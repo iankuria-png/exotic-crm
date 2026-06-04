@@ -369,6 +369,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/payments', [PaymentQueueController::class, 'index']);
         Route::post('/payments/export', [PaymentExportController::class, 'exportPayments']);
         Route::get('/payments/reference-check', [ManualPaymentBundleController::class, 'referenceCheck']);
+        Route::get('/payments/recovery-report', [PaymentQueueController::class, 'recoveryReport']);
         Route::post('/payments/import/preview', [PaymentQueueController::class, 'importPreview']);
         Route::post('/payments/import/commit', [PaymentQueueController::class, 'importCommit']);
         Route::get('/payments/import/template', [PaymentQueueController::class, 'importTemplate']);

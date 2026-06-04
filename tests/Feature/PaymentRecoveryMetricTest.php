@@ -88,6 +88,7 @@ class PaymentRecoveryMetricTest extends TestCase
 
         $this->assertSame(4, $metrics['failed_payments']);
         $this->assertSame(2, $metrics['recovered_payments']);
+        $this->assertSame(2, $metrics['lost_payments']);
         $this->assertSame(50.0, $metrics['payment_recovery_rate']);
         $this->assertSame(3, $metrics['failed_customers']);
         $this->assertSame(2, $metrics['recovered_customers']);
@@ -116,6 +117,7 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertOk()
             ->assertJsonPath('kpis.failed_payment_recovery.failed_payments', 1)
             ->assertJsonPath('kpis.failed_payment_recovery.recovered_payments', 1)
+            ->assertJsonPath('kpis.failed_payment_recovery.lost_payments', 0)
             ->assertJsonPath('kpis.failed_payment_recovery.payment_recovery_rate', 100);
 
         $this->getJson("/api/crm/dashboard/ceo/summary?platform_id={$platform->id}&horizon=custom&from=2026-06-01&to=2026-06-10&reporting_currency=USD")
@@ -124,6 +126,14 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('metrics.failed_payment_recovery.value.failed_payments', 1)
             ->assertJsonPath('metrics.failed_payment_recovery.value.recovered_payments', 1)
             ->assertJsonPath('metrics.failed_payment_recovery.value.payment_recovery_rate', 100);
+
+        $this->getJson("/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10")
+            ->assertOk()
+            ->assertJsonPath('metrics.failed_payments', 1)
+            ->assertJsonPath('metrics.recovered_payments', 1)
+            ->assertJsonPath('metrics.lost_payments', 0)
+            ->assertJsonPath('recovered_pairs.0.failed_payment.status', 'failed')
+            ->assertJsonPath('recovered_pairs.0.recovered_payment.status', 'completed');
     }
 
     private function payment(Platform $platform, array $overrides = []): Payment

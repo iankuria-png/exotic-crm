@@ -28,6 +28,7 @@ use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
+use App\Services\PaymentRecoveryMetricService;
 use App\Services\PaymentQueueQueryBuilder;
 use App\Services\ProviderStatusQueryOrchestrator;
 use App\Services\ReportingCurrencyService;
@@ -83,7 +84,8 @@ class PaymentQueueController extends Controller
         private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService
     ) {
     }
 
@@ -334,6 +336,51 @@ class PaymentQueueController extends Controller
         $payload['stats_scope'] = $this->resolveStatsScope($statsVisibility, $environmentFilter);
         $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
         return response()->json($payload);
+    }
+
+    public function recoveryReport(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'limit' => 'nullable|integer|min:1|max:250',
+        ]);
+
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this payment market.'
+        );
+
+        $platformIds = $selectedPlatformId
+            ? [(int) $selectedPlatformId]
+            : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : now()->subDays(29)->startOfDay();
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : now()->endOfDay();
+        $limit = (int) ($validated['limit'] ?? 100);
+
+        $report = $this->paymentRecoveryMetricService->report(
+            is_array($platformIds) ? $platformIds : null,
+            $from,
+            $to,
+            $limit
+        );
+
+        return response()->json([
+            'filters' => [
+                'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+                'limit' => $limit,
+            ],
+            ...$report,
+        ]);
     }
 
     public function markTest(Request $request, Payment $payment)

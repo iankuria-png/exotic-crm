@@ -56,9 +56,10 @@ function metricSubHint(key, metric) {
     if (key === 'failed_payment_recovery') {
         const recovered = Number(metric.value?.recovered_payments || 0).toLocaleString();
         const failed = Number(metric.value?.failed_payments || 0).toLocaleString();
+        const lost = Number(metric.value?.lost_payments || 0).toLocaleString();
         const customerRate = Number(metric.value?.customer_recovery_rate || 0).toFixed(1);
 
-        return `${recovered}/${failed} failed payments · ${customerRate}% of customers`;
+        return `${recovered} recovered · ${lost} lost of ${failed} failed · ${customerRate}% customers`;
     }
 
     return 'Compared with the prior matching window';

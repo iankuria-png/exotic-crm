@@ -120,6 +120,31 @@ function toAmount(value) {
     return Number.isFinite(amount) ? amount : 0;
 }
 
+function formatAmountBreakdown(breakdown = {}, fallbackCurrency = 'USD') {
+    const entries = Object.entries(breakdown || {}).filter(([, amount]) => Number(amount || 0) !== 0);
+
+    if (entries.length === 0) {
+        return formatCurrency(0, fallbackCurrency);
+    }
+
+    return entries
+        .slice(0, 2)
+        .map(([currency, amount]) => formatCurrency(amount, currency))
+        .join(' + ');
+}
+
+function formatRecoveryDuration(minutes) {
+    const total = Number(minutes || 0);
+    if (!Number.isFinite(total) || total <= 0) return 'same minute';
+    if (total < 60) return `${Math.round(total)}m`;
+
+    const hours = total / 60;
+    if (hours < 48) return `${hours.toFixed(hours >= 10 ? 0 : 1)}h`;
+
+    const days = hours / 24;
+    return `${days.toFixed(days >= 10 ? 0 : 1)}d`;
+}
+
 function hoursSince(timestamp) {
     if (!timestamp) return Infinity;
     const parsed = new Date(timestamp).getTime();
@@ -783,6 +808,188 @@ function StructuredDiagnosticsSection({ section }) {
     );
 }
 
+function RecoveryMetricTile({ label, value, hint, tone = 'slate' }) {
+    const toneClass = {
+        emerald: 'border-emerald-200 bg-emerald-50/70 text-emerald-700',
+        rose: 'border-rose-200 bg-rose-50/70 text-rose-700',
+        amber: 'border-amber-200 bg-amber-50/70 text-amber-700',
+        slate: 'border-slate-200 bg-white text-slate-700',
+    }[tone] || 'border-slate-200 bg-white text-slate-700';
+
+    return (
+        <div className={`rounded-lg border px-4 py-4 ${toneClass}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] opacity-75">{label}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+            {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+        </div>
+    );
+}
+
+function RecoveryPaymentMiniCard({ title, payment, tone = 'slate' }) {
+    const toneClass = tone === 'rose'
+        ? 'border-rose-200 bg-rose-50/60'
+        : 'border-emerald-200 bg-emerald-50/60';
+
+    if (!payment) {
+        return null;
+    }
+
+    return (
+        <div className={`rounded-xl border px-4 py-4 ${toneClass}`}>
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{title}</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-950">
+                        {formatCurrency(payment.amount, payment.currency)}
+                    </p>
+                </div>
+                <span className="rounded-full border border-white/70 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                    {titleize(payment.status)}
+                </span>
+            </div>
+            <div className="mt-4 grid gap-2 text-xs text-slate-600">
+                <p><span className="font-semibold text-slate-800">Reference:</span> {payment.transaction_reference || payment.reference_number || '—'}</p>
+                <p><span className="font-semibold text-slate-800">Phone:</span> {payment.phone || payment.client?.phone_normalized || '—'}</p>
+                <p><span className="font-semibold text-slate-800">Client:</span> {payment.client?.name || 'Unmatched customer'}</p>
+                <p><span className="font-semibold text-slate-800">Market:</span> {payment.platform?.name || '—'}</p>
+                <p><span className="font-semibold text-slate-800">Created:</span> {formatDateTime(payment.created_at)}</p>
+                {payment.completed_at ? (
+                    <p><span className="font-semibold text-slate-800">Completed:</span> {formatDateTime(payment.completed_at)}</p>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbackCurrency }) {
+    const metrics = report?.metrics || {};
+    const pairs = report?.recovered_pairs || [];
+    const failed = Number(metrics.failed_payments || 0);
+    const recovered = Number(metrics.recovered_payments || 0);
+    const lost = Number(metrics.lost_payments || 0);
+    const affected = Number(metrics.failed_customers || 0);
+    const rate = Number(metrics.payment_recovery_rate || 0);
+
+    if (isLoading) {
+        return (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="animate-pulse space-y-4">
+                    <div className="h-4 w-52 rounded bg-slate-100" />
+                    <div className="grid gap-3 md:grid-cols-4">
+                        {Array.from({ length: 4 }).map((_, index) => (
+                            <div key={index} className="h-24 rounded-lg bg-slate-100" />
+                        ))}
+                    </div>
+                    <div className="h-64 rounded-lg bg-slate-100" />
+                </div>
+            </section>
+        );
+    }
+
+    return (
+        <section className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-slate-900">Failed payment recovery</h2>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Failed attempts in this window matched to later successful payments from the same phone or client.
+                        </p>
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                        {report?.filters?.from || metrics.window?.from || 'Start'} to {report?.filters?.to || metrics.window?.to || 'today'}
+                    </span>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-5">
+                    <RecoveryMetricTile label="Recovery rate" value={`${rate.toFixed(1)}%`} hint={`${recovered}/${failed} failed payments`} tone="emerald" />
+                    <RecoveryMetricTile label="Recovered" value={recovered.toLocaleString()} hint={formatAmountBreakdown(metrics.recovered_amount_breakdown, fallbackCurrency)} tone="emerald" />
+                    <RecoveryMetricTile label="Lost" value={lost.toLocaleString()} hint={formatAmountBreakdown(metrics.lost_amount_breakdown, fallbackCurrency)} tone={lost > 0 ? 'rose' : 'slate'} />
+                    <RecoveryMetricTile label="Customers affected" value={affected.toLocaleString()} hint={`${Number(metrics.recovered_customers || 0).toLocaleString()} recovered customers`} tone="amber" />
+                    <RecoveryMetricTile label="Failed value" value={formatAmountBreakdown(metrics.failed_amount_breakdown, fallbackCurrency)} hint="Attempted payment value" />
+                </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                        <p className="text-sm font-semibold text-slate-900">Recovered payment pairs</p>
+                        <p className="mt-1 text-xs text-slate-500">Click a row to inspect the failed attempt and the payment that recovered it.</p>
+                    </div>
+                    {pairs.length === 0 ? (
+                        <div className="px-4 py-12 text-center text-sm text-slate-500">
+                            No recovered failed-payment pairs in this window.
+                        </div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-slate-200 text-sm">
+                                <thead className="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                    <tr>
+                                        <th className="px-4 py-3">Customer</th>
+                                        <th className="px-4 py-3">Failed</th>
+                                        <th className="px-4 py-3">Recovered</th>
+                                        <th className="px-4 py-3">Time to recover</th>
+                                        <th className="px-4 py-3">Market</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {pairs.map((pair) => {
+                                        const active = selectedPair?.failed_payment?.id === pair.failed_payment?.id;
+                                        const failedPayment = pair.failed_payment || {};
+                                        const recoveredPayment = pair.recovered_payment || {};
+
+                                        return (
+                                            <tr
+                                                key={`${failedPayment.id}-${recoveredPayment.id}`}
+                                                onClick={() => onSelectPair(pair)}
+                                                className={`cursor-pointer transition ${active ? 'bg-teal-50/70' : 'hover:bg-slate-50'}`}
+                                            >
+                                                <td className="px-4 py-3">
+                                                    <p className="font-semibold text-slate-900">{failedPayment.client?.name || recoveredPayment.client?.name || 'Unmatched customer'}</p>
+                                                    <p className="mt-0.5 text-xs text-slate-500">{failedPayment.phone || recoveredPayment.phone || 'No phone captured'}</p>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <p className="font-semibold text-rose-700">{formatCurrency(failedPayment.amount, failedPayment.currency)}</p>
+                                                    <p className="mt-0.5 text-xs text-slate-500">{formatDateTime(failedPayment.created_at)}</p>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <p className="font-semibold text-emerald-700">{formatCurrency(recoveredPayment.amount, recoveredPayment.currency)}</p>
+                                                    <p className="mt-0.5 text-xs text-slate-500">{formatDateTime(recoveredPayment.completed_at || recoveredPayment.created_at)}</p>
+                                                </td>
+                                                <td className="px-4 py-3 font-semibold text-slate-700">{formatRecoveryDuration(pair.recovery_minutes)}</td>
+                                                <td className="px-4 py-3 text-slate-600">{failedPayment.platform?.name || recoveredPayment.platform?.name || '—'}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    {selectedPair ? (
+                        <div className="space-y-3">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">Recovery detail</p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    Recovered in {formatRecoveryDuration(selectedPair.recovery_minutes)}.
+                                </p>
+                            </div>
+                            <RecoveryPaymentMiniCard title="Failed attempt" payment={selectedPair.failed_payment} tone="rose" />
+                            <RecoveryPaymentMiniCard title="Recovered payment" payment={selectedPair.recovered_payment} tone="emerald" />
+                        </div>
+                    ) : (
+                        <div className="flex min-h-[24rem] items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-center text-sm text-slate-500">
+                            Select a recovered pair to compare the failed attempt with the successful recovery.
+                        </div>
+                    )}
+                </aside>
+            </div>
+        </section>
+    );
+}
+
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue', 'reversed']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
@@ -797,6 +1004,9 @@ export default function Payments() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
+    const [workspaceTab, setWorkspaceTab] = useState(() => (
+        searchParams.get('recovery_tab') === 'recovered' ? 'recovery' : 'payments'
+    ));
     const toast = useToast();
     const { user, isLoading: authLoading } = useAuth();
     const canViewTests = user?.role === 'admin';
@@ -941,6 +1151,7 @@ export default function Payments() {
     });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
     const [exportModalOpen, setExportModalOpen] = useState(false);
+    const [selectedRecoveryPair, setSelectedRecoveryPair] = useState(null);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data: integrationData } = useQuery({
@@ -1023,6 +1234,22 @@ export default function Payments() {
         enabled: !isRangeInvalid,
     });
 
+    const {
+        data: recoveryReportData,
+        isLoading: recoveryReportLoading,
+    } = useQuery({
+        queryKey: ['payments-recovery-report', platformFilter, fromDate, toDate],
+        queryFn: () => api.get('/crm/payments/recovery-report', {
+            params: {
+                ...(platformFilter && { platform_id: Number(platformFilter) }),
+                ...(fromDate && { from: fromDate }),
+                ...(toDate && { to: toDate }),
+                limit: 100,
+            },
+        }).then((response) => response.data),
+        enabled: workspaceTab === 'recovery' && !isRangeInvalid,
+    });
+
     // Hydrate fromDate from baseline cutoff on first successful response
     useEffect(() => {
         if (!hasInitializedFrom && data?.baseline_cutoff) {
@@ -1030,6 +1257,27 @@ export default function Payments() {
             setHasInitializedFrom(true);
         }
     }, [data?.baseline_cutoff, hasInitializedFrom]);
+
+    useEffect(() => {
+        if (workspaceTab !== 'recovery') {
+            return;
+        }
+
+        const pairs = recoveryReportData?.recovered_pairs || [];
+        if (pairs.length === 0) {
+            setSelectedRecoveryPair(null);
+            return;
+        }
+
+        const stillSelected = pairs.some((pair) => (
+            pair.failed_payment?.id === selectedRecoveryPair?.failed_payment?.id
+            && pair.recovered_payment?.id === selectedRecoveryPair?.recovered_payment?.id
+        ));
+
+        if (!stillSelected) {
+            setSelectedRecoveryPair(pairs[0]);
+        }
+    }, [recoveryReportData?.recovered_pairs, selectedRecoveryPair, workspaceTab]);
 
     const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
         queryKey: ['payment-candidates', selectedPayment?.id, candidateSearch],
@@ -2587,6 +2835,44 @@ export default function Payments() {
                 </button>
             </section>
 
+            <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">Payment workspace</p>
+                        <p className="mt-1 text-xs text-slate-500">Switch between the live payment queue and failed-payment recovery analysis.</p>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                        {[
+                            ['payments', 'Payment queue'],
+                            ['recovery', 'Failed recovery'],
+                        ].map(([key, label]) => (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => setWorkspaceTab(key)}
+                                className={`rounded-md px-3 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                    workspaceTab === key
+                                        ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
+                                        : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                                }`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            {workspaceTab === 'recovery' ? (
+                <RecoveryLedger
+                    report={recoveryReportData}
+                    isLoading={recoveryReportLoading}
+                    selectedPair={selectedRecoveryPair}
+                    onSelectPair={setSelectedRecoveryPair}
+                    fallbackCurrency={resolveCurrency(null)}
+                />
+            ) : (
+            <>
             <section className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -2953,6 +3239,8 @@ export default function Payments() {
                 perPage={perPage}
                 onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
+            </>
+            )}
 
             {diagnosticsDrawer.open ? (
                 <div className="fixed inset-0 z-40 flex bg-slate-900/45" onClick={closeDiagnostics}>

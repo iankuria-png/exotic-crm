@@ -76,7 +76,7 @@ class CeoDashboardDataService
                     'value' => $currentRecovery,
                     'prior_value' => $priorRecovery,
                     'delta_percent' => $this->percentDelta($currentRecovery['payment_recovery_rate'], $priorRecovery['payment_recovery_rate']),
-                    'href' => '/payments?status=recovery_queue',
+                    'href' => '/payments?recovery_tab=recovered',
                 ],
             ],
             'customer_mix' => $currentCustomerMix,
