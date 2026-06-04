@@ -97,15 +97,25 @@ function resolvePresetDateRange(preset) {
         return { from: formatDateInputValue(startDate), to: endDate };
     }
 
+    if (preset === '90d') {
+        startDate.setDate(startDate.getDate() - 89);
+        return { from: formatDateInputValue(startDate), to: endDate };
+    }
+
+    if (preset === 'ytd') {
+        startDate.setMonth(0, 1);
+        return { from: formatDateInputValue(startDate), to: endDate };
+    }
+
     return { from: '', to: '' };
 }
 
-function detectPresetDateRange(fromDate, toDate) {
+function detectPresetDateRange(fromDate, toDate, presets = ['today', '7d', '30d']) {
     if (!fromDate || !toDate) {
         return '';
     }
 
-    for (const preset of ['today', '7d', '30d']) {
+    for (const preset of presets) {
         const range = resolvePresetDateRange(preset);
         if (range.from === fromDate && range.to === toDate) {
             return preset;
@@ -131,6 +141,34 @@ function formatAmountBreakdown(breakdown = {}, fallbackCurrency = 'USD') {
         .slice(0, 2)
         .map(([currency, amount]) => formatCurrency(amount, currency))
         .join(' + ');
+}
+
+function recoveryAmountDisplay(metrics, bucket, reportingCurrency, fallbackCurrency) {
+    const normalizedAmount = metrics?.[`${bucket}_normalized_amount`];
+    const normalizedCurrency = metrics?.normalized_currency || reportingCurrency?.targetCurrency || fallbackCurrency;
+    const meta = metrics?.[`${bucket}_normalization_meta`];
+
+    if (reportingCurrency?.isFlat && normalizedAmount !== null && normalizedAmount !== undefined) {
+        return {
+            value: formatCurrency(normalizedAmount, normalizedCurrency),
+            hint: 'Converted value',
+            meta,
+        };
+    }
+
+    if (reportingCurrency?.isFlat) {
+        return {
+            value: formatAmountBreakdown(metrics?.[`${bucket}_amount_breakdown`], fallbackCurrency),
+            hint: 'Native value; FX incomplete',
+            meta,
+        };
+    }
+
+    return {
+        value: formatAmountBreakdown(metrics?.[`${bucket}_amount_breakdown`], fallbackCurrency),
+        hint: 'Native value',
+        meta: null,
+    };
 }
 
 function formatRecoveryDuration(minutes) {
@@ -808,19 +846,108 @@ function StructuredDiagnosticsSection({ section }) {
     );
 }
 
-function RecoveryMetricTile({ label, value, hint, tone = 'slate' }) {
+function RecoveryMetricTile({ label, value, hint, meta, tone = 'slate' }) {
     const toneClass = {
-        emerald: 'border-emerald-200 bg-emerald-50/70 text-emerald-700',
-        rose: 'border-rose-200 bg-rose-50/70 text-rose-700',
-        amber: 'border-amber-200 bg-amber-50/70 text-amber-700',
+        emerald: 'border-emerald-200 bg-emerald-50/70',
+        rose: 'border-rose-200 bg-rose-50/70',
+        amber: 'border-amber-200 bg-amber-50/70',
+        sky: 'border-sky-200 bg-sky-50/70',
         slate: 'border-slate-200 bg-white text-slate-700',
     }[tone] || 'border-slate-200 bg-white text-slate-700';
 
     return (
-        <div className={`rounded-lg border px-4 py-4 ${toneClass}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] opacity-75">{label}</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+        <div className={`min-h-[8.5rem] rounded-lg border px-4 py-4 ${toneClass}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+            <p className="mt-2 break-words text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
             {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+            {meta ? <FxNormalizationNotice meta={meta} className="mt-2" /> : null}
+        </div>
+    );
+}
+
+function RecoveryScopeBar({
+    platformOptions,
+    platformFilter,
+    onPlatformChange,
+    fromDate,
+    toDate,
+    onFromDateChange,
+    onToDateChange,
+    isRangeInvalid,
+    preset,
+    onPresetChange,
+    reportingCurrency,
+}) {
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+            <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[190px]">
+                    <FilterSelect
+                        label="Market"
+                        value={platformFilter}
+                        onChange={(event) => onPlatformChange(event.target.value)}
+                        options={platformOptionsWithFlags(platformOptions)}
+                    />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="recovery-from">From</label>
+                    <input
+                        id="recovery-from"
+                        type="date"
+                        value={fromDate}
+                        onChange={(event) => onFromDateChange(event.target.value)}
+                        className="crm-input w-auto min-w-[140px]"
+                    />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="recovery-to">To</label>
+                    <input
+                        id="recovery-to"
+                        type="date"
+                        value={toDate}
+                        onChange={(event) => onToDateChange(event.target.value)}
+                        className="crm-input w-auto min-w-[140px]"
+                    />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                    {[
+                        ['30d', '30 days'],
+                        ['90d', '90 days'],
+                        ['ytd', 'YTD'],
+                    ].map(([key, label]) => (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => onPresetChange(key)}
+                            className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                preset === key
+                                    ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
+                                    : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                            }`}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                    <span className={`rounded-md px-2.5 py-1.5 text-xs font-semibold ${
+                        preset === 'custom'
+                            ? 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200'
+                            : 'text-slate-400'
+                    }`}>
+                        Custom
+                    </span>
+                </div>
+
+                <span className="ml-auto inline-flex h-9 items-center rounded border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800">
+                    {reportingCurrency?.isFlat ? `Converted to ${reportingCurrency.targetCurrency}` : 'Native currencies'}
+                </span>
+
+                {isRangeInvalid ? (
+                    <span className="pb-2 text-xs font-medium text-rose-500">From must be before To</span>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -861,7 +988,23 @@ function RecoveryPaymentMiniCard({ title, payment, tone = 'slate' }) {
     );
 }
 
-function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbackCurrency }) {
+function RecoveryLedger({
+    report,
+    isLoading,
+    selectedPair,
+    onSelectPair,
+    fallbackCurrency,
+    reportingCurrency,
+    platformOptions,
+    platformFilter,
+    onPlatformChange,
+    fromDate,
+    toDate,
+    onFromDateChange,
+    onToDateChange,
+    isRangeInvalid,
+    onPresetChange,
+}) {
     const metrics = report?.metrics || {};
     const pairs = report?.recovered_pairs || [];
     const failed = Number(metrics.failed_payments || 0);
@@ -869,14 +1012,33 @@ function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbac
     const lost = Number(metrics.lost_payments || 0);
     const affected = Number(metrics.failed_customers || 0);
     const rate = Number(metrics.payment_recovery_rate || 0);
+    const customerRate = Number(metrics.customer_recovery_rate || 0);
+    const lostCustomers = Number(metrics.lost_customers || 0);
+    const recoveredAmount = recoveryAmountDisplay(metrics, 'recovered', reportingCurrency, fallbackCurrency);
+    const lostAmount = recoveryAmountDisplay(metrics, 'lost', reportingCurrency, fallbackCurrency);
+    const failedAmount = recoveryAmountDisplay(metrics, 'failed', reportingCurrency, fallbackCurrency);
+    const preset = detectPresetDateRange(fromDate, toDate, ['30d', '90d', 'ytd']);
 
     if (isLoading) {
         return (
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <section className="space-y-4">
+                <RecoveryScopeBar
+                    platformOptions={platformOptions}
+                    platformFilter={platformFilter}
+                    onPlatformChange={onPlatformChange}
+                    fromDate={fromDate}
+                    toDate={toDate}
+                    onFromDateChange={onFromDateChange}
+                    onToDateChange={onToDateChange}
+                    isRangeInvalid={isRangeInvalid}
+                    preset={preset}
+                    onPresetChange={onPresetChange}
+                    reportingCurrency={reportingCurrency}
+                />
                 <div className="animate-pulse space-y-4">
-                    <div className="h-4 w-52 rounded bg-slate-100" />
-                    <div className="grid gap-3 md:grid-cols-4">
-                        {Array.from({ length: 4 }).map((_, index) => (
+                    <div className="h-24 rounded-xl bg-slate-100" />
+                    <div className="grid gap-3 md:grid-cols-5">
+                        {Array.from({ length: 5 }).map((_, index) => (
                             <div key={index} className="h-24 rounded-lg bg-slate-100" />
                         ))}
                     </div>
@@ -888,12 +1050,26 @@ function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbac
 
     return (
         <section className="space-y-4">
+            <RecoveryScopeBar
+                platformOptions={platformOptions}
+                platformFilter={platformFilter}
+                onPlatformChange={onPlatformChange}
+                fromDate={fromDate}
+                toDate={toDate}
+                onFromDateChange={onFromDateChange}
+                onToDateChange={onToDateChange}
+                isRangeInvalid={isRangeInvalid}
+                preset={preset}
+                onPresetChange={onPresetChange}
+                reportingCurrency={reportingCurrency}
+            />
+
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h2 className="text-sm font-semibold text-slate-900">Failed payment recovery</h2>
                         <p className="mt-1 text-xs text-slate-500">
-                            Failed attempts in this window matched to later successful payments from the same phone or client.
+                            Failed attempts matched to later successful payments from the same phone or client.
                         </p>
                     </div>
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
@@ -902,19 +1078,24 @@ function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbac
                 </div>
 
                 <div className="mt-4 grid gap-3 md:grid-cols-5">
-                    <RecoveryMetricTile label="Recovery rate" value={`${rate.toFixed(1)}%`} hint={`${recovered}/${failed} failed payments`} tone="emerald" />
-                    <RecoveryMetricTile label="Recovered" value={recovered.toLocaleString()} hint={formatAmountBreakdown(metrics.recovered_amount_breakdown, fallbackCurrency)} tone="emerald" />
-                    <RecoveryMetricTile label="Lost" value={lost.toLocaleString()} hint={formatAmountBreakdown(metrics.lost_amount_breakdown, fallbackCurrency)} tone={lost > 0 ? 'rose' : 'slate'} />
-                    <RecoveryMetricTile label="Customers affected" value={affected.toLocaleString()} hint={`${Number(metrics.recovered_customers || 0).toLocaleString()} recovered customers`} tone="amber" />
-                    <RecoveryMetricTile label="Failed value" value={formatAmountBreakdown(metrics.failed_amount_breakdown, fallbackCurrency)} hint="Attempted payment value" />
+                    <RecoveryMetricTile label="Recovery rate" value={`${rate.toFixed(1)}%`} hint={`${recovered.toLocaleString()}/${failed.toLocaleString()} failed payments recovered`} tone="emerald" />
+                    <RecoveryMetricTile label="Recovered value" value={recoveredAmount.value} hint={`${recovered.toLocaleString()} recovered payments`} meta={recoveredAmount.meta} tone="emerald" />
+                    <RecoveryMetricTile label="Lost value" value={lostAmount.value} hint={`${lost.toLocaleString()} failed payments not recovered`} meta={lostAmount.meta} tone={lost > 0 ? 'rose' : 'slate'} />
+                    <RecoveryMetricTile label="Customers affected" value={affected.toLocaleString()} hint={`${customerRate.toFixed(1)}% recovered · ${lostCustomers.toLocaleString()} unresolved`} tone="amber" />
+                    <RecoveryMetricTile label="Failed value" value={failedAmount.value} hint="Total attempted value" meta={failedAmount.meta} tone="sky" />
                 </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    <div className="border-b border-slate-200 px-4 py-3">
-                        <p className="text-sm font-semibold text-slate-900">Recovered payment pairs</p>
-                        <p className="mt-1 text-xs text-slate-500">Click a row to inspect the failed attempt and the payment that recovered it.</p>
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">Recovered payment pairs</p>
+                            <p className="mt-1 text-xs text-slate-500">Select a row to compare the failed attempt with the successful recovery.</p>
+                        </div>
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-500">
+                            {pairs.length.toLocaleString()} shown
+                        </span>
                     </div>
                     {pairs.length === 0 ? (
                         <div className="px-4 py-12 text-center text-sm text-slate-500">
@@ -957,7 +1138,7 @@ function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbac
                                                     <p className="mt-0.5 text-xs text-slate-500">{formatDateTime(recoveredPayment.completed_at || recoveredPayment.created_at)}</p>
                                                 </td>
                                                 <td className="px-4 py-3 font-semibold text-slate-700">{formatRecoveryDuration(pair.recovery_minutes)}</td>
-                                                <td className="px-4 py-3 text-slate-600">{failedPayment.platform?.name || recoveredPayment.platform?.name || '—'}</td>
+                                                <td className="px-4 py-3 text-slate-600">{failedPayment.platform?.name || recoveredPayment.platform?.name || '-'}</td>
                                             </tr>
                                         );
                                     })}
@@ -967,7 +1148,7 @@ function RecoveryLedger({ report, isLoading, selectedPair, onSelectPair, fallbac
                     )}
                 </div>
 
-                <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:self-start">
                     {selectedPair ? (
                         <div className="space-y-3">
                             <div>
@@ -1238,13 +1419,14 @@ export default function Payments() {
         data: recoveryReportData,
         isLoading: recoveryReportLoading,
     } = useQuery({
-        queryKey: ['payments-recovery-report', platformFilter, fromDate, toDate],
+        queryKey: ['payments-recovery-report', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () => api.get('/crm/payments/recovery-report', {
             params: {
                 ...(platformFilter && { platform_id: Number(platformFilter) }),
                 ...(fromDate && { from: fromDate }),
                 ...(toDate && { to: toDate }),
                 limit: 100,
+                ...reportingCurrency.queryParams,
             },
         }).then((response) => response.data),
         enabled: workspaceTab === 'recovery' && !isRangeInvalid,
@@ -2123,6 +2305,18 @@ export default function Payments() {
         setPage(1);
     };
 
+    const applyRecoveryPreset = (preset) => {
+        const range = resolvePresetDateRange(preset);
+        if (!range.from || !range.to) {
+            return;
+        }
+
+        setFromDate(range.from);
+        setToDate(range.to);
+        setHasInitializedFrom(true);
+        setPage(1);
+    };
+
     const applyCustomerMixSegment = (segmentKey) => {
         const nextSegment = customerMixSegment === segmentKey ? '' : segmentKey;
         setCustomerMixSegment(nextSegment);
@@ -2870,6 +3064,25 @@ export default function Payments() {
                     selectedPair={selectedRecoveryPair}
                     onSelectPair={setSelectedRecoveryPair}
                     fallbackCurrency={resolveCurrency(null)}
+                    reportingCurrency={reportingCurrency}
+                    platformOptions={platformOptions}
+                    platformFilter={platformFilter}
+                    onPlatformChange={(value) => {
+                        setPlatformFilter(value);
+                        setPage(1);
+                    }}
+                    fromDate={fromDate}
+                    toDate={toDate}
+                    onFromDateChange={(value) => {
+                        setFromDate(value);
+                        setPage(1);
+                    }}
+                    onToDateChange={(value) => {
+                        setToDate(value);
+                        setPage(1);
+                    }}
+                    isRangeInvalid={isRangeInvalid}
+                    onPresetChange={applyRecoveryPreset}
                 />
             ) : (
             <>

@@ -345,6 +345,8 @@ class PaymentQueueController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'limit' => 'nullable|integer|min:1|max:250',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -364,12 +366,23 @@ class PaymentQueueController extends Controller
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
         $limit = (int) ($validated['limit'] ?? 100);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            $selectedPlatformId === null
+        );
 
         $report = $this->paymentRecoveryMetricService->report(
             is_array($platformIds) ? $platformIds : null,
             $from,
             $to,
             $limit
+        );
+        $report['metrics'] = $this->appendRecoveryAmountNormalization(
+            $report['metrics'],
+            $targetCurrency,
+            $to,
+            $currencyMode === ReportingCurrencyService::MODE_FLAT
         );
 
         return response()->json([
@@ -378,9 +391,35 @@ class PaymentQueueController extends Controller
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
                 'limit' => $limit,
+                'currency_mode' => $currencyMode,
+                'reporting_currency' => $targetCurrency,
             ],
             ...$report,
         ]);
+    }
+
+    private function appendRecoveryAmountNormalization(array $metrics, string $targetCurrency, Carbon $eventDate, bool $shouldNormalize): array
+    {
+        foreach (['failed', 'recovered', 'lost'] as $bucket) {
+            if (!$shouldNormalize) {
+                $metrics["{$bucket}_normalized_amount"] = null;
+                $metrics["{$bucket}_normalization_meta"] = null;
+                continue;
+            }
+
+            $normalized = $this->reportingCurrencyService->normalizeBreakdown(
+                $metrics["{$bucket}_amount_breakdown"] ?? [],
+                $eventDate,
+                $targetCurrency
+            );
+
+            $metrics["{$bucket}_normalized_amount"] = $normalized['normalized_total'];
+            $metrics["{$bucket}_normalization_meta"] = $normalized['normalization_meta'];
+        }
+
+        $metrics['normalized_currency'] = $targetCurrency;
+
+        return $metrics;
     }
 
     public function markTest(Request $request, Payment $payment)

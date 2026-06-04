@@ -129,11 +129,19 @@ class PaymentRecoveryMetricTest extends TestCase
 
         $this->getJson("/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10")
             ->assertOk()
+            ->assertJsonPath('filters.currency_mode', 'native')
             ->assertJsonPath('metrics.failed_payments', 1)
             ->assertJsonPath('metrics.recovered_payments', 1)
             ->assertJsonPath('metrics.lost_payments', 0)
             ->assertJsonPath('recovered_pairs.0.failed_payment.status', 'failed')
             ->assertJsonPath('recovered_pairs.0.recovered_payment.status', 'completed');
+
+        $this->getJson("/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10&currency_mode=flat&reporting_currency=KES")
+            ->assertOk()
+            ->assertJsonPath('filters.currency_mode', 'flat')
+            ->assertJsonPath('filters.reporting_currency', 'KES')
+            ->assertJsonPath('metrics.normalized_currency', 'KES')
+            ->assertJsonPath('metrics.recovered_normalization_meta.target_currency', 'KES');
     }
 
     private function payment(Platform $platform, array $overrides = []): Payment
