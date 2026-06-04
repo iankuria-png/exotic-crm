@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
@@ -19,6 +19,9 @@ const PAYMENT_CLOSE_REASONS = [
 ];
 
 const ALLOWED_PRESET_HOURS = new Set([24, 48, 168, 720]);
+const INITIAL_BUCKET_LIMIT = 50;
+const BUCKET_LIMIT_STEP = 50;
+const MAX_BUCKET_LIMIT = 500;
 
 function readRangeFromUrl(searchParams) {
     const from = searchParams.get('from') || '';
@@ -41,7 +44,7 @@ function inferPaymentCloseReason(row) {
     return 'payment_failed';
 }
 
-function SectionHeader({ title, count, refreshedAgo, onToggle, collapsed, emptyHint }) {
+function SectionHeader({ title, count, visibleCount, refreshedAgo, onToggle, collapsed, emptyHint }) {
     return (
         <header className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <div className="flex items-center gap-3">
@@ -60,15 +63,48 @@ function SectionHeader({ title, count, refreshedAgo, onToggle, collapsed, emptyH
                     </svg>
                     <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                        {count}
+                        {Number(count || 0).toLocaleString()}
                     </span>
                 </button>
             </div>
             <span className="text-[11px] text-slate-400">
+                {Number(count || 0) > Number(visibleCount || 0) ? (
+                    <span className="mr-2 text-slate-500">
+                        Showing {Number(visibleCount || 0).toLocaleString()} of {Number(count || 0).toLocaleString()}
+                    </span>
+                ) : null}
                 {refreshedAgo != null ? `Updated ${refreshedAgo}s ago` : ''}
                 {count === 0 && emptyHint ? <span className="ml-2 italic">{emptyHint}</span> : null}
             </span>
         </header>
+    );
+}
+
+function LoadMoreFooter({ loaded, total, limit, onLoadMore }) {
+    const remaining = Math.max(0, Number(total || 0) - Number(loaded || 0));
+    if (remaining <= 0) {
+        return null;
+    }
+
+    const currentLimit = Number(limit || loaded || 0);
+    const canLoadMore = currentLimit < MAX_BUCKET_LIMIT;
+    const nextCount = Math.min(BUCKET_LIMIT_STEP, remaining, Math.max(0, MAX_BUCKET_LIMIT - currentLimit));
+
+    return (
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
+            <p className="text-xs text-slate-500">
+                Showing {Number(loaded || 0).toLocaleString()} of {Number(total || 0).toLocaleString()} matching items.
+            </p>
+            {canLoadMore ? (
+                <button
+                    type="button"
+                    onClick={onLoadMore}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                >
+                    Load {nextCount.toLocaleString()} more
+                </button>
+            ) : null}
+        </footer>
     );
 }
 
@@ -180,6 +216,11 @@ export default function ConversionQueueView({ platformId = '' }) {
     const toast = useToast();
     const [searchParams, setSearchParams] = useSearchParams();
     const [collapsed, setCollapsed] = useState({ new_signups: false, failed_payments: false, stalled_contacted: false });
+    const [bucketLimits, setBucketLimits] = useState({
+        new_signups: INITIAL_BUCKET_LIMIT,
+        failed_payments: INITIAL_BUCKET_LIMIT,
+        stalled_contacted: INITIAL_BUCKET_LIMIT,
+    });
     const [closeDialog, setCloseDialog] = useState({ open: false, client: null });
     const [closeError, setCloseError] = useState(null);
     const [closePaymentDialog, setClosePaymentDialog] = useState({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
@@ -187,11 +228,29 @@ export default function ConversionQueueView({ platformId = '' }) {
     const range = useMemo(() => readRangeFromUrl(searchParams), [searchParams]);
 
     const queryParams = useMemo(() => {
+        const limitParams = {
+            new_signups_limit: bucketLimits.new_signups,
+            failed_payments_limit: bucketLimits.failed_payments,
+            stalled_contacted_limit: bucketLimits.stalled_contacted,
+        };
+
         if (range.mode === 'custom') {
-            return { from: range.from || undefined, to: range.to || undefined };
+            return {
+                from: range.from || undefined,
+                to: range.to || undefined,
+                ...limitParams,
+            };
         }
-        return { range_hours: range.hours };
-    }, [range]);
+        return { range_hours: range.hours, ...limitParams };
+    }, [bucketLimits, range]);
+
+    useEffect(() => {
+        setBucketLimits({
+            new_signups: INITIAL_BUCKET_LIMIT,
+            failed_payments: INITIAL_BUCKET_LIMIT,
+            stalled_contacted: INITIAL_BUCKET_LIMIT,
+        });
+    }, [platformId, range.mode, range.hours, range.from, range.to]);
 
     const handleRangeChange = (next) => {
         const params = new URLSearchParams(searchParams);
@@ -285,6 +344,12 @@ export default function ConversionQueueView({ platformId = '' }) {
     const buckets = queueQuery.data || { new_signups: [], failed_payments: [], stalled_contacted: [], counts: {} };
 
     const togglerFor = (key) => () => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
+    const loadMoreFor = (key) => () => {
+        setBucketLimits((current) => ({
+            ...current,
+            [key]: Math.min(MAX_BUCKET_LIMIT, Number(current[key] || INITIAL_BUCKET_LIMIT) + BUCKET_LIMIT_STEP),
+        }));
+    };
 
     return (
         <section className="space-y-4">
@@ -297,25 +362,41 @@ export default function ConversionQueueView({ platformId = '' }) {
             <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">New signups</p>
-                    <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.new_signups ?? 0}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">{buckets.range?.label || 'Last 48 hours'}</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(buckets.counts?.new_signups || 0).toLocaleString()}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                        {buckets.range?.label || 'Last 48 hours'}
+                        {Number(buckets.counts?.new_signups || 0) > Number(buckets.visible_counts?.new_signups || buckets.new_signups?.length || 0)
+                            ? ` · showing ${Number(buckets.visible_counts?.new_signups || buckets.new_signups?.length || 0).toLocaleString()}`
+                            : ''}
+                    </p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Failed payments</p>
-                    <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.failed_payments ?? 0}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">{buckets.range?.label || 'Last 48 hours'}</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(buckets.counts?.failed_payments || 0).toLocaleString()}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                        {buckets.range?.label || 'Last 48 hours'}
+                        {Number(buckets.counts?.failed_payments || 0) > Number(buckets.visible_counts?.failed_payments || buckets.failed_payments?.length || 0)
+                            ? ` · showing ${Number(buckets.visible_counts?.failed_payments || buckets.failed_payments?.length || 0).toLocaleString()}`
+                            : ''}
+                    </p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Stalled contacted ({'>'}72h)</p>
-                    <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.stalled_contacted ?? 0}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">Idle &gt; 72 hours · independent of range</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(buckets.counts?.stalled_contacted || 0).toLocaleString()}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                        Idle &gt; 72 hours · independent of range
+                        {Number(buckets.counts?.stalled_contacted || 0) > Number(buckets.visible_counts?.stalled_contacted || buckets.stalled_contacted?.length || 0)
+                            ? ` · showing ${Number(buckets.visible_counts?.stalled_contacted || buckets.stalled_contacted?.length || 0).toLocaleString()}`
+                            : ''}
+                    </p>
                 </div>
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-white">
                 <SectionHeader
                     title="New signups"
-                    count={buckets.new_signups?.length ?? 0}
+                    count={buckets.counts?.new_signups ?? buckets.new_signups?.length ?? 0}
+                    visibleCount={buckets.visible_counts?.new_signups ?? buckets.new_signups?.length ?? 0}
                     refreshedAgo={refreshedAgo}
                     collapsed={collapsed.new_signups}
                     onToggle={togglerFor('new_signups')}
@@ -333,6 +414,12 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 onCloseCase={() => { setCloseError(null); setCloseDialog({ open: true, client: row }); }}
                             />
                         ))}
+                        <LoadMoreFooter
+                            loaded={buckets.visible_counts?.new_signups ?? buckets.new_signups?.length ?? 0}
+                            total={buckets.counts?.new_signups ?? buckets.new_signups?.length ?? 0}
+                            limit={buckets.limits?.new_signups ?? bucketLimits.new_signups}
+                            onLoadMore={loadMoreFor('new_signups')}
+                        />
                     </div>
                 ) : null}
             </div>
@@ -340,7 +427,8 @@ export default function ConversionQueueView({ platformId = '' }) {
             <div className="rounded-lg border border-slate-200 bg-white">
                 <SectionHeader
                     title="Failed payments"
-                    count={buckets.failed_payments?.length ?? 0}
+                    count={buckets.counts?.failed_payments ?? buckets.failed_payments?.length ?? 0}
+                    visibleCount={buckets.visible_counts?.failed_payments ?? buckets.failed_payments?.length ?? 0}
                     refreshedAgo={refreshedAgo}
                     collapsed={collapsed.failed_payments}
                     onToggle={togglerFor('failed_payments')}
@@ -364,6 +452,12 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 })}
                             />
                         ))}
+                        <LoadMoreFooter
+                            loaded={buckets.visible_counts?.failed_payments ?? buckets.failed_payments?.length ?? 0}
+                            total={buckets.counts?.failed_payments ?? buckets.failed_payments?.length ?? 0}
+                            limit={buckets.limits?.failed_payments ?? bucketLimits.failed_payments}
+                            onLoadMore={loadMoreFor('failed_payments')}
+                        />
                     </div>
                 ) : null}
             </div>
@@ -371,7 +465,8 @@ export default function ConversionQueueView({ platformId = '' }) {
             <div className="rounded-lg border border-slate-200 bg-white">
                 <SectionHeader
                     title="Stalled contacted"
-                    count={buckets.stalled_contacted?.length ?? 0}
+                    count={buckets.counts?.stalled_contacted ?? buckets.stalled_contacted?.length ?? 0}
+                    visibleCount={buckets.visible_counts?.stalled_contacted ?? buckets.stalled_contacted?.length ?? 0}
                     refreshedAgo={refreshedAgo}
                     collapsed={collapsed.stalled_contacted}
                     onToggle={togglerFor('stalled_contacted')}
@@ -388,6 +483,12 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 onCloseCase={() => { setCloseError(null); setCloseDialog({ open: true, client: row }); }}
                             />
                         ))}
+                        <LoadMoreFooter
+                            loaded={buckets.visible_counts?.stalled_contacted ?? buckets.stalled_contacted?.length ?? 0}
+                            total={buckets.counts?.stalled_contacted ?? buckets.stalled_contacted?.length ?? 0}
+                            limit={buckets.limits?.stalled_contacted ?? bucketLimits.stalled_contacted}
+                            onLoadMore={loadMoreFor('stalled_contacted')}
+                        />
                     </div>
                 ) : null}
             </div>

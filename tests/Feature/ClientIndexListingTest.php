@@ -318,6 +318,106 @@ class ClientIndexListingTest extends TestCase
         }
     }
 
+    public function test_conversion_queue_reports_real_totals_and_allows_expanded_signup_limit(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 5, 22, 12, 0, 0, $timezone));
+
+        try {
+            Client::factory()->count(55)->create([
+                'platform_id' => $platform->id,
+                'first_contact_at' => null,
+                'created_at' => now()->subMinutes(30),
+                'updated_at' => now()->subMinutes(30),
+            ]);
+
+            Sanctum::actingAs($admin);
+
+            $defaultResponse = $this->getJson("/api/crm/clients/conversion-queue?platform_id={$platform->id}&range_hours=24");
+            $defaultResponse->assertOk()
+                ->assertJsonPath('counts.new_signups', 55)
+                ->assertJsonPath('visible_counts.new_signups', 50)
+                ->assertJsonPath('limits.new_signups', 50)
+                ->assertJsonPath('has_more.new_signups', true)
+                ->assertJsonCount(50, 'new_signups');
+
+            $expandedResponse = $this->getJson("/api/crm/clients/conversion-queue?platform_id={$platform->id}&range_hours=24&new_signups_limit=75");
+            $expandedResponse->assertOk()
+                ->assertJsonPath('counts.new_signups', 55)
+                ->assertJsonPath('visible_counts.new_signups', 55)
+                ->assertJsonPath('limits.new_signups', 75)
+                ->assertJsonPath('has_more.new_signups', false)
+                ->assertJsonCount(55, 'new_signups');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_closed_reasons_summary_groups_patterns_for_selected_market(): void
+    {
+        $platform = $this->createPlatform();
+        $otherPlatform = Platform::factory()->create([
+            'name' => 'Ghana Market',
+            'country' => 'Ghana',
+            'phone_prefix' => '233',
+            'currency_code' => 'GHS',
+            'timezone' => 'Africa/Accra',
+        ]);
+        $admin = $this->createAdminUser();
+        $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 5, 22, 12, 0, 0, $timezone));
+
+        try {
+            Client::factory()->count(2)->create([
+                'platform_id' => $platform->id,
+                'closed_at' => now()->subDays(2),
+                'close_reason_code' => 'no_response',
+                'closed_by' => $admin->id,
+                'purge_after' => now()->addDays(28),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $platform->id,
+                'closed_at' => now()->subDays(3),
+                'close_reason_code' => 'payment_issue',
+                'close_reason_note' => 'Failed STK attempts and link expired.',
+                'closed_by' => $admin->id,
+                'purge_after' => now()->addDays(27),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $platform->id,
+                'closed_at' => now()->subDays(35),
+                'close_reason_code' => 'declined',
+                'closed_by' => $admin->id,
+                'purge_after' => now()->subDays(5),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $otherPlatform->id,
+                'closed_at' => now()->subDay(),
+                'close_reason_code' => 'no_response',
+                'closed_by' => $admin->id,
+                'purge_after' => now()->addDays(29),
+            ]);
+
+            Sanctum::actingAs($admin);
+
+            $response = $this->getJson("/api/crm/clients/closed-reasons-summary?platform_id={$platform->id}&range_days=30");
+            $response->assertOk()
+                ->assertJsonPath('totals.closed', 3)
+                ->assertJsonPath('totals.previous_closed', 1)
+                ->assertJsonPath('totals.delta', 2)
+                ->assertJsonPath('totals.with_notes', 1)
+                ->assertJsonPath('top_reason.code', 'no_response')
+                ->assertJsonPath('top_reason.count', 2)
+                ->assertJsonPath('top_reason.share', 66.7)
+                ->assertJsonPath('recent_notes.0.reason_code', 'payment_issue')
+                ->assertJsonPath('recent_notes.0.reason_note', 'Failed STK attempts and link expired.');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_conversion_queue_respects_sales_assigned_market_scope(): void
     {
         $kenya = $this->createPlatform();

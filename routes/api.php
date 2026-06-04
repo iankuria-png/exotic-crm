@@ -263,6 +263,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/bulk-refresh-display-images', [ClientController::class, 'bulkRefreshDisplayImages'])->middleware('role:admin,sub_admin,sales,field_sales');
     // Close-case routes — static segments MUST sit before /clients/{client} or route-model binding swallows them.
     Route::get('/clients/close-reasons', [ClientController::class, 'closeReasons'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::get('/clients/closed-reasons-summary', [ClientController::class, 'closedReasonsSummary'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/conversion-queue', [ClientController::class, 'conversionQueue'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-close', [ClientController::class, 'bulkClose'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');

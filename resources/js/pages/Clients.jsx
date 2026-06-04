@@ -1513,7 +1513,7 @@ export default function Clients() {
                     subtitle="Closed cases auto-delete after 30 days. Reopen any time within the window."
                 />
                 {tabStrip}
-                <ClosedCasesView />
+                <ClosedCasesView platformId={platformFilter} />
             </div>
         );
     }

@@ -3888,6 +3888,163 @@ class ClientController extends Controller
         ]);
     }
 
+    public function closedReasonsSummary(Request $request)
+    {
+        $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this client market.'
+        );
+
+        $rangeDays = (int) $request->input('range_days', 30);
+        if (!in_array($rangeDays, [7, 30, 90], true)) {
+            $rangeDays = 30;
+        }
+
+        $platformScope = function ($query) use ($request, $requestedPlatformId) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+
+            if ($requestedPlatformId !== null) {
+                $query->where('platform_id', $requestedPlatformId);
+            }
+        };
+
+        $now = now();
+        $rangeStart = $now->copy()->subDays($rangeDays);
+        $previousStart = $rangeStart->copy()->subDays($rangeDays);
+
+        $baseQuery = Client::query()
+            ->tap($platformScope)
+            ->closed()
+            ->where('closed_at', '>=', $rangeStart);
+
+        $previousQuery = Client::query()
+            ->tap($platformScope)
+            ->closed()
+            ->where('closed_at', '>=', $previousStart)
+            ->where('closed_at', '<', $rangeStart);
+
+        $total = (clone $baseQuery)->count();
+        $previousTotal = (clone $previousQuery)->count();
+        $withNotes = (clone $baseQuery)
+            ->whereNotNull('close_reason_note')
+            ->where('close_reason_note', '!=', '')
+            ->count();
+        $unknownCount = (clone $baseQuery)
+            ->where(function ($query) {
+                $query->whereNull('close_reason_code')
+                    ->orWhere('close_reason_code', '');
+            })
+            ->count();
+
+        $reasonCounts = (clone $baseQuery)
+            ->select('close_reason_code', DB::raw('COUNT(*) as total'))
+            ->whereNotNull('close_reason_code')
+            ->where('close_reason_code', '!=', '')
+            ->groupBy('close_reason_code')
+            ->pluck('total', 'close_reason_code')
+            ->map(fn ($count) => (int) $count)
+            ->all();
+
+        $previousReasonCounts = (clone $previousQuery)
+            ->select('close_reason_code', DB::raw('COUNT(*) as total'))
+            ->whereNotNull('close_reason_code')
+            ->where('close_reason_code', '!=', '')
+            ->groupBy('close_reason_code')
+            ->pluck('total', 'close_reason_code')
+            ->map(fn ($count) => (int) $count)
+            ->all();
+
+        $knownReasons = array_map(function (array $option) use ($reasonCounts, $previousReasonCounts, $total) {
+            $code = (string) $option['code'];
+            $count = (int) ($reasonCounts[$code] ?? 0);
+            $previousCount = (int) ($previousReasonCounts[$code] ?? 0);
+
+            return [
+                'code' => $code,
+                'label' => (string) $option['label'],
+                'count' => $count,
+                'share' => $total > 0 ? round(($count / $total) * 100, 1) : 0.0,
+                'previous_count' => $previousCount,
+                'delta' => $count - $previousCount,
+            ];
+        }, CrmClientCloseReason::options());
+
+        $extraReasonRows = collect($reasonCounts)
+            ->reject(fn ($_count, string $code) => CrmClientCloseReason::isValid($code))
+            ->map(fn (int $count, string $code) => [
+                'code' => $code,
+                'label' => $code,
+                'count' => $count,
+                'share' => $total > 0 ? round(($count / $total) * 100, 1) : 0.0,
+                'previous_count' => (int) ($previousReasonCounts[$code] ?? 0),
+                'delta' => $count - (int) ($previousReasonCounts[$code] ?? 0),
+            ])
+            ->values()
+            ->all();
+
+        $reasons = collect([...$knownReasons, ...$extraReasonRows])
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+
+        if ($unknownCount > 0) {
+            $reasons[] = [
+                'code' => 'unknown',
+                'label' => 'No Reason Captured',
+                'count' => $unknownCount,
+                'share' => $total > 0 ? round(($unknownCount / $total) * 100, 1) : 0.0,
+                'previous_count' => 0,
+                'delta' => $unknownCount,
+            ];
+        }
+
+        $topReason = collect($reasons)->first(fn (array $reason) => (int) $reason['count'] > 0);
+
+        $recentNotes = (clone $baseQuery)
+            ->with(['platform:id,name', 'closedBy:id,name,email'])
+            ->whereNotNull('close_reason_note')
+            ->where('close_reason_note', '!=', '')
+            ->orderBy('closed_at', 'desc')
+            ->limit(5)
+            ->get()
+            ->map(fn (Client $client) => [
+                'id' => (int) $client->id,
+                'name' => $client->name,
+                'phone' => $client->phone_normalized,
+                'reason_code' => $client->close_reason_code,
+                'reason_label' => CrmClientCloseReason::label((string) $client->close_reason_code),
+                'reason_note' => $client->close_reason_note,
+                'closed_at' => optional($client->closed_at)?->toIso8601String(),
+                'platform' => $client->platform ? ['id' => (int) $client->platform->id, 'name' => $client->platform->name] : null,
+                'closed_by' => $client->closedBy ? [
+                    'id' => (int) $client->closedBy->id,
+                    'name' => $client->closedBy->name,
+                    'email' => $client->closedBy->email,
+                ] : null,
+            ])
+            ->values();
+
+        return response()->json([
+            'range' => [
+                'days' => $rangeDays,
+                'label' => "Last {$rangeDays} days",
+                'start' => $rangeStart->toIso8601String(),
+                'end' => $now->toIso8601String(),
+            ],
+            'totals' => [
+                'closed' => $total,
+                'previous_closed' => $previousTotal,
+                'delta' => $total - $previousTotal,
+                'with_notes' => $withNotes,
+                'without_reason' => $unknownCount,
+            ],
+            'top_reason' => $topReason,
+            'reasons' => $reasons,
+            'recent_notes' => $recentNotes,
+        ]);
+    }
+
     public function closeCase(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);
@@ -4074,6 +4231,11 @@ class ClientController extends Controller
         // `from`/`to` ISO dates (custom range). Defaults to last 48h to match
         // the customer-service intake cadence.
         [$rangeStart, $rangeEnd, $rangeLabel] = $this->resolveConversionQueueRange($request);
+        $limits = [
+            'new_signups' => $this->resolveConversionQueueLimit($request, 'new_signups_limit'),
+            'failed_payments' => $this->resolveConversionQueueLimit($request, 'failed_payments_limit'),
+            'stalled_contacted' => $this->resolveConversionQueueLimit($request, 'stalled_contacted_limit'),
+        ];
 
         $newSignupsQuery = Client::query()
             ->with(['platform:id,name'])
@@ -4090,7 +4252,11 @@ class ClientController extends Controller
         if ($rangeEnd !== null) {
             $newSignupsQuery->where('created_at', '<=', $rangeEnd);
         }
-        $newSignups = $newSignupsQuery->orderBy('created_at', 'desc')->limit(50)->get();
+        $newSignupsTotal = (clone $newSignupsQuery)->count();
+        $newSignups = (clone $newSignupsQuery)
+            ->orderBy('created_at', 'desc')
+            ->limit($limits['new_signups'])
+            ->get();
 
         $failedPaymentsQuery = Payment::query()
             ->with(['client:id,name,phone_normalized,city,platform_id,closed_at', 'client.platform:id,name', 'product:id,name,display_name'])
@@ -4104,9 +4270,13 @@ class ClientController extends Controller
         if ($rangeEnd !== null) {
             $failedPaymentsQuery->where('created_at', '<=', $rangeEnd);
         }
-        $failedPayments = $failedPaymentsQuery->orderBy('created_at', 'desc')->limit(50)->get();
+        $failedPaymentsTotal = (clone $failedPaymentsQuery)->count();
+        $failedPayments = (clone $failedPaymentsQuery)
+            ->orderBy('created_at', 'desc')
+            ->limit($limits['failed_payments'])
+            ->get();
 
-        $stalled = Client::query()
+        $stalledQuery = Client::query()
             ->with(['platform:id,name', 'assignedAgent:id,name'])
             ->tap($platformScope)
             ->notClosed()
@@ -4115,8 +4285,10 @@ class ClientController extends Controller
             ->whereDoesntHave('deals', function ($q) {
                 $q->whereIn('status', ['active', 'paid']);
             })
-            ->orderBy('last_contact_at', 'asc')
-            ->limit(50)
+            ->orderBy('last_contact_at', 'asc');
+        $stalledTotal = (clone $stalledQuery)->count();
+        $stalled = (clone $stalledQuery)
+            ->limit($limits['stalled_contacted'])
             ->get();
 
         $now = now();
@@ -4171,10 +4343,22 @@ class ClientController extends Controller
                 'assigned_agent' => $c->assignedAgent ? ['id' => $c->assignedAgent->id, 'name' => $c->assignedAgent->name] : null,
             ])->values(),
             'counts' => [
+                'new_signups' => $newSignupsTotal,
+                'failed_payments' => $failedPaymentsTotal,
+                'stalled_contacted' => $stalledTotal,
+                'total' => $newSignupsTotal + $failedPaymentsTotal + $stalledTotal,
+            ],
+            'visible_counts' => [
                 'new_signups' => $newSignups->count(),
                 'failed_payments' => $failedPayments->count(),
                 'stalled_contacted' => $stalled->count(),
                 'total' => $newSignups->count() + $failedPayments->count() + $stalled->count(),
+            ],
+            'limits' => $limits,
+            'has_more' => [
+                'new_signups' => $newSignupsTotal > $newSignups->count(),
+                'failed_payments' => $failedPaymentsTotal > $failedPayments->count(),
+                'stalled_contacted' => $stalledTotal > $stalled->count(),
             ],
             'sla_thresholds' => [
                 'green_max_minutes' => 5,
@@ -4242,6 +4426,17 @@ class ClientController extends Controller
         };
 
         return [$start, null, $label];
+    }
+
+    private function resolveConversionQueueLimit(Request $request, string $key): int
+    {
+        $limit = (int) $request->input($key, 50);
+
+        if ($limit < 1) {
+            return 50;
+        }
+
+        return min($limit, 500);
     }
 
     private function conversionSlaBucket(\DateTimeInterface $reference): string
