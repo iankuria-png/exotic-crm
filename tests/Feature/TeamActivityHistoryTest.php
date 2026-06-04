@@ -214,6 +214,88 @@ class TeamActivityHistoryTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_payment_filter_returns_collected_payment_records_assigned_to_the_agent(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-04 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'payment-filter@example.test']);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'amount' => 15400,
+            'currency' => 'KES',
+            'expires_at' => now()->addMonth(),
+        ]);
+        $payment = $this->createTeamPayment($platform, $deal, [
+            'amount' => 15400,
+            'currency' => 'KES',
+            'transaction_reference' => 'PAY-15400',
+            'provider_key' => 'mpesa_stk',
+            'source' => 'hosted_checkout',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subMinutes(20),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.0077);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-04&to=2026-06-04&platform_id=' . $platform->id . '&entity_type=payment&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.id', $payment->id)
+            ->assertJsonPath('data.0.action', 'payment_record')
+            ->assertJsonPath('data.0.payment.normalized_total', 118.58)
+            ->assertJsonPath('data.0.payment.channel.label', 'Self-service')
+            ->assertJsonPath('data.0.deal_meta.amount_display', 'KES 15,400')
+            ->assertJsonPath('data.0.deal_meta.product.name', $deal->product->display_name ?: $deal->product->name);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_subscription_filter_includes_value_product_status_and_expiry_context(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-04 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Ghana', 'currency_code' => 'GHS']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'subscription-filter@example.test']);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'amount' => 350,
+            'currency' => 'GHS',
+            'plan_type' => 'vip',
+            'duration' => 'monthly',
+            'status' => 'active',
+            'expires_at' => Carbon::parse('2026-07-04 12:00:00'),
+        ]);
+        $auditLog = $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => CrmAuditAction::DEAL_ACTIVATE,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'after_state' => ['deal_status' => 'active'],
+            'created_at' => now()->subMinutes(15),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-04&to=2026-06-04&platform_id=' . $platform->id . '&entity_type=subscription');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $auditLog->id)
+            ->assertJsonPath('data.0.entity_type', 'deal')
+            ->assertJsonPath('data.0.deal_meta.type', 'subscription')
+            ->assertJsonPath('data.0.deal_meta.amount_display', 'GHS 350')
+            ->assertJsonPath('data.0.deal_meta.status', 'active')
+            ->assertJsonPath('data.0.deal_meta.duration', 'monthly')
+            ->assertJsonPath('data.0.deal_meta.plan_type', 'vip')
+            ->assertJsonPath('data.0.deal_meta.product.name', $deal->product->display_name ?: $deal->product->name)
+            ->assertJsonPath('data.0.deal_meta.expires_at', '2026-07-04T12:00:00+00:00');
+
+        Carbon::setTestNow();
+    }
+
     public function test_team_me_platform_options_include_inactive_but_accessible_markets(): void
     {
         $subAdmin = $this->createTeamUser('sub_admin');

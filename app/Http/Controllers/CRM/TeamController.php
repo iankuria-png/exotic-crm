@@ -52,7 +52,7 @@ class TeamController extends Controller
     public function leaderboard(Request $request)
     {
         $validated = $request->validate([
-            'period' => 'nullable|in:today,week,month',
+            'period' => 'nullable|in:today,week,month,30d',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
@@ -109,7 +109,7 @@ class TeamController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
-            'entity_type' => 'nullable|in:client,lead,payment,deal,user,platform',
+            'entity_type' => 'nullable|in:client,lead,payment,deal,subscription,user,platform',
             'action_focus' => 'nullable|in:free_trials_discounts',
             'search' => 'nullable|string|max:120',
             'include_system' => 'nullable|boolean',
@@ -161,7 +161,7 @@ class TeamController extends Controller
     public function myStats(Request $request)
     {
         $validated = $request->validate([
-            'period' => 'nullable|in:today,week,month',
+            'period' => 'nullable|in:today,week,month,30d',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',

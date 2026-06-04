@@ -17,11 +17,12 @@ import { getCountryFlag, platformOptionsWithFlags } from '../utils/flags';
 import { formatCurrency } from '../utils/currency';
 
 const TEAM_PERIOD_STORAGE_KEY = 'exoticcrm.team.period';
-const DEFAULT_PERIOD = 'week';
+const DEFAULT_PERIOD = '30d';
 const DEFAULT_GOAL_PERIOD = 'weekly';
 const DEFAULT_GOAL_ROLE_SCOPE = 'sales';
 const DEFAULT_LEADERBOARD_ROLE_FILTER = 'all';
 const PERIOD_OPTIONS = [
+    { value: '30d', label: '30 days' },
     { value: 'today', label: 'Today' },
     { value: 'week', label: 'This Week' },
     { value: 'month', label: 'This Month' },
@@ -42,7 +43,7 @@ const ACTIVITY_ENTITY_TYPE_OPTIONS = [
     { value: 'client', label: 'Client' },
     { value: 'lead', label: 'Lead' },
     { value: 'payment', label: 'Payment' },
-    { value: 'deal', label: 'Deal' },
+    { value: 'subscription', label: 'Subscription' },
     { value: 'user', label: 'User' },
     { value: 'platform', label: 'Platform' },
 ];
@@ -121,6 +122,14 @@ function getPeriodDateRange(period) {
         };
     }
 
+    if (period === '30d') {
+        start.setDate(start.getDate() - 29);
+        return {
+            from: toInputDateString(start),
+            to: toInputDateString(end),
+        };
+    }
+
     const day = start.getDay();
     const offset = day === 0 ? 6 : day - 1;
     start.setDate(start.getDate() - offset);
@@ -157,6 +166,9 @@ function comparisonLabel(period) {
     }
     if (period === 'month') {
         return 'last month';
+    }
+    if (period === '30d') {
+        return 'the previous 30 days';
     }
     if (period === 'custom') {
         return 'the previous period';
@@ -320,6 +332,14 @@ function dealActivitySummary(meta) {
 
     if (meta.type === 'free_trial') {
         return meta.duration_days > 0 ? `${meta.duration_days} days free trial` : 'Free trial';
+    }
+
+    if (meta.type === 'subscription') {
+        return [
+            meta.amount_display,
+            meta.product?.name || meta.plan_type,
+            meta.expires_at ? `expires ${formatDateTime(meta.expires_at)}` : null,
+        ].filter(Boolean).join(' • ');
     }
 
     return '';
@@ -660,23 +680,42 @@ function ActivityDealDetail({ meta }) {
         return null;
     }
 
+    const heading = meta.type === 'discount'
+        ? 'Discount context'
+        : meta.type === 'free_trial'
+            ? 'Free-trial context'
+            : 'Subscription context';
+    const productLabel = meta.product?.name || meta.plan_type || 'Package not recorded';
+    const statusLabel = [meta.status, meta.duration].filter(Boolean).join(' • ');
+
     return (
         <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 text-xs sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
             <div className="min-w-0">
-                <p className="font-semibold text-slate-700">
-                    {meta.type === 'discount' ? 'Discount context' : 'Free-trial context'}
-                </p>
+                <p className="font-semibold text-slate-700">{heading}</p>
                 <p className="mt-1 truncate text-slate-500">{meta.client?.name || 'Unlinked client'}</p>
             </div>
             <div>
-                <p className="font-semibold text-slate-900">{dealActivitySummary(meta)}</p>
-                {meta.discount_source ? (
-                    <p className="mt-1 text-slate-500">{String(meta.discount_source).replace(/_/g, ' ')}</p>
-                ) : null}
+                <p className="font-semibold text-slate-900">{dealActivitySummary(meta) || productLabel}</p>
+                <p className="mt-1 text-slate-500">
+                    {meta.discount_source ? String(meta.discount_source).replace(/_/g, ' ') : statusLabel}
+                </p>
             </div>
             <div>
-                <p className="font-medium text-slate-500">Approved by</p>
-                <p className="mt-1 font-semibold text-slate-800">{meta.approver?.name || 'Not recorded'}</p>
+                {meta.type === 'subscription' ? (
+                    <>
+                        <p className="font-medium text-slate-500">Product & expiry</p>
+                        <p className="mt-1 font-semibold text-slate-800">{productLabel}</p>
+                        <p className="mt-1 text-slate-500">{meta.expires_at ? `Expires ${formatDateTime(meta.expires_at)}` : 'Expiry not recorded'}</p>
+                    </>
+                ) : (
+                    <>
+                        <p className="font-medium text-slate-500">Approved by</p>
+                        <p className="mt-1 font-semibold text-slate-800">{meta.approver?.name || 'Not recorded'}</p>
+                    </>
+                )}
+                {meta.amount_display && meta.type !== 'subscription' ? (
+                    <p className="mt-1 text-slate-500">{meta.amount_display}</p>
+                ) : null}
             </div>
         </div>
     );
@@ -791,6 +830,9 @@ function createActivityRowsCsv(rows, agentName) {
             'Payment Channel',
             'Payment Method',
             'Payment Status',
+            'Subscription Value',
+            'Subscription Product',
+            'Subscription Expiry',
             'Deal Context',
             'Approver',
         ]),
@@ -812,6 +854,9 @@ function createActivityRowsCsv(rows, agentName) {
             row.payment?.channel?.label || '',
             row.payment?.method?.label || '',
             row.payment?.status || '',
+            row.deal_meta?.amount_display || '',
+            row.deal_meta?.product?.name || row.deal_meta?.plan_type || '',
+            row.deal_meta?.expires_at || '',
             dealActivitySummary(row.deal_meta),
             row.deal_meta?.approver?.name || '',
         ]));

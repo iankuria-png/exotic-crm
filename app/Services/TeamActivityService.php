@@ -24,6 +24,7 @@ class TeamActivityService
     public const PERIOD_TODAY = 'today';
     public const PERIOD_WEEK = 'week';
     public const PERIOD_MONTH = 'month';
+    public const PERIOD_30_DAYS = '30d';
 
     public const GOAL_PERIOD_WEEKLY = 'weekly';
     public const GOAL_PERIOD_MONTHLY = 'monthly';
@@ -337,7 +338,9 @@ class TeamActivityService
         User $viewer,
         string $roleFilter = self::ROLE_FILTER_ALL,
         ?string $currencyMode = null,
-        ?string $targetCurrency = null
+        ?string $targetCurrency = null,
+        ?CarbonInterface $from = null,
+        ?CarbonInterface $to = null
     ): array
     {
         $this->assertManager($viewer);
@@ -352,6 +355,8 @@ class TeamActivityService
         if (empty($agentIds)) {
             return [
                 'period' => $this->normalizeNamedPeriod($period),
+                'from' => $from ? Carbon::instance($from)->toDateString() : null,
+                'to' => $to ? Carbon::instance($to)->toDateString() : null,
                 'platform_id' => $platformId,
                 'role_filter' => $roleFilter,
                 'currency_mode' => $currencyMode,
@@ -360,7 +365,7 @@ class TeamActivityService
             ];
         }
 
-        ['start' => $start, 'end' => $end] = $this->resolveNamedPeriodRange($period);
+        ['start' => $start, 'end' => $end] = $this->resolveReportingRange($period, $from, $to);
 
         $actionMetrics = $this->aggregateActionMetricsForRange($start, $end, $viewer, $platformId, $agentIds);
         $sessionTotals = $this->aggregateSessionTotals($agentIds, $start, $end);
@@ -435,6 +440,8 @@ class TeamActivityService
 
         return [
             'period' => $this->normalizeNamedPeriod($period),
+            'from' => $start->toDateString(),
+            'to' => $end->copy()->subSecond()->toDateString(),
             'platform_id' => $platformId,
             'role_filter' => $roleFilter,
             'currency_mode' => $currencyMode,
@@ -500,11 +507,18 @@ class TeamActivityService
         ];
     }
 
-    public function getMyStats(User $user, string $period = self::PERIOD_WEEK, ?int $platformId = null, ?string $targetCurrency = null): array
+    public function getMyStats(
+        User $user,
+        string $period = self::PERIOD_WEEK,
+        ?int $platformId = null,
+        ?string $targetCurrency = null,
+        ?CarbonInterface $from = null,
+        ?CarbonInterface $to = null
+    ): array
     {
         $this->assertPlatformAccessible($user, $platformId);
 
-        ['start' => $start, 'end' => $end] = $this->resolveNamedPeriodRange($period);
+        ['start' => $start, 'end' => $end] = $this->resolveReportingRange($period, $from, $to);
         $previousRange = $this->previousRange($start, $end);
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
 
@@ -558,6 +572,11 @@ class TeamActivityService
         $page = max(1, (int) ($options['page'] ?? 1));
         $perPage = min(100, max(5, (int) ($options['per_page'] ?? 25)));
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($options['target_currency'] ?? null);
+        $entityType = $this->normalizeActivityEntityType($options['entity_type'] ?? null);
+
+        if ($entityType === 'payment') {
+            return $this->getAgentPaymentActivityFeed($agent, $start, $end, $platformId, $viewer, $options, $targetCurrency);
+        }
 
         $query = AuditLog::query()
             ->with('actor:id,name')
@@ -573,7 +592,6 @@ class TeamActivityService
             $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
         }
 
-        $entityType = trim((string) ($options['entity_type'] ?? ''));
         if ($entityType !== '') {
             $query->where('entity_type', $entityType);
         }
@@ -608,6 +626,83 @@ class TeamActivityService
             'to' => Carbon::instance($to)->toDateString(),
             'platform_id' => $platformId,
             'data' => $items,
+            'meta' => [
+                'current_page' => (int) $paginator->currentPage(),
+                'last_page' => (int) $paginator->lastPage(),
+                'per_page' => (int) $paginator->perPage(),
+                'total' => (int) $paginator->total(),
+            ],
+        ];
+    }
+
+    private function getAgentPaymentActivityFeed(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?int $platformId,
+        ?User $viewer,
+        array $options,
+        string $targetCurrency
+    ): array {
+        $page = max(1, (int) ($options['page'] ?? 1));
+        $perPage = min(100, max(5, (int) ($options['per_page'] ?? 25)));
+
+        $query = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->where('deals.assigned_to', $agent->id)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()])
+            ->select('payments.*')
+            ->with([
+                'client:id,name',
+                'deal.client:id,name',
+                'deal.product:id,name,display_name,tier',
+                'deal.platform:id,name,country,currency_code',
+                'platform:id,name,country,currency_code',
+                'manualSubmission',
+                'routingDecisions',
+                'providerTransactions',
+            ])
+            ->orderByRaw('COALESCE(payments.completed_at, payments.created_at) DESC')
+            ->orderByDesc('payments.id');
+
+        if ($platformId) {
+            $query->where('payments.platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
+        }
+
+        $search = trim((string) ($options['search'] ?? ''));
+        if ($search !== '') {
+            $query->where(function ($searchQuery) use ($search) {
+                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $searchQuery
+                    ->where('payments.transaction_reference', 'like', $like)
+                    ->orWhere('payments.reference_number', 'like', $like)
+                    ->orWhere('payments.phone', 'like', $like)
+                    ->orWhereHas('client', fn ($clientQuery) => $clientQuery->where('name', 'like', $like))
+                    ->orWhereHas('deal.client', fn ($clientQuery) => $clientQuery->where('name', 'like', $like));
+
+                if (ctype_digit($search)) {
+                    $searchQuery->orWhere('payments.id', (int) $search);
+                }
+            });
+        }
+
+        $paginator = $query->paginate($perPage, ['payments.*'], 'page', $page);
+        $payments = $paginator->getCollection();
+        $paymentPayloads = $this->paymentActivityPayloads($payments->keyBy('id'), $targetCurrency);
+
+        return [
+            'from' => Carbon::instance($start)->toDateString(),
+            'to' => Carbon::instance($end)->copy()->subSecond()->toDateString(),
+            'platform_id' => $platformId,
+            'data' => $payments
+                ->map(fn (Payment $payment) => $this->formatPaymentActivityRecord($payment, $paymentPayloads[(int) $payment->id] ?? null))
+                ->values()
+                ->all(),
             'meta' => [
                 'current_page' => (int) $paginator->currentPage(),
                 'last_page' => (int) $paginator->lastPage(),
@@ -1664,8 +1759,7 @@ class TeamActivityService
         $paymentPayloads = $this->paymentActivityPayloads($paymentsById, $targetCurrency);
 
         $dealLogs = $logs
-            ->filter(fn (AuditLog $log) => in_array((string) $log->action, [CrmAuditAction::DEAL_FREE_TRIAL, CrmAuditAction::DEAL_DISCOUNT], true)
-                && (string) $log->entity_type === 'deal')
+            ->filter(fn (AuditLog $log) => (string) $log->entity_type === 'deal')
             ->values();
         $dealsById = $this->dealsForActivityLogs($dealLogs);
         $approversById = $this->approversForDealActivityLogs($dealLogs);
@@ -1681,7 +1775,7 @@ class TeamActivityService
                     }
                 }
 
-                if (in_array((string) $log->action, [CrmAuditAction::DEAL_FREE_TRIAL, CrmAuditAction::DEAL_DISCOUNT], true)) {
+                if ((string) $log->entity_type === 'deal') {
                     $dealMeta = $this->dealActivityMeta($log, $dealsById[(int) $log->entity_id] ?? null, $approversById);
                     if ($dealMeta !== null) {
                         $extras['deal_meta'] = $dealMeta;
@@ -1775,7 +1869,7 @@ class TeamActivityService
 
         return Deal::query()
             ->whereIn('id', $dealIds)
-            ->with(['platform:id,name,currency_code,country', 'client:id,name'])
+            ->with(['platform:id,name,currency_code,country', 'client:id,name', 'product:id,name,display_name,tier'])
             ->get()
             ->keyBy('id');
     }
@@ -1805,6 +1899,30 @@ class TeamActivityService
             'id' => (int) $log->actor->id,
             'name' => $log->actor->name,
         ] : null;
+        $currency = strtoupper((string) ($deal?->currency ?: $deal?->platform?->currency_code ?: ''));
+        $base = [
+            'type' => 'subscription',
+            'amount' => $deal?->amount !== null ? (float) $deal->amount : null,
+            'currency' => $currency,
+            'amount_display' => $deal?->amount !== null && $currency !== ''
+                ? ($currency . ' ' . $this->formatMoney((float) $deal->amount))
+                : null,
+            'status' => $deal?->status,
+            'expires_at' => $deal?->expires_at?->toIso8601String(),
+            'activated_at' => $deal?->activated_at?->toIso8601String(),
+            'duration' => $deal?->duration,
+            'duration_days' => $deal?->duration_days !== null ? (int) $deal->duration_days : null,
+            'plan_type' => $deal?->plan_type,
+            'product' => $deal?->product ? [
+                'id' => (int) $deal->product->id,
+                'name' => $deal->product->display_name ?: $deal->product->name,
+                'tier' => $deal->product->tier,
+            ] : null,
+            'client' => $deal?->client ? [
+                'id' => (int) $deal->client->id,
+                'name' => $deal->client->name,
+            ] : null,
+        ];
 
         if ((string) $log->action === CrmAuditAction::DEAL_DISCOUNT) {
             $approverId = (int) ($afterState['discount_approved_by'] ?? 0);
@@ -1815,7 +1933,7 @@ class TeamActivityService
                 ]
                 : $actorPayload;
 
-            return [
+            return array_merge($base, [
                 'type' => 'discount',
                 'discount_percentage' => isset($afterState['discount_percentage'])
                     ? (float) $afterState['discount_percentage']
@@ -1826,31 +1944,64 @@ class TeamActivityService
                 'discounted_amount' => isset($afterState['amount'])
                     ? (float) $afterState['amount']
                     : ($deal?->amount !== null ? (float) $deal->amount : null),
-                'currency' => strtoupper((string) ($deal?->currency ?: $deal?->platform?->currency_code ?: '')),
                 'discount_source' => $afterState['discount_source'] ?? $deal?->discount_source,
                 'approver' => $approver,
-                'client' => $deal?->client ? [
-                    'id' => (int) $deal->client->id,
-                    'name' => $deal->client->name,
-                ] : null,
-            ];
+            ]);
         }
 
         if ((string) $log->action === CrmAuditAction::DEAL_FREE_TRIAL) {
-            return [
+            return array_merge($base, [
                 'type' => 'free_trial',
                 'is_free_trial' => true,
                 'duration_days' => (int) ($afterState['duration_days'] ?? $afterState['additional_days'] ?? $deal?->duration_days ?? 0),
                 'approval_mode' => $afterState['approval_mode'] ?? null,
                 'approver' => $actorPayload,
-                'client' => $deal?->client ? [
+            ]);
+        }
+
+        return $deal ? $base : null;
+    }
+
+    private function formatPaymentActivityRecord(Payment $payment, ?array $paymentPayload): array
+    {
+        $eventAt = $payment->completed_at ?: $payment->created_at;
+        $deal = $payment->deal;
+
+        return [
+            'id' => (int) $payment->id,
+            'action' => 'payment_record',
+            'label' => 'Collected payment',
+            'entity_type' => 'payment',
+            'entity_id' => (int) $payment->id,
+            'entity_url' => $this->entityUrl('payment', (int) $payment->id),
+            'platform_id' => (int) $payment->platform_id,
+            'reason' => $payment->transaction_reference ?: $payment->reference_number,
+            'created_at' => $eventAt?->toIso8601String(),
+            'payment' => $paymentPayload,
+            'deal_meta' => $deal ? [
+                'type' => 'subscription',
+                'amount' => $deal->amount !== null ? (float) $deal->amount : null,
+                'currency' => strtoupper((string) ($deal->currency ?: $deal->platform?->currency_code ?: $payment->currency)),
+                'amount_display' => $deal->amount !== null
+                    ? (strtoupper((string) ($deal->currency ?: $deal->platform?->currency_code ?: $payment->currency)) . ' ' . $this->formatMoney((float) $deal->amount))
+                    : null,
+                'status' => $deal->status,
+                'expires_at' => $deal->expires_at?->toIso8601String(),
+                'activated_at' => $deal->activated_at?->toIso8601String(),
+                'duration' => $deal->duration,
+                'duration_days' => $deal->duration_days !== null ? (int) $deal->duration_days : null,
+                'plan_type' => $deal->plan_type,
+                'product' => $deal->product ? [
+                    'id' => (int) $deal->product->id,
+                    'name' => $deal->product->display_name ?: $deal->product->name,
+                    'tier' => $deal->product->tier,
+                ] : null,
+                'client' => $deal->client ? [
                     'id' => (int) $deal->client->id,
                     'name' => $deal->client->name,
                 ] : null,
-            ];
-        }
-
-        return null;
+            ] : null,
+        ];
     }
 
     private function formatActivityLog(AuditLog $log, array $extras = []): array
@@ -2558,8 +2709,19 @@ class TeamActivityService
         $period = strtolower(trim($period));
 
         return match ($period) {
-            self::PERIOD_TODAY, self::PERIOD_WEEK, self::PERIOD_MONTH => $period,
+            self::PERIOD_TODAY, self::PERIOD_WEEK, self::PERIOD_MONTH, self::PERIOD_30_DAYS => $period,
             default => self::PERIOD_WEEK,
+        };
+    }
+
+    private function normalizeActivityEntityType(mixed $entityType): string
+    {
+        $value = strtolower(trim((string) $entityType));
+
+        return match ($value) {
+            'subscription' => 'deal',
+            'client', 'lead', 'payment', 'deal', 'user', 'platform' => $value,
+            default => '',
         };
     }
 
@@ -2628,11 +2790,37 @@ class TeamActivityService
                 'start' => $now->copy()->startOfMonth(),
                 'end' => $now->copy(),
             ],
+            self::PERIOD_30_DAYS => [
+                'start' => $now->copy()->subDays(29)->startOfDay(),
+                'end' => $now->copy(),
+            ],
             default => [
                 'start' => $now->copy()->startOfWeek(),
                 'end' => $now->copy(),
             ],
         };
+    }
+
+    private function resolveReportingRange(string $period, ?CarbonInterface $from = null, ?CarbonInterface $to = null): array
+    {
+        if ($from && $to) {
+            $start = Carbon::instance($from)->startOfDay();
+            $end = Carbon::instance($to)->addDay()->startOfDay();
+
+            if ($start->gt($end)) {
+                [$start, $end] = [$end->copy()->subDay()->startOfDay(), $start->copy()->addDay()->startOfDay()];
+            }
+
+            return [
+                'start' => $start,
+                'end' => $end,
+            ];
+        }
+
+        $range = $this->resolveNamedPeriodRange($period);
+        $range['end'] = Carbon::instance($range['end'])->addSecond();
+
+        return $range;
     }
 
     private function previousRange(CarbonInterface $start, CarbonInterface $end): array

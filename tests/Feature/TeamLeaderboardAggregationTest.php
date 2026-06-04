@@ -388,6 +388,46 @@ class TeamLeaderboardAggregationTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_leaderboard_honors_custom_date_ranges_for_ceo_dashboard_alignment(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-04 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'custom-window@example.test']);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'amount' => 100000,
+            'currency' => 'KES',
+        ]);
+
+        $this->createTeamPayment($platform, $deal, [
+            'amount' => 100000,
+            'currency' => 'KES',
+            'created_at' => Carbon::parse('2026-05-20 09:00:00'),
+            'completed_at' => Carbon::parse('2026-05-20 09:00:00'),
+        ]);
+        $this->createTeamPayment($platform, $deal, [
+            'amount' => 50000,
+            'currency' => 'KES',
+            'created_at' => Carbon::parse('2026-04-28 09:00:00'),
+            'completed_at' => Carbon::parse('2026-04-28 09:00:00'),
+        ]);
+        $this->createRate('KES', 'USD', Carbon::parse('2026-05-20'), 0.0077);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/leaderboard?from=2026-05-06&to=2026-06-04&platform_id=' . $platform->id . '&currency_mode=flat&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('from', '2026-05-06')
+            ->assertJsonPath('to', '2026-06-04')
+            ->assertJsonPath('data.0.user_id', $agent->id)
+            ->assertJsonPath('data.0.revenue_display', 'KES 100,000')
+            ->assertJsonPath('data.0.normalized_revenue_total', 770);
+
+        Carbon::setTestNow();
+    }
+
     private function createRate(string $source, string $target, Carbon $date, float $rate): void
     {
         ReportingFxRate::query()->create([
