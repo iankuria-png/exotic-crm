@@ -356,6 +356,38 @@ class TeamLeaderboardAggregationTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_leaderboard_revenue_window_uses_payment_completed_at_when_available(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'completed-window@example.test']);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'amount' => 10000,
+            'currency' => 'KES',
+        ]);
+
+        $this->createTeamPayment($platform, $deal, [
+            'amount' => 10000,
+            'currency' => 'KES',
+            'created_at' => now()->subDay(),
+            'completed_at' => now()->subHour(),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.0077);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&currency_mode=flat&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.user_id', $agent->id)
+            ->assertJsonPath('data.0.revenue_display', 'KES 10,000')
+            ->assertJsonPath('data.0.normalized_revenue_total', 77);
+
+        Carbon::setTestNow();
+    }
+
     private function createRate(string $source, string $target, Carbon $date, float $rate): void
     {
         ReportingFxRate::query()->create([

@@ -110,10 +110,12 @@ class TeamController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'entity_type' => 'nullable|in:client,lead,payment,deal,user,platform',
+            'action_focus' => 'nullable|in:free_trials_discounts',
             'search' => 'nullable|string|max:120',
             'include_system' => 'nullable|boolean',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:5|max:100',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         $hasDate = isset($validated['date']);
@@ -134,6 +136,7 @@ class TeamController extends Controller
         $to = $hasRange
             ? now()->parse((string) $validated['to'])
             : now()->parse((string) $validated['date']);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
 
         return response()->json(
             $this->teamActivityService->getAgentActivityFeed(
@@ -144,10 +147,12 @@ class TeamController extends Controller
                 $request->user(),
                 [
                     'entity_type' => isset($validated['entity_type']) ? (string) $validated['entity_type'] : null,
+                    'action_focus' => isset($validated['action_focus']) ? (string) $validated['action_focus'] : null,
                     'search' => isset($validated['search']) ? (string) $validated['search'] : null,
                     'include_system' => (bool) ($validated['include_system'] ?? false),
                     'page' => (int) ($validated['page'] ?? 1),
                     'per_page' => (int) ($validated['per_page'] ?? 25),
+                    'target_currency' => $targetCurrency,
                 ]
             )
         );

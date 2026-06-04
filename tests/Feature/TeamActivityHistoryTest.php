@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\ReportingFxRate;
+use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -86,6 +88,128 @@ class TeamActivityHistoryTest extends TestCase
             ->assertJsonPath('to', '2026-03-26')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.id', $todayLog->id);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_agent_activity_feed_paginates_excludes_system_events_and_enriches_payment_and_deal_rows(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
+        $admin = $this->createTeamUser('admin', [], ['name' => 'Manager One']);
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'activity-enriched@example.test']);
+        $client = $this->createTeamClient($platform, ['name' => 'Ada Client', 'assigned_to' => $agent->id]);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'client' => $client,
+            'amount' => 15000,
+            'original_amount' => 20000,
+            'discount_percentage' => 25,
+            'discount_approved_by' => $admin->id,
+            'discount_source' => 'manager_override',
+        ]);
+        $payment = $this->createTeamPayment($platform, $deal, [
+            'amount' => 12900,
+            'currency' => 'KES',
+            'provider_key' => 'pawa_pay',
+            'source' => 'hosted_checkout',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subMinutes(35),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.01);
+
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => CrmAuditAction::WHATSAPP_DELIVERED,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'created_at' => now()->subMinutes(5),
+        ]);
+        $paymentLog = $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => CrmAuditAction::PAYMENT_MANUAL_APPROVE,
+            'entity_type' => 'payment',
+            'entity_id' => $payment->id,
+            'reason' => 'Manual review completed',
+            'created_at' => now()->subMinutes(20),
+        ]);
+        $discountLog = $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => CrmAuditAction::DEAL_DISCOUNT,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'after_state' => [
+                'discount_percentage' => 25,
+                'original_amount' => 20000,
+                'amount' => 15000,
+                'discount_approved_by' => $admin->id,
+                'discount_source' => 'manager_override',
+            ],
+            'created_at' => now()->subMinutes(25),
+        ]);
+        $trialLog = $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => CrmAuditAction::DEAL_FREE_TRIAL,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'after_state' => ['duration_days' => 7],
+            'created_at' => now()->subMinutes(40),
+        ]);
+        foreach (range(1, 3) as $index) {
+            $this->createTeamAudit([
+                'platform_id' => $platform->id,
+                'actor_id' => $agent->id,
+                'action' => CrmAuditAction::CLIENT_CREDENTIAL_SEND,
+                'entity_type' => 'client',
+                'entity_id' => $client->id,
+                'created_at' => now()->subMinutes(40 + $index),
+            ]);
+        }
+
+        Sanctum::actingAs($admin);
+
+        $firstPage = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&per_page=5&reporting_currency=USD');
+
+        $firstPage->assertOk()
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.last_page', 2)
+            ->assertJsonPath('meta.total', 6)
+            ->assertJsonPath('data.0.id', $paymentLog->id)
+            ->assertJsonPath('data.0.actor.name', $agent->name)
+            ->assertJsonPath('data.0.payment.client.name', 'Ada Client')
+            ->assertJsonPath('data.0.payment.normalized_total', 129)
+            ->assertJsonPath('data.0.payment.normalized_currency', 'USD')
+            ->assertJsonPath('data.0.payment.channel.label', 'Self-service')
+            ->assertJsonPath('data.0.payment.method.label', 'Pawa Pay')
+            ->assertJsonPath('data.1.id', $discountLog->id)
+            ->assertJsonPath('data.1.deal_meta.type', 'discount')
+            ->assertJsonPath('data.1.deal_meta.client.name', 'Ada Client')
+            ->assertJsonPath('data.1.deal_meta.approver.name', 'Manager One')
+            ->assertJsonPath('data.1.deal_meta.discount_percentage', 25);
+
+        $secondPage = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&per_page=5&page=2&reporting_currency=USD');
+
+        $secondPage->assertOk()
+            ->assertJsonPath('meta.current_page', 2)
+            ->assertJsonCount(1, 'data');
+
+        $includeSystem = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&include_system=1&per_page=5');
+
+        $includeSystem->assertOk()
+            ->assertJsonPath('meta.total', 7)
+            ->assertJsonPath('data.0.action', CrmAuditAction::WHATSAPP_DELIVERED);
+
+        $focused = $this->getJson('/api/crm/team/' . $agent->id . '/activity?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&action_focus=free_trials_discounts&per_page=10');
+
+        $focused->assertOk();
+        $this->assertSame(
+            [$discountLog->id, $trialLog->id],
+            collect($focused->json('data'))->pluck('id')->all()
+        );
 
         Carbon::setTestNow();
     }
@@ -197,5 +321,18 @@ class TeamActivityHistoryTest extends TestCase
             ->assertJsonPath('data.0.id', $auditLog->id);
 
         Carbon::setTestNow();
+    }
+
+    private function createRate(string $source, string $target, Carbon $date, float $rate): void
+    {
+        ReportingFxRate::query()->create([
+            'provider' => 'currencyapi',
+            'source_currency' => $source,
+            'target_currency' => $target,
+            'rate_date' => $date->toDateString(),
+            'rate' => $rate,
+            'fetched_at' => $date,
+            'payload_hash' => sha1($source . $target . $date->toDateString() . $rate),
+        ]);
     }
 }

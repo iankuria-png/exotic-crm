@@ -47,6 +47,11 @@ const ACTIVITY_ENTITY_TYPE_OPTIONS = [
     { value: 'platform', label: 'Platform' },
 ];
 const ACTIVITY_PER_PAGE = 25;
+const ACTIVITY_EXPORT_PER_PAGE = 100;
+const ACTIVITY_FOCUS_FREE_TRIALS_DISCOUNTS = 'free_trials_discounts';
+const FREE_TRIAL_REVIEW_RATE = 0.25;
+const DISCOUNT_REVIEW_RATE = 0.30;
+const INCENTIVE_REVIEW_MIN_COUNT = 5;
 
 const LEADERBOARD_ROLE_FILTER_OPTIONS = [
     { value: 'all', label: 'All roles' },
@@ -237,6 +242,15 @@ function formatCount(value) {
     return asNumber(value).toLocaleString();
 }
 
+function formatRate(numerator, denominator) {
+    const base = asNumber(denominator);
+    if (base <= 0) {
+        return '0%';
+    }
+
+    return `${Math.round((asNumber(numerator) / base) * 100)}%`;
+}
+
 function formatGoalValue(goalOrRow, key = 'current') {
     const displayKey = `${key}_display`;
     if (goalOrRow?.[displayKey]) {
@@ -264,6 +278,78 @@ function formatCurrencyRows(rows) {
     }
 
     return rows.map((row) => `${row.currency} ${asNumber(row.amount).toLocaleString()}`);
+}
+
+function paymentAmountDisplay(payment) {
+    if (!payment) {
+        return { primary: '--', secondary: null };
+    }
+
+    const native = formatCurrency(payment.amount, payment.currency);
+    const normalized = payment.normalized_total !== null && payment.normalized_total !== undefined
+        ? formatCurrency(payment.normalized_total, payment.normalized_currency || payment.currency)
+        : null;
+
+    if (!normalized || normalized === native) {
+        return { primary: native, secondary: null };
+    }
+
+    return { primary: normalized, secondary: native };
+}
+
+function dealActivitySummary(meta) {
+    if (!meta) {
+        return '';
+    }
+
+    if (meta.type === 'discount') {
+        const percentage = meta.discount_percentage !== null && meta.discount_percentage !== undefined
+            ? `${asNumber(meta.discount_percentage)}%`
+            : 'Discount';
+        const original = meta.original_amount !== null && meta.original_amount !== undefined
+            ? formatCurrency(meta.original_amount, meta.currency)
+            : null;
+        const discounted = meta.discounted_amount !== null && meta.discounted_amount !== undefined
+            ? formatCurrency(meta.discounted_amount, meta.currency)
+            : null;
+
+        return [percentage, original && discounted ? `${original} to ${discounted}` : null]
+            .filter(Boolean)
+            .join(' • ');
+    }
+
+    if (meta.type === 'free_trial') {
+        return meta.duration_days > 0 ? `${meta.duration_days} days free trial` : 'Free trial';
+    }
+
+    return '';
+}
+
+function incentiveReviewFlags(row) {
+    const activated = asNumber(row?.subs_activated);
+    const trials = asNumber(row?.free_trials_given);
+    const discounts = asNumber(row?.discounts_given);
+    const trialBase = activated + trials;
+    const discountBase = activated + discounts;
+    const flags = [];
+
+    if (trials >= INCENTIVE_REVIEW_MIN_COUNT && trialBase > 0 && trials / trialBase >= FREE_TRIAL_REVIEW_RATE) {
+        flags.push({
+            key: 'free_trials',
+            label: `Trial review ${formatRate(trials, trialBase)}`,
+            title: `${formatCount(trials)} free trials against ${formatCount(trialBase)} activated-or-trial outcomes`,
+        });
+    }
+
+    if (discounts >= INCENTIVE_REVIEW_MIN_COUNT && discountBase > 0 && discounts / discountBase >= DISCOUNT_REVIEW_RATE) {
+        flags.push({
+            key: 'discounts',
+            label: `Discount review ${formatRate(discounts, discountBase)}`,
+            title: `${formatCount(discounts)} discounts against ${formatCount(discountBase)} activated-or-discount outcomes`,
+        });
+    }
+
+    return flags;
 }
 
 function formatTrendText(trend, period) {
@@ -507,6 +593,95 @@ function GoalProgressBar({ current, target }) {
     );
 }
 
+function IncentiveReviewChips({ row, className = '' }) {
+    const flags = incentiveReviewFlags(row);
+    if (!flags.length) {
+        return null;
+    }
+
+    return (
+        <div className={`flex flex-wrap gap-1.5 ${className}`}>
+            {flags.map((flag) => (
+                <span
+                    key={flag.key}
+                    title={flag.title}
+                    className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                >
+                    {flag.label}
+                </span>
+            ))}
+        </div>
+    );
+}
+
+function ActivityPaymentDetail({ payment }) {
+    if (!payment) {
+        return null;
+    }
+
+    const amount = paymentAmountDisplay(payment);
+
+    return (
+        <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 text-xs sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="min-w-0">
+                <p className="font-semibold text-slate-700">Payment</p>
+                <p className="mt-1 truncate text-slate-500">{payment.client?.name || 'Unlinked client'}</p>
+            </div>
+            <div>
+                <p className="crm-mono font-semibold text-slate-900">{amount.primary}</p>
+                {amount.secondary ? (
+                    <p className="mt-1 text-slate-500">{amount.secondary} native</p>
+                ) : null}
+                <FxNormalizationNotice meta={payment.normalization_meta} className="mt-1" />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                {payment.channel?.label ? (
+                    <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-600">
+                        {payment.channel.label}
+                    </span>
+                ) : null}
+                {payment.method?.label ? (
+                    <span className="rounded-full bg-teal-50 px-2 py-1 font-medium text-teal-700">
+                        {payment.method.label}
+                    </span>
+                ) : null}
+                {payment.status ? (
+                    <span className="rounded-full bg-white px-2 py-1 font-medium text-slate-500 ring-1 ring-slate-200">
+                        {payment.status}
+                    </span>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+function ActivityDealDetail({ meta }) {
+    if (!meta) {
+        return null;
+    }
+
+    return (
+        <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 text-xs sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="min-w-0">
+                <p className="font-semibold text-slate-700">
+                    {meta.type === 'discount' ? 'Discount context' : 'Free-trial context'}
+                </p>
+                <p className="mt-1 truncate text-slate-500">{meta.client?.name || 'Unlinked client'}</p>
+            </div>
+            <div>
+                <p className="font-semibold text-slate-900">{dealActivitySummary(meta)}</p>
+                {meta.discount_source ? (
+                    <p className="mt-1 text-slate-500">{String(meta.discount_source).replace(/_/g, ' ')}</p>
+                ) : null}
+            </div>
+            <div>
+                <p className="font-medium text-slate-500">Approved by</p>
+                <p className="mt-1 font-semibold text-slate-800">{meta.approver?.name || 'Not recorded'}</p>
+            </div>
+        </div>
+    );
+}
+
 function ActivityList({ items, emptyTitle, emptyMessage, grouped = false }) {
     if (!items?.length) {
         return <TeamEmptyState title={emptyTitle} message={emptyMessage} />;
@@ -531,6 +706,8 @@ function ActivityList({ items, emptyTitle, emptyMessage, grouped = false }) {
                     ) : null}
                 </div>
             </div>
+            <ActivityPaymentDetail payment={item.payment} />
+            <ActivityDealDetail meta={item.deal_meta} />
         </article>
     );
 
@@ -565,6 +742,9 @@ function createLeaderboardRowsCsv(rows) {
             'Revenue Breakdown JSON',
             'Subs Activated',
             'Subs Renewed',
+            'Free Trials',
+            'Discounts',
+            'Review Flags',
             'Payments Matched',
             'Leads Contacted',
             'Chats',
@@ -582,11 +762,58 @@ function createLeaderboardRowsCsv(rows) {
             JSON.stringify(row.revenue_by_currency || []),
             row.subs_activated,
             row.subs_renewed,
+            row.free_trials_given,
+            row.discounts_given,
+            incentiveReviewFlags(row).map((flag) => flag.label).join(' | '),
             row.payments_matched,
             row.leads_contacted,
             row.chats_replied,
             row.sms_sent,
             row.total_actions,
+        ]));
+    });
+
+    return csvRows;
+}
+
+function createActivityRowsCsv(rows, agentName) {
+    const csvRows = [
+        toCsvRow([
+            'Date',
+            'Agent',
+            'Action',
+            'Type',
+            'Entity',
+            'Reason',
+            'Client',
+            'Amount',
+            'Native Amount',
+            'Payment Channel',
+            'Payment Method',
+            'Payment Status',
+            'Deal Context',
+            'Approver',
+        ]),
+    ];
+
+    rows.forEach((row) => {
+        const amount = paymentAmountDisplay(row.payment);
+
+        csvRows.push(toCsvRow([
+            row.created_at,
+            row.actor?.name || agentName || '',
+            row.label,
+            row.entity_type,
+            row.entity_id,
+            row.reason,
+            row.payment?.client?.name || row.deal_meta?.client?.name || '',
+            amount.primary === '--' ? '' : amount.primary,
+            amount.secondary || '',
+            row.payment?.channel?.label || '',
+            row.payment?.method?.label || '',
+            row.payment?.status || '',
+            dealActivitySummary(row.deal_meta),
+            row.deal_meta?.approver?.name || '',
         ]));
     });
 
@@ -627,7 +854,9 @@ export default function Team() {
     const [goalOverrideToDelete, setGoalOverrideToDelete] = useState(null);
     const [activitySearch, setActivitySearch] = useState('');
     const [activityEntityType, setActivityEntityType] = useState('');
+    const [activityFocus, setActivityFocus] = useState('');
     const [activityIncludeSystem, setActivityIncludeSystem] = useState(false);
+    const [activityExporting, setActivityExporting] = useState(false);
     const [activityPage, setActivityPage] = useState(1);
     const [activityItems, setActivityItems] = useState([]);
     const [activityLastPage, setActivityLastPage] = useState(1);
@@ -837,7 +1066,7 @@ export default function Team() {
 
     const agentActivityQuery = useQuery({
         enabled: isManager && activeTab === 'agent-detail' && Boolean(selectedAgent?.user_id),
-        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter || 'all', activitySearch, activityEntityType, activityIncludeSystem, activityPage],
+        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter || 'all', activitySearch, activityEntityType, activityFocus, activityIncludeSystem, activityPage, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get(`/crm/team/${selectedAgent.user_id}/activity`, {
                 params: {
@@ -846,7 +1075,9 @@ export default function Team() {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(activitySearch ? { search: activitySearch } : {}),
                     ...(activityEntityType ? { entity_type: activityEntityType } : {}),
+                    ...(activityFocus ? { action_focus: activityFocus } : {}),
                     include_system: activityIncludeSystem ? 1 : 0,
+                    reporting_currency: reportingCurrency.targetCurrency,
                     page: activityPage,
                     per_page: ACTIVITY_PER_PAGE,
                 },
@@ -860,7 +1091,7 @@ export default function Team() {
         setActivityPage(1);
         setActivityItems([]);
         setActivityLastPage(1);
-    }, [selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter, activitySearch, activityEntityType, activityIncludeSystem]);
+    }, [selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter, activitySearch, activityEntityType, activityFocus, activityIncludeSystem, reportingCurrency.targetCurrency]);
 
     useEffect(() => {
         const incoming = agentActivityQuery.data;
@@ -1060,6 +1291,18 @@ export default function Team() {
             tone: 'success',
         },
         {
+            label: 'Free Trials',
+            value: formatCount(mySummary.free_trials_given),
+            meta: formatTrendText(myTrend.free_trials_given, period),
+            tone: 'neutral',
+        },
+        {
+            label: 'Discounts',
+            value: formatCount(mySummary.discounts_given),
+            meta: formatTrendText(myTrend.discounts_given, period),
+            tone: 'warning',
+        },
+        {
             label: 'Payments Matched',
             value: formatCount(mySummary.payments_matched),
             meta: formatTrendText(myTrend.payments_matched, period),
@@ -1099,6 +1342,18 @@ export default function Team() {
             tone: 'success',
         },
         {
+            label: 'Free Trials',
+            value: formatCount(agentSummary.free_trials_given),
+            meta: formatTrendText(agentTrend.free_trials_given, period),
+            tone: 'neutral',
+        },
+        {
+            label: 'Discounts',
+            value: formatCount(agentSummary.discounts_given),
+            meta: formatTrendText(agentTrend.discounts_given, period),
+            tone: 'warning',
+        },
+        {
             label: 'Payments Matched',
             value: formatCount(agentSummary.payments_matched),
             meta: formatTrendText(agentTrend.payments_matched, period),
@@ -1126,6 +1381,14 @@ export default function Team() {
         {
             key: 'subs_activated',
             label: 'Subs Activated',
+        },
+        {
+            key: 'free_trials_given',
+            label: 'Free Trials',
+        },
+        {
+            key: 'discounts_given',
+            label: 'Discounts',
         },
         {
             key: 'payments_matched',
@@ -1170,6 +1433,7 @@ export default function Team() {
                     <div className="min-w-0">
                         <p className="font-semibold text-slate-900">{row.name}</p>
                         <p className="mt-1 text-xs text-slate-500">{formatRole(row.role)}</p>
+                        <IncentiveReviewChips row={row} className="mt-2" />
                         {period === 'today' ? (
                             <div className="mt-1">
                                 <PresenceStatus isOnline={row.is_online} />
@@ -1220,6 +1484,20 @@ export default function Team() {
             headerClassName: 'hidden lg:table-cell text-right',
             cellClassName: 'hidden lg:table-cell text-right crm-mono font-medium',
             render: (row) => formatCount(row.subs_renewed),
+        },
+        {
+            key: 'free_trials_given',
+            label: 'Free Trials',
+            headerClassName: 'hidden xl:table-cell text-right',
+            cellClassName: 'hidden xl:table-cell text-right crm-mono font-medium',
+            render: (row) => formatCount(row.free_trials_given),
+        },
+        {
+            key: 'discounts_given',
+            label: 'Discounts',
+            headerClassName: 'hidden xl:table-cell text-right',
+            cellClassName: 'hidden xl:table-cell text-right crm-mono font-medium',
+            render: (row) => formatCount(row.discounts_given),
         },
         {
             key: 'payments_matched',
@@ -1287,6 +1565,64 @@ export default function Team() {
 
         const filename = `team-leaderboard-${period}-${platformFilter || 'all'}-${leaderboardRoleFilter}.csv`;
         downloadCsv(filename, createLeaderboardRowsCsv(leaderboardRows));
+    };
+
+    const handleToggleActivityFocus = () => {
+        const nextFocus = activityFocus === ACTIVITY_FOCUS_FREE_TRIALS_DISCOUNTS
+            ? ''
+            : ACTIVITY_FOCUS_FREE_TRIALS_DISCOUNTS;
+
+        setActivityFocus(nextFocus);
+        if (nextFocus) {
+            setActivityEntityType('');
+        }
+    };
+
+    const handleExportActivity = async () => {
+        if (!selectedAgent?.user_id || activityExporting) {
+            return;
+        }
+
+        setActivityExporting(true);
+
+        try {
+            const params = {
+                from: agentDateRange.from,
+                to: agentDateRange.to,
+                ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                ...(activitySearch ? { search: activitySearch } : {}),
+                ...(activityEntityType ? { entity_type: activityEntityType } : {}),
+                ...(activityFocus ? { action_focus: activityFocus } : {}),
+                include_system: activityIncludeSystem ? 1 : 0,
+                reporting_currency: reportingCurrency.targetCurrency,
+                per_page: ACTIVITY_EXPORT_PER_PAGE,
+            };
+            let page = 1;
+            let lastPage = 1;
+            const rows = [];
+
+            do {
+                const response = await api.get(`/crm/team/${selectedAgent.user_id}/activity`, {
+                    params: { ...params, page },
+                });
+                rows.push(...(response.data?.data || []));
+                lastPage = response.data?.meta?.last_page || 1;
+                page += 1;
+            } while (page <= lastPage);
+
+            if (!rows.length) {
+                toast.warning('No activity matched the current filters.');
+                return;
+            }
+
+            const filename = `team-activity-${selectedAgent.user_id}-${agentDateRange.from}-${agentDateRange.to}.csv`;
+            downloadCsv(filename, createActivityRowsCsv(rows, selectedAgent.name));
+            toast.success('Activity CSV exported.');
+        } catch (error) {
+            toast.error(getApiErrorMessage(error, 'We could not export activity.'));
+        } finally {
+            setActivityExporting(false);
+        }
     };
 
     const handleCreateGoal = () => {
@@ -2194,12 +2530,13 @@ export default function Team() {
                                         <div>
                                             <p className="text-lg font-semibold text-slate-900">{agentStatsQuery.data?.agent?.name}</p>
                                             <p className="mt-1 text-sm text-slate-500">{formatRole(agentStatsQuery.data?.agent?.role)}</p>
+                                            <IncentiveReviewChips row={agentSummary} className="mt-3" />
                                         </div>
                                         <PresenceStatus isOnline={selectedAgent.is_online} lastSeenAt={selectedAgent.last_seen_at} />
                                     </div>
                                 </div>
 
-                                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                     {agentMetricCards.map((metric) => (
                                         <MetricCard
                                             key={metric.label}
@@ -2306,15 +2643,35 @@ export default function Team() {
                             <FilterSelect
                                 label="Type"
                                 value={activityEntityType}
-                                onChange={(e) => setActivityEntityType(e.target.value)}
+                                onChange={(e) => {
+                                    setActivityEntityType(e.target.value);
+                                    if (e.target.value) {
+                                        setActivityFocus('');
+                                    }
+                                }}
                                 options={ACTIVITY_ENTITY_TYPE_OPTIONS}
                             />
+                            <button
+                                type="button"
+                                onClick={handleToggleActivityFocus}
+                                className={`crm-btn-secondary px-3 py-2 text-xs ${activityFocus === ACTIVITY_FOCUS_FREE_TRIALS_DISCOUNTS ? 'border-amber-300 bg-amber-50 text-amber-800' : ''}`}
+                            >
+                                Trials & discounts
+                            </button>
                             <button
                                 type="button"
                                 onClick={() => setActivityIncludeSystem((v) => !v)}
                                 className={`crm-btn-secondary px-3 py-2 text-xs ${activityIncludeSystem ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
                             >
                                 {activityIncludeSystem ? 'Hiding system' : 'Show system'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleExportActivity}
+                                disabled={activityExporting || agentActivityQuery.isLoading}
+                                className="crm-btn-secondary px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                {activityExporting ? 'Exporting…' : 'Export CSV'}
                             </button>
                         </div>
                         {agentActivityQuery.isError ? (

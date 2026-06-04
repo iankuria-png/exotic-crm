@@ -13,6 +13,7 @@ use App\Models\MarketRevenueTarget;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
+use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
@@ -48,6 +49,18 @@ class TeamActivityService
         MarketAuthorizationService::ROLE_SUB_ADMIN,
         MarketAuthorizationService::ROLE_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
+    ];
+
+    private const SYSTEM_ACTIONS = [
+        CrmAuditAction::SYSTEM_DEPLOY_START,
+        CrmAuditAction::SYSTEM_DEPLOY_SUCCESS,
+        CrmAuditAction::SYSTEM_DEPLOY_FAILED,
+        CrmAuditAction::INTEGRATION_SYNC_RUN,
+        CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+        CrmAuditAction::SCRAPER_RUN,
+        CrmAuditAction::WHATSAPP_DELIVERED,
+        CrmAuditAction::WHATSAPP_READ,
+        CrmAuditAction::WHATSAPP_INBOUND_RECEIVED,
     ];
 
     public const GOAL_ROLE_SCOPE_SALES = MarketAuthorizationService::ROLE_SALES;
@@ -123,7 +136,8 @@ class TeamActivityService
 
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly PaymentPresenter $paymentPresenter
     ) {
     }
 
@@ -531,7 +545,8 @@ class TeamActivityService
         CarbonInterface $from,
         CarbonInterface $to,
         ?int $platformId = null,
-        ?User $viewer = null
+        ?User $viewer = null,
+        array $options = []
     ): array {
         if ($viewer) {
             $this->assertTeamMemberVisibleToViewer($viewer, $agent);
@@ -540,12 +555,65 @@ class TeamActivityService
 
         $start = Carbon::instance($from)->startOfDay();
         $end = Carbon::instance($to)->addDay()->startOfDay();
+        $page = max(1, (int) ($options['page'] ?? 1));
+        $perPage = min(100, max(5, (int) ($options['per_page'] ?? 25)));
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($options['target_currency'] ?? null);
+
+        $query = AuditLog::query()
+            ->with('actor:id,name')
+            ->where('actor_id', $agent->id)
+            ->where('created_at', '>=', $start)
+            ->where('created_at', '<', $end)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
+        }
+
+        $entityType = trim((string) ($options['entity_type'] ?? ''));
+        if ($entityType !== '') {
+            $query->where('entity_type', $entityType);
+        }
+
+        if (($options['action_focus'] ?? null) === 'free_trials_discounts') {
+            $query->whereIn('action', [CrmAuditAction::DEAL_FREE_TRIAL, CrmAuditAction::DEAL_DISCOUNT]);
+        }
+
+        $search = trim((string) ($options['search'] ?? ''));
+        if ($search !== '') {
+            $query->where(function ($searchQuery) use ($search) {
+                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $searchQuery
+                    ->where('action', 'like', $like)
+                    ->orWhere('reason', 'like', $like);
+
+                if (ctype_digit($search)) {
+                    $searchQuery->orWhere('entity_id', (int) $search);
+                }
+            });
+        }
+
+        if (!((bool) ($options['include_system'] ?? false))) {
+            $query->whereNotIn('action', self::SYSTEM_ACTIONS);
+        }
+
+        $paginator = $query->paginate($perPage, ['*'], 'page', $page);
+        $items = $this->enrichActivityLogs($paginator->getCollection(), $targetCurrency);
 
         return [
             'from' => $start->toDateString(),
             'to' => Carbon::instance($to)->toDateString(),
             'platform_id' => $platformId,
-            'data' => $this->recentActivity($agent, $start, $end, $viewer ?? $agent, $platformId, 100),
+            'data' => $items,
+            'meta' => [
+                'current_page' => (int) $paginator->currentPage(),
+                'last_page' => (int) $paginator->lastPage(),
+                'per_page' => (int) $paginator->perPage(),
+                'total' => (int) $paginator->total(),
+            ],
         ];
     }
 
@@ -1146,8 +1214,8 @@ class TeamActivityService
             ->excludingWalletTopups()
             ->join('deals', 'deals.id', '=', 'payments.deal_id')
             ->whereIn('deals.assigned_to', $userIds)
-            ->where('payments.created_at', '>=', $start)
-            ->where('payments.created_at', '<', $end);
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()]);
 
         if ($platformId) {
             $query->where('payments.platform_id', $platformId);
@@ -1211,8 +1279,8 @@ class TeamActivityService
             ->excludingWalletTopups()
             ->join('deals', 'deals.id', '=', 'payments.deal_id')
             ->whereNotNull('deals.assigned_to')
-            ->where('payments.created_at', '>=', $start)
-            ->where('payments.created_at', '<', $end)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()])
             ->selectRaw('deals.assigned_to as assigned_to')
             ->selectRaw('payments.platform_id as platform_id')
             ->selectRaw("{$currencyExpression} as currency")
@@ -1485,10 +1553,35 @@ class TeamActivityService
             return [];
         }
 
-        $query = AuditLog::query()
+        $floor = now()->subDays(14);
+        $rankedQuery = AuditLog::query()
             ->whereIn('actor_id', $userIds)
-            ->orderByDesc('created_at')
-            ->orderByDesc('id');
+            ->where('created_at', '>=', $floor);
+
+        if ($platformId) {
+            $rankedQuery->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($rankedQuery, $viewer);
+        }
+
+        $latestIds = DB::query()
+            ->fromSub(
+                $rankedQuery
+                    ->select(['id', 'actor_id'])
+                    ->selectRaw('ROW_NUMBER() OVER (PARTITION BY actor_id ORDER BY created_at DESC, id DESC) as row_rank'),
+                'ranked_audit_log'
+            )
+            ->where('row_rank', 1)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if (empty($latestIds)) {
+            return [];
+        }
+
+        $query = AuditLog::query()
+            ->whereIn('id', $latestIds);
 
         if ($platformId) {
             $query->where('platform_id', $platformId);
@@ -1496,15 +1589,11 @@ class TeamActivityService
             $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
         }
 
-        $logs = $query->get(['id', 'actor_id', 'action', 'entity_type', 'entity_id', 'platform_id', 'created_at', 'reason']);
+        $logs = $query->get(['id', 'actor_id', 'action', 'entity_type', 'entity_id', 'platform_id', 'created_at', 'reason', 'after_state']);
         $latest = [];
 
         foreach ($logs as $log) {
             $userId = (int) $log->actor_id;
-            if (isset($latest[$userId])) {
-                continue;
-            }
-
             $latest[$userId] = [
                 'action' => $log->action,
                 'label' => $this->activityLabel($log),
@@ -1562,9 +1651,211 @@ class TeamActivityService
         return $query->get()->map(fn (AuditLog $log) => $this->formatActivityLog($log))->all();
     }
 
-    private function formatActivityLog(AuditLog $log): array
+    private function enrichActivityLogs(Collection $logs, string $targetCurrency): array
     {
-        return [
+        if ($logs->isEmpty()) {
+            return [];
+        }
+
+        $paymentLogs = $logs
+            ->filter(fn (AuditLog $log) => (string) $log->entity_type === 'payment')
+            ->values();
+        $paymentsById = $this->paymentsForActivityLogs($paymentLogs);
+        $paymentPayloads = $this->paymentActivityPayloads($paymentsById, $targetCurrency);
+
+        $dealLogs = $logs
+            ->filter(fn (AuditLog $log) => in_array((string) $log->action, [CrmAuditAction::DEAL_FREE_TRIAL, CrmAuditAction::DEAL_DISCOUNT], true)
+                && (string) $log->entity_type === 'deal')
+            ->values();
+        $dealsById = $this->dealsForActivityLogs($dealLogs);
+        $approversById = $this->approversForDealActivityLogs($dealLogs);
+
+        return $logs
+            ->map(function (AuditLog $log) use ($paymentPayloads, $dealsById, $approversById) {
+                $extras = [];
+
+                if ((string) $log->entity_type === 'payment') {
+                    $paymentPayload = $paymentPayloads[(int) $log->entity_id] ?? null;
+                    if ($paymentPayload) {
+                        $extras['payment'] = $paymentPayload;
+                    }
+                }
+
+                if (in_array((string) $log->action, [CrmAuditAction::DEAL_FREE_TRIAL, CrmAuditAction::DEAL_DISCOUNT], true)) {
+                    $dealMeta = $this->dealActivityMeta($log, $dealsById[(int) $log->entity_id] ?? null, $approversById);
+                    if ($dealMeta !== null) {
+                        $extras['deal_meta'] = $dealMeta;
+                    }
+                }
+
+                return $this->formatActivityLog($log, $extras);
+            })
+            ->all();
+    }
+
+    private function paymentsForActivityLogs(Collection $paymentLogs): Collection
+    {
+        $paymentIds = $paymentLogs
+            ->pluck('entity_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($paymentIds->isEmpty()) {
+            return collect();
+        }
+
+        return Payment::query()
+            ->whereIn('id', $paymentIds)
+            ->with([
+                'client:id,name',
+                'deal.client:id,name',
+                'platform:id,name,country,currency_code',
+                'deal.assignedAgent:id,name,role',
+                'confirmedBy:id,name,role',
+                'manualSubmission',
+                'routingDecisions',
+                'providerTransactions',
+            ])
+            ->get()
+            ->keyBy('id');
+    }
+
+    private function paymentActivityPayloads(Collection $paymentsById, string $targetCurrency): array
+    {
+        $payloads = [];
+
+        foreach ($paymentsById as $payment) {
+            $eventDate = $payment->completed_at ?: $payment->created_at;
+            $currency = strtoupper((string) ($payment->currency ?: $payment->platform?->currency_code ?: $targetCurrency));
+            $normalized = $this->reportingCurrencyService->normalizeEventRows([
+                (object) [
+                    'event_date' => $eventDate?->toDateString() ?: now()->toDateString(),
+                    'currency' => $currency,
+                    'amount' => (float) $payment->amount,
+                    'platform_id' => $payment->platform_id,
+                    'platform_country' => $payment->platform?->country,
+                    'platform_name' => $payment->platform?->name,
+                ],
+            ], $targetCurrency, false);
+            $client = $payment->client ?: $payment->deal?->client;
+
+            $payloads[(int) $payment->id] = [
+                'amount' => (float) $payment->amount,
+                'currency' => $currency,
+                'normalized_total' => $normalized['normalized_total'],
+                'normalized_currency' => $normalized['normalized_currency'],
+                'normalization_meta' => $normalized['normalization_meta'],
+                'status' => $payment->status,
+                'client' => $client ? [
+                    'id' => (int) $client->id,
+                    'name' => $client->name,
+                ] : null,
+                'method' => $this->paymentPresenter->paymentMethod($payment),
+                'channel' => $this->paymentPresenter->paymentChannel($payment),
+            ];
+        }
+
+        return $payloads;
+    }
+
+    private function dealsForActivityLogs(Collection $dealLogs): Collection
+    {
+        $dealIds = $dealLogs
+            ->pluck('entity_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($dealIds->isEmpty()) {
+            return collect();
+        }
+
+        return Deal::query()
+            ->whereIn('id', $dealIds)
+            ->with(['platform:id,name,currency_code,country', 'client:id,name'])
+            ->get()
+            ->keyBy('id');
+    }
+
+    private function approversForDealActivityLogs(Collection $dealLogs): Collection
+    {
+        $approverIds = $dealLogs
+            ->map(fn (AuditLog $log) => (int) ($log->after_state['discount_approved_by'] ?? 0))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($approverIds->isEmpty()) {
+            return collect();
+        }
+
+        return User::query()
+            ->whereIn('id', $approverIds)
+            ->get(['id', 'name'])
+            ->keyBy('id');
+    }
+
+    private function dealActivityMeta(AuditLog $log, ?Deal $deal, Collection $approversById): ?array
+    {
+        $afterState = is_array($log->after_state) ? $log->after_state : [];
+        $actorPayload = $log->relationLoaded('actor') && $log->actor ? [
+            'id' => (int) $log->actor->id,
+            'name' => $log->actor->name,
+        ] : null;
+
+        if ((string) $log->action === CrmAuditAction::DEAL_DISCOUNT) {
+            $approverId = (int) ($afterState['discount_approved_by'] ?? 0);
+            $approver = $approverId > 0 && $approversById->has($approverId)
+                ? [
+                    'id' => $approverId,
+                    'name' => $approversById[$approverId]->name,
+                ]
+                : $actorPayload;
+
+            return [
+                'type' => 'discount',
+                'discount_percentage' => isset($afterState['discount_percentage'])
+                    ? (float) $afterState['discount_percentage']
+                    : ($deal?->discount_percentage !== null ? (float) $deal->discount_percentage : null),
+                'original_amount' => isset($afterState['original_amount'])
+                    ? (float) $afterState['original_amount']
+                    : ($deal?->original_amount !== null ? (float) $deal->original_amount : null),
+                'discounted_amount' => isset($afterState['amount'])
+                    ? (float) $afterState['amount']
+                    : ($deal?->amount !== null ? (float) $deal->amount : null),
+                'currency' => strtoupper((string) ($deal?->currency ?: $deal?->platform?->currency_code ?: '')),
+                'discount_source' => $afterState['discount_source'] ?? $deal?->discount_source,
+                'approver' => $approver,
+                'client' => $deal?->client ? [
+                    'id' => (int) $deal->client->id,
+                    'name' => $deal->client->name,
+                ] : null,
+            ];
+        }
+
+        if ((string) $log->action === CrmAuditAction::DEAL_FREE_TRIAL) {
+            return [
+                'type' => 'free_trial',
+                'is_free_trial' => true,
+                'duration_days' => (int) ($afterState['duration_days'] ?? $afterState['additional_days'] ?? $deal?->duration_days ?? 0),
+                'approval_mode' => $afterState['approval_mode'] ?? null,
+                'approver' => $actorPayload,
+                'client' => $deal?->client ? [
+                    'id' => (int) $deal->client->id,
+                    'name' => $deal->client->name,
+                ] : null,
+            ];
+        }
+
+        return null;
+    }
+
+    private function formatActivityLog(AuditLog $log, array $extras = []): array
+    {
+        $payload = [
             'id' => (int) $log->id,
             'action' => $log->action,
             'label' => $this->activityLabel($log),
@@ -1575,6 +1866,15 @@ class TeamActivityService
             'reason' => $log->reason,
             'created_at' => $log->created_at?->toIso8601String(),
         ];
+
+        if ($log->relationLoaded('actor') && $log->actor) {
+            $payload['actor'] = [
+                'id' => (int) $log->actor->id,
+                'name' => $log->actor->name,
+            ];
+        }
+
+        return array_merge($payload, $extras);
     }
 
     private function activityLabel(AuditLog $log): string
@@ -1593,10 +1893,20 @@ class TeamActivityService
             'payment_match_confirm' => 'Matched payment manually',
             'payment_match_auto' => 'Matched payment automatically',
             'payment_create_subscription' => 'Created subscription from payment',
+            'payment_manual_approve' => 'Approved manual payment',
+            'payment_manual_verify' => 'Verified manual payment',
+            'payment_manual_reject' => 'Rejected manual payment',
+            'payment_manual_close' => 'Closed payment',
+            'payment_send_link' => 'Sent payment link',
+            'payment_retry_stk' => 'Retried STK payment',
             'conversation_sms_sent' => 'Sent conversation SMS',
+            'conversation_sms_failed' => 'Conversation SMS failed',
             'conversation_whatsapp_sent' => 'Sent conversation WhatsApp',
+            'conversation_whatsapp_failed' => 'Conversation WhatsApp failed',
             'renewal_sms_sent' => 'Sent renewal SMS',
+            'renewal_sms_failed' => 'Renewal SMS failed',
             'renewal_whatsapp_sent' => 'Sent renewal WhatsApp',
+            'renewal_whatsapp_failed' => 'Renewal WhatsApp failed',
             'lead_status_update' => (($log->after_state['status'] ?? null) === 'contacted')
                 ? 'Contacted lead'
                 : 'Updated lead status',
