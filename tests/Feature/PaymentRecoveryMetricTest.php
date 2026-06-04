@@ -109,9 +109,19 @@ class PaymentRecoveryMetricTest extends TestCase
             'created_at' => '2026-06-01 10:05:00',
             'completed_at' => '2026-06-01 10:10:00',
         ]);
+        $this->payment($platform, [
+            'phone' => '254700000011',
+            'status' => 'failed',
+            'purpose' => 'wallet_topup',
+            'created_at' => '2026-06-02 10:00:00',
+        ]);
 
         $admin = User::factory()->create(['role' => 'admin', 'status' => 'active', 'is_ceo' => true]);
         Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/payments?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10")
+            ->assertOk()
+            ->assertJsonPath('stats.failed', 1);
 
         $this->getJson("/api/crm/dashboard?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10")
             ->assertOk()
@@ -142,6 +152,41 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('filters.reporting_currency', 'KES')
             ->assertJsonPath('metrics.normalized_currency', 'KES')
             ->assertJsonPath('metrics.recovered_normalization_meta.target_currency', 'KES');
+    }
+
+    public function test_recovery_report_normalizes_cfa_with_market_context(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Senegal',
+            'country' => 'Senegal',
+            'currency_code' => 'CFA',
+        ]);
+
+        $this->payment($platform, [
+            'phone' => '221700000001',
+            'status' => 'failed',
+            'amount' => 100,
+            'currency' => 'CFA',
+            'created_at' => '2026-06-01 10:00:00',
+        ]);
+        $this->payment($platform, [
+            'phone' => '221700000001',
+            'status' => 'completed',
+            'amount' => 100,
+            'currency' => 'CFA',
+            'created_at' => '2026-06-01 10:05:00',
+            'completed_at' => '2026-06-01 10:10:00',
+        ]);
+
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10&currency_mode=flat&reporting_currency=XOF")
+            ->assertOk()
+            ->assertJsonPath('metrics.normalized_currency', 'XOF')
+            ->assertJsonPath('metrics.recovered_normalized_amount', 100)
+            ->assertJsonPath('metrics.recovered_normalization_meta.partial', false)
+            ->assertJsonPath('metrics.recovered_normalization_meta.currency_aliases.0.canonical_currency', 'XOF');
     }
 
     private function payment(Platform $platform, array $overrides = []): Payment

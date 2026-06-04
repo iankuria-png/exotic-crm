@@ -157,6 +157,9 @@ class PaymentRecoveryMetricService
         $failedBreakdown = [];
         $recoveredBreakdown = [];
         $lostBreakdown = [];
+        $failedRows = [];
+        $recoveredRows = [];
+        $lostRows = [];
 
         foreach ($failures as $failure) {
             $root = $unionFind->find($failure['tokens'][0]);
@@ -167,12 +170,15 @@ class PaymentRecoveryMetricService
                 && $latestSuccessByRoot[$root]->greaterThan($failedAt);
 
             $this->addAmount($failedBreakdown, $payment);
+            $this->addAmountRow($failedRows, $payment, $failedAt);
 
             if ($recovered) {
                 $recoveredPayments++;
                 $this->addAmount($recoveredBreakdown, $payment);
+                $this->addAmountRow($recoveredRows, $payment, $failedAt);
             } else {
                 $this->addAmount($lostBreakdown, $payment);
+                $this->addAmountRow($lostRows, $payment, $failedAt);
             }
 
             $customers[$root] = ($customers[$root] ?? false) || $recovered;
@@ -195,6 +201,9 @@ class PaymentRecoveryMetricService
                 'failed_amount_breakdown' => $failedBreakdown,
                 'recovered_amount_breakdown' => $recoveredBreakdown,
                 'lost_amount_breakdown' => $lostBreakdown,
+                'failed_amount_rows' => $failedRows,
+                'recovered_amount_rows' => $recoveredRows,
+                'lost_amount_rows' => $lostRows,
                 'window' => [
                     'from' => $from->toDateString(),
                     'to' => $to->toDateString(),
@@ -298,6 +307,9 @@ class PaymentRecoveryMetricService
             'failed_amount_breakdown' => [],
             'recovered_amount_breakdown' => [],
             'lost_amount_breakdown' => [],
+            'failed_amount_rows' => [],
+            'recovered_amount_rows' => [],
+            'lost_amount_rows' => [],
             'window' => [
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
@@ -309,6 +321,22 @@ class PaymentRecoveryMetricService
     {
         $currency = strtoupper((string) ($payment->currency ?: $payment->platform?->currency_code ?: 'USD'));
         $breakdown[$currency] = round((float) ($breakdown[$currency] ?? 0) + (float) $payment->amount, 2);
+    }
+
+    private function addAmountRow(array &$rows, Payment $payment, mixed $eventAt): void
+    {
+        $platform = $payment->relationLoaded('platform') ? $payment->platform : null;
+
+        $rows[] = [
+            'currency' => strtoupper((string) ($payment->currency ?: $platform?->currency_code ?: 'USD')),
+            'amount' => round((float) $payment->amount, 2),
+            'event_date' => $eventAt instanceof CarbonInterface
+                ? $eventAt->toDateString()
+                : ($payment->created_at?->toDateString() ?: now()->toDateString()),
+            'platform_id' => $payment->platform_id ? (int) $payment->platform_id : null,
+            'platform_country' => $platform?->country,
+            'platform_name' => $platform?->name,
+        ];
     }
 
     private function serializePayment(Payment $payment): array

@@ -204,12 +204,15 @@ class PaymentQueueController extends Controller
 
         $discountedNormalized = $this->reportingCurrencyService->normalizeEventRows($foregoneEventRows, $targetCurrency);
         $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
-        $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
+        $failedStatsQuery = (clone $statsQuery)
+            ->excludingWalletTopups()
+            ->where('status', 'failed');
+        $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
         $pendingNormalized   = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
         $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
-        $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->where('status', 'failed'), $targetCurrency);
+        $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery(clone $failedStatsQuery, $targetCurrency);
         $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
         $customerMix = $this->buildCustomerMixStats(
             clone $confirmedStatsQuery,
@@ -251,7 +254,7 @@ class PaymentQueueController extends Controller
             'reversed_amount_breakdown' => $reversedBreakdown['breakdown'],
             'reversed_normalized_amount' => $reversedNormalized['normalized_total'],
             'reversed_normalization_meta' => $reversedNormalized['normalization_meta'],
-            'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
+            'failed' => (clone $failedStatsQuery)->count(),
             'failed_amount' => $failedBreakdown['scalar_amount'],
             'failed_amount_breakdown' => $failedBreakdown['breakdown'],
             'failed_currency_count' => $failedBreakdown['currency_count'],
@@ -381,7 +384,6 @@ class PaymentQueueController extends Controller
         $report['metrics'] = $this->appendRecoveryAmountNormalization(
             $report['metrics'],
             $targetCurrency,
-            $to,
             $currencyMode === ReportingCurrencyService::MODE_FLAT
         );
 
@@ -398,7 +400,7 @@ class PaymentQueueController extends Controller
         ]);
     }
 
-    private function appendRecoveryAmountNormalization(array $metrics, string $targetCurrency, Carbon $eventDate, bool $shouldNormalize): array
+    private function appendRecoveryAmountNormalization(array $metrics, string $targetCurrency, bool $shouldNormalize): array
     {
         foreach (['failed', 'recovered', 'lost'] as $bucket) {
             if (!$shouldNormalize) {
@@ -407,9 +409,8 @@ class PaymentQueueController extends Controller
                 continue;
             }
 
-            $normalized = $this->reportingCurrencyService->normalizeBreakdown(
-                $metrics["{$bucket}_amount_breakdown"] ?? [],
-                $eventDate,
+            $normalized = $this->reportingCurrencyService->normalizeEventRows(
+                $metrics["{$bucket}_amount_rows"] ?? [],
                 $targetCurrency
             );
 
@@ -418,6 +419,11 @@ class PaymentQueueController extends Controller
         }
 
         $metrics['normalized_currency'] = $targetCurrency;
+        unset(
+            $metrics['failed_amount_rows'],
+            $metrics['recovered_amount_rows'],
+            $metrics['lost_amount_rows']
+        );
 
         return $metrics;
     }
