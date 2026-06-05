@@ -12,6 +12,9 @@ use App\Models\Deal;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Services\BillingGatewayService;
+use App\Services\KopokopoService;
+use App\Services\Routing\ProviderRoutingDispatcher;
 use App\Models\User;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -23,12 +26,8 @@ class DealControllerTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_deal_stk_initiation_records_attempt_with_actor(): void
+    public function test_deal_stk_activation_uses_kopokopo_subscription_push_with_sandbox_guard(): void
     {
-        config([
-            'services.django.base_url' => 'https://payments.exotic-ads.com/api/payments',
-        ]);
-
         $platform = Platform::factory()->create([
             'name' => 'Deals Market',
             'country' => 'Kenya',
@@ -65,14 +64,20 @@ class DealControllerTest extends TestCase
             'assigned_to' => $user->id,
         ]);
 
-        $this->configureMpesaProxy($platform, $user->id, 'https://payments.exotic-ads.com/api/payments', '76');
+        $this->createKopokopoSubscriptionPushForPlatform($platform, 'sandbox');
 
-        Http::fake([
-            'https://payments.exotic-ads.com/api/payments/initiate/' => Http::response([
-                'message' => 'Payment initiated',
-                'payment_id' => 4455,
-            ], 200),
-        ]);
+        $this->mock(KopokopoService::class, function ($mock): void {
+            $mock->shouldReceive('normalizePhone')
+                ->andReturnUsing(fn ($phone) => str_starts_with((string) $phone, '+') ? (string) $phone : '+' . (string) $phone);
+            $mock->shouldReceive('initiateStkPush')
+                ->once()
+                ->andReturn([
+                    'status' => 'success',
+                    'location' => 'https://sandbox.kopokopo.test/incoming/4455',
+                ]);
+        });
+        $this->app->forgetInstance(BillingGatewayService::class);
+        $this->app->forgetInstance(ProviderRoutingDispatcher::class);
 
         Sanctum::actingAs($user);
 
@@ -82,19 +87,35 @@ class DealControllerTest extends TestCase
             'User-Agent' => 'Mozilla/5.0 Chrome/123.0 Safari/537.36',
         ])->postJson("/api/crm/deals/{$deal->id}/activate", [
             'payment_method' => 'stk',
+            'phone' => '+254700111444',
             'reason' => 'Activate after STK payment',
         ]);
 
         $response->assertStatus(202)
-            ->assertJsonPath('payment.status', 'initiated');
+            ->assertJsonPath('payment.status', 'pending')
+            ->assertJsonPath('payment.purpose', 'subscription')
+            ->assertJsonPath('payment.deal_id', $deal->id)
+            ->assertJsonPath('payment.provider_key', 'kopokopo');
+
+        $payment = $deal->fresh()->payment()->firstOrFail();
+
+        $this->assertSame('crm_activation', $payment->source);
+        $this->assertSame('kopokopo', $payment->provider_key);
+        $this->assertSame('sandbox', $payment->provider_environment);
+        $this->assertTrue((bool) data_get($payment->payment_data, 'test_mode'));
+        $this->assertSame('+254700111444', $payment->phone);
 
         $attempt = PaymentAttempt::query()->latest('id')->firstOrFail();
 
         $this->assertSame('stk_initiate', $attempt->attempt_type);
         $this->assertSame('success', $attempt->status);
-        $this->assertSame('django_stk', $attempt->provider);
+        $this->assertSame('kopokopo_direct', $attempt->provider);
         $this->assertSame($user->id, $attempt->created_by);
         $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->firstOrFail();
+        $this->assertSame('subscription_push', $decision->billing_surface);
+        $this->assertSame('kopokopo', $decision->provider_type_key);
     }
 
     public function test_deal_link_activation_defaults_to_market_active_provider(): void
@@ -567,42 +588,6 @@ class DealControllerTest extends TestCase
         $this->assertSame(2880.0, (float) $payment->amount);
     }
 
-    private function configureMpesaProxy(Platform $platform, int $userId, string $baseUrl, string $organizationCode): void
-    {
-        app(WalletSettingsService::class)->saveSystemConfig([
-            'mode' => 'sandbox',
-            'default_currency' => 'KES',
-            'billing_domains' => [
-                'sandbox' => 'https://billing-sandbox.example.test',
-                'production' => 'https://billing.example.test',
-            ],
-            'billing_branding' => [
-                'sandbox' => [
-                    'business_name' => 'Exotic Sandbox Billing',
-                    'description' => 'Sandbox wallet top-up',
-                ],
-                'production' => [
-                    'business_name' => 'Exotic Billing',
-                    'description' => 'Live wallet top-up',
-                ],
-            ],
-            'redirect_delay_seconds' => 3,
-            'wallet_refresh_rate_limit_seconds' => 15,
-            'wallet_refresh_timeout_seconds' => 15,
-            'topup_poll_interval_seconds' => 10,
-        ], $userId);
-
-        app(WalletSettingsService::class)->savePlatformProviderCredentials($platform, [
-            'mpesa_stk' => [
-                'sandbox' => [
-                    'transport' => 'django_proxy',
-                    'payment_service_base_url' => $baseUrl,
-                    'organization_code' => $organizationCode,
-                ],
-            ],
-        ], $userId);
-    }
-
     private function createLinkPlatform(): Platform
     {
         return Platform::factory()->create([
@@ -712,6 +697,50 @@ class DealControllerTest extends TestCase
         BillingRoutingRule::query()->create([
             'market_id' => $platform->id,
             'billing_surface' => 'subscription_link',
+            'primary_binding_id' => $binding->id,
+            'fallback_strategy_json' => ['providers' => []],
+            'risk_policy_json' => ['mode' => 'direct'],
+            'active' => true,
+        ]);
+    }
+
+    private function createKopokopoSubscriptionPushForPlatform(Platform $platform, string $environment): void
+    {
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'Projected KopoKopo ' . ucfirst($environment),
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => $environment,
+            'config_json' => [
+                'base_url' => 'https://sandbox.kopokopo.test',
+                'till_number' => '123456',
+            ],
+            'secrets_json' => [
+                'client_id' => 'kopokopo-client',
+                'client_secret' => 'kopokopo-secret',
+                'api_key' => 'kopokopo-api-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_push',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-push',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingRule::query()->create([
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_push',
             'primary_binding_id' => $binding->id,
             'fallback_strategy_json' => ['providers' => []],
             'risk_policy_json' => ['mode' => 'direct'],

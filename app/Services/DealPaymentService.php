@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\BillingPermissions;
 use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Models\Client;
@@ -14,9 +15,11 @@ use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
+use App\Services\Routing\ProviderRoutingDispatcher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class DealPaymentService
@@ -27,7 +30,11 @@ class DealPaymentService
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
-        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
+        private readonly BillingModeService $billingModeService,
+        private readonly ProviderRoutingDispatcher $providerRoutingDispatcher,
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly KopokopoService $kopokopoService
     ) {
     }
 
@@ -330,6 +337,162 @@ class DealPaymentService
         ]);
     }
 
+    public function initiateSubscriptionPushForDeal(
+        Deal $deal,
+        Client $client,
+        Request $request,
+        ?string $targetPhone = null,
+        array $paymentOverrides = []
+    ): array {
+        $client->loadMissing('platform');
+        $platform = $client->platform;
+
+        if (!$platform) {
+            return [
+                'success' => false,
+                'message' => 'Client has no market configured for subscription push.',
+            ];
+        }
+
+        try {
+            $context = $this->billingModeService->providerContext(
+                $platform,
+                'kopokopo',
+                requireEnabled: false,
+                environmentOverride: null,
+                surface: 'subscription_push'
+            );
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage() ?: 'KopoKopo is not configured for subscription push in this market.',
+            ];
+        }
+
+        if (empty($context['chosen_binding_id']) || empty($context['provider_profile_id'])) {
+            return [
+                'success' => false,
+                'message' => 'KopoKopo is not configured for subscription push in this market. Use a payment link for hosted-checkout markets.',
+            ];
+        }
+
+        $phone = $this->kopokopoService->normalizePhone($targetPhone ?: $client->phone_normalized);
+        if (!preg_match('/^\+254\d{9}$/', $phone)) {
+            return [
+                'success' => false,
+                'message' => 'Enter a valid Kenyan phone number for the M-Pesa STK push.',
+            ];
+        }
+
+        $transactionUuid = (string) Str::uuid();
+        $referenceNumber = $this->crmSubscriptionReference($deal, $client, $transactionUuid);
+        $environment = strtolower(trim((string) ($context['environment'] ?? 'production'))) ?: 'production';
+        $durationDays = (int) ($deal->duration_days ?: $this->resolveDurationDaysFromCatalog($deal));
+        $currency = strtoupper((string) ($deal->currency ?: ($platform->currency_code ?: 'KES')));
+
+        $payment = Payment::create([
+            'platform_id' => (int) $deal->platform_id,
+            'product_id' => $deal->product_id,
+            'deal_id' => (int) $deal->id,
+            'client_id' => (int) $client->id,
+            'phone' => $phone,
+            'amount' => (float) ($deal->amount ?? 0),
+            'currency' => $currency,
+            'transaction_uuid' => $transactionUuid,
+            'transaction_reference' => $referenceNumber,
+            'reference_number' => $referenceNumber,
+            'status' => 'initiated',
+            'purpose' => 'subscription',
+            'source' => 'crm_activation',
+            'provider_key' => 'kopokopo',
+            'provider_environment' => $environment,
+            'duration' => $deal->duration,
+            'subscription_lifecycle' => $paymentOverrides['subscription_lifecycle'] ?? $deal->subscription_lifecycle,
+            'subscription_lifecycle_source' => $paymentOverrides['subscription_lifecycle_source'] ?? $deal->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $paymentOverrides['subscription_lifecycle_reason'] ?? $deal->subscription_lifecycle_reason,
+            'raw_payload' => [
+                'source' => 'crm_activation',
+                'method' => 'subscription_push',
+                'deal_id' => (int) $deal->id,
+            ],
+            'payment_data' => [
+                'product_price_id' => $deal->product_price_id,
+                'duration_days' => $durationDays,
+                'provider' => 'kopokopo',
+                'provider_config_key' => 'kopokopo_subscription_push',
+                'provider_mode' => 'subscription_push',
+                'checkout_channel' => 'crm',
+                'billing_surface' => 'subscription_push',
+                'test_mode' => $environment === 'sandbox',
+                'customer' => [
+                    'name' => (string) $client->name,
+                    'email' => (string) ($client->email ?? ''),
+                    'phone' => $phone,
+                ],
+            ],
+        ]);
+
+        $payment->loadMissing(['client', 'platform', 'product']);
+        $dispatchContext = array_merge($context, [
+            'provider_key' => 'kopokopo',
+        ]);
+        $callbackUrl = $this->billingModeService->buildAbsoluteUrl(
+            $platform,
+            '/api/billing/mpesa/callback',
+            [],
+            $environment
+        );
+        $resolvedProvider = [
+            'key' => 'kopokopo_subscription_push',
+            'config' => [
+                'label' => 'KopoKopo',
+                'wallet_provider_key' => 'kopokopo',
+                'mode' => 'subscription_push',
+                'billing_surface' => 'subscription_push',
+                'execution_mode' => 'direct',
+                'environment' => $environment,
+                'chosen_binding_id' => $context['chosen_binding_id'] ?? null,
+                'provider_profile_id' => $context['provider_profile_id'] ?? null,
+            ],
+        ];
+        $pricing = [
+            'amount' => (float) $payment->amount,
+            'currency' => $currency,
+            'quoted_amount' => (float) $payment->amount,
+            'quoted_currency' => $currency,
+        ];
+
+        $this->billingRoutingDecisionRecorder->recordSelfCheckout(
+            $payment,
+            $dispatchContext,
+            $resolvedProvider,
+            $pricing,
+            $callbackUrl
+        );
+
+        try {
+            $action = $this->providerRoutingDispatcher->dispatch($payment, $dispatchContext, [
+                'phone' => $phone,
+                'request' => $request,
+            ]);
+        } catch (\Throwable $exception) {
+            $freshPayment = $payment->fresh() ?? $payment;
+
+            return [
+                'success' => false,
+                'message' => $freshPayment->failure_reason ?: $exception->getMessage(),
+                'payment' => $freshPayment,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'message' => $action['message'] ?? 'STK push sent. Subscription will activate after payment confirmation.',
+            'payment' => $payment->fresh(['platform', 'product', 'client']),
+            'action' => $action,
+        ];
+    }
+
     public function initiatePaymentForDeal(
         Deal $deal,
         Client $client,
@@ -337,12 +500,13 @@ class DealPaymentService
         Request $request,
         ?string $paymentLinkProvider = null,
         array $paymentLinkSelection = [],
-        array $paymentOverrides = []
+        array $paymentOverrides = [],
+        ?string $targetPhone = null
     ): array {
         $client->loadMissing('platform');
 
         $phonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
-        $phone = PhoneNormalizer::normalize($client->phone_normalized, $phonePrefix);
+        $phone = PhoneNormalizer::normalize($targetPhone ?: $client->phone_normalized, $phonePrefix);
         if (!$phone) {
             return [
                 'success' => false,
@@ -580,7 +744,16 @@ class DealPaymentService
             'payment_method' => 'link',
         ];
 
-        $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider, $paymentLinkSelection, $paymentOverrides);
+        $initiation = $this->initiatePaymentForDeal(
+            $deal,
+            $client,
+            'link',
+            $request,
+            $paymentLinkProvider,
+            $paymentLinkSelection,
+            $paymentOverrides,
+            trim((string) $request->input('phone')) ?: null
+        );
         $paymentReady = (bool) ($initiation['payment_ready'] ?? false);
         if (!($initiation['success'] ?? false) && !($allowPreparedLinkFallback && $paymentReady)) {
             throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
@@ -815,6 +988,20 @@ class DealPaymentService
             'manual' => 30,
             default => 30,
         };
+    }
+
+    private function crmSubscriptionReference(Deal $deal, Client $client, string $transactionUuid): string
+    {
+        $hash = strtoupper(substr(hash('sha256', implode('|', [
+            (int) $deal->platform_id,
+            (int) $client->id,
+            (int) $deal->id,
+            (int) $deal->product_id,
+            (string) $deal->duration,
+            $transactionUuid,
+        ])), 0, 18));
+
+        return 'CRM-SUB-' . $hash;
     }
 
     private function emitDealCreatedTimeline(Deal $deal, Client $client, int $actorId, array $content = []): void

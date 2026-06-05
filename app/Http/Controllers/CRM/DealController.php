@@ -382,6 +382,7 @@ class DealController extends Controller
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
             'payment_method' => 'required|string|max:50',
+            'phone' => 'nullable|string|max:30',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
@@ -537,19 +538,23 @@ class DealController extends Controller
                     'message' => $result['message'] ?? 'Payment initiated. Subscription will activate when payment succeeds.',
                     'deal' => $deal,
                     'payment' => $payment,
+                    'payment_url' => $result['payment_url'] ?? null,
+                    'sms_result' => $result['sms_result'] ?? null,
+                    'phone' => $result['phone'] ?? null,
                 ], 202);
             } elseif ($paymentMethod === 'stk') {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal(
+                $targetPhone = trim((string) ($validated['phone'] ?? '')) ?: null;
+                $initiation = $this->dealPaymentService->initiateSubscriptionPushForDeal(
                     $deal,
                     $client,
-                    $paymentMethod,
                     $request,
-                    $paymentLinkProvider,
-                    $paymentLinkSelection ?? [],
+                    $targetPhone,
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
                 if (!($initiation['success'] ?? false)) {
-                    throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
+                    throw ValidationException::withMessages([
+                        'payment_method' => (string) ($initiation['message'] ?? 'Payment initiation failed.'),
+                    ]);
                 }
 
                 /** @var \App\Models\Payment $payment */
@@ -733,6 +738,19 @@ class DealController extends Controller
             }
 
             return response()->json($deal);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => collect($e->errors())->flatten()->first() ?: 'Activation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\InvalidArgumentException $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => 'Activation failed: ' . $e->getMessage(),
+            ], 422);
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Deal activation failed', [

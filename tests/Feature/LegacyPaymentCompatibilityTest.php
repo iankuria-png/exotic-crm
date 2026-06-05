@@ -2,8 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\Product;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -54,6 +57,52 @@ class LegacyPaymentCompatibilityTest extends TestCase
         $this->get('/success/txn-browser-001')
             ->assertOk()
             ->assertSee('Payment Successful!');
+    }
+
+    public function test_payment_status_exposes_failure_and_deal_context_for_crm_polling(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $product = Product::factory()->create(['platform_id' => $platform->id]);
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'status' => 'awaiting_payment',
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'client_id' => $client->id,
+            'deal_id' => $deal->id,
+            'phone' => '+254700000001',
+            'amount' => 1400,
+            'currency' => 'KES',
+            'transaction_uuid' => 'txn-crm-status-001',
+            'transaction_reference' => 'CRM-SUB-STATUS',
+            'status' => 'failed',
+            'purpose' => 'subscription',
+            'provider_key' => 'kopokopo',
+            'provider_environment' => 'sandbox',
+            'failure_reason' => 'Customer declined the STK prompt.',
+            'payment_data' => [
+                'provisioning_status' => 'suppressed_sandbox',
+                'sandbox_suppressed' => true,
+            ],
+        ]);
+
+        $this->getJson('/api/payment-status/txn-crm-status-001')
+            ->assertOk()
+            ->assertJsonPath('payment_status', 'failed')
+            ->assertJsonPath('data.failure_reason', 'Customer declined the STK prompt.')
+            ->assertJsonPath('data.deal_id', $deal->id)
+            ->assertJsonPath('data.deal_status', 'awaiting_payment')
+            ->assertJsonPath('data.purpose', 'subscription')
+            ->assertJsonPath('data.provider_key', 'kopokopo')
+            ->assertJsonPath('data.provider_environment', 'sandbox')
+            ->assertJsonPath('data.provisioning_status', 'suppressed_sandbox')
+            ->assertJsonPath('data.sandbox_suppressed', true);
     }
 
     private function createPlatform(string $name): Platform

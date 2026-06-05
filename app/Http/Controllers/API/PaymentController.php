@@ -799,7 +799,7 @@ class PaymentController extends Controller
 
     private function statusResponseForPayment(Payment $payment): array
     {
-        $payment->loadMissing(['platform:id,name', 'product:id,name']);
+        $payment->loadMissing(['platform:id,name', 'product:id,name', 'deal:id,status']);
         $status = $this->normalizePaymentStatus($payment->status) ?? $payment->status;
 
         return [
@@ -812,6 +812,14 @@ class PaymentController extends Controller
                 'transaction_uuid' => $payment->transaction_uuid,
                 'transaction_reference' => $payment->transaction_reference,
                 'reference_number' => $payment->reference_number,
+                'failure_reason' => $payment->failure_reason,
+                'deal_id' => $payment->deal_id,
+                'deal_status' => $payment->deal?->status,
+                'purpose' => $payment->purpose,
+                'provider_key' => $payment->provider_key,
+                'provider_environment' => $payment->provider_environment,
+                'provisioning_status' => data_get($payment->payment_data, 'provisioning_status'),
+                'sandbox_suppressed' => (bool) data_get($payment->payment_data, 'sandbox_suppressed', false),
                 'amount' => $payment->amount,
                 'currency' => $payment->currency,
                 'duration' => $payment->duration,

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import api from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import Timeline from '../components/Timeline';
@@ -756,6 +757,8 @@ export default function ClientDetail() {
     const [activationPaymentReference, setActivationPaymentReference] = useState('');
     const [activationFreeTrialPin, setActivationFreeTrialPin] = useState('');
     const [activationPaymentLinkProvider, setActivationPaymentLinkProvider] = useState('');
+    const [activationTargetPhone, setActivationTargetPhone] = useState('');
+    const [activationAsyncResult, setActivationAsyncResult] = useState(null);
     const [activationApplyDiscount, setActivationApplyDiscount] = useState(false);
     const [activationDiscountPercentage, setActivationDiscountPercentage] = useState('');
     const [activationDiscountPayableAmount, setActivationDiscountPayableAmount] = useState('');
@@ -1156,12 +1159,13 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason, subsidiaryTrial }) =>
+        mutationFn: ({ dealId, reason, paymentMethod, phone, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason, subsidiaryTrial }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason,
                 payment_method: paymentMethod,
                 subscription_lifecycle: subscriptionLifecycle,
                 ...(subscriptionLifecycleReason ? { subscription_lifecycle_reason: subscriptionLifecycleReason } : {}),
+                ...(['stk', 'link'].includes(paymentMethod) && phone ? { phone } : {}),
                 ...(paymentMethod === 'manual' ? { payment_reference: paymentReference } : {}),
                 ...(paymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPin } : {}),
                 ...(paymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
@@ -1174,9 +1178,21 @@ export default function ClientDetail() {
                     : {}),
                 ...(subsidiaryTrial?.enabled ? { subsidiary_trial: subsidiaryTrial } : {}),
             }).then((r) => r.data),
-        onSuccess: (payload) => {
+        onSuccess: (payload, variables) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            if (['stk', 'link'].includes(variables?.paymentMethod)) {
+                setActivationAsyncResult({
+                    method: variables.paymentMethod,
+                    payload,
+                    payment: payload?.payment || null,
+                    paymentUrl: payload?.payment_url || null,
+                    phone: payload?.phone || variables?.phone || '',
+                    startedAt: Date.now(),
+                });
+                toast.success(payload?.message || 'Payment request submitted.');
+                return;
+            }
             const subsidiaryTrial = payload?.subsidiary_trial || null;
             if (subsidiaryTrial?.status === 'failed') {
                 setSubsidiaryTrialBanner({
@@ -1194,6 +1210,8 @@ export default function ClientDetail() {
             setActivationPaymentReference('');
             setActivationFreeTrialPin('');
             setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
+            setActivationTargetPhone(client?.phone_normalized || '');
+            setActivationAsyncResult(null);
             setActivationApplyDiscount(false);
             setActivationDiscountPercentage('');
             setActivationDiscountPayableAmount('');
@@ -1214,6 +1232,49 @@ export default function ClientDetail() {
             toast.error(error?.response?.data?.message || 'Subscription activation failed.');
         },
     });
+
+    const activationStatusUuid = activationAsyncResult?.method === 'stk'
+        ? activationAsyncResult?.payment?.transaction_uuid
+        : null;
+    const activationStatusQuery = useQuery({
+        queryKey: ['activation-payment-status', activationStatusUuid],
+        queryFn: () => axios
+            .get(`/api/payment-status/${encodeURIComponent(activationStatusUuid)}`)
+            .then((response) => response.data),
+        enabled: Boolean(activationDialog.open && activationStatusUuid),
+        refetchInterval: (query) => {
+            const status = String(query.state.data?.data?.status || query.state.data?.payment_status || '').toLowerCase();
+            const dealStatus = String(query.state.data?.data?.deal_status || '').toLowerCase();
+            const elapsed = Date.now() - Number(activationAsyncResult?.startedAt || Date.now());
+
+            if (['completed', 'failed', 'canceled', 'cancelled', 'expired'].includes(status) || dealStatus === 'active' || elapsed > 90000) {
+                return false;
+            }
+
+            return 5000;
+        },
+    });
+    const activationStatusPayload = activationStatusQuery.data?.data || null;
+    const activationPolledStatus = String(
+        activationStatusPayload?.status
+        || activationStatusQuery.data?.payment_status
+        || activationAsyncResult?.payment?.status
+        || ''
+    ).toLowerCase();
+    const activationDealStatus = String(activationStatusPayload?.deal_status || '').toLowerCase();
+    const activationIsTerminal = ['completed', 'failed', 'canceled', 'cancelled', 'expired'].includes(activationPolledStatus)
+        || activationDealStatus === 'active';
+
+    useEffect(() => {
+        if (activationAsyncResult?.method !== 'stk') {
+            return;
+        }
+
+        if (activationPolledStatus === 'completed' || activationDealStatus === 'active') {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+        }
+    }, [activationAsyncResult?.method, activationDealStatus, activationPolledStatus, id, queryClient]);
 
     const retrySubsidiaryTrialMutation = useMutation({
         mutationFn: ({ dealId, pin }) => api.post(`/crm/deals/${dealId}/subsidiary-trial-retry`, { pin }).then((response) => response.data),
@@ -1641,6 +1702,10 @@ export default function ClientDetail() {
             return;
         }
 
+        if (!activationTargetPhone) {
+            setActivationTargetPhone(client?.phone_normalized || '');
+        }
+
         if (!activationPaymentMethods.includes(activationPaymentMethod)) {
             setActivationPaymentMethod(activationPaymentMethods[0] || '');
         }
@@ -1648,7 +1713,7 @@ export default function ClientDetail() {
         if (!activationPaymentLinkProvider && defaultPaymentLinkProvider) {
             setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
         }
-    }, [activationDialog.open, activationPaymentLinkProvider, activationPaymentMethod, activationPaymentMethods, defaultPaymentLinkProvider]);
+    }, [activationDialog.open, activationPaymentLinkProvider, activationPaymentMethod, activationPaymentMethods, activationTargetPhone, client?.phone_normalized, defaultPaymentLinkProvider]);
 
     useEffect(() => {
         if (!activationDialog.open) {
@@ -1827,7 +1892,7 @@ export default function ClientDetail() {
     const activationRequiresFreeTrialPin = activationPaymentMethod === 'free_trial';
     const activationRequiresProvider = activationPaymentMethod === 'link';
     const activationDiscountAllowed = activationPaymentMethod !== 'free_trial';
-    const activationTargetPhone = client?.phone_normalized || '';
+    const activationRequiresPhone = activationPaymentMethod === 'stk' || activationPaymentMethod === 'link';
     const dealPaymentRequiresReference = dealPaymentMethod === 'manual';
     const dealPaymentRequiresFreeTrialPin = dealPaymentMethod === 'free_trial';
     const dealPaymentRequiresProvider = dealPaymentMethod === 'link';
@@ -1888,6 +1953,8 @@ export default function ClientDetail() {
         setActivationPaymentReference('');
         setActivationFreeTrialPin('');
         setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
+        setActivationTargetPhone(client?.phone_normalized || '');
+        setActivationAsyncResult(null);
         setActivationApplyDiscount(false);
         setActivationDiscountPercentage('');
         setActivationDiscountPayableAmount('');
@@ -2060,6 +2127,31 @@ export default function ClientDetail() {
         }
     };
 
+    const openActivationPaymentUrl = () => {
+        const paymentUrl = activationAsyncResult?.paymentUrl;
+        if (!paymentUrl) {
+            toast.error('No checkout URL is available to open.');
+            return;
+        }
+
+        window.open(paymentUrl, '_blank', 'noopener,noreferrer');
+    };
+
+    const copyActivationPaymentUrl = async () => {
+        const paymentUrl = activationAsyncResult?.paymentUrl;
+        if (!paymentUrl) {
+            toast.error('No checkout URL is available to copy.');
+            return;
+        }
+
+        try {
+            await copyTextValue(paymentUrl);
+            toast.success('Checkout link copied.');
+        } catch (error) {
+            toast.error('Checkout link could not be copied.');
+        }
+    };
+
     const copyProfileMessage = async () => {
         if (!hasProfileUrl) {
             toast.error('No profile URL is available to copy.');
@@ -2095,6 +2187,8 @@ export default function ClientDetail() {
         setActivationPaymentReference('');
         setActivationFreeTrialPin('');
         setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
+        setActivationTargetPhone(client?.phone_normalized || '');
+        setActivationAsyncResult(null);
         setActivationApplyDiscount(false);
         setActivationDiscountPercentage('');
         setActivationDiscountPayableAmount('');
@@ -2160,6 +2254,11 @@ export default function ClientDetail() {
             return;
         }
 
+        if (activationRequiresPhone && !activationTargetPhone.trim()) {
+            toast.error('Enter the phone number for this payment request.');
+            return;
+        }
+
         if (activationApplyDiscount && !activationDiscountAllowed) {
             toast.error('Discounts cannot be applied to free trials.');
             return;
@@ -2192,6 +2291,7 @@ export default function ClientDetail() {
             dealId: activationDialog.dealId,
             reason: activationReason.trim() || 'Activation initiated from client profile',
             paymentMethod: activationPaymentMethod,
+            phone: activationRequiresPhone ? activationTargetPhone.trim() : undefined,
             subscriptionLifecycle: activationSubscriptionLifecycle,
             subscriptionLifecycleReason: activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
                 ? activationSubscriptionLifecycleReason.trim()
@@ -2216,10 +2316,12 @@ export default function ClientDetail() {
     };
 
     const activationSubmitDisabled = activateDealMutation.isPending
+        || Boolean(activationAsyncResult)
         || !activationDialog.dealId
         || (activationRequiresReference && !activationPaymentReference.trim())
         || (activationRequiresFreeTrialPin && activationFreeTrialPin.trim().length < 4)
         || (activationRequiresProvider && !activationPaymentLinkProvider)
+        || (activationRequiresPhone && !activationTargetPhone.trim())
         || (activationApplyDiscount && !activationDiscountValid)
         || (activationApplyDiscount && activationDiscountPin.trim().length < 4)
         || (activationSubsidiaryTrial.enabled && !activationSubsidiaryReady)
@@ -4650,15 +4752,93 @@ export default function ClientDetail() {
                                 ) : null}
 
                                 {(activationPaymentMethod === 'stk' || activationPaymentMethod === 'link') ? (
-                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                                        {activationPaymentMethod === 'stk'
-                                            ? 'We’ll send an STK push to this phone. The subscription starts after payment is confirmed.'
-                                            : paymentLinkProviderOptions.length
-                                                ? 'We’ll send a payment link to this phone. The subscription starts after payment is confirmed.'
-                                                : 'No payment link provider is set up for this market yet.'}
-                                        <span className="mt-1 block crm-mono text-[11px] text-slate-500">
-                                            Phone: {activationTargetPhone || 'Unavailable'}
-                                        </span>
+                                    <div className="space-y-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                        <p>
+                                            {activationPaymentMethod === 'stk'
+                                                ? 'We’ll send an STK push to this phone. The subscription starts after payment is confirmed.'
+                                                : paymentLinkProviderOptions.length
+                                                    ? 'We’ll prepare a secure checkout link for this phone. Open, copy, or share it after submission.'
+                                                    : 'No payment link provider is set up for this market yet.'}
+                                        </p>
+                                        <label htmlFor="client-detail-activation-phone" className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                            Payment phone
+                                        </label>
+                                        <input
+                                            id="client-detail-activation-phone"
+                                            type="tel"
+                                            value={activationTargetPhone}
+                                            onChange={(event) => setActivationTargetPhone(event.target.value)}
+                                            className="crm-input crm-mono text-sm"
+                                            placeholder="+254712345678"
+                                            disabled={activateDealMutation.isPending || Boolean(activationAsyncResult)}
+                                        />
+                                    </div>
+                                ) : null}
+                                {activationAsyncResult ? (
+                                    <div className="space-y-3 rounded-md border border-teal-200 bg-teal-50/80 p-3 text-sm">
+                                        {activationAsyncResult.method === 'stk' ? (
+                                            <>
+                                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                                    <div>
+                                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">STK status</p>
+                                                        <p className="mt-1 font-semibold text-slate-900">
+                                                            {activationPolledStatus === 'failed'
+                                                                ? 'Payment failed'
+                                                                : (activationPolledStatus === 'completed' || activationDealStatus === 'active')
+                                                                    ? 'Payment confirmed'
+                                                                    : 'STK sent'}
+                                                        </p>
+                                                        <p className="mt-1 text-slate-600">
+                                                            {activationPolledStatus === 'failed'
+                                                                ? (activationStatusPayload?.failure_reason || 'The provider marked this payment as failed.')
+                                                                : (activationPolledStatus === 'completed' || activationDealStatus === 'active')
+                                                                    ? 'Subscription activation has been confirmed.'
+                                                                    : 'Ask the client to enter their M-Pesa PIN.'}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => activationStatusQuery.refetch()}
+                                                        disabled={activationStatusQuery.isFetching}
+                                                        className="crm-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {activationStatusQuery.isFetching ? 'Checking...' : 'Check status'}
+                                                    </button>
+                                                </div>
+                                                <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                                                    <span className="crm-mono">Ref: {activationAsyncResult.payment?.transaction_reference || activationAsyncResult.payment?.reference_number || 'Pending'}</span>
+                                                    <span className="crm-mono">Phone: {activationAsyncResult.phone || activationTargetPhone || 'Unavailable'}</span>
+                                                </div>
+                                                {!activationIsTerminal && !activationStatusQuery.isFetching ? (
+                                                    <p className="text-xs text-slate-500">Polling will stop after confirmation, failure, or 90 seconds.</p>
+                                                ) : null}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div>
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">Checkout link</p>
+                                                    <p className="mt-1 font-semibold text-slate-900">Ready to share</p>
+                                                    <p className="mt-1 text-slate-600">{activationAsyncResult.payload?.message || 'Open the hosted checkout or copy the link for the client.'}</p>
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    readOnly
+                                                    value={activationAsyncResult.paymentUrl || ''}
+                                                    className="crm-input crm-mono text-xs"
+                                                />
+                                                <div className="flex flex-wrap gap-2">
+                                                    <button type="button" onClick={openActivationPaymentUrl} className="crm-btn-primary">
+                                                        Open checkout
+                                                    </button>
+                                                    <button type="button" onClick={copyActivationPaymentUrl} className="crm-btn-secondary">
+                                                        Copy link
+                                                    </button>
+                                                    <span className="inline-flex items-center rounded-md border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold text-slate-600">
+                                                        Sent to {activationAsyncResult.phone || activationTargetPhone || 'client phone'}
+                                                    </span>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                 ) : null}
                                 {activationDiscountAllowed ? (
