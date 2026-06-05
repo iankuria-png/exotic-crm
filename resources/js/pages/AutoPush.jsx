@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
 import DataTable from '../components/DataTable';
 import { useToast } from '../components/ToastProvider';
+import { proxyImageUrl } from '../utils/imageProxy';
 
 const DAY_OPTIONS = [
     { value: 1, label: 'Mon' },
@@ -89,6 +90,43 @@ function formatDateTime(value) {
         hour: '2-digit',
         minute: '2-digit',
     }).format(parsed);
+}
+
+function formatDateTimeLocal(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return '';
+    }
+
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function formatPreviewTime(value) {
+    if (!value) return 'Not scheduled';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return 'Not scheduled';
+
+    return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(parsed);
+}
+
+function platformLabel(platform) {
+    return platform?.platform_name || platform?.name || platform?.country || 'Unknown market';
+}
+
+function bucketLabel(type) {
+    return prettyLabel(type).replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function deepClone(value) {
@@ -263,6 +301,94 @@ function renderBucketParams(bucket, onChange) {
     return null;
 }
 
+function SelectField({ label, value, onChange, children, className = '', tone = 'default' }) {
+    return (
+        <label className={`space-y-1 ${className}`}>
+            {label ? <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</span> : null}
+            <div className="relative">
+                <select
+                    className={`crm-select-enhanced w-full pr-10 ${tone === 'soft' ? 'border-slate-200 bg-slate-50/70' : ''}`}
+                    value={value}
+                    onChange={onChange}
+                >
+                    {children}
+                </select>
+                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m5 7 5 5 5-5" />
+                    </svg>
+                </span>
+            </div>
+        </label>
+    );
+}
+
+function PreviewNotification({ item, device = 'mobile' }) {
+    const imageUrl = proxyImageUrl(item?.profile_image_url || '');
+    const title = item?.city ? `${item.name} in ${item.city}` : (item?.name || 'Profile preview');
+    const sourceLabel = prettyLabel(item?.message_source || 'seed');
+
+    return (
+        <div className={`mx-auto ${device === 'mobile' ? 'w-[320px]' : 'w-full max-w-[560px]'}`}>
+            <div className={`rounded-[30px] border border-slate-200 bg-slate-950 p-3 shadow-[0_32px_80px_-38px_rgba(15,23,42,0.75)] ${device === 'mobile' ? '' : 'rounded-[24px]'}`}>
+                <div className="rounded-[24px] bg-slate-100 p-3">
+                    <div className="mb-3 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        <div className="flex items-center gap-2">
+                            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-teal-600 text-[10px] font-bold text-white">EO</span>
+                            <span>Exotic Push</span>
+                        </div>
+                        <span>{formatPreviewTime(item?.scheduled_at_market || item?.scheduled_at)}</span>
+                    </div>
+
+                    <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-sm">
+                        <div className="relative aspect-[4/3] bg-slate-200">
+                            {imageUrl ? (
+                                <img src={imageUrl} alt={item?.name || 'Preview profile'} className="h-full w-full object-cover" />
+                            ) : (
+                                <div className="flex h-full items-center justify-center bg-gradient-to-br from-slate-200 via-slate-100 to-white text-3xl font-semibold text-slate-500">
+                                    {(item?.name || 'E').charAt(0).toUpperCase()}
+                                </div>
+                            )}
+                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/75 via-slate-950/25 to-transparent px-4 pb-4 pt-10">
+                                <div className="flex items-end justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate text-lg font-semibold text-white">{item?.name || 'Preview profile'}</p>
+                                        <p className="truncate text-sm text-slate-200">{item?.city || 'Unknown location'}</p>
+                                    </div>
+                                    <span className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-white backdrop-blur">
+                                        {sourceLabel}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3 p-4">
+                            <p className="text-base font-semibold leading-6 text-slate-900">{title}</p>
+                            <p className="rounded-2xl bg-slate-50 px-3.5 py-3 text-[15px] leading-6 text-slate-700">
+                                {item?.message || 'Preview a generated message here.'}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1">{formatPreviewTime(item?.scheduled_at_market || item?.scheduled_at)}</span>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1">{item?.city || 'Location pending'}</span>
+                                {item?.profile_url ? (
+                                    <a
+                                        href={item.profile_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 transition hover:bg-teal-100"
+                                    >
+                                        Open profile
+                                    </a>
+                                ) : null}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function AutoPush() {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -271,6 +397,9 @@ export default function AutoPush() {
     const [form, setForm] = useState(() => deepClone(EMPTY_FORM));
     const [clonePlatformIds, setClonePlatformIds] = useState([]);
     const [preview, setPreview] = useState(null);
+    const [previewItems, setPreviewItems] = useState([]);
+    const [activePreviewId, setActivePreviewId] = useState(null);
+    const [previewDevice, setPreviewDevice] = useState('mobile');
 
     const integrationsQuery = useQuery({
         queryKey: ['settings-integrations', 'auto-push'],
@@ -316,6 +445,8 @@ export default function AutoPush() {
         setIsCreatingNew(false);
         setForm(normalizePlanToForm(selectedPlan));
         setPreview(null);
+        setPreviewItems([]);
+        setActivePreviewId(null);
         setClonePlatformIds([]);
     }, [selectedPlan]);
 
@@ -385,7 +516,20 @@ export default function AutoPush() {
                 setSelectedPlanId(createdPlan.id);
                 invalidateAll();
             }
+            const items = Array.isArray(previewPayload?.items)
+                ? previewPayload.items.map((item, index) => ({
+                    ...item,
+                    preview_id: `${item.client_id || 'preview'}-${index}`,
+                    scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
+                    original_city: item.city || '',
+                    original_message: item.message || '',
+                    original_scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
+                }))
+                : [];
+
             setPreview(previewPayload);
+            setPreviewItems(items);
+            setActivePreviewId(items[0]?.preview_id || null);
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Preview failed.');
@@ -558,6 +702,8 @@ export default function AutoPush() {
     const selectedPlanCoverage = selectedPlan?.coverage_count || 0;
     const selectedPlanRunway = selectedPlan?.runway_threshold || 0;
     const selectedPlanMarket = selectedPlan?.platform?.name || selectedPlan?.platform?.country || '—';
+    const currentPlatformOption = platformOptions.find((platform) => String(platform.platform_id) === String(form.platform_id)) || null;
+    const selectedPreviewItem = previewItems.find((item) => item.preview_id === activePreviewId) || previewItems[0] || null;
 
     const handleSave = () => {
         savePlanMutation.mutate(planToPayload(form));
@@ -576,6 +722,8 @@ export default function AutoPush() {
         setIsCreatingNew(true);
         setSelectedPlanId(null);
         setPreview(null);
+        setPreviewItems([]);
+        setActivePreviewId(null);
         setClonePlatformIds([]);
         setForm({
             ...deepClone(EMPTY_FORM),
@@ -583,11 +731,21 @@ export default function AutoPush() {
         });
     };
 
+    const updatePreviewItem = (previewId, updater) => {
+        setPreviewItems((current) => current.map((item) => {
+            if (item.preview_id !== previewId) {
+                return item;
+            }
+
+            return typeof updater === 'function' ? updater(item) : { ...item, ...updater };
+        }));
+    };
+
     return (
         <div className="space-y-4">
             <PageHeader
                 title="Auto Push"
-                subtitle="Manage market-specific autopilot plans, inspect runway, and keep replacements and alerts under control."
+                subtitle="Shape audience, timing, and copy in one working surface before the next market run goes live."
                 actions={(
                     <>
                         <button type="button" onClick={handleNewPlan} className="crm-btn-secondary">
@@ -599,7 +757,7 @@ export default function AutoPush() {
                             disabled={previewMutation.isPending}
                             className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            {previewMutation.isPending ? 'Previewing...' : 'Preview selection'}
+                            {previewMutation.isPending ? 'Refreshing preview...' : 'Refresh preview'}
                         </button>
                         <button
                             type="button"
@@ -616,288 +774,340 @@ export default function AutoPush() {
             <section className="grid gap-4 md:grid-cols-4">
                 <MetricCard label="Plans" value={metrics.totalPlans.toLocaleString()} meta="market playbooks" tone="accent" />
                 <MetricCard label="Enabled" value={metrics.enabledPlans.toLocaleString()} meta="live in scheduler" tone="success" />
-                <MetricCard label="Due Now" value={metrics.dueNow.toLocaleString()} meta="ready for another run" tone="warning" />
-                <MetricCard label="Open Alerts" value={metrics.openAlerts.toLocaleString()} meta="needs review" tone="danger" />
+                <MetricCard label="Due Now" value={metrics.dueNow.toLocaleString()} meta="runway under threshold" tone="warning" />
+                <MetricCard label="Open Alerts" value={metrics.openAlerts.toLocaleString()} meta="operational follow-up" tone="danger" />
             </section>
 
-            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <section className="crm-surface overflow-hidden">
-                    <div className="border-b border-slate-200 px-4 py-4">
-                        <h3 className="text-sm font-semibold text-slate-900">Plans</h3>
-                        <p className="mt-1 text-sm text-slate-500">One plan per market, with runway and approvals visible at a glance.</p>
-                    </div>
-                    <div className="max-h-[72vh] space-y-3 overflow-y-auto p-4">
-                        {plansQuery.isLoading ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">Loading plans...</div>
-                        ) : plans.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">No plans yet. Create the first market plan to start coverage.</div>
-                        ) : plans.map((plan) => {
-                            const active = Number(plan.id) === Number(selectedPlanId);
-                            const statusTone = plan.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600';
-                            return (
-                                <button
-                                    key={plan.id}
-                                    type="button"
-                                    onClick={() => setSelectedPlanId(plan.id)}
-                                    className={`w-full rounded-xl border p-4 text-left transition ${
-                                        active ? 'border-teal-300 bg-teal-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p className="font-semibold text-slate-900">{plan.name}</p>
-                                            <p className="mt-1 text-sm text-slate-500">{plan.platform?.name || plan.platform?.country || 'Unknown market'}</p>
-                                        </div>
-                                        <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${statusTone}`}>
-                                            {plan.enabled ? 'enabled' : 'disabled'}
-                                        </span>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                                        <div className="rounded-lg bg-white/80 px-3 py-2">
-                                            <p className="font-medium text-slate-900">{Number(plan.coverage_count || 0).toLocaleString()}</p>
-                                            <p>covered slots</p>
-                                        </div>
-                                        <div className="rounded-lg bg-white/80 px-3 py-2">
-                                            <p className="font-medium text-slate-900">{plan.due_now ? 'Yes' : 'No'}</p>
-                                            <p>due now</p>
-                                        </div>
-                                    </div>
-                                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                                        <span className="rounded-full bg-slate-100 px-2 py-1">{plan.autopilot ? 'autopilot on' : 'approval mode'}</span>
-                                        <span className="rounded-full bg-slate-100 px-2 py-1">last run {formatDateTime(plan.last_run_at)}</span>
-                                    </div>
+            <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+                <aside className="space-y-4 xl:sticky xl:top-6 self-start">
+                    <section className="crm-surface overflow-hidden">
+                        <div className="border-b border-slate-200 px-4 py-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-slate-900">Plans</h3>
+                                    <p className="mt-1 text-sm text-slate-500">Select the market workspace you want to tune.</p>
+                                </div>
+                                <button type="button" onClick={handleNewPlan} className="crm-btn-secondary px-3 py-1.5 text-xs">
+                                    Create
                                 </button>
-                            );
-                        })}
-                    </div>
-                </section>
-
-                <div className="space-y-4">
-                    <section className="grid gap-4 md:grid-cols-3">
-                        <MetricCard label="Market" value={selectedPlanMarket} meta="selected plan" tone="default" />
-                        <MetricCard label="Coverage" value={selectedPlanCoverage.toLocaleString()} meta={`threshold ${Number(selectedPlanRunway || 0).toLocaleString()}`} tone={selectedPlanCoverage >= selectedPlanRunway ? 'success' : 'warning'} />
-                        <MetricCard label="Mode" value={form.autopilot ? 'Autopilot' : 'Approval'} meta={form.enabled ? 'scheduler active' : 'scheduler paused'} tone={form.autopilot ? 'accent' : 'default'} />
+                            </div>
+                        </div>
+                        <div className="max-h-[68vh] space-y-3 overflow-y-auto p-4">
+                            {plansQuery.isLoading ? (
+                                <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">Loading plans...</div>
+                            ) : plans.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">No plans yet. Start with a market plan, then shape the audience and preview before you schedule.</div>
+                            ) : plans.map((plan) => {
+                                const active = Number(plan.id) === Number(selectedPlanId);
+                                return (
+                                    <button
+                                        key={plan.id}
+                                        type="button"
+                                        onClick={() => setSelectedPlanId(plan.id)}
+                                        className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+                                            active
+                                                ? 'border-teal-300 bg-teal-50/80 shadow-sm'
+                                                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="truncate font-semibold text-slate-900">{plan.name}</p>
+                                                <p className="mt-1 truncate text-sm text-slate-500">{platformLabel(plan.platform)}</p>
+                                            </div>
+                                            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                                                plan.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                                            }`}>
+                                                {plan.enabled ? 'Live' : 'Paused'}
+                                            </span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                                            <div className="rounded-xl bg-white/90 px-3 py-2">
+                                                <p className="font-semibold text-slate-900">{Number(plan.coverage_count || 0).toLocaleString()}</p>
+                                                <p>coverage</p>
+                                            </div>
+                                            <div className="rounded-xl bg-white/90 px-3 py-2">
+                                                <p className="font-semibold text-slate-900">{plan.due_now ? 'Due' : 'Stable'}</p>
+                                                <p>runway</p>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                                            <span className="rounded-full bg-slate-100 px-2 py-1">{plan.autopilot ? 'autopilot' : 'approval'}</span>
+                                            <span className="rounded-full bg-slate-100 px-2 py-1">last run {formatDateTime(plan.last_run_at)}</span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </section>
 
-                    <section className="crm-surface p-5">
-                        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
-                            <div>
-                                <h3 className="text-base font-semibold text-slate-900">Plan Settings</h3>
-                                <p className="mt-1 text-sm text-slate-500">Tune selection buckets, schedule runway, copy strategy, and failover behavior.</p>
+                    <section className="crm-surface p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Current plan</p>
+                        <p className="mt-2 text-lg font-semibold text-slate-900">{form.name || 'Untitled plan'}</p>
+                        <p className="mt-1 text-sm text-slate-500">{platformLabel(currentPlatformOption)}</p>
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                            <div className="rounded-xl bg-slate-50 px-3 py-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Mode</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{form.autopilot ? 'Autopilot' : 'Approval'}</p>
                             </div>
-                            {form.id ? (
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleMutation.mutate(form.id)}
-                                        disabled={toggleMutation.isPending}
-                                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {form.enabled ? 'Disable' : 'Enable'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => autopilotMutation.mutate(form.id)}
-                                        disabled={autopilotMutation.isPending}
-                                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {form.autopilot ? 'Turn off autopilot' : 'Turn on autopilot'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => runNowMutation.mutate(form.id)}
-                                        disabled={runNowMutation.isPending}
-                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {runNowMutation.isPending ? 'Running...' : 'Run now'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => deleteMutation.mutate(form.id)}
-                                        disabled={deleteMutation.isPending}
-                                        className="rounded-xl border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        Delete
-                                    </button>
-                                </div>
-                            ) : null}
+                            <div className="rounded-xl bg-slate-50 px-3 py-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Coverage</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{selectedPlanCoverage.toLocaleString()}</p>
+                            </div>
                         </div>
+                    </section>
+                </aside>
 
-                        <div className="mt-5 grid gap-4 md:grid-cols-2">
-                            <label className="space-y-1">
-                                <span className="text-sm font-medium text-slate-700">Plan name</span>
-                                <input
-                                    className="crm-input"
-                                    value={form.name}
-                                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                                    placeholder="Kenya daily runway"
-                                />
-                            </label>
-                            <label className="space-y-1">
-                                <span className="text-sm font-medium text-slate-700">Market</span>
-                                <select
-                                    className="crm-select"
+                <div className="space-y-5">
+                    <section className="crm-surface sticky top-0 z-10 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/90">
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                ['overview', 'Overview'],
+                                ['audience', 'Audience'],
+                                ['schedule', 'Schedule'],
+                                ['preview', 'Preview'],
+                                ['operations', 'Operations'],
+                            ].map(([id, label]) => (
+                                <button
+                                    key={id}
+                                    type="button"
+                                    onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section id="overview" className="crm-surface overflow-hidden">
+                        <div className="border-b border-slate-200 px-5 py-4">
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                <div>
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Plan overview</p>
+                                    <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{form.name || 'Draft auto-push plan'}</h2>
+                                    <p className="mt-1 text-sm text-slate-500">{platformLabel(currentPlatformOption)} • {form.enabled ? 'Scheduler active' : 'Scheduler paused'} • {form.autopilot ? 'Autopilot enabled' : 'Awaiting approval before send'}</p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {form.id ? (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleMutation.mutate(form.id)}
+                                                disabled={toggleMutation.isPending}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {form.enabled ? 'Pause plan' : 'Enable plan'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => autopilotMutation.mutate(form.id)}
+                                                disabled={autopilotMutation.isPending}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {form.autopilot ? 'Switch to approval' : 'Switch to autopilot'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => runNowMutation.mutate(form.id)}
+                                                disabled={runNowMutation.isPending}
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {runNowMutation.isPending ? 'Running...' : 'Run now'}
+                                            </button>
+                                        </>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="grid gap-4 px-5 py-5 md:grid-cols-3">
+                            <MetricCard label="Market" value={selectedPlanMarket} meta="selected workspace" tone="default" />
+                            <MetricCard label="Coverage" value={selectedPlanCoverage.toLocaleString()} meta={`threshold ${Number(selectedPlanRunway || 0).toLocaleString()}`} tone={selectedPlanCoverage >= selectedPlanRunway ? 'success' : 'warning'} />
+                            <MetricCard label="Preview cards" value={previewItems.length.toLocaleString()} meta="editable mock sends" tone="accent" />
+                        </div>
+                    </section>
+
+                    <section id="audience" className="crm-surface overflow-hidden">
+                        <div className="border-b border-slate-200 px-5 py-4">
+                            <h3 className="text-lg font-semibold text-slate-900">Audience + Rules</h3>
+                            <p className="mt-1 text-sm text-slate-500">Set the market, enablement mode, and the bucket order that determines who gets pulled into each run.</p>
+                        </div>
+                        <div className="space-y-6 px-5 py-5">
+                            <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_280px]">
+                                <label className="space-y-1">
+                                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Plan name</span>
+                                    <input
+                                        className="crm-input"
+                                        value={form.name}
+                                        onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                                        placeholder="Kenya daily runway"
+                                    />
+                                </label>
+                                <SelectField
+                                    label="Market"
                                     value={form.platform_id}
                                     onChange={(event) => setForm((current) => ({ ...current, platform_id: event.target.value }))}
                                 >
                                     <option value="">Select market</option>
                                     {platformOptions.map((platform) => (
                                         <option key={platform.platform_id} value={platform.platform_id}>
-                                            {platform.platform_name}
+                                            {platformLabel(platform)}
                                         </option>
                                     ))}
-                                </select>
-                            </label>
-                        </div>
-
-                        <div className="mt-4 grid gap-3 md:grid-cols-3">
-                            <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
-                                <input
-                                    type="checkbox"
-                                    checked={form.enabled}
-                                    onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
-                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                />
-                                <span>
-                                    <span className="block text-sm font-medium text-slate-800">Enabled</span>
-                                    <span className="block text-xs text-slate-500">Eligible for scheduler runs.</span>
-                                </span>
-                            </label>
-                            <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
-                                <input
-                                    type="checkbox"
-                                    checked={form.autopilot}
-                                    onChange={(event) => setForm((current) => ({ ...current, autopilot: event.target.checked }))}
-                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                />
-                                <span>
-                                    <span className="block text-sm font-medium text-slate-800">Autopilot</span>
-                                    <span className="block text-xs text-slate-500">Schedules campaigns immediately.</span>
-                                </span>
-                            </label>
-                            <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
-                                <input
-                                    type="checkbox"
-                                    checked={form.schedule.count_unapproved_drafts_as_coverage}
-                                    onChange={(event) => setForm((current) => ({
-                                        ...current,
-                                        schedule: {
-                                            ...current.schedule,
-                                            count_unapproved_drafts_as_coverage: event.target.checked,
-                                        },
-                                    }))}
-                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                />
-                                <span>
-                                    <span className="block text-sm font-medium text-slate-800">Count drafts as coverage</span>
-                                    <span className="block text-xs text-slate-500">Prevents duplicate draft runway.</span>
-                                </span>
-                            </label>
-                        </div>
-
-                        <div className="mt-6 space-y-4">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <h4 className="text-sm font-semibold text-slate-900">Selection Buckets</h4>
-                                    <p className="text-sm text-slate-500">Priority order matters. First matching bucket wins the client.</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setForm((current) => ({
-                                        ...current,
-                                        buckets: [...current.buckets, { type: 'new_subscriptions', enabled: true, limit: 1, params: {} }],
-                                    }))}
-                                    className="crm-btn-secondary px-3 py-1.5 text-xs"
-                                >
-                                    Add bucket
-                                </button>
+                                </SelectField>
                             </div>
 
-                            <div className="space-y-3">
-                                {form.buckets.map((bucket, index) => (
-                                    <div key={`${bucket.type}-${index}`} className="rounded-xl border border-slate-200 p-4">
-                                        <div className="grid gap-3 md:grid-cols-[1.4fr_110px_110px_auto]">
-                                            <label className="space-y-1">
-                                                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Type</span>
-                                                <select
-                                                    className="crm-select"
+                            <div className="grid gap-3 md:grid-cols-3">
+                                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.enabled}
+                                        onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    <span>
+                                        <span className="block text-sm font-medium text-slate-800">Enabled</span>
+                                        <span className="block text-xs text-slate-500">Allow the scheduler to watch this plan.</span>
+                                    </span>
+                                </label>
+                                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.autopilot}
+                                        onChange={(event) => setForm((current) => ({ ...current, autopilot: event.target.checked }))}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    <span>
+                                        <span className="block text-sm font-medium text-slate-800">Autopilot</span>
+                                        <span className="block text-xs text-slate-500">Schedule generated campaigns immediately.</span>
+                                    </span>
+                                </label>
+                                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.schedule.count_unapproved_drafts_as_coverage}
+                                        onChange={(event) => setForm((current) => ({
+                                            ...current,
+                                            schedule: {
+                                                ...current.schedule,
+                                                count_unapproved_drafts_as_coverage: event.target.checked,
+                                            },
+                                        }))}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    <span>
+                                        <span className="block text-sm font-medium text-slate-800">Drafts count as coverage</span>
+                                        <span className="block text-xs text-slate-500">Avoid duplicate runway while approval is pending.</span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-base font-semibold text-slate-900">Selection buckets</h4>
+                                        <p className="mt-1 text-sm text-slate-500">Priority order matters. The first matching bucket wins the client slot.</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setForm((current) => ({
+                                            ...current,
+                                            buckets: [...current.buckets, { type: 'new_subscriptions', enabled: true, limit: 1, params: {} }],
+                                        }))}
+                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                    >
+                                        Add bucket
+                                    </button>
+                                </div>
+
+                                <div className="space-y-4">
+                                    {form.buckets.map((bucket, index) => (
+                                        <article key={`${bucket.type}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                            <div className="grid gap-3 xl:grid-cols-[minmax(0,220px)_120px_140px_auto]">
+                                                <SelectField
+                                                    label="Type"
                                                     value={bucket.type}
                                                     onChange={(event) => {
                                                         const nextBuckets = [...form.buckets];
-                                                        nextBuckets[index] = {
-                                                            ...bucket,
-                                                            type: event.target.value,
-                                                            params: {},
-                                                        };
+                                                        nextBuckets[index] = { ...bucket, type: event.target.value, params: {} };
                                                         setForm((current) => ({ ...current, buckets: nextBuckets }));
                                                     }}
                                                 >
                                                     {BUCKET_TYPE_OPTIONS.map((option) => (
                                                         <option key={option.value} value={option.value}>{option.label}</option>
                                                     ))}
-                                                </select>
-                                            </label>
-                                            <label className="space-y-1">
-                                                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Limit</span>
-                                                <input
-                                                    type="number"
-                                                    min="1"
-                                                    max="500"
-                                                    className="crm-input"
-                                                    value={bucket.limit}
-                                                    onChange={(event) => {
-                                                        const nextBuckets = [...form.buckets];
-                                                        nextBuckets[index] = { ...bucket, limit: Number(event.target.value || 1) };
-                                                        setForm((current) => ({ ...current, buckets: nextBuckets }));
-                                                    }}
-                                                />
-                                            </label>
-                                            <label className="flex items-end gap-2 rounded-lg border border-slate-200 px-3 py-2.5">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={bucket.enabled}
-                                                    onChange={(event) => {
-                                                        const nextBuckets = [...form.buckets];
-                                                        nextBuckets[index] = { ...bucket, enabled: event.target.checked };
-                                                        setForm((current) => ({ ...current, buckets: nextBuckets }));
-                                                    }}
-                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                <span className="text-sm text-slate-700">Enabled</span>
-                                            </label>
-                                            <button
-                                                type="button"
-                                                onClick={() => setForm((current) => ({
-                                                    ...current,
-                                                    buckets: current.buckets.filter((_, bucketIndex) => bucketIndex !== index),
-                                                }))}
-                                                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                                            >
-                                                Remove
-                                            </button>
-                                        </div>
-
-                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                            {renderBucketParams(bucket, (nextBucket) => {
-                                                const nextBuckets = [...form.buckets];
-                                                nextBuckets[index] = nextBucket;
-                                                setForm((current) => ({ ...current, buckets: nextBuckets }));
-                                            })}
-                                            <div className="rounded-lg bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                                                {bucketDescription(bucket)}
+                                                </SelectField>
+                                                <label className="space-y-1">
+                                                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Limit</span>
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        max="500"
+                                                        className="crm-input"
+                                                        value={bucket.limit}
+                                                        onChange={(event) => {
+                                                            const nextBuckets = [...form.buckets];
+                                                            nextBuckets[index] = { ...bucket, limit: Number(event.target.value || 1) };
+                                                            setForm((current) => ({ ...current, buckets: nextBuckets }));
+                                                        }}
+                                                    />
+                                                </label>
+                                                <label className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={bucket.enabled}
+                                                        onChange={(event) => {
+                                                            const nextBuckets = [...form.buckets];
+                                                            nextBuckets[index] = { ...bucket, enabled: event.target.checked };
+                                                            setForm((current) => ({ ...current, buckets: nextBuckets }));
+                                                        }}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    <span className="text-sm font-medium text-slate-700">Enabled</span>
+                                                </label>
+                                                <div className="flex items-end justify-end">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setForm((current) => ({
+                                                            ...current,
+                                                            buckets: current.buckets.filter((_, bucketIndex) => bucketIndex !== index),
+                                                        }))}
+                                                        className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
                                             </div>
-                                        </div>
-                                    </div>
-                                ))}
+
+                                            <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+                                                {renderBucketParams(bucket, (nextBucket) => {
+                                                    const nextBuckets = [...form.buckets];
+                                                    nextBuckets[index] = nextBucket;
+                                                    setForm((current) => ({ ...current, buckets: nextBuckets }));
+                                                })}
+                                                <div className="rounded-2xl bg-slate-50 px-4 py-4">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Bucket summary</p>
+                                                    <p className="mt-2 text-sm font-medium text-slate-800">{bucketLabel(bucket.type)}</p>
+                                                    <p className="mt-1 text-sm text-slate-500">{bucketDescription(bucket)}</p>
+                                                </div>
+                                            </div>
+                                        </article>
+                                    ))}
+                                </div>
                             </div>
                         </div>
+                    </section>
 
-                        <div className="mt-6 grid gap-4 xl:grid-cols-2">
-                            <div className="space-y-4 rounded-xl border border-slate-200 p-4">
-                                <h4 className="text-sm font-semibold text-slate-900">Schedule</h4>
-                                <div className="grid gap-3 md:grid-cols-2">
+                    <section id="schedule" className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <h3 className="text-lg font-semibold text-slate-900">Schedule</h3>
+                                <p className="mt-1 text-sm text-slate-500">Set the runway window, slot spacing, and active days that the engine can allocate.</p>
+                            </div>
+                            <div className="space-y-5 px-5 py-5">
+                                <div className="grid gap-4 md:grid-cols-2">
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Window Start</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Window start</span>
                                         <input
                                             type="time"
                                             className="crm-input"
@@ -909,7 +1119,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Window End</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Window end</span>
                                         <input
                                             type="time"
                                             className="crm-input"
@@ -921,7 +1131,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Interval Hours</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Interval hours</span>
                                         <input
                                             type="number"
                                             min="1"
@@ -935,7 +1145,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Lookahead Days</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Lookahead days</span>
                                         <input
                                             type="number"
                                             min="1"
@@ -949,7 +1159,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max Items / Day</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max items / day</span>
                                         <input
                                             type="number"
                                             min="1"
@@ -963,7 +1173,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Runway Threshold</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Runway threshold</span>
                                         <input
                                             type="number"
                                             min="1"
@@ -980,8 +1190,13 @@ export default function AutoPush() {
                                 </div>
 
                                 <div>
-                                    <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Active Days</p>
-                                    <div className="mt-2 grid grid-cols-4 gap-2 md:grid-cols-7">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Active days</p>
+                                            <p className="mt-1 text-sm text-slate-500">Pick the days where the slot allocator can place sends.</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2">
                                         {DAY_OPTIONS.map((day) => {
                                             const active = form.schedule.active_days.includes(day.value);
                                             return (
@@ -1002,10 +1217,10 @@ export default function AutoPush() {
                                                             },
                                                         };
                                                     })}
-                                                    className={`rounded-lg border px-2 py-2 text-sm font-medium transition ${
+                                                    className={`min-w-[60px] rounded-2xl border px-3 py-2 text-sm font-medium transition ${
                                                         active
-                                                            ? 'border-teal-300 bg-teal-50 text-teal-700'
-                                                            : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                                                            ? 'border-teal-300 bg-teal-50 text-teal-700 shadow-sm'
+                                                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                                                     }`}
                                                 >
                                                     {day.label}
@@ -1015,27 +1230,29 @@ export default function AutoPush() {
                                     </div>
                                 </div>
                             </div>
+                        </section>
 
-                            <div className="space-y-4 rounded-xl border border-slate-200 p-4">
-                                <h4 className="text-sm font-semibold text-slate-900">Copy + Reliability</h4>
-                                <div className="grid gap-3 md:grid-cols-2">
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <h3 className="text-lg font-semibold text-slate-900">Copy + Reliability</h3>
+                                <p className="mt-1 text-sm text-slate-500">Shape how the message sounds and how much recovery runway the plan keeps in reserve.</p>
+                            </div>
+                            <div className="space-y-5 px-5 py-5">
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <SelectField
+                                        label="Message mode"
+                                        value={form.message_strategy.mode}
+                                        onChange={(event) => setForm((current) => ({
+                                            ...current,
+                                            message_strategy: { ...current.message_strategy, mode: event.target.value },
+                                        }))}
+                                    >
+                                        {MESSAGE_MODE_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </SelectField>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Message Mode</span>
-                                        <select
-                                            className="crm-select"
-                                            value={form.message_strategy.mode}
-                                            onChange={(event) => setForm((current) => ({
-                                                ...current,
-                                                message_strategy: { ...current.message_strategy, mode: event.target.value },
-                                            }))}
-                                        >
-                                            {MESSAGE_MODE_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                            ))}
-                                        </select>
-                                    </label>
-                                    <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max Characters</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max characters</span>
                                         <input
                                             type="number"
                                             min="40"
@@ -1057,7 +1274,7 @@ export default function AutoPush() {
                                                 ...current,
                                                 message_strategy: { ...current.message_strategy, tone: event.target.value },
                                             }))}
-                                            placeholder="Playful but direct"
+                                            placeholder="Warm and direct"
                                         />
                                     </label>
                                     <label className="space-y-1">
@@ -1069,7 +1286,7 @@ export default function AutoPush() {
                                                 ...current,
                                                 message_strategy: { ...current.message_strategy, temperament: event.target.value },
                                             }))}
-                                            placeholder="Calm"
+                                            placeholder="Confident"
                                         />
                                     </label>
                                     <label className="space-y-1">
@@ -1085,7 +1302,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Reserve Multiplier</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Reserve multiplier</span>
                                         <input
                                             type="number"
                                             min="1"
@@ -1100,7 +1317,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max Replacements</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Max replacements</span>
                                         <input
                                             type="number"
                                             min="0"
@@ -1114,7 +1331,7 @@ export default function AutoPush() {
                                         />
                                     </label>
                                     <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Exclude Pushed Within Days</span>
+                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Exclude pushed within days</span>
                                         <input
                                             type="number"
                                             min="0"
@@ -1127,24 +1344,21 @@ export default function AutoPush() {
                                             }))}
                                         />
                                     </label>
-                                    <label className="space-y-1">
-                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Replacement Spillover</span>
-                                        <select
-                                            className="crm-select"
-                                            value={form.reliability.replacement_spillover}
-                                            onChange={(event) => setForm((current) => ({
-                                                ...current,
-                                                reliability: { ...current.reliability, replacement_spillover: event.target.value },
-                                            }))}
-                                        >
-                                            {SPILLOVER_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                            ))}
-                                        </select>
-                                    </label>
+                                    <SelectField
+                                        label="Replacement spillover"
+                                        value={form.reliability.replacement_spillover}
+                                        onChange={(event) => setForm((current) => ({
+                                            ...current,
+                                            reliability: { ...current.reliability, replacement_spillover: event.target.value },
+                                        }))}
+                                    >
+                                        {SPILLOVER_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </SelectField>
                                 </div>
 
-                                <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
+                                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
                                     <input
                                         type="checkbox"
                                         checked={form.reliability.sms_alerts_enabled}
@@ -1156,14 +1370,14 @@ export default function AutoPush() {
                                     />
                                     <span>
                                         <span className="block text-sm font-medium text-slate-800">SMS alerts</span>
-                                        <span className="block text-xs text-slate-500">Marks operational intent in the plan config.</span>
+                                        <span className="block text-xs text-slate-500">Keep operational intent visible in the plan configuration.</span>
                                     </span>
                                 </label>
 
                                 <label className="space-y-1">
-                                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Seed Phrases</span>
+                                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Seed phrases</span>
                                     <textarea
-                                        className="crm-input min-h-[110px] resize-y"
+                                        className="crm-input min-h-[150px] resize-y"
                                         value={form.message_strategy.seed_phrases.join('\n')}
                                         onChange={(event) => setForm((current) => ({
                                             ...current,
@@ -1176,14 +1390,16 @@ export default function AutoPush() {
                                     />
                                 </label>
                             </div>
-                        </div>
+                        </section>
+                    </section>
 
-                        {form.id ? (
-                            <div className="mt-6 rounded-xl border border-slate-200 p-4">
+                    {form.id ? (
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
                                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                                     <div>
-                                        <h4 className="text-sm font-semibold text-slate-900">Clone to Other Markets</h4>
-                                        <p className="mt-1 text-sm text-slate-500">Copy the current plan shape into one or more other accessible markets.</p>
+                                        <h3 className="text-lg font-semibold text-slate-900">Market cloning</h3>
+                                        <p className="mt-1 text-sm text-slate-500">Copy this plan structure into other accessible markets, then tune market-specific details after cloning.</p>
                                     </div>
                                     <button
                                         type="button"
@@ -1194,114 +1410,243 @@ export default function AutoPush() {
                                         {cloneMutation.isPending ? 'Cloning...' : 'Clone selected'}
                                     </button>
                                 </div>
-                                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                                    {otherPlatforms.length === 0 ? (
-                                        <p className="text-sm text-slate-500">No other accessible markets available.</p>
-                                    ) : otherPlatforms.map((platform) => {
-                                        const checked = clonePlatformIds.includes(String(platform.platform_id));
-                                        return (
-                                            <label key={platform.platform_id} className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onChange={(event) => setClonePlatformIds((current) => event.target.checked
-                                                        ? [...current, String(platform.platform_id)]
-                                                        : current.filter((value) => value !== String(platform.platform_id)))}
-                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                <span className="text-sm text-slate-700">{platform.platform_name}</span>
-                                            </label>
-                                        );
-                                    })}
+                            </div>
+                            <div className="grid gap-3 px-5 py-5 md:grid-cols-2 xl:grid-cols-3">
+                                {otherPlatforms.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No other accessible markets available.</p>
+                                ) : otherPlatforms.map((platform) => {
+                                    const checked = clonePlatformIds.includes(String(platform.platform_id));
+                                    return (
+                                        <label key={platform.platform_id} className={`flex items-center gap-3 rounded-2xl border px-4 py-3 transition ${
+                                            checked ? 'border-teal-300 bg-teal-50' : 'border-slate-200 hover:bg-slate-50'
+                                        }`}>
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={(event) => setClonePlatformIds((current) => event.target.checked
+                                                    ? [...current, String(platform.platform_id)]
+                                                    : current.filter((value) => value !== String(platform.platform_id)))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span className="text-sm font-medium text-slate-700">{platformLabel(platform)}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    ) : null}
+
+                    <section id="preview" className="grid gap-5 2xl:grid-cols-[minmax(0,0.95fr)_minmax(380px,0.85fr)]">
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-slate-900">Preview queue</h3>
+                                        <p className="mt-1 text-sm text-slate-500">Inspect the generated slice, then refine the mock notification content and timing before you commit the plan.</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPreviewDevice('mobile')}
+                                            className={`crm-btn-secondary px-3 py-1.5 text-xs ${previewDevice === 'mobile' ? 'border-teal-400 bg-teal-50 text-teal-700' : ''}`}
+                                        >
+                                            Mobile
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPreviewDevice('desktop')}
+                                            className={`crm-btn-secondary px-3 py-1.5 text-xs ${previewDevice === 'desktop' ? 'border-teal-400 bg-teal-50 text-teal-700' : ''}`}
+                                        >
+                                            Desktop
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        ) : null}
-                    </section>
 
-                    <section className="grid gap-4 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-                        <section className="crm-surface overflow-hidden">
-                            <div className="border-b border-slate-200 px-4 py-4">
-                                <h3 className="text-sm font-semibold text-slate-900">Preview</h3>
-                                <p className="mt-1 text-sm text-slate-500">Top candidate slice and generated copy before the next run is queued.</p>
-                            </div>
-                            <div className="space-y-3 p-4">
+                            <div className="space-y-4 px-5 py-5">
                                 {preview?.selection ? (
                                     <div className="grid gap-3 md:grid-cols-3">
-                                        <div className="rounded-xl bg-slate-50 px-3 py-3">
-                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Primary</p>
-                                            <p className="mt-1 text-lg font-semibold text-slate-900">{Number(preview.selection.primary_count || 0).toLocaleString()}</p>
+                                        <div className="rounded-2xl bg-slate-50 px-4 py-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Primary</p>
+                                            <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(preview.selection.primary_count || 0).toLocaleString()}</p>
                                         </div>
-                                        <div className="rounded-xl bg-slate-50 px-3 py-3">
-                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Reserve</p>
-                                            <p className="mt-1 text-lg font-semibold text-slate-900">{Number(preview.selection.reserve_count || 0).toLocaleString()}</p>
+                                        <div className="rounded-2xl bg-slate-50 px-4 py-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Reserve</p>
+                                            <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(preview.selection.reserve_count || 0).toLocaleString()}</p>
                                         </div>
-                                        <div className="rounded-xl bg-slate-50 px-3 py-3">
-                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Buckets</p>
-                                            <p className="mt-1 text-lg font-semibold text-slate-900">{Object.keys(preview.selection.bucket_counts || {}).length}</p>
+                                        <div className="rounded-2xl bg-slate-50 px-4 py-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Buckets</p>
+                                            <p className="mt-1 text-2xl font-semibold text-slate-900">{Object.keys(preview.selection.bucket_counts || {}).length}</p>
                                         </div>
                                     </div>
                                 ) : null}
 
-                                {preview?.items?.length > 0 ? preview.items.map((item) => (
-                                    <article key={`${item.client_id}-${item.scheduled_at}`} className="rounded-xl border border-slate-200 p-4">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <p className="font-medium text-slate-900">{item.name}</p>
-                                                <p className="text-sm text-slate-500">{item.city || 'Unknown city'}</p>
-                                            </div>
-                                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                                                {prettyLabel(item.message_source)}
-                                            </span>
-                                        </div>
-                                        <p className="mt-3 rounded-lg bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-700">{item.message}</p>
-                                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                                            <span className="rounded-full bg-slate-100 px-2 py-1">{formatDateTime(item.scheduled_at_market || item.scheduled_at)}</span>
-                                            {item.profile_url ? (
-                                                <a href={item.profile_url} target="_blank" rel="noreferrer" className="rounded-full bg-slate-100 px-2 py-1 text-teal-700 hover:bg-teal-50">
-                                                    Open profile
-                                                </a>
-                                            ) : null}
-                                        </div>
-                                    </article>
-                                )) : (
-                                    <div className="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-                                        Run a preview to inspect selected clients, scheduled slots, and generated push copy.
+                                {previewItems.length > 0 ? (
+                                    <div className="space-y-3">
+                                        {previewItems.map((item, index) => {
+                                            const active = item.preview_id === activePreviewId;
+                                            return (
+                                                <button
+                                                    key={item.preview_id}
+                                                    type="button"
+                                                    onClick={() => setActivePreviewId(item.preview_id)}
+                                                    className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+                                                        active ? 'border-teal-300 bg-teal-50/70 shadow-sm' : 'border-slate-200 hover:bg-slate-50'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-start gap-3">
+                                                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
+                                                            {item.profile_image_url ? (
+                                                                <img src={proxyImageUrl(item.profile_image_url)} alt={item.name || 'Preview'} className="h-full w-full object-cover" />
+                                                            ) : (
+                                                                <div className="flex h-full w-full items-center justify-center text-lg font-semibold text-slate-500">
+                                                                    {(item.name || 'E').charAt(0).toUpperCase()}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="flex flex-wrap items-start justify-between gap-2">
+                                                                <div>
+                                                                    <p className="truncate font-semibold text-slate-900">{item.name || `Preview ${index + 1}`}</p>
+                                                                    <p className="truncate text-sm text-slate-500">{item.city || 'Unknown location'}</p>
+                                                                </div>
+                                                                <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600 shadow-sm">
+                                                                    {prettyLabel(item.message_source)}
+                                                                </span>
+                                                            </div>
+                                                            <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{item.message}</p>
+                                                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                                                                <span className="rounded-full bg-white px-2.5 py-1 shadow-sm">{formatPreviewTime(item.scheduled_at_market || item.scheduled_at)}</span>
+                                                                <span className="rounded-full bg-white px-2.5 py-1 shadow-sm">{item.profile_url ? 'Profile linked' : 'No profile link'}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
+                                        Refresh preview to generate realistic sample notifications for this plan.
                                     </div>
                                 )}
                             </div>
                         </section>
 
-                        <div className="space-y-4">
+                        <div className="space-y-5">
                             <section className="crm-surface overflow-hidden">
-                                <div className="border-b border-slate-200 px-4 py-4">
-                                    <h3 className="text-sm font-semibold text-slate-900">Recent Runs</h3>
-                                    <p className="mt-1 text-sm text-slate-500">Latest execution attempts for this plan.</p>
+                                <div className="border-b border-slate-200 px-5 py-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <h3 className="text-lg font-semibold text-slate-900">Preview studio</h3>
+                                            <p className="mt-1 text-sm text-slate-500">See the notification as a real push surface, then tweak the visible fields card by card.</p>
+                                        </div>
+                                        {selectedPreviewItem ? (
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+                                                {selectedPreviewItem.name || 'Selected preview'}
+                                            </span>
+                                        ) : null}
+                                    </div>
                                 </div>
-                                <DataTable
-                                    columns={runColumns}
-                                    data={runRows}
-                                    pagination={{ current_page: 1, last_page: 1, total: runRows.length, per_page: runRows.length || 10 }}
-                                    isLoading={runsQuery.isLoading}
-                                    emptyMessage="No runs yet for this plan."
-                                    compact
-                                />
-                            </section>
+                                <div className="space-y-5 px-5 py-5">
+                                    {selectedPreviewItem ? (
+                                        <>
+                                            <PreviewNotification item={selectedPreviewItem} device={previewDevice} />
 
-                            <section className="crm-surface overflow-hidden">
-                                <div className="border-b border-slate-200 px-4 py-4">
-                                    <h3 className="text-sm font-semibold text-slate-900">Alerts</h3>
-                                    <p className="mt-1 text-sm text-slate-500">Operational issues, failovers, and replacement exhaustion.</p>
+                                            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                                                <div className="mb-4 flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-slate-900">Edit visible preview</h4>
+                                                        <p className="mt-1 text-xs text-slate-500">Use this to tighten the presentation before you sign off on the plan shape.</p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updatePreviewItem(selectedPreviewItem.preview_id, (item) => ({
+                                                            ...item,
+                                                            city: item.original_city,
+                                                            message: item.original_message,
+                                                            scheduled_at_input: item.original_scheduled_at_input,
+                                                            scheduled_at_market: item.original_scheduled_at_input ? new Date(item.original_scheduled_at_input).toISOString() : item.scheduled_at_market,
+                                                        }))}
+                                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                    >
+                                                        Reset card
+                                                    </button>
+                                                </div>
+                                                <div className="grid gap-4">
+                                                    <div className="grid gap-4 md:grid-cols-2">
+                                                        <label className="space-y-1">
+                                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Location</span>
+                                                            <input
+                                                                className="crm-input"
+                                                                value={selectedPreviewItem.city || ''}
+                                                                onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, { city: event.target.value })}
+                                                            />
+                                                        </label>
+                                                        <label className="space-y-1">
+                                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Scheduled time</span>
+                                                            <input
+                                                                type="datetime-local"
+                                                                className="crm-input"
+                                                                value={selectedPreviewItem.scheduled_at_input || ''}
+                                                                onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, {
+                                                                    scheduled_at_input: event.target.value,
+                                                                    scheduled_at_market: event.target.value ? new Date(event.target.value).toISOString() : selectedPreviewItem.scheduled_at_market,
+                                                                })}
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                    <label className="space-y-1">
+                                                        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Message</span>
+                                                        <textarea
+                                                            className="crm-input min-h-[120px] resize-y"
+                                                            value={selectedPreviewItem.message || ''}
+                                                            onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, { message: event.target.value })}
+                                                        />
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
+                                            Pick a preview card to open the device preview and inline editor.
+                                        </div>
+                                    )}
                                 </div>
-                                <DataTable
-                                    columns={alertColumns}
-                                    data={alertRows}
-                                    pagination={{ current_page: 1, last_page: 1, total: alertRows.length, per_page: alertRows.length || 10 }}
-                                    isLoading={alertsQuery.isLoading}
-                                    emptyMessage="No alerts for this plan."
-                                    compact
-                                />
                             </section>
                         </div>
+                    </section>
+
+                    <section id="operations" className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <h3 className="text-lg font-semibold text-slate-900">Recent runs</h3>
+                                <p className="mt-1 text-sm text-slate-500">Execution attempts for the selected plan, including reserve use and replacement volume.</p>
+                            </div>
+                            <DataTable
+                                columns={runColumns}
+                                data={runRows}
+                                pagination={{ current_page: 1, last_page: 1, total: runRows.length, per_page: runRows.length || 10 }}
+                                isLoading={runsQuery.isLoading}
+                                emptyMessage="No runs yet for this plan."
+                                compact
+                            />
+                        </section>
+
+                        <section className="crm-surface overflow-hidden">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <h3 className="text-lg font-semibold text-slate-900">Alerts</h3>
+                                <p className="mt-1 text-sm text-slate-500">Operational issues, failovers, and replacement exhaustion that need a human decision.</p>
+                            </div>
+                            <DataTable
+                                columns={alertColumns}
+                                data={alertRows}
+                                pagination={{ current_page: 1, last_page: 1, total: alertRows.length, per_page: alertRows.length || 10 }}
+                                isLoading={alertsQuery.isLoading}
+                                emptyMessage="No alerts for this plan."
+                                compact
+                            />
+                        </section>
                     </section>
                 </div>
             </div>
