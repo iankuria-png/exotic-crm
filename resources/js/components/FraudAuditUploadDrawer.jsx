@@ -5,7 +5,7 @@ import { useToast } from './ToastProvider';
 
 export default function FraudAuditUploadDrawer({ open, onClose, platformOptions, onPreviewSaved }) {
     const toast = useToast();
-    const [platformId, setPlatformId] = useState('');
+    const [platformIds, setPlatformIds] = useState([]);
     const [file, setFile] = useState(null);
     const [pastedText, setPastedText] = useState('');
     const [reason, setReason] = useState('Fraud reconciliation review');
@@ -13,17 +13,30 @@ export default function FraudAuditUploadDrawer({ open, onClose, platformOptions,
 
     useEffect(() => {
         if (!open) return;
-        setPlatformId('');
+        setPlatformIds([]);
         setFile(null);
         setPastedText('');
         setReason('Fraud reconciliation review');
         setPreview(null);
     }, [open]);
 
+    const markets = (platformOptions || []).map((platform) => ({
+        id: String(platform.platform_id || platform.id),
+        label: platform.label || platform.platform_name || platform.name || platform.country,
+        currency: platform.currency || platform.currency_code || null,
+    }));
+
+    const toggleMarket = (id) => {
+        setPlatformIds((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
+    };
+
+    const allSelected = markets.length > 0 && platformIds.length === markets.length;
+    const toggleAll = () => setPlatformIds(allSelected ? [] : markets.map((market) => market.id));
+
     const previewMutation = useMutation({
         mutationFn: async () => {
             const formData = new FormData();
-            formData.append('platform_id', platformId);
+            platformIds.forEach((id) => formData.append('platform_ids[]', id));
             formData.append('reason', reason);
             formData.append('has_header', '1');
             if (file) {
@@ -51,8 +64,9 @@ export default function FraudAuditUploadDrawer({ open, onClose, platformOptions,
         return null;
     }
 
-    const canSubmit = platformId && reason.trim() && (file || pastedText.trim()) && !previewMutation.isPending;
+    const canSubmit = platformIds.length > 0 && reason.trim() && (file || pastedText.trim()) && !previewMutation.isPending;
     const summary = preview?.summary || {};
+    const mixedCurrency = new Set(markets.filter((m) => platformIds.includes(m.id)).map((m) => m.currency).filter(Boolean)).size > 1;
 
     return (
         <div className="fixed inset-0 z-[100] flex bg-slate-900/45" onClick={onClose}>
@@ -73,21 +87,35 @@ export default function FraudAuditUploadDrawer({ open, onClose, platformOptions,
                 </header>
 
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-                    <label className="block">
-                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Market</span>
-                        <select
-                            value={platformId}
-                            onChange={(event) => setPlatformId(event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
-                        >
-                            <option value="">Select market</option>
-                            {(platformOptions || []).map((platform) => (
-                                <option key={platform.platform_id || platform.id} value={platform.platform_id || platform.id}>
-                                    {platform.label || platform.name || platform.country}
-                                </option>
+                    <div className="block">
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Markets</span>
+                            {markets.length > 1 ? (
+                                <button type="button" onClick={toggleAll} className="text-xs font-semibold text-teal-700 hover:underline">
+                                    {allSelected ? 'Clear all' : 'Select all'}
+                                </button>
+                            ) : null}
+                        </div>
+                        <p className="mt-0.5 text-xs text-slate-500">Transaction codes are matched across every selected market.</p>
+                        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2">
+                            {markets.length === 0 ? <p className="px-1 text-xs text-slate-500">No markets available.</p> : null}
+                            {markets.map((market) => (
+                                <label key={market.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-slate-50">
+                                    <input
+                                        type="checkbox"
+                                        checked={platformIds.includes(market.id)}
+                                        onChange={() => toggleMarket(market.id)}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                    />
+                                    <span className="text-sm text-slate-700">{market.label}</span>
+                                    {market.currency ? <span className="ml-auto text-xs text-slate-400">{market.currency}</span> : null}
+                                </label>
                             ))}
-                        </select>
-                    </label>
+                        </div>
+                        {mixedCurrency ? (
+                            <p className="mt-1 text-xs text-amber-600">Selected markets use different currencies — per-row amounts will use each matched payment's currency.</p>
+                        ) : null}
+                    </div>
 
                     <label className="block">
                         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">CSV / XLSX / XML file</span>

@@ -8,6 +8,8 @@ class PaymentReconciliationBatch extends Model
 {
     protected $fillable = [
         'platform_id',
+        'platform_ids',
+        'fallback_currency',
         'uploaded_by',
         'file_name',
         'file_mime',
@@ -29,11 +31,28 @@ class PaymentReconciliationBatch extends Model
     protected $casts = [
         'closed_at' => 'datetime',
         'metadata' => 'array',
+        'platform_ids' => 'array',
     ];
 
     public function platform()
     {
         return $this->belongsTo(Platform::class);
+    }
+
+    /**
+     * The full set of market ids this batch reconciles against. Falls back to the
+     * primary platform_id for legacy single-market batches.
+     *
+     * @return array<int,int>
+     */
+    public function platformIdSet(): array
+    {
+        $ids = is_array($this->platform_ids) ? $this->platform_ids : [];
+        if (empty($ids) && $this->platform_id) {
+            $ids = [(int) $this->platform_id];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
     }
 
     public function uploader()

@@ -21,6 +21,7 @@ class PaymentReconciliationRow extends Model
         'matched_payment_id',
         'matched_client_id',
         'matched_confirmed_by',
+        'matched_platform_id',
         'match_basis',
         'review_status',
         'review_note',
@@ -49,6 +50,11 @@ class PaymentReconciliationRow extends Model
     public function matchedClient()
     {
         return $this->belongsTo(Client::class, 'matched_client_id');
+    }
+
+    public function matchedPlatform()
+    {
+        return $this->belongsTo(Platform::class, 'matched_platform_id');
     }
 
     public function confirmedBy()

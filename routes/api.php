@@ -385,6 +385,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::get('/payments/reconcile/batches/{batch}', [PaymentReconciliationController::class, 'show']);
             Route::post('/payments/reconcile/batches/{batch}/close', [PaymentReconciliationController::class, 'close']);
             Route::post('/payments/reconcile/batches/{batch}/reopen', [PaymentReconciliationController::class, 'reopen']);
+            Route::post('/payments/reconcile/batches/{batch}/bulk-review', [PaymentReconciliationController::class, 'bulkReview']);
             Route::post('/payments/reconcile/rows/{row}/review', [PaymentReconciliationController::class, 'review']);
             Route::post('/payments/reconcile/rows/{row}/link', [PaymentReconciliationController::class, 'link']);
             Route::get('/payments/reconcile/rows/{row}/candidates', [PaymentReconciliationController::class, 'candidates']);

@@ -23,9 +23,19 @@ class PaymentReconciliationAuditService
     ) {
     }
 
-    public function preview(UploadedFile|string $input, Platform $platform, int $actorId, bool $hasHeader = true, ?string $reason = null): array
+    /**
+     * @param array<int,Platform> $platforms One or more markets to reconcile against. The first is the
+     *                                        primary market used for authorization/audit; transaction
+     *                                        codes are matched across ALL of them.
+     */
+    public function preview(UploadedFile|string $input, array $platforms, int $actorId, bool $hasHeader = true, ?string $reason = null): array
     {
-        return DB::transaction(function () use ($input, $platform, $actorId, $hasHeader, $reason): array {
+        $platforms = array_values(array_filter($platforms));
+        if (empty($platforms)) {
+            throw new InvalidArgumentException('At least one market must be selected.');
+        }
+
+        return DB::transaction(function () use ($input, $platforms, $actorId, $hasHeader, $reason): array {
             [$parsed, $sourceType, $fileName, $mimeType, $metadata] = $this->parseInput($input, $hasHeader);
             $rows = $this->normalizeParsedRows($parsed, (bool) ($metadata['headerless'] ?? false));
 
@@ -33,8 +43,14 @@ class PaymentReconciliationAuditService
                 throw new InvalidArgumentException('The reconciliation source has no data rows.');
             }
 
+            $primary = $platforms[0];
+            $platformIds = array_values(array_unique(array_map(fn(Platform $p) => (int) $p->id, $platforms)));
+            $fallbackCurrency = $this->resolveSharedCurrency($platforms);
+
             $batch = PaymentReconciliationBatch::query()->create([
-                'platform_id' => (int) $platform->id,
+                'platform_id' => (int) $primary->id,
+                'platform_ids' => $platformIds,
+                'fallback_currency' => $fallbackCurrency,
                 'uploaded_by' => $actorId,
                 'file_name' => $fileName,
                 'file_mime' => $mimeType,
@@ -43,11 +59,16 @@ class PaymentReconciliationAuditService
                 'reason' => $reason ? trim($reason) : null,
                 'metadata' => [
                     'columns' => $parsed['headers'] ?? [],
+                    'markets' => array_map(fn(Platform $p) => [
+                        'id' => (int) $p->id,
+                        'name' => $p->name,
+                        'currency_code' => $p->currency_code ?: null,
+                    ], $platforms),
                     ...$metadata,
                 ],
             ]);
 
-            $paymentMap = $this->buildPaymentMap((int) $platform->id);
+            $paymentMap = $this->buildPaymentMap($platformIds);
             $seenReferences = [];
             $responseRows = [];
             $counts = [
@@ -61,7 +82,7 @@ class PaymentReconciliationAuditService
             ];
 
             foreach ($rows as $row) {
-                $draft = $this->classifyRow($row, $paymentMap, $seenReferences, (int) $platform->id);
+                $draft = $this->classifyRow($row, $paymentMap, $seenReferences, $platformIds, $fallbackCurrency);
 
                 if ($draft['transaction_reference_norm']) {
                     $seenReferences[$draft['transaction_reference_norm']] = true;
@@ -82,6 +103,7 @@ class PaymentReconciliationAuditService
                     'matched_payment_id' => $draft['matched_payment_id'],
                     'matched_client_id' => $draft['matched_client_id'],
                     'matched_confirmed_by' => $draft['matched_confirmed_by'],
+                    'matched_platform_id' => $draft['matched_platform_id'],
                     'match_basis' => $draft['match_basis'],
                     'review_status' => 'pending',
                 ]);
@@ -102,6 +124,25 @@ class PaymentReconciliationAuditService
                 'rows' => $responseRows,
             ];
         });
+    }
+
+    /**
+     * Returns the single currency shared by every selected market, or null when they differ
+     * (mixed-currency batch — per-row currency then comes from the matched payment only).
+     *
+     * @param array<int,Platform> $platforms
+     */
+    private function resolveSharedCurrency(array $platforms): ?string
+    {
+        $currencies = [];
+        foreach ($platforms as $platform) {
+            $code = $this->normalizeCurrencyOrNull($platform->currency_code);
+            if ($code !== null) {
+                $currencies[$code] = true;
+            }
+        }
+
+        return count($currencies) === 1 ? array_key_first($currencies) : null;
     }
 
     public function updateRowReview(PaymentReconciliationRow $row, string $status, ?string $note, int $actorId): array
@@ -140,6 +181,51 @@ class PaymentReconciliationAuditService
         });
     }
 
+    /**
+     * Apply a single review status to many rows of one batch in a single transaction.
+     *
+     * @param array<int,int> $rowIds
+     */
+    public function bulkUpdateReview(PaymentReconciliationBatch $batch, array $rowIds, string $status, ?string $note, int $actorId): array
+    {
+        if (!in_array($status, self::REVIEW_STATUSES, true)) {
+            throw new InvalidArgumentException('Invalid review status.');
+        }
+
+        $rowIds = array_values(array_unique(array_map('intval', $rowIds)));
+        if (empty($rowIds)) {
+            throw new InvalidArgumentException('No rows selected.');
+        }
+
+        return DB::transaction(function () use ($batch, $rowIds, $status, $note, $actorId): array {
+            /** @var PaymentReconciliationBatch $lockedBatch */
+            $lockedBatch = PaymentReconciliationBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
+
+            if ($lockedBatch->status === 'closed') {
+                throw new InvalidArgumentException('This reconciliation batch is closed. Reopen it before making row changes.');
+            }
+
+            $updated = PaymentReconciliationRow::query()
+                ->where('batch_id', $lockedBatch->id)
+                ->whereIn('id', $rowIds)
+                ->update([
+                    'review_status' => $status,
+                    'review_note' => $note ? trim($note) : null,
+                    'reviewed_by' => $actorId,
+                    'reviewed_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+            $this->refreshResolvedRows($lockedBatch);
+
+            return [
+                'batch' => $lockedBatch->fresh(),
+                'updated' => (int) $updated,
+                'status' => $status,
+            ];
+        });
+    }
+
     public function linkRowToPayment(PaymentReconciliationRow $row, Payment $payment, int $actorId, ?string $note): array
     {
         return DB::transaction(function () use ($row, $payment, $actorId, $note): array {
@@ -154,8 +240,8 @@ class PaymentReconciliationAuditService
 
             $this->ensureBatchIsOpen($lockedRow);
 
-            if ((int) $lockedPayment->platform_id !== (int) $lockedRow->batch->platform_id) {
-                throw new InvalidArgumentException('This reconciliation row can only be linked to a payment in the same market.');
+            if (!in_array((int) $lockedPayment->platform_id, $lockedRow->batch->platformIdSet(), true)) {
+                throw new InvalidArgumentException('This reconciliation row can only be linked to a payment in one of the batch markets.');
             }
 
             $rowBefore = $this->rowReviewState($lockedRow);
@@ -168,6 +254,7 @@ class PaymentReconciliationAuditService
                 'matched_payment_id' => $lockedPayment->id,
                 'matched_client_id' => $lockedPayment->client_id,
                 'matched_confirmed_by' => $lockedPayment->confirmed_by,
+                'matched_platform_id' => $lockedPayment->platform_id,
                 'review_status' => 'linked',
                 'review_note' => $note ? trim($note) : null,
                 'reviewed_by' => $actorId,
@@ -208,13 +295,13 @@ class PaymentReconciliationAuditService
         $row->loadMissing('batch');
         $this->ensureBatchIsOpen($row);
 
-        $platformId = (int) $row->batch->platform_id;
+        $platformIds = $row->batch->platformIdSet();
         $candidates = [];
 
         if ($row->transaction_reference_norm) {
             $payments = Payment::query()
-                ->with(['client:id,name'])
-                ->where('platform_id', $platformId)
+                ->with(['client:id,name', 'platform:id,name'])
+                ->whereIn('platform_id', $platformIds)
                 ->whereNotNull('transaction_reference')
                 ->get(['id', 'platform_id', 'client_id', 'amount', 'currency', 'transaction_reference', 'status', 'confirmed_by', 'created_at']);
 
@@ -227,15 +314,15 @@ class PaymentReconciliationAuditService
 
         if ($row->external_name) {
             $clientIds = Client::query()
-                ->where('platform_id', $platformId)
+                ->whereIn('platform_id', $platformIds)
                 ->where('name', 'like', '%' . $row->external_name . '%')
                 ->limit(20)
                 ->pluck('id');
 
             if ($clientIds->isNotEmpty()) {
                 Payment::query()
-                    ->with(['client:id,name'])
-                    ->where('platform_id', $platformId)
+                    ->with(['client:id,name', 'platform:id,name'])
+                    ->whereIn('platform_id', $platformIds)
                     ->whereIn('client_id', $clientIds)
                     ->latest()
                     ->limit(20)
@@ -248,8 +335,8 @@ class PaymentReconciliationAuditService
 
         if ($row->external_amount !== null) {
             Payment::query()
-                ->with(['client:id,name'])
-                ->where('platform_id', $platformId)
+                ->with(['client:id,name', 'platform:id,name'])
+                ->whereIn('platform_id', $platformIds)
                 ->whereBetween('amount', [(float) $row->external_amount - 0.5, (float) $row->external_amount + 0.5])
                 ->latest()
                 ->limit(20)
@@ -385,12 +472,17 @@ class PaymentReconciliationAuditService
         return $mapped;
     }
 
-    private function classifyRow(array $row, array $paymentMap, array $seenReferences, int $platformId): array
+    /**
+     * @param array<int,int> $platformIds The markets the batch covers (codes matched across all).
+     */
+    private function classifyRow(array $row, array $paymentMap, array $seenReferences, array $platformIds, ?string $fallbackCurrency): array
     {
         $values = $row['values'] ?? [];
         $externalName = $this->firstNonEmpty($values, ['client_name', 'name', 'client']);
         $externalAmount = $this->parseAmount($this->firstNonEmpty($values, ['amount_paid', 'amount', 'paid_amount']));
-        $externalCurrency = $this->parseCurrency($this->firstNonEmpty($values, ['currency', 'currency_code']), 'KES');
+        // Currency from the sheet if present, otherwise resolved per-row below (matched payment, then
+        // the batch's shared currency). Never hardcoded.
+        $rowCurrency = $this->normalizeCurrencyOrNull($this->firstNonEmpty($values, ['currency', 'currency_code']));
         $externalPaidAtText = $this->firstNonEmpty($values, ['date_paid', 'date', 'payment_date']);
         $externalReferenceRaw = $this->firstNonEmpty($values, ['transaction_id', 'transaction_reference', 'reference', 'receipt', 'crm_transaction_id']);
         $reference = $this->usableReference($externalReferenceRaw);
@@ -401,6 +493,8 @@ class PaymentReconciliationAuditService
         $matchedPaymentId = null;
         $matchedClientId = null;
         $matchedConfirmedBy = null;
+        $matchedPlatformId = null;
+        $externalCurrency = $rowCurrency ?? $fallbackCurrency;
 
         if ($reference && isset($seenReferences[$reference])) {
             $classification = 'duplicate_in_file';
@@ -413,10 +507,14 @@ class PaymentReconciliationAuditService
                 $matchedPaymentId = $hit['payment_id'];
                 $matchedClientId = $hit['client_id'];
                 $matchedConfirmedBy = $hit['confirmed_by'];
+                $matchedPlatformId = $hit['platform_id'];
+                // The matched payment is authoritative for currency display.
+                $externalCurrency = $rowCurrency ?? $hit['currency'] ?? $fallbackCurrency;
                 $matchBasis = [
                     'basis' => 'reference_exact',
                     'payment_status' => $hit['status'],
                     'payment_reference' => $hit['transaction_reference'],
+                    'platform_id' => $hit['platform_id'],
                 ];
 
                 if ($externalAmount !== null && $hit['amount'] !== null && abs($externalAmount - (float) $hit['amount']) > 0.5) {
@@ -433,15 +531,19 @@ class PaymentReconciliationAuditService
                 }
             } elseif (count($hits) > 1) {
                 $classification = 'duplicate_in_crm';
+                // A code recorded in more than one market is itself a fraud signal.
+                $platformsHit = array_values(array_unique(array_map(fn($h) => $h['platform_id'], $hits)));
+                $flags['cross_market'] = count($platformsHit) > 1;
                 $matchBasis = [
                     'basis' => 'reference_collision',
                     'payments' => $hits,
+                    'platform_ids' => $platformsHit,
                 ];
             } else {
                 $classification = 'missing';
                 $matchBasis = [
                     'basis' => 'reference_not_found',
-                    'platform_id' => $platformId,
+                    'platform_ids' => $platformIds,
                 ];
             }
         } else {
@@ -462,16 +564,20 @@ class PaymentReconciliationAuditService
             'matched_payment_id' => $matchedPaymentId,
             'matched_client_id' => $matchedClientId,
             'matched_confirmed_by' => $matchedConfirmedBy,
+            'matched_platform_id' => $matchedPlatformId,
             'match_basis' => $matchBasis,
         ];
     }
 
-    private function buildPaymentMap(int $platformId): array
+    /**
+     * @param array<int,int> $platformIds
+     */
+    private function buildPaymentMap(array $platformIds): array
     {
         $map = [];
         Payment::query()
             ->with(['client:id,name', 'confirmedBy:id,name,email'])
-            ->where('platform_id', $platformId)
+            ->whereIn('platform_id', $platformIds)
             ->whereNotNull('transaction_reference')
             ->get(['id', 'platform_id', 'client_id', 'confirmed_by', 'amount', 'currency', 'transaction_reference', 'status'])
             ->each(function (Payment $payment) use (&$map) {
@@ -482,6 +588,7 @@ class PaymentReconciliationAuditService
 
                 $map[$reference][] = [
                     'payment_id' => (int) $payment->id,
+                    'platform_id' => (int) $payment->platform_id,
                     'amount' => $payment->amount !== null ? (float) $payment->amount : null,
                     'currency' => $payment->currency,
                     'client_id' => $payment->client_id ? (int) $payment->client_id : null,
@@ -618,18 +725,14 @@ class PaymentReconciliationAuditService
         return round($amount, 2);
     }
 
-    private function parseCurrency(?string $value, string $fallback): string
+    private function normalizeCurrencyOrNull(?string $value): ?string
     {
         $candidate = strtoupper(trim((string) $value));
         if ($candidate === '') {
-            $candidate = strtoupper(trim($fallback));
+            return null;
         }
 
-        if (preg_match('/[A-Z]{3}/', $candidate, $matches) === 1) {
-            return $matches[0];
-        }
-
-        return 'KES';
+        return preg_match('/[A-Z]{3}/', $candidate, $matches) === 1 ? $matches[0] : null;
     }
 
     private function normalizeName(string $value): string
@@ -698,6 +801,7 @@ class PaymentReconciliationAuditService
             'matched_payment_id' => $row->matched_payment_id ? (int) $row->matched_payment_id : null,
             'matched_client_id' => $row->matched_client_id ? (int) $row->matched_client_id : null,
             'matched_confirmed_by' => $row->matched_confirmed_by ? (int) $row->matched_confirmed_by : null,
+            'matched_platform_id' => $row->matched_platform_id ? (int) $row->matched_platform_id : null,
             'match_basis' => $row->match_basis,
             'review_status' => $row->review_status,
             'review_note' => $row->review_note,
@@ -711,6 +815,8 @@ class PaymentReconciliationAuditService
         return [
             'payment_id' => (int) $payment->id,
             'basis' => $basis,
+            'platform_id' => (int) $payment->platform_id,
+            'platform_name' => $payment->platform?->name,
             'client_id' => $payment->client_id ? (int) $payment->client_id : null,
             'client_name' => $payment->client?->name,
             'amount' => $payment->amount !== null ? (float) $payment->amount : null,

@@ -231,6 +231,150 @@ class PaymentReconciliationFlowTest extends TestCase
         }
     }
 
+    public function test_currency_follows_market_not_hardcoded_kes(): void
+    {
+        // A non-KES market (Senegal uses XOF) must never display KES just because the sheet
+        // has no currency column.
+        $platform = $this->createPlatform('Senegal', 'XOF');
+        $admin = $this->createUser('admin');
+        $client = $this->createClient($platform, 'Sexy Gold');
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'amount' => 10000,
+            'currency' => 'XOF',
+            'transaction_reference' => 'T_OLIAPWIBZTZ5NA4K',
+            'status' => 'completed',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $csv = implode("\n", [
+            'Client Name,Amount Paid,Date Paid,Transaction ID',
+            'Sexy Gold,"10,000",29th April,T_OLIAPWIBZTZ5NA4K',
+            'Missing One,"10,000",30th April,T_MISSING_XOF',
+        ]);
+
+        $response = $this->postJson('/api/crm/payments/reconcile/preview', [
+            'platform_ids' => [$platform->id],
+            'file' => UploadedFile::fake()->createWithContent('senegal.csv', $csv),
+            'reason' => 'Senegal currency check',
+        ]);
+
+        $response->assertOk();
+        $batchId = (int) $response->json('batch_id');
+
+        $detail = $this->getJson("/api/crm/payments/reconcile/batches/{$batchId}")->assertOk();
+        $rows = collect($detail->json('rows'));
+
+        $matched = $rows->firstWhere('external_reference_raw', 'T_OLIAPWIBZTZ5NA4K');
+        $missing = $rows->firstWhere('external_reference_raw', 'T_MISSING_XOF');
+
+        $this->assertSame('XOF', $matched['display_currency']);
+        $this->assertNotSame('KES', $matched['display_currency']);
+        // Missing rows fall back to the (single, shared) market currency, not KES.
+        $this->assertSame('XOF', $missing['display_currency']);
+        $this->assertSame('XOF', $detail->json('batch.fallback_currency'));
+    }
+
+    public function test_codes_match_across_multiple_selected_markets(): void
+    {
+        $senegal = $this->createPlatform('Senegal', 'XOF');
+        $ivory = $this->createPlatform('Cote dIvoire', 'XOF');
+        $admin = $this->createUser('admin');
+
+        // Code paid in Senegal only.
+        Payment::query()->create([
+            'platform_id' => $senegal->id,
+            'amount' => 10000,
+            'currency' => 'XOF',
+            'transaction_reference' => 'T_SEN_ONLY',
+            'status' => 'completed',
+        ]);
+        // Code paid in Cote d'Ivoire only.
+        Payment::query()->create([
+            'platform_id' => $ivory->id,
+            'amount' => 10000,
+            'currency' => 'XOF',
+            'transaction_reference' => 'T_CIV_ONLY',
+            'status' => 'completed',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $csv = implode("\n", [
+            'Client Name,Amount Paid,Date Paid,Transaction ID',
+            'A,"10,000",1st May,T_SEN_ONLY',
+            'B,"10,000",2nd May,T_CIV_ONLY',
+            'C,"10,000",3rd May,T_NOWHERE',
+        ]);
+
+        $response = $this->postJson('/api/crm/payments/reconcile/preview', [
+            'platform_ids' => [$senegal->id, $ivory->id],
+            'file' => UploadedFile::fake()->createWithContent('multi.csv', $csv),
+            'reason' => 'Multi-market audit',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('summary.matched_rows', 2)
+            ->assertJsonPath('summary.missing_rows', 1);
+
+        $batchId = (int) $response->json('batch_id');
+        $detail = $this->getJson("/api/crm/payments/reconcile/batches/{$batchId}")->assertOk();
+        $rows = collect($detail->json('rows'));
+
+        // Each matched row records the market it actually matched in.
+        $this->assertSame($senegal->id, $rows->firstWhere('external_reference_raw', 'T_SEN_ONLY')['matched_platform']['id']);
+        $this->assertSame($ivory->id, $rows->firstWhere('external_reference_raw', 'T_CIV_ONLY')['matched_platform']['id']);
+        $this->assertSame('missing', $rows->firstWhere('external_reference_raw', 'T_NOWHERE')['classification']);
+        $this->assertEqualsCanonicalizing([$senegal->id, $ivory->id], $detail->json('batch.platform_ids'));
+    }
+
+    public function test_bulk_review_updates_selected_rows(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $csv = implode("\n", [
+            'Client Name,Amount Paid,Date Paid,Transaction ID',
+            'A,"10,000",1st May,T_A',
+            'B,"10,000",2nd May,T_B',
+            'C,"10,000",3rd May,T_C',
+        ]);
+
+        $preview = $this->postJson('/api/crm/payments/reconcile/preview', [
+            'platform_ids' => [$platform->id],
+            'file' => UploadedFile::fake()->createWithContent('bulk.csv', $csv),
+            'reason' => 'Bulk seed',
+        ])->assertOk();
+
+        $batchId = (int) $preview->json('batch_id');
+        $rowIds = collect($preview->json('rows'))->take(2)->pluck('id')->all();
+
+        $bulk = $this->postJson("/api/crm/payments/reconcile/batches/{$batchId}/bulk-review", [
+            'row_ids' => $rowIds,
+            'status' => 'confirmed_fraud',
+            'reason' => 'Bulk confirmed fraud',
+        ]);
+
+        $bulk->assertOk()
+            ->assertJsonPath('updated', 2)
+            ->assertJsonPath('summary.resolved_rows', 2);
+
+        foreach ($rowIds as $rowId) {
+            $this->assertDatabaseHas('payment_reconciliation_rows', [
+                'id' => $rowId,
+                'review_status' => 'confirmed_fraud',
+            ]);
+        }
+
+        $this->assertTrue(
+            AuditLog::query()->where('action', CrmAuditAction::PAYMENT_RECON_ROW_REVIEW)->exists()
+        );
+    }
+
     private function createUser(string $role, array $assignedMarketIds = []): User
     {
         return User::query()->create([
@@ -243,7 +387,7 @@ class PaymentReconciliationFlowTest extends TestCase
         ]);
     }
 
-    private function createPlatform(string $name): Platform
+    private function createPlatform(string $name, string $currency = 'KES'): Platform
     {
         return Platform::query()->create([
             'name' => $name,
@@ -251,7 +395,7 @@ class PaymentReconciliationFlowTest extends TestCase
             'country' => $name,
             'is_active' => true,
             'phone_prefix' => '254',
-            'currency_code' => 'KES',
+            'currency_code' => $currency,
             'wp_api_url' => 'https://example.test/wp-json/exotic-crm-sync/v1',
             'wp_api_user' => 'crm-user',
             'wp_api_password' => 'secret',

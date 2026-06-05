@@ -27,8 +27,14 @@ class PaymentReconciliationController extends Controller
 
     public function preview(Request $request)
     {
+        // Accept either a single platform_id (legacy) or platform_ids[] for multi-market batches.
+        $request->merge([
+            'platform_ids' => $this->normalizePlatformIdsInput($request),
+        ]);
+
         $validator = Validator::make($request->all(), [
-            'platform_id' => 'required|integer|exists:platforms,id',
+            'platform_ids' => 'required|array|min:1',
+            'platform_ids.*' => 'integer|exists:platforms,id',
             'file' => 'nullable|required_without:pasted_text|file|mimes:csv,txt,xlsx,xml|max:20480',
             'pasted_text' => [
                 'nullable',
@@ -45,14 +51,24 @@ class PaymentReconciliationController extends Controller
         ]);
 
         $validated = $validator->validate();
-        $platformId = (int) $validated['platform_id'];
-        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
-            $request->user(),
-            $platformId,
-            'You do not have access to this payment market.'
-        );
+        $platformIds = array_values(array_unique(array_map('intval', $validated['platform_ids'])));
 
-        $platform = Platform::query()->findOrFail($platformId);
+        // The user must be authorized for every selected market.
+        foreach ($platformIds as $platformId) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                $platformId,
+                'You do not have access to one of the selected payment markets.'
+            );
+        }
+
+        // Preserve selection order so the first market becomes the primary (used for audit scope).
+        $platforms = Platform::query()->whereIn('id', $platformIds)->get()->keyBy('id');
+        $orderedPlatforms = array_values(array_filter(array_map(
+            fn(int $id) => $platforms->get($id),
+            $platformIds
+        )));
+
         $input = $request->hasFile('file')
             ? $validated['file']
             : (string) ($validated['pasted_text'] ?? '');
@@ -60,7 +76,7 @@ class PaymentReconciliationController extends Controller
         try {
             $result = $this->reconciliationService->preview(
                 $input,
-                $platform,
+                $orderedPlatforms,
                 (int) $request->user()->id,
                 (bool) ($validated['has_header'] ?? true),
                 (string) $validated['reason']
@@ -71,7 +87,7 @@ class PaymentReconciliationController extends Controller
 
         $this->auditService->fromRequest(
             $request,
-            $platformId,
+            $platformIds[0],
             CrmAuditAction::PAYMENT_RECON_PREVIEW,
             'payment_reconciliation_batch',
             (int) $result['batch_id'],
@@ -79,12 +95,32 @@ class PaymentReconciliationController extends Controller
             [
                 'summary' => $result['summary'] ?? [],
                 'source_type' => $result['source_type'] ?? null,
+                'platform_ids' => $platformIds,
                 'file_name' => $request->hasFile('file') ? $validated['file']->getClientOriginalName() : null,
             ],
             (string) $validated['reason']
         );
 
         return response()->json($result);
+    }
+
+    /**
+     * Resolve the selected markets from either platform_ids[] or a single platform_id.
+     *
+     * @return array<int,int>
+     */
+    private function normalizePlatformIdsInput(Request $request): array
+    {
+        $ids = $request->input('platform_ids', []);
+        if (!is_array($ids)) {
+            $ids = array_filter(array_map('trim', explode(',', (string) $ids)), fn($v) => $v !== '');
+        }
+
+        if (empty($ids) && $request->filled('platform_id')) {
+            $ids = [$request->input('platform_id')];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
     }
 
     public function batches(Request $request)
@@ -133,6 +169,7 @@ class PaymentReconciliationController extends Controller
         $validated = $request->validate([
             'classification' => 'nullable|in:matched,amount_mismatch,missing,unverifiable,duplicate_in_file,duplicate_in_crm',
             'review_status' => 'nullable|in:pending,reviewing,confirmed_fraud,cleared,linked,resolved',
+            'search' => 'nullable|string|max:120',
             'per_page' => 'nullable|integer|min:1|max:200',
         ]);
 
@@ -140,6 +177,7 @@ class PaymentReconciliationController extends Controller
             ->with([
                 'matchedPayment:id,platform_id,client_id,amount,currency,transaction_reference,status,reconciliation_state,confirmed_by',
                 'matchedClient:id,name',
+                'matchedPlatform:id,name,currency_code',
                 'confirmedBy:id,name,email',
                 'reviewedBy:id,name,email',
             ])
@@ -155,7 +193,19 @@ class PaymentReconciliationController extends Controller
             $query->where('review_status', $validated['review_status']);
         }
 
+        $search = trim((string) ($validated['search'] ?? ''));
+        if ($search !== '') {
+            $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+            $referenceLike = '%' . preg_replace('/[^A-Za-z0-9]/', '', $search) . '%';
+            $query->where(function ($builder) use ($like, $referenceLike) {
+                $builder->where('external_name', 'like', $like)
+                    ->orWhere('external_reference_raw', 'like', $like)
+                    ->orWhere('transaction_reference_norm', 'like', $referenceLike);
+            });
+        }
+
         $rows = $query->paginate((int) ($validated['per_page'] ?? 50));
+        collect($rows->items())->each(fn(PaymentReconciliationRow $row) => $row->setRelation('batch', $batch));
 
         return response()->json([
             'batch' => $this->serializeBatch($batch->fresh(['platform:id,name,country,currency_code', 'uploader:id,name,email', 'closedBy:id,name,email'])),
@@ -215,8 +265,59 @@ class PaymentReconciliationController extends Controller
 
         return response()->json([
             'message' => 'Review status updated.',
-            'row' => $this->serializeRow($result['row']->fresh(['matchedPayment', 'matchedClient', 'confirmedBy', 'reviewedBy'])),
+            'row' => $this->serializeRow($result['row']->fresh(['matchedPayment', 'matchedClient', 'matchedPlatform', 'confirmedBy', 'reviewedBy', 'batch'])),
             'summary' => $this->batchSummary($result['row']->batch->fresh()),
+        ]);
+    }
+
+    public function bulkReview(Request $request, PaymentReconciliationBatch $batch)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $batch->platform_id);
+
+        $validated = $request->validate([
+            'row_ids' => 'required|array|min:1',
+            'row_ids.*' => 'integer',
+            'status' => 'required|in:pending,reviewing,confirmed_fraud,cleared',
+            'note' => 'nullable|string|max:1000',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $before = [
+            'resolved_rows' => (int) $batch->resolved_rows,
+        ];
+
+        try {
+            $result = $this->reconciliationService->bulkUpdateReview(
+                $batch,
+                array_map('intval', $validated['row_ids']),
+                (string) $validated['status'],
+                $validated['note'] ?? null,
+                (int) $request->user()->id
+            );
+        } catch (InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $batch->platform_id,
+            CrmAuditAction::PAYMENT_RECON_ROW_REVIEW,
+            'payment_reconciliation_batch',
+            (int) $batch->id,
+            $before,
+            [
+                'status' => $result['status'],
+                'rows_updated' => $result['updated'],
+                'row_ids' => array_map('intval', $validated['row_ids']),
+                'resolved_rows' => (int) $result['batch']->resolved_rows,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'message' => $result['updated'] . ' row(s) updated.',
+            'updated' => $result['updated'],
+            'summary' => $this->batchSummary($result['batch']),
         ]);
     }
 
@@ -269,7 +370,7 @@ class PaymentReconciliationController extends Controller
 
         return response()->json([
             'message' => 'Row linked to payment.',
-            'row' => $this->serializeRow($result['row']->fresh(['matchedPayment', 'matchedClient', 'confirmedBy', 'reviewedBy'])),
+            'row' => $this->serializeRow($result['row']->fresh(['matchedPayment', 'matchedClient', 'matchedPlatform', 'confirmedBy', 'reviewedBy', 'batch'])),
             'payment' => $result['payment'],
             'summary' => $this->batchSummary($result['row']->batch->fresh()),
         ]);
@@ -362,15 +463,28 @@ class PaymentReconciliationController extends Controller
             return null;
         }
 
+        $marketsMeta = collect($batch->metadata['markets'] ?? [])
+            ->map(fn($market) => [
+                'id' => (int) ($market['id'] ?? 0),
+                'name' => $market['name'] ?? null,
+                'currency_code' => $market['currency_code'] ?? null,
+            ])
+            ->filter(fn($market) => $market['id'] > 0)
+            ->values()
+            ->all();
+
         return [
             'id' => (int) $batch->id,
             'platform_id' => (int) $batch->platform_id,
+            'platform_ids' => $batch->platformIdSet(),
+            'fallback_currency' => $batch->fallback_currency,
             'platform' => $batch->platform ? [
                 'id' => (int) $batch->platform->id,
                 'name' => $batch->platform->name,
                 'country' => $batch->platform->country,
                 'currency_code' => $batch->platform->currency_code,
             ] : null,
+            'markets' => $marketsMeta,
             'uploaded_by' => $batch->uploaded_by ? (int) $batch->uploaded_by : null,
             'uploader' => $batch->uploader ? [
                 'id' => (int) $batch->uploader->id,
@@ -423,6 +537,15 @@ class PaymentReconciliationController extends Controller
                 'id' => (int) $row->matchedClient->id,
                 'name' => $row->matchedClient->name,
             ] : null,
+            'matched_platform_id' => $row->matched_platform_id ? (int) $row->matched_platform_id : null,
+            'matched_platform' => $row->matchedPlatform ? [
+                'id' => (int) $row->matchedPlatform->id,
+                'name' => $row->matchedPlatform->name,
+                'currency_code' => $row->matchedPlatform->currency_code,
+            ] : null,
+            // Currency to display this row in: matched payment first, else the resolved sheet/batch currency.
+            'display_currency' => $row->matchedPayment?->currency
+                ?: ($row->external_currency ?: ($row->matchedPlatform?->currency_code ?: $row->batch?->fallback_currency)),
             'matched_confirmed_by' => $row->matched_confirmed_by ? (int) $row->matched_confirmed_by : null,
             'confirmed_by' => $row->confirmedBy ? [
                 'id' => (int) $row->confirmedBy->id,
@@ -444,6 +567,15 @@ class PaymentReconciliationController extends Controller
 
     private function batchSummary(PaymentReconciliationBatch $batch): array
     {
+        // Sum the external (collected) amount per classification — the "amount at risk", especially
+        // for the Missing bucket. Money totals are only meaningful when the batch shares one currency.
+        $amountByClassification = $batch->rows()
+            ->selectRaw('classification, COALESCE(SUM(external_amount), 0) as total')
+            ->groupBy('classification')
+            ->pluck('total', 'classification');
+
+        $sum = fn(array $keys) => round((float) collect($keys)->sum(fn($key) => (float) ($amountByClassification[$key] ?? 0)), 2);
+
         return [
             'total_rows' => (int) $batch->total_rows,
             'matched_rows' => (int) $batch->matched_rows,
@@ -452,6 +584,15 @@ class PaymentReconciliationController extends Controller
             'unverifiable_rows' => (int) $batch->unverifiable_rows,
             'duplicate_rows' => (int) $batch->duplicate_rows,
             'resolved_rows' => (int) $batch->resolved_rows,
+            'summary_currency' => $batch->fallback_currency,
+            'amounts' => [
+                'total' => $sum(['matched', 'amount_mismatch', 'missing', 'unverifiable', 'duplicate_in_file', 'duplicate_in_crm']),
+                'matched' => $sum(['matched']),
+                'mismatch' => $sum(['amount_mismatch']),
+                'missing' => $sum(['missing']),
+                'unverifiable' => $sum(['unverifiable']),
+                'duplicate' => $sum(['duplicate_in_file', 'duplicate_in_crm']),
+            ],
         ];
     }
 }

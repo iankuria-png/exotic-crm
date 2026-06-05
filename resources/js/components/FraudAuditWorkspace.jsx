@@ -30,13 +30,26 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
     const [selectedBatchId, setSelectedBatchId] = useState(null);
     const [classificationFilter, setClassificationFilter] = useState('');
     const [reviewFilter, setReviewFilter] = useState('');
+    const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
     const [rowPage, setRowPage] = useState(1);
     const [transitionDialog, setTransitionDialog] = useState(null);
     const [reviewDialog, setReviewDialog] = useState(null);
+    const [bulkDialog, setBulkDialog] = useState(null);
     const [linkDialog, setLinkDialog] = useState(null);
+    const [detailRow, setDetailRow] = useState(null);
     const [reason, setReason] = useState('');
     const [note, setNote] = useState('');
     const [paymentId, setPaymentId] = useState('');
+
+    // Debounce the search box into the query param.
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setSearch(searchInput.trim());
+            setRowPage(1);
+        }, 350);
+        return () => clearTimeout(timer);
+    }, [searchInput]);
 
     const batchesQuery = useQuery({
         queryKey: ['reconcile-batches'],
@@ -52,16 +65,18 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
     }, [batches, selectedBatchId]);
 
     const batchQuery = useQuery({
-        queryKey: ['reconcile-batch', selectedBatchId, classificationFilter, reviewFilter, rowPage],
+        queryKey: ['reconcile-batch', selectedBatchId, classificationFilter, reviewFilter, search, rowPage],
         queryFn: () => api.get(`/crm/payments/reconcile/batches/${selectedBatchId}`, {
             params: {
                 page: rowPage,
                 per_page: 50,
                 ...(classificationFilter ? { classification: classificationFilter } : {}),
                 ...(reviewFilter ? { review_status: reviewFilter } : {}),
+                ...(search ? { search } : {}),
             },
         }).then((response) => response.data),
         enabled: Boolean(selectedBatchId),
+        keepPreviousData: true,
     });
 
     const candidatesQuery = useQuery({
@@ -74,13 +89,20 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
     const summary = batchQuery.data?.summary || selectedBatch?.summary || {};
     const rows = batchQuery.data?.rows || [];
     const isClosed = selectedBatch?.status === 'closed';
+    const amounts = summary.amounts || {};
+    const summaryCurrency = summary.summary_currency || selectedBatch?.fallback_currency || null;
+    const marketCount = (selectedBatch?.platform_ids || []).length || 1;
+
+    const invalidateBatch = () => {
+        queryClient.invalidateQueries({ queryKey: ['reconcile-batches'] });
+        queryClient.invalidateQueries({ queryKey: ['reconcile-batch', selectedBatchId] });
+    };
 
     const transitionMutation = useMutation({
         mutationFn: ({ batch, action, reason: transitionReason }) =>
             api.post(`/crm/payments/reconcile/batches/${batch.id}/${action}`, { reason: transitionReason }).then((response) => response.data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batches'] });
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batch', selectedBatchId] });
+            invalidateBatch();
             setTransitionDialog(null);
             setReason('');
             toast.success('Batch status updated.');
@@ -92,14 +114,32 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
         mutationFn: ({ row, status, reason: reviewReason, note: reviewNote }) =>
             api.post(`/crm/payments/reconcile/rows/${row.id}/review`, { status, reason: reviewReason, note: reviewNote }).then((response) => response.data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batches'] });
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batch', selectedBatchId] });
+            invalidateBatch();
             setReviewDialog(null);
             setReason('');
             setNote('');
             toast.success('Review status updated.');
         },
         onError: (error) => toast.error(error?.response?.data?.message || 'Review update failed.'),
+    });
+
+    const bulkReviewMutation = useMutation({
+        mutationFn: ({ rowIds, status, reason: bulkReason, note: bulkNote }) =>
+            api.post(`/crm/payments/reconcile/batches/${selectedBatchId}/bulk-review`, {
+                row_ids: rowIds,
+                status,
+                reason: bulkReason,
+                note: bulkNote,
+            }).then((response) => response.data),
+        onSuccess: (data) => {
+            invalidateBatch();
+            bulkDialog?.clearSelection?.();
+            setBulkDialog(null);
+            setReason('');
+            setNote('');
+            toast.success(`${data.updated} row(s) updated.`);
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Bulk update failed.'),
     });
 
     const linkMutation = useMutation({
@@ -110,8 +150,7 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                 note: linkNote,
             }).then((response) => response.data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batches'] });
-            queryClient.invalidateQueries({ queryKey: ['reconcile-batch', selectedBatchId] });
+            invalidateBatch();
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setLinkDialog(null);
             setReason('');
@@ -122,13 +161,16 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
         onError: (error) => toast.error(error?.response?.data?.message || 'Link failed.'),
     });
 
+    // Classification metric cards: count + amount-at-risk (when the batch is single-currency).
     const metrics = useMemo(() => ([
-        ['matched', 'Matched', summary.matched_rows || 0],
-        ['amount_mismatch', 'Amount mismatch', summary.mismatch_rows || 0],
-        ['missing', 'Missing from CRM', summary.missing_rows || 0],
-        ['unverifiable', 'Unverifiable', summary.unverifiable_rows || 0],
-        ['duplicate_in_file', 'Duplicate', summary.duplicate_rows || 0],
-    ]), [summary]);
+        { key: 'matched', label: 'Matched', count: summary.matched_rows || 0, amount: amounts.matched, tone: 'text-emerald-700' },
+        { key: 'amount_mismatch', label: 'Amount mismatch', count: summary.mismatch_rows || 0, amount: amounts.mismatch, tone: 'text-amber-700' },
+        { key: 'missing', label: 'Missing from CRM', count: summary.missing_rows || 0, amount: amounts.missing, tone: 'text-rose-700', emphasize: true },
+        { key: 'unverifiable', label: 'Unverifiable', count: summary.unverifiable_rows || 0, amount: amounts.unverifiable, tone: 'text-slate-700' },
+        { key: 'duplicate_in_file', label: 'Duplicate', count: summary.duplicate_rows || 0, amount: amounts.duplicate, tone: 'text-amber-700' },
+    ]), [summary, amounts]);
+
+    const rowDisplayCurrency = (row) => row.display_currency || summaryCurrency || row.external_currency || selectedBatch?.platform?.currency_code || 'KES';
 
     const columns = [
         {
@@ -145,7 +187,7 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
             key: 'amount',
             label: 'Amount',
             render: (row) => (
-                <CurrencyAmount scalarAmount={row.external_amount || 0} fallbackCurrency={row.external_currency || selectedBatch?.platform?.currency_code || 'KES'} className="text-sm font-semibold text-slate-800" />
+                <CurrencyAmount scalarAmount={row.external_amount || 0} fallbackCurrency={rowDisplayCurrency(row)} className="text-sm font-semibold text-slate-800" />
             ),
         },
         {
@@ -156,7 +198,15 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
         {
             key: 'classification',
             label: 'Classification',
-            render: (row) => <StatusBadge status={row.classification} />,
+            render: (row) => (
+                <div className="space-y-1">
+                    <StatusBadge status={row.classification} />
+                    {row.flags?.amount_delta !== undefined ? (
+                        <p className="text-[11px] text-amber-700">Δ {Number(row.flags.amount_delta).toLocaleString()}</p>
+                    ) : null}
+                    {row.flags?.name_mismatch ? <p className="text-[11px] text-amber-700">Name differs</p> : null}
+                </div>
+            ),
         },
         {
             key: 'crm',
@@ -167,7 +217,10 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                     <p className="mt-1 text-xs text-slate-500">
                         {row.matched_payment_id ? `Payment #${row.matched_payment_id}` : 'No payment linked'}
                     </p>
-                    {row.confirmed_by ? <p className="mt-1 text-xs text-slate-500">Recorded by {row.confirmed_by.name}</p> : null}
+                    {row.matched_platform?.name ? (
+                        <p className="mt-1 text-[11px] font-medium text-teal-700">{row.matched_platform.name}</p>
+                    ) : null}
+                    {row.confirmed_by ? <p className="mt-0.5 text-xs text-slate-500">Recorded by {row.confirmed_by.name}</p> : null}
                 </div>
             ),
         },
@@ -195,8 +248,8 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
             label: 'Actions',
             render: (row) => (
                 <div className="flex flex-wrap gap-1.5">
-                    <button type="button" disabled={isClosed} onClick={() => { setReviewDialog({ row, status: 'reviewing' }); setReason('Reviewing fraud audit row'); }} className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50">
-                        Review
+                    <button type="button" onClick={() => setDetailRow(row)} className="crm-btn-secondary px-2 py-1 text-xs">
+                        Details
                     </button>
                     <button type="button" disabled={isClosed} onClick={() => { setReviewDialog({ row, status: 'confirmed_fraud' }); setReason('Confirmed fraud discrepancy'); }} className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50">
                         Fraud
@@ -217,13 +270,19 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
         },
     ];
 
+    const bulkActions = [
+        { key: 'reviewing', label: 'Mark reviewing', disabled: isClosed, onClick: (selected, { clearSelection }) => { setBulkDialog({ status: 'reviewing', rows: selected, clearSelection }); setReason('Bulk: reviewing'); } },
+        { key: 'confirmed_fraud', label: 'Confirm fraud', disabled: isClosed, onClick: (selected, { clearSelection }) => { setBulkDialog({ status: 'confirmed_fraud', rows: selected, clearSelection }); setReason('Bulk: confirmed fraud'); } },
+        { key: 'cleared', label: 'Clear', disabled: isClosed, onClick: (selected, { clearSelection }) => { setBulkDialog({ status: 'cleared', rows: selected, clearSelection }); setReason('Bulk: cleared'); } },
+    ];
+
     return (
         <section className="space-y-4">
             <section className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h2 className="text-sm font-semibold text-slate-900">Fraud audit</h2>
-                        <p className="mt-1 text-xs text-slate-500">Cross-check external collection records against CRM payments.</p>
+                        <p className="mt-1 text-xs text-slate-500">Cross-check external collection records against CRM payments across one or more markets.</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => setUploadOpen(true)} className="crm-btn-primary">Upload / paste sheet</button>
@@ -249,20 +308,26 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                     <div className="max-h-[520px] overflow-y-auto p-2">
                         {batchesQuery.isLoading ? <p className="p-3 text-sm text-slate-500">Loading batches...</p> : null}
                         {!batchesQuery.isLoading && batches.length === 0 ? <p className="p-3 text-sm text-slate-500">No fraud audit batches yet.</p> : null}
-                        {batches.map((batch) => (
-                            <button
-                                key={batch.id}
-                                type="button"
-                                onClick={() => { setSelectedBatchId(batch.id); setClassificationFilter(''); setReviewFilter(''); setRowPage(1); }}
-                                className={`mb-1 w-full rounded-lg px-3 py-2 text-left transition ${selectedBatchId === batch.id ? 'bg-teal-50 text-teal-900 ring-1 ring-teal-200' : 'hover:bg-slate-50'}`}
-                            >
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm font-semibold">Batch #{batch.id}</span>
-                                    <StatusBadge status={batch.status} />
-                                </div>
-                                <p className="mt-1 truncate text-xs text-slate-500">{batch.platform?.name || 'Market'} • {formatDateTime(batch.created_at)}</p>
-                            </button>
-                        ))}
+                        {batches.map((batch) => {
+                            const marketNames = (batch.markets || []).map((m) => m.name).filter(Boolean);
+                            const marketLabel = marketNames.length > 1
+                                ? `${marketNames.length} markets`
+                                : (marketNames[0] || batch.platform?.name || 'Market');
+                            return (
+                                <button
+                                    key={batch.id}
+                                    type="button"
+                                    onClick={() => { setSelectedBatchId(batch.id); setClassificationFilter(''); setReviewFilter(''); setSearchInput(''); setSearch(''); setRowPage(1); }}
+                                    className={`mb-1 w-full rounded-lg px-3 py-2 text-left transition ${selectedBatchId === batch.id ? 'bg-teal-50 text-teal-900 ring-1 ring-teal-200' : 'hover:bg-slate-50'}`}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-sm font-semibold">Batch #{batch.id}</span>
+                                        <StatusBadge status={batch.status} />
+                                    </div>
+                                    <p className="mt-1 truncate text-xs text-slate-500" title={marketNames.join(', ')}>{marketLabel} • {formatDateTime(batch.created_at)}</p>
+                                </button>
+                            );
+                        })}
                     </div>
                 </aside>
 
@@ -270,20 +335,28 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                     {selectedBatch ? (
                         <>
                             <section className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
-                                {metrics.map(([key, label, value]) => (
+                                {metrics.map((metric) => (
                                     <button
-                                        key={key}
+                                        key={metric.key}
                                         type="button"
-                                        onClick={() => { setClassificationFilter(classificationFilter === key ? '' : key); setReviewFilter(''); setRowPage(1); }}
-                                        className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-left shadow-sm transition hover:border-teal-200 hover:bg-teal-50/30"
+                                        onClick={() => { setClassificationFilter(classificationFilter === metric.key ? '' : metric.key); setReviewFilter(''); setRowPage(1); }}
+                                        className={`rounded-lg border px-3 py-3 text-left shadow-sm transition hover:bg-teal-50/30 ${
+                                            classificationFilter === metric.key ? 'border-teal-300 bg-teal-50/40' : 'border-slate-200 bg-white hover:border-teal-200'
+                                        } ${metric.emphasize && metric.count > 0 ? 'ring-1 ring-rose-200' : ''}`}
                                     >
-                                        <p className="text-xs font-semibold text-slate-500">{label}</p>
-                                        <p className="mt-2 text-2xl font-semibold text-slate-900">{Number(value).toLocaleString()}</p>
+                                        <p className="text-xs font-semibold text-slate-500">{metric.label}</p>
+                                        <p className={`mt-2 text-2xl font-semibold ${metric.emphasize && metric.count > 0 ? 'text-rose-700' : 'text-slate-900'}`}>{Number(metric.count).toLocaleString()}</p>
+                                        {summaryCurrency && metric.amount ? (
+                                            <p className={`mt-1 text-[11px] font-medium ${metric.tone}`}>
+                                                <CurrencyAmount scalarAmount={metric.amount} fallbackCurrency={summaryCurrency} />
+                                            </p>
+                                        ) : null}
                                     </button>
                                 ))}
-                                <button type="button" onClick={() => { setReviewFilter(reviewFilter === 'resolved' ? '' : 'resolved'); setClassificationFilter(''); setRowPage(1); }} className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-left shadow-sm transition hover:border-teal-200 hover:bg-teal-50/30">
+                                <button type="button" onClick={() => { setReviewFilter(reviewFilter === 'resolved' ? '' : 'resolved'); setClassificationFilter(''); setRowPage(1); }} className={`rounded-lg border px-3 py-3 text-left shadow-sm transition hover:bg-teal-50/30 ${reviewFilter === 'resolved' ? 'border-teal-300 bg-teal-50/40' : 'border-slate-200 bg-white hover:border-teal-200'}`}>
                                     <p className="text-xs font-semibold text-slate-500">Resolved</p>
                                     <p className="mt-2 text-2xl font-semibold text-slate-900">{Number(summary.resolved_rows || 0).toLocaleString()}</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">of {Number(summary.total_rows || 0).toLocaleString()} rows</p>
                                 </button>
                             </section>
 
@@ -292,10 +365,19 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-900">Batch #{selectedBatch.id}</h3>
                                         <p className="mt-1 text-xs text-slate-500">
-                                            {selectedBatch.platform?.name || 'Market'} • {selectedBatch.file_name || selectedBatch.source_type} • {summary.total_rows || 0} rows
+                                            {marketCount > 1 ? `${marketCount} markets` : (selectedBatch.platform?.name || 'Market')}
+                                            {' • '}{selectedBatch.file_name || selectedBatch.source_type}
+                                            {' • '}{summary.total_rows || 0} rows
+                                            {!summaryCurrency ? ' • mixed currencies' : ''}
                                         </p>
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <input
+                                            value={searchInput}
+                                            onChange={(event) => setSearchInput(event.target.value)}
+                                            placeholder="Search name or code"
+                                            className="rounded-md border border-slate-300 px-3 py-2 text-xs focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                                        />
                                         <select value={classificationFilter} onChange={(event) => { setClassificationFilter(event.target.value); setRowPage(1); }} className="rounded-md border border-slate-300 px-3 py-2 text-xs">
                                             <option value="">All classifications</option>
                                             <option value="matched">Matched</option>
@@ -326,6 +408,10 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                                 isLoading={batchQuery.isLoading}
                                 emptyMessage="No reconciliation rows found."
                                 compact
+                                rowIdKey="id"
+                                selectable={!isClosed}
+                                bulkActions={bulkActions}
+                                clearSelectionKey={`${selectedBatchId}|${classificationFilter}|${reviewFilter}|${search}|${rowPage}`}
                             />
                         </>
                     ) : (
@@ -345,9 +431,20 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                     setSelectedBatchId(result.batch_id);
                     setClassificationFilter('');
                     setReviewFilter('');
+                    setSearchInput('');
+                    setSearch('');
                     setRowPage(1);
                 }}
             />
+
+            {detailRow ? (
+                <RowDetailDrawer
+                    row={detailRow}
+                    currency={rowDisplayCurrency(detailRow)}
+                    onClose={() => setDetailRow(null)}
+                    onOpenPayment={onOpenPayment}
+                />
+            ) : null}
 
             <ConfirmDialog
                 open={Boolean(transitionDialog)}
@@ -368,13 +465,28 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                 message={reviewDialog?.status ? `Set status to ${reviewDialog.status.replace(/_/g, ' ')}.` : ''}
                 confirmLabel="Save review"
                 tone={reviewDialog?.status === 'confirmed_fraud' ? 'danger' : 'default'}
-                onCancel={() => setReviewDialog(null)}
+                onCancel={() => { setReviewDialog(null); setNote(''); }}
                 onConfirm={() => reviewMutation.mutate({ ...reviewDialog, reason, note })}
                 confirmDisabled={!reason.trim()}
                 isPending={reviewMutation.isPending}
             >
-                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Review note" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} placeholder="Reason" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Review note (optional)" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={Boolean(bulkDialog)}
+                title="Bulk review update"
+                message={bulkDialog ? `Set ${bulkDialog.rows?.length || 0} row(s) to ${String(bulkDialog.status).replace(/_/g, ' ')}.` : ''}
+                confirmLabel="Apply to selected"
+                tone={bulkDialog?.status === 'confirmed_fraud' ? 'danger' : 'default'}
+                onCancel={() => { setBulkDialog(null); setNote(''); }}
+                onConfirm={() => bulkReviewMutation.mutate({ rowIds: (bulkDialog.rows || []).map((r) => r.id), status: bulkDialog.status, reason, note })}
+                confirmDisabled={!reason.trim() || !(bulkDialog?.rows || []).length}
+                isPending={bulkReviewMutation.isPending}
+            >
+                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} placeholder="Reason" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Note (optional)" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
             </ConfirmDialog>
 
             <ConfirmDialog
@@ -382,7 +494,7 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                 title="Link row to payment"
                 message="Linking flags the payment for manual review."
                 confirmLabel="Link payment"
-                onCancel={() => setLinkDialog(null)}
+                onCancel={() => { setLinkDialog(null); setNote(''); setPaymentId(''); }}
                 onConfirm={() => linkMutation.mutate({ row: linkDialog.row, selectedPaymentId: paymentId, reason, note })}
                 confirmDisabled={!paymentId || !reason.trim()}
                 isPending={linkMutation.isPending}
@@ -390,16 +502,87 @@ export default function FraudAuditWorkspace({ platformOptions, onOpenPayment }) 
                 <input value={paymentId} onChange={(event) => setPaymentId(event.target.value)} placeholder="Payment ID" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 <div className="max-h-40 overflow-y-auto rounded-md border border-slate-200">
                     {candidatesQuery.isLoading ? <p className="p-3 text-xs text-slate-500">Loading candidates...</p> : null}
+                    {!candidatesQuery.isLoading && (candidatesQuery.data?.data || []).length === 0 ? <p className="p-3 text-xs text-slate-500">No candidate payments found.</p> : null}
                     {(candidatesQuery.data?.data || []).map((candidate) => (
-                        <button key={candidate.payment_id} type="button" onClick={() => setPaymentId(String(candidate.payment_id))} className="block w-full border-b border-slate-100 px-3 py-2 text-left text-xs hover:bg-slate-50">
+                        <button key={candidate.payment_id} type="button" onClick={() => setPaymentId(String(candidate.payment_id))} className={`block w-full border-b border-slate-100 px-3 py-2 text-left text-xs hover:bg-slate-50 ${String(paymentId) === String(candidate.payment_id) ? 'bg-teal-50' : ''}`}>
                             <span className="font-semibold text-slate-800">#{candidate.payment_id}</span>
-                            <span className="ml-2 text-slate-500">{candidate.client_name || 'No client'} • {candidate.transaction_reference || 'No ref'} • {candidate.basis}</span>
+                            <span className="ml-2 text-slate-500">{candidate.client_name || 'No client'} • {candidate.transaction_reference || 'No ref'} • {candidate.platform_name || ''} • {candidate.basis}</span>
                         </button>
                     ))}
                 </div>
-                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Link note" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} placeholder="Reason" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Link note (optional)" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
             </ConfirmDialog>
         </section>
+    );
+}
+
+function RowDetailDrawer({ row, currency, onClose, onOpenPayment }) {
+    const rawEntries = Object.entries(row.raw_row || {});
+    return (
+        <div className="fixed inset-0 z-[100] flex bg-slate-900/45" onClick={onClose}>
+            <aside className="ml-auto flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Row #{row.row_number} · {row.external_name || 'Unknown'}</h3>
+                        <div className="mt-1 flex items-center gap-2">
+                            <StatusBadge status={row.classification} />
+                            <StatusBadge status={row.review_status} />
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} className="crm-btn-secondary px-3 py-1.5 text-xs">Close</button>
+                </header>
+
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</p>
+                        <CurrencyAmount scalarAmount={row.external_amount || 0} fallbackCurrency={currency} className="text-base font-semibold text-slate-900" />
+                        <p className="mt-1 text-xs text-slate-500">Date on sheet: {row.external_paid_at_text || '—'}</p>
+                        <p className="font-mono text-xs text-slate-500">Ref: {row.external_reference_raw || '—'}</p>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">CRM match</p>
+                        {row.matched_payment_id ? (
+                            <div className="mt-1 space-y-0.5 text-sm">
+                                <p>Payment #{row.matched_payment_id} {row.matched_payment?.status ? `· ${row.matched_payment.status}` : ''}</p>
+                                <p>Client: {row.matched_client?.name || '—'}</p>
+                                <p>Market: {row.matched_platform?.name || '—'}</p>
+                                <p>Recorded by: {row.confirmed_by?.name || '—'}</p>
+                                <button type="button" onClick={() => onOpenPayment?.(row.matched_payment_id)} className="mt-1 crm-btn-secondary px-2 py-1 text-xs">Open payment</button>
+                            </div>
+                        ) : <p className="mt-1 text-sm text-slate-500">No CRM payment linked.</p>}
+                    </div>
+
+                    {row.flags && Object.keys(row.flags).length ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-amber-700">Flags</p>
+                            <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-amber-900">{JSON.stringify(row.flags, null, 2)}</pre>
+                        </div>
+                    ) : null}
+
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Source row</p>
+                        <dl className="mt-1 divide-y divide-slate-100 rounded-lg border border-slate-200">
+                            {rawEntries.length === 0 ? <p className="p-2 text-xs text-slate-500">No raw columns.</p> : null}
+                            {rawEntries.map(([key, value]) => (
+                                <div key={key} className="flex gap-3 px-3 py-1.5">
+                                    <dt className="w-1/3 shrink-0 text-xs font-medium text-slate-500">{key}</dt>
+                                    <dd className="flex-1 break-words text-xs text-slate-800">{String(value ?? '')}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    </div>
+
+                    {row.review_note || row.reviewer ? (
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Review</p>
+                            <p className="mt-1 text-xs text-slate-700">{row.review_note || '—'}</p>
+                            {row.reviewer ? <p className="mt-1 text-xs text-slate-500">By {row.reviewer.name} · {formatDateTime(row.reviewed_at)}</p> : null}
+                        </div>
+                    ) : null}
+                </div>
+            </aside>
+        </div>
     );
 }
