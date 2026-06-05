@@ -18,6 +18,7 @@ class AutoPushPlan extends Model
         'schedule',
         'message_strategy',
         'reliability',
+        'draft_run_package',
         'created_by',
         'last_run_at',
     ];
@@ -29,6 +30,7 @@ class AutoPushPlan extends Model
         'schedule' => 'array',
         'message_strategy' => 'array',
         'reliability' => 'array',
+        'draft_run_package' => 'array',
         'last_run_at' => 'datetime',
     ];
 

@@ -285,6 +285,75 @@ class AutoPushWorkflowTest extends TestCase
             ->assertJsonCount(1, 'items');
     }
 
+    public function test_marketing_user_can_load_save_and_replace_draft_preview_package(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $clients = Client::factory()->count(3)->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+        ]);
+
+        foreach ($clients as $index => $client) {
+            $client->forceFill([
+                'display_image_url' => $index === 0 ? 'https://images.example/primary.jpg' : null,
+                'main_image_url' => 'https://images.example/' . ($index + 1) . '.jpg',
+            ])->save();
+
+            \App\Models\Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $client->id,
+                'subscription_lifecycle' => 'new',
+                'activated_at' => now()->subHours($index + 1),
+                'status' => 'active',
+            ]);
+        }
+
+        Sanctum::actingAs($user);
+
+        $store = $this->postJson('/api/crm/auto-push/plans', array_merge($this->planRequestPayload($platform->id), [
+            'buckets' => [[
+                'type' => 'new_subscriptions',
+                'enabled' => true,
+                'limit' => 3,
+                'params' => ['lookback_hours' => 24, 'lifecycle' => ['new']],
+            ]],
+            'schedule' => array_merge($this->defaultSchedule(), [
+                'max_items_per_day' => 2,
+            ]),
+        ]));
+        $store->assertCreated();
+        $planId = (int) $store->json('plan.id');
+
+        $draft = $this->getJson("/api/crm/auto-push/plans/{$planId}/draft-package")
+            ->assertOk()
+            ->assertJsonCount(2, 'items')
+            ->assertJsonPath('items.0.profile_image_url', 'https://images.example/primary.jpg');
+
+        $items = $draft->json('items');
+        $items[0]['message'] = 'Saved draft message';
+        $items[0]['city'] = 'Westlands';
+
+        $this->putJson("/api/crm/auto-push/plans/{$planId}/draft-package", [
+            'items' => $items,
+            'ui' => [
+                'active_preview_id' => $items[0]['preview_id'],
+                'preview_device' => 'desktop',
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('items.0.message', 'Saved draft message')
+            ->assertJsonPath('ui.preview_device', 'desktop');
+
+        $this->postJson("/api/crm/auto-push/plans/{$planId}/draft-package/replace", [
+            'preview_id' => $items[0]['preview_id'],
+            'client_id' => $clients[2]->id,
+        ])
+            ->assertOk()
+            ->assertJsonPath('items.0.preview_id', $items[0]['preview_id'])
+            ->assertJsonPath('items.0.client_id', $clients[2]->id);
+    }
+
     public function test_run_auto_push_command_skips_not_due_plans_and_runs_due_plans(): void
     {
         Carbon::setTestNow('2026-06-05 08:00:00');

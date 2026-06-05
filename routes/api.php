@@ -264,6 +264,10 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/plans/{plan}/toggle', [AutoPushPlanController::class, 'toggle']);
         Route::post('/plans/{plan}/autopilot', [AutoPushPlanController::class, 'autopilot']);
         Route::post('/plans/{plan}/preview', [AutoPushPlanController::class, 'preview']);
+        Route::get('/plans/{plan}/draft-package', [AutoPushPlanController::class, 'draftPackage']);
+        Route::put('/plans/{plan}/draft-package', [AutoPushPlanController::class, 'saveDraftPackage']);
+        Route::post('/plans/{plan}/draft-package/shuffle', [AutoPushPlanController::class, 'shuffleDraftPackage']);
+        Route::post('/plans/{plan}/draft-package/replace', [AutoPushPlanController::class, 'replaceDraftPackageItem']);
         Route::post('/plans/{plan}/run-now', [AutoPushPlanController::class, 'runNow']);
         Route::get('/runs', [AutoPushPlanController::class, 'runs']);
         Route::get('/alerts', [AutoPushPlanController::class, 'alerts']);

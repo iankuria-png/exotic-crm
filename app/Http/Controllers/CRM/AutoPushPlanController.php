@@ -6,15 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\AutoPushAlert;
 use App\Models\AutoPushPlan;
 use App\Models\AutoPushRun;
-use App\Models\Platform;
+use App\Services\AutoPush\AutoPushDraftPackageService;
 use App\Services\AutoPush\AutoPushEngineService;
-use App\Services\AutoPush\AutoPushMessageService;
-use App\Services\AutoPush\AutoPushSelectionService;
 use App\Services\MarketAuthorizationService;
 use App\Support\AutoPushSlotAllocator;
-use App\Support\ClientProfileUrl;
 use App\Support\MarketTimezone;
-use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -23,8 +19,7 @@ class AutoPushPlanController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AutoPushEngineService $engineService,
-        private readonly AutoPushSelectionService $selectionService,
-        private readonly AutoPushMessageService $messageService,
+        private readonly AutoPushDraftPackageService $draftPackageService,
     ) {
     }
 
@@ -127,38 +122,64 @@ class AutoPushPlanController extends Controller
     public function preview(Request $request, AutoPushPlan $plan)
     {
         $this->ensurePlanAccess($request, $plan);
-        $plan->loadMissing('platform');
-        $selection = $this->selectionService->selectForPlan($plan);
-        $timezone = MarketTimezone::resolve($plan->platform?->timezone, config('app.timezone', 'UTC'));
-        $slots = AutoPushSlotAllocator::slotGrid($plan, now($timezone)->startOfDay(), max(1, (int) data_get($plan->schedule, 'lookahead_days', 1)))
-            ->filter(fn (Carbon $slot) => $slot->greaterThan(now()->utc()->subMinutes(5)))
-            ->values();
+        return response()->json($this->draftPackageService->refresh($plan));
+    }
 
-        $items = $selection['primary']->take(5)->values()->map(function ($client, $index) use ($plan, $slots, $timezone) {
-            $slot = $slots->get($index);
-            $message = $this->messageService->generateMessage($plan, $client);
+    public function draftPackage(Request $request, AutoPushPlan $plan)
+    {
+        $this->ensurePlanAccess($request, $plan);
 
-            return [
-                'client_id' => (int) $client->id,
-                'name' => $client->name,
-                'city' => $client->city,
-                'profile_url' => ClientProfileUrl::resolve($client, $plan->platform),
-                'profile_image_url' => $client->main_image_url,
-                'message' => $message['message'],
-                'message_source' => $message['source'],
-                'scheduled_at' => $slot?->toIso8601String(),
-                'scheduled_at_market' => $slot ? $slot->copy()->setTimezone($timezone)->toIso8601String() : null,
-            ];
-        });
+        return response()->json($this->draftPackageService->load($plan));
+    }
 
-        return response()->json([
-            'selection' => [
-                'primary_count' => $selection['primary']->count(),
-                'reserve_count' => $selection['reserve']->count(),
-                'bucket_counts' => $selection['bucket_counts'],
-            ],
-            'items' => $items,
+    public function saveDraftPackage(Request $request, AutoPushPlan $plan)
+    {
+        $this->ensurePlanAccess($request, $plan);
+
+        $validated = $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.preview_id' => 'required|string|max:80',
+            'items.*.slot_index' => 'nullable|integer|min:0|max:500',
+            'items.*.client_id' => 'nullable|integer|exists:clients,id',
+            'items.*.name' => 'nullable|string|max:255',
+            'items.*.city' => 'nullable|string|max:255',
+            'items.*.profile_url' => 'nullable|string|max:1000',
+            'items.*.profile_image_url' => 'nullable|string|max:1000',
+            'items.*.fallback_profile_image_url' => 'nullable|string|max:1000',
+            'items.*.message' => 'nullable|string|max:500',
+            'items.*.message_source' => 'nullable|string|max:50',
+            'items.*.scheduled_at' => 'nullable|date',
+            'items.*.scheduled_at_market' => 'nullable|date',
+            'ui' => 'nullable|array',
+            'ui.active_preview_id' => 'nullable|string|max:80',
+            'ui.preview_device' => ['nullable', 'string', Rule::in(['mobile', 'desktop'])],
         ]);
+
+        return response()->json($this->draftPackageService->save($plan, $validated));
+    }
+
+    public function shuffleDraftPackage(Request $request, AutoPushPlan $plan)
+    {
+        $this->ensurePlanAccess($request, $plan);
+
+        return response()->json($this->draftPackageService->shuffle($plan));
+    }
+
+    public function replaceDraftPackageItem(Request $request, AutoPushPlan $plan)
+    {
+        $this->ensurePlanAccess($request, $plan);
+        $validated = $request->validate([
+            'preview_id' => 'required|string|max:80',
+            'client_id' => 'nullable|integer|exists:clients,id',
+        ]);
+
+        return response()->json(
+            $this->draftPackageService->replaceItem(
+                $plan,
+                (string) $validated['preview_id'],
+                isset($validated['client_id']) ? (int) $validated['client_id'] : null,
+            )
+        );
     }
 
     public function runNow(Request $request, AutoPushPlan $plan)
@@ -348,6 +369,7 @@ class AutoPushPlanController extends Controller
             'runway_threshold' => $runwayThreshold,
             'due_now' => $this->engineService->dueForRun($plan, $nowMarket),
             'last_run' => $lastRun,
+            'has_draft_run_package' => !empty($plan->draft_run_package),
         ];
     }
 }

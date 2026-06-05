@@ -121,6 +121,10 @@ function formatPreviewTime(value) {
     }).format(parsed);
 }
 
+function resolvePreviewImage(item) {
+    return proxyImageUrl(item?.profile_image_url || item?.fallback_profile_image_url || '');
+}
+
 function platformLabel(platform) {
     return platform?.platform_name || platform?.name || platform?.country || 'Unknown market';
 }
@@ -324,7 +328,7 @@ function SelectField({ label, value, onChange, children, className = '', tone = 
 }
 
 function PreviewNotification({ item, device = 'mobile' }) {
-    const imageUrl = proxyImageUrl(item?.profile_image_url || '');
+    const imageUrl = resolvePreviewImage(item);
     const title = item?.city ? `${item.name} in ${item.city}` : (item?.name || 'Profile preview');
     const sourceLabel = prettyLabel(item?.message_source || 'seed');
 
@@ -400,6 +404,8 @@ export default function AutoPush() {
     const [previewItems, setPreviewItems] = useState([]);
     const [activePreviewId, setActivePreviewId] = useState(null);
     const [previewDevice, setPreviewDevice] = useState('mobile');
+    const [previewExpanded, setPreviewExpanded] = useState(false);
+    const [previewDirty, setPreviewDirty] = useState(false);
 
     const integrationsQuery = useQuery({
         queryKey: ['settings-integrations', 'auto-push'],
@@ -447,8 +453,43 @@ export default function AutoPush() {
         setPreview(null);
         setPreviewItems([]);
         setActivePreviewId(null);
+        setPreviewExpanded(false);
+        setPreviewDirty(false);
         setClonePlatformIds([]);
     }, [selectedPlan]);
+
+    const draftPackageQuery = useQuery({
+        queryKey: ['auto-push-draft-package', selectedPlanId],
+        enabled: Boolean(selectedPlanId) && !isCreatingNew && !previewDirty,
+        staleTime: 60_000,
+        refetchOnWindowFocus: false,
+        queryFn: () => api.get(`/crm/auto-push/plans/${selectedPlanId}/draft-package`).then((response) => response.data),
+    });
+
+    useEffect(() => {
+        if (!draftPackageQuery.data || isCreatingNew) {
+            return;
+        }
+
+        const items = Array.isArray(draftPackageQuery.data?.items)
+            ? draftPackageQuery.data.items.map((item) => ({
+                ...item,
+                preview_id: item.preview_id || `slot-${Number(item.slot_index || 0) + 1}`,
+                scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
+                original_city: item.city || '',
+                original_message: item.message || '',
+                original_scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
+                original_profile_image_url: item.profile_image_url || '',
+            }))
+            : [];
+
+        setPreview(draftPackageQuery.data);
+        setPreviewItems(items);
+        setActivePreviewId(draftPackageQuery.data?.ui?.active_preview_id || items[0]?.preview_id || null);
+        setPreviewDevice(draftPackageQuery.data?.ui?.preview_device || 'mobile');
+        setPreviewExpanded(false);
+        setPreviewDirty(false);
+    }, [draftPackageQuery.data, isCreatingNew]);
 
     const runsQuery = useQuery({
         queryKey: ['auto-push-runs', selectedPlanId],
@@ -470,6 +511,7 @@ export default function AutoPush() {
         queryClient.invalidateQueries({ queryKey: ['auto-push-plans'] });
         queryClient.invalidateQueries({ queryKey: ['auto-push-runs'] });
         queryClient.invalidateQueries({ queryKey: ['auto-push-alerts'] });
+        queryClient.invalidateQueries({ queryKey: ['auto-push-draft-package'] });
         queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
         queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
     };
@@ -515,24 +557,68 @@ export default function AutoPush() {
             if (createdPlan?.id) {
                 setSelectedPlanId(createdPlan.id);
                 invalidateAll();
+                queryClient.setQueryData(['auto-push-draft-package', createdPlan.id], previewPayload);
+            } else if (selectedPlanId) {
+                queryClient.setQueryData(['auto-push-draft-package', selectedPlanId], previewPayload);
             }
             const items = Array.isArray(previewPayload?.items)
                 ? previewPayload.items.map((item, index) => ({
                     ...item,
-                    preview_id: `${item.client_id || 'preview'}-${index}`,
+                    preview_id: item.preview_id || `slot-${index + 1}`,
                     scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
                     original_city: item.city || '',
                     original_message: item.message || '',
                     original_scheduled_at_input: formatDateTimeLocal(item.scheduled_at_market || item.scheduled_at),
+                    original_profile_image_url: item.profile_image_url || '',
                 }))
                 : [];
 
             setPreview(previewPayload);
             setPreviewItems(items);
-            setActivePreviewId(items[0]?.preview_id || null);
+            setActivePreviewId(previewPayload?.ui?.active_preview_id || items[0]?.preview_id || null);
+            setPreviewDevice(previewPayload?.ui?.preview_device || 'mobile');
+            setPreviewExpanded(false);
+            setPreviewDirty(false);
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Preview failed.');
+        },
+    });
+
+    const saveDraftPackageMutation = useMutation({
+        mutationFn: (payload) => api.put(`/crm/auto-push/plans/${form.id}/draft-package`, payload).then((response) => response.data),
+        onSuccess: (draftPackage) => {
+            queryClient.setQueryData(['auto-push-draft-package', selectedPlanId], draftPackage);
+            toast.success('Preview draft saved.');
+            setPreviewDirty(false);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save preview draft.');
+        },
+    });
+
+    const shuffleDraftPackageMutation = useMutation({
+        mutationFn: () => api.post(`/crm/auto-push/plans/${form.id}/draft-package/shuffle`).then((response) => response.data),
+        onSuccess: (draftPackage) => {
+            queryClient.setQueryData(['auto-push-draft-package', selectedPlanId], draftPackage);
+            toast.success('Preview queue shuffled.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to shuffle preview queue.');
+        },
+    });
+
+    const replacePreviewItemMutation = useMutation({
+        mutationFn: ({ previewId, clientId }) => api.post(`/crm/auto-push/plans/${form.id}/draft-package/replace`, {
+            preview_id: previewId,
+            ...(clientId ? { client_id: clientId } : {}),
+        }).then((response) => response.data),
+        onSuccess: (draftPackage) => {
+            queryClient.setQueryData(['auto-push-draft-package', selectedPlanId], draftPackage);
+            toast.success('Preview client replaced.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to replace preview client.');
         },
     });
 
@@ -704,9 +790,40 @@ export default function AutoPush() {
     const selectedPlanMarket = selectedPlan?.platform?.name || selectedPlan?.platform?.country || '—';
     const currentPlatformOption = platformOptions.find((platform) => String(platform.platform_id) === String(form.platform_id)) || null;
     const selectedPreviewItem = previewItems.find((item) => item.preview_id === activePreviewId) || previewItems[0] || null;
+    const visiblePreviewItems = previewExpanded ? previewItems : previewItems.slice(0, 5);
+    const hiddenPreviewCount = Math.max(0, previewItems.length - visiblePreviewItems.length);
 
     const handleSave = () => {
         savePlanMutation.mutate(planToPayload(form));
+    };
+
+    const handleSavePreviewDraft = () => {
+        if (!form.id || previewItems.length === 0) {
+            return;
+        }
+
+        saveDraftPackageMutation.mutate({
+            items: previewItems.map((item) => ({
+                preview_id: item.preview_id,
+                slot_index: item.slot_index,
+                client_id: item.client_id,
+                name: item.name,
+                city: item.city,
+                profile_url: item.profile_url,
+                profile_image_url: item.profile_image_url,
+                fallback_profile_image_url: item.fallback_profile_image_url,
+                message: item.message,
+                message_source: item.message_source,
+                scheduled_at: item.scheduled_at,
+                scheduled_at_market: item.scheduled_at_input
+                    ? new Date(item.scheduled_at_input).toISOString()
+                    : item.scheduled_at_market,
+            })),
+            ui: {
+                active_preview_id: activePreviewId,
+                preview_device: previewDevice,
+            },
+        });
     };
 
     const handlePreview = () => {
@@ -724,6 +841,8 @@ export default function AutoPush() {
         setPreview(null);
         setPreviewItems([]);
         setActivePreviewId(null);
+        setPreviewExpanded(false);
+        setPreviewDirty(false);
         setClonePlatformIds([]);
         setForm({
             ...deepClone(EMPTY_FORM),
@@ -739,6 +858,7 @@ export default function AutoPush() {
 
             return typeof updater === 'function' ? updater(item) : { ...item, ...updater };
         }));
+        setPreviewDirty(true);
     };
 
     return (
@@ -1442,9 +1562,33 @@ export default function AutoPush() {
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                     <div>
                                         <h3 className="text-lg font-semibold text-slate-900">Preview queue</h3>
-                                        <p className="mt-1 text-sm text-slate-500">Inspect the generated slice, then refine the mock notification content and timing before you commit the plan.</p>
+                                        <p className="mt-1 text-sm text-slate-500">Inspect the saved draft run package, expand it when you need the full queue, and swap profiles before the next push batch goes live.</p>
                                     </div>
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleSavePreviewDraft}
+                                            disabled={!form.id || previewItems.length === 0 || saveDraftPackageMutation.isPending || !previewDirty}
+                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {saveDraftPackageMutation.isPending ? 'Saving draft...' : previewDirty ? 'Save draft package' : 'Draft saved'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => shuffleDraftPackageMutation.mutate()}
+                                            disabled={!form.id || shuffleDraftPackageMutation.isPending}
+                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {shuffleDraftPackageMutation.isPending ? 'Shuffling...' : 'Shuffle all'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handlePreview}
+                                            disabled={!form.id || previewMutation.isPending}
+                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {previewMutation.isPending ? 'Refreshing...' : 'Refresh from plan'}
+                                        </button>
                                         <button
                                             type="button"
                                             onClick={() => setPreviewDevice('mobile')}
@@ -1481,23 +1625,101 @@ export default function AutoPush() {
                                     </div>
                                 ) : null}
 
+                                {(preview?.engagement?.top_profiles?.length || preview?.engagement?.bottom_profiles?.length) ? (
+                                    <div className="grid gap-4 xl:grid-cols-2">
+                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-emerald-900">Top 3 engagement signals</p>
+                                                    <p className="mt-1 text-xs text-emerald-700">Pulled from the same profile engagement ranking used in Reports.</p>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 space-y-3">
+                                                {(preview?.engagement?.top_profiles || []).map((profile) => (
+                                                    <div key={`top-${profile.client_id || profile.post_id}`} className="flex items-center gap-3 rounded-2xl bg-white/90 px-3 py-3 shadow-sm">
+                                                        <div className="h-12 w-12 overflow-hidden rounded-2xl bg-emerald-100">
+                                                            {resolvePreviewImage(profile) ? (
+                                                                <img src={resolvePreviewImage(profile)} alt={profile.name || 'Top profile'} className="h-full w-full object-cover" />
+                                                            ) : (
+                                                                <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-emerald-700">
+                                                                    {(profile.name || 'T').charAt(0).toUpperCase()}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="truncate text-sm font-semibold text-slate-900">{profile.name}</p>
+                                                            <p className="truncate text-xs text-slate-500">
+                                                                {profile.city || 'Unknown location'} • {Number(profile.contact_rate_percent || 0).toFixed(1)}% contact rate
+                                                            </p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => replacePreviewItemMutation.mutate({ previewId: activePreviewId || selectedPreviewItem?.preview_id, clientId: profile.client_id })}
+                                                            disabled={!profile.client_id || !selectedPreviewItem || replacePreviewItemMutation.isPending}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            Use
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-amber-900">Bottom 3 engagement signals</p>
+                                                    <p className="mt-1 text-xs text-amber-700">Useful when the team wants to test recovery or reactivation-style copy.</p>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 space-y-3">
+                                                {(preview?.engagement?.bottom_profiles || []).map((profile) => (
+                                                    <div key={`bottom-${profile.client_id || profile.post_id}`} className="flex items-center gap-3 rounded-2xl bg-white/90 px-3 py-3 shadow-sm">
+                                                        <div className="h-12 w-12 overflow-hidden rounded-2xl bg-amber-100">
+                                                            {resolvePreviewImage(profile) ? (
+                                                                <img src={resolvePreviewImage(profile)} alt={profile.name || 'Bottom profile'} className="h-full w-full object-cover" />
+                                                            ) : (
+                                                                <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-amber-700">
+                                                                    {(profile.name || 'B').charAt(0).toUpperCase()}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="truncate text-sm font-semibold text-slate-900">{profile.name}</p>
+                                                            <p className="truncate text-xs text-slate-500">
+                                                                {profile.city || 'Unknown location'} • {Number(profile.contact_rate_percent || 0).toFixed(1)}% contact rate
+                                                            </p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => replacePreviewItemMutation.mutate({ previewId: activePreviewId || selectedPreviewItem?.preview_id, clientId: profile.client_id })}
+                                                            disabled={!profile.client_id || !selectedPreviewItem || replacePreviewItemMutation.isPending}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            Use
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : null}
+
                                 {previewItems.length > 0 ? (
                                     <div className="space-y-3">
-                                        {previewItems.map((item, index) => {
+                                        {visiblePreviewItems.map((item, index) => {
                                             const active = item.preview_id === activePreviewId;
                                             return (
-                                                <button
+                                                <div
                                                     key={item.preview_id}
-                                                    type="button"
-                                                    onClick={() => setActivePreviewId(item.preview_id)}
-                                                    className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+                                                    className={`rounded-2xl border px-4 py-4 transition ${
                                                         active ? 'border-teal-300 bg-teal-50/70 shadow-sm' : 'border-slate-200 hover:bg-slate-50'
                                                     }`}
                                                 >
                                                     <div className="flex items-start gap-3">
                                                         <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
-                                                            {item.profile_image_url ? (
-                                                                <img src={proxyImageUrl(item.profile_image_url)} alt={item.name || 'Preview'} className="h-full w-full object-cover" />
+                                                            {resolvePreviewImage(item) ? (
+                                                                <img src={resolvePreviewImage(item)} alt={item.name || 'Preview'} className="h-full w-full object-cover" />
                                                             ) : (
                                                                 <div className="flex h-full w-full items-center justify-center text-lg font-semibold text-slate-500">
                                                                     {(item.name || 'E').charAt(0).toUpperCase()}
@@ -1510,9 +1732,14 @@ export default function AutoPush() {
                                                                     <p className="truncate font-semibold text-slate-900">{item.name || `Preview ${index + 1}`}</p>
                                                                     <p className="truncate text-sm text-slate-500">{item.city || 'Unknown location'}</p>
                                                                 </div>
-                                                                <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600 shadow-sm">
-                                                                    {prettyLabel(item.message_source)}
-                                                                </span>
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600 shadow-sm">
+                                                                        {prettyLabel(item.message_source)}
+                                                                    </span>
+                                                                    <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 shadow-sm">
+                                                                        slot {Number(item.slot_index || index) + 1}
+                                                                    </span>
+                                                                </div>
                                                             </div>
                                                             <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{item.message}</p>
                                                             <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1521,13 +1748,40 @@ export default function AutoPush() {
                                                             </div>
                                                         </div>
                                                     </div>
-                                                </button>
+                                                    <div className="mt-4 flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setActivePreviewId(item.preview_id)}
+                                                            className={`crm-btn-secondary px-3 py-1.5 text-xs ${active ? 'border-teal-400 bg-teal-50 text-teal-700' : ''}`}
+                                                        >
+                                                            {active ? 'Editing' : 'Open in studio'}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => replacePreviewItemMutation.mutate({ previewId: item.preview_id })}
+                                                            disabled={replacePreviewItemMutation.isPending}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            {replacePreviewItemMutation.isPending && active ? 'Replacing...' : 'Replace client'}
+                                                        </button>
+                                                    </div>
+                                                </div>
                                             );
                                         })}
+
+                                        {previewItems.length > 5 ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setPreviewExpanded((current) => !current)}
+                                                className="crm-btn-secondary w-full px-3 py-2 text-sm"
+                                            >
+                                                {previewExpanded ? 'Show fewer preview cards' : `Show ${hiddenPreviewCount} more preview card${hiddenPreviewCount === 1 ? '' : 's'}`}
+                                            </button>
+                                        ) : null}
                                     </div>
                                 ) : (
                                     <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
-                                        Refresh preview to generate realistic sample notifications for this plan.
+                                        {draftPackageQuery.isLoading ? 'Loading saved preview package...' : 'Refresh preview to generate realistic sample notifications for this plan.'}
                                     </div>
                                 )}
                             </div>
@@ -1557,21 +1811,32 @@ export default function AutoPush() {
                                                 <div className="mb-4 flex items-center justify-between gap-3">
                                                     <div>
                                                         <h4 className="text-sm font-semibold text-slate-900">Edit visible preview</h4>
-                                                        <p className="mt-1 text-xs text-slate-500">Use this to tighten the presentation before you sign off on the plan shape.</p>
+                                                        <p className="mt-1 text-xs text-slate-500">Tighten the client-facing presentation, then save it into the draft run package so the team sees the same preview later.</p>
                                                     </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => updatePreviewItem(selectedPreviewItem.preview_id, (item) => ({
-                                                            ...item,
-                                                            city: item.original_city,
-                                                            message: item.original_message,
-                                                            scheduled_at_input: item.original_scheduled_at_input,
-                                                            scheduled_at_market: item.original_scheduled_at_input ? new Date(item.original_scheduled_at_input).toISOString() : item.scheduled_at_market,
-                                                        }))}
-                                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
-                                                    >
-                                                        Reset card
-                                                    </button>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => replacePreviewItemMutation.mutate({ previewId: selectedPreviewItem.preview_id })}
+                                                            disabled={replacePreviewItemMutation.isPending}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            Replace client
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updatePreviewItem(selectedPreviewItem.preview_id, (item) => ({
+                                                                ...item,
+                                                                city: item.original_city,
+                                                                message: item.original_message,
+                                                                scheduled_at_input: item.original_scheduled_at_input,
+                                                                scheduled_at_market: item.original_scheduled_at_input ? new Date(item.original_scheduled_at_input).toISOString() : item.scheduled_at_market,
+                                                                profile_image_url: item.original_profile_image_url,
+                                                            }))}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                        >
+                                                            Reset card
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 <div className="grid gap-4">
                                                     <div className="grid gap-4 md:grid-cols-2">
@@ -1584,6 +1849,17 @@ export default function AutoPush() {
                                                             />
                                                         </label>
                                                         <label className="space-y-1">
+                                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Image URL</span>
+                                                            <input
+                                                                className="crm-input"
+                                                                value={selectedPreviewItem.profile_image_url || ''}
+                                                                onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, { profile_image_url: event.target.value })}
+                                                                placeholder="https://..."
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                    <div className="grid gap-4 md:grid-cols-2">
+                                                        <label className="space-y-1">
                                                             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Scheduled time</span>
                                                             <input
                                                                 type="datetime-local"
@@ -1595,6 +1871,14 @@ export default function AutoPush() {
                                                                 })}
                                                             />
                                                         </label>
+                                                        <label className="space-y-1">
+                                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Profile name</span>
+                                                            <input
+                                                                className="crm-input"
+                                                                value={selectedPreviewItem.name || ''}
+                                                                onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, { name: event.target.value })}
+                                                            />
+                                                        </label>
                                                     </div>
                                                     <label className="space-y-1">
                                                         <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Message</span>
@@ -1604,12 +1888,25 @@ export default function AutoPush() {
                                                             onChange={(event) => updatePreviewItem(selectedPreviewItem.preview_id, { message: event.target.value })}
                                                         />
                                                     </label>
+                                                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                                                        <p className="text-xs text-slate-500">
+                                                            {previewDirty ? 'You have unsaved preview changes.' : 'This preview is saved into the current draft package.'}
+                                                        </p>
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleSavePreviewDraft}
+                                                            disabled={!previewDirty || saveDraftPackageMutation.isPending}
+                                                            className="crm-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            {saveDraftPackageMutation.isPending ? 'Saving...' : 'Save preview draft'}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </>
                                     ) : (
                                         <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
-                                            Pick a preview card to open the device preview and inline editor.
+                                            {draftPackageQuery.isLoading ? 'Loading preview studio...' : 'Pick a preview card to open the device preview and inline editor.'}
                                         </div>
                                     )}
                                 </div>

@@ -15,6 +15,64 @@ use Illuminate\Support\Facades\DB;
 class AutoPushSelectionService
 {
     /**
+     * @return array{clients:\Illuminate\Support\Collection<int,\App\Models\Client>,bucket_counts:array<string,int>}
+     */
+    public function orderedCandidatesForPlan(AutoPushPlan $plan): array
+    {
+        $bucketCounts = [];
+        $orderedClients = collect();
+        $seen = [];
+
+        foreach ((array) ($plan->buckets ?? []) as $bucket) {
+            if (!(bool) ($bucket['enabled'] ?? false)) {
+                continue;
+            }
+
+            $type = (string) ($bucket['type'] ?? '');
+            $clients = match ($type) {
+                'new_subscriptions' => $this->selectNewSubscriptions($plan),
+                'subscription_tier' => $this->selectByTier($plan),
+                'bottom_engagement' => $this->selectBottomEngagement($plan),
+                default => collect(),
+            };
+
+            $bucketCounts[$type] = $clients->count();
+
+            foreach ($clients as $client) {
+                $clientId = (int) $client->id;
+                if (isset($seen[$clientId])) {
+                    continue;
+                }
+
+                $seen[$clientId] = true;
+                $orderedClients->push($client);
+            }
+        }
+
+        $excludeDays = max(0, (int) data_get($plan->reliability, 'exclude_pushed_within_days', 3));
+        if ($excludeDays > 0) {
+            $recentClientIds = PushCampaignItem::query()
+                ->join('push_campaigns', 'push_campaigns.id', '=', 'push_campaign_items.campaign_id')
+                ->where('push_campaigns.platform_id', (int) $plan->platform_id)
+                ->whereNotNull('push_campaign_items.client_id')
+                ->whereNotNull('push_campaign_items.sent_at')
+                ->where('push_campaign_items.sent_at', '>=', now()->subDays($excludeDays))
+                ->pluck('push_campaign_items.client_id')
+                ->map(fn ($id) => (int) $id)
+                ->flip();
+
+            $orderedClients = $orderedClients
+                ->reject(fn (Client $client) => $recentClientIds->has((int) $client->id))
+                ->values();
+        }
+
+        return [
+            'clients' => $orderedClients,
+            'bucket_counts' => $bucketCounts,
+        ];
+    }
+
+    /**
      * @return \Illuminate\Support\Collection<int, \App\Models\Client>
      */
     public function selectNewSubscriptions(AutoPushPlan $plan): Collection
@@ -116,51 +174,9 @@ class AutoPushSelectionService
      */
     public function selectForPlan(AutoPushPlan $plan): array
     {
-        $bucketCounts = [];
-        $orderedClients = collect();
-        $seen = [];
-
-        foreach ((array) ($plan->buckets ?? []) as $bucket) {
-            if (!(bool) ($bucket['enabled'] ?? false)) {
-                continue;
-            }
-
-            $type = (string) ($bucket['type'] ?? '');
-            $clients = match ($type) {
-                'new_subscriptions' => $this->selectNewSubscriptions($plan),
-                'subscription_tier' => $this->selectByTier($plan),
-                'bottom_engagement' => $this->selectBottomEngagement($plan),
-                default => collect(),
-            };
-
-            $bucketCounts[$type] = $clients->count();
-
-            foreach ($clients as $client) {
-                $clientId = (int) $client->id;
-                if (isset($seen[$clientId])) {
-                    continue;
-                }
-                $seen[$clientId] = true;
-                $orderedClients->push($client);
-            }
-        }
-
-        $excludeDays = max(0, (int) data_get($plan->reliability, 'exclude_pushed_within_days', 3));
-        if ($excludeDays > 0) {
-            $recentClientIds = PushCampaignItem::query()
-                ->join('push_campaigns', 'push_campaigns.id', '=', 'push_campaign_items.campaign_id')
-                ->where('push_campaigns.platform_id', (int) $plan->platform_id)
-                ->whereNotNull('push_campaign_items.client_id')
-                ->whereNotNull('push_campaign_items.sent_at')
-                ->where('push_campaign_items.sent_at', '>=', now()->subDays($excludeDays))
-                ->pluck('push_campaign_items.client_id')
-                ->map(fn ($id) => (int) $id)
-                ->flip();
-
-            $orderedClients = $orderedClients
-                ->reject(fn (Client $client) => $recentClientIds->has((int) $client->id))
-                ->values();
-        }
+        $ordered = $this->orderedCandidatesForPlan($plan);
+        $orderedClients = $ordered['clients'];
+        $bucketCounts = $ordered['bucket_counts'];
 
         $maxItems = max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1));
         $reserveMultiplier = max(1.0, (float) data_get($plan->reliability, 'reserve_multiplier', 1.5));
