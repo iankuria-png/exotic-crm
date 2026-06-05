@@ -11,11 +11,12 @@ class Template extends Model
 
     protected $fillable = [
         'platform_id', 'title', 'category', 'channel',
-        'subject', 'body', 'variables', 'status',
+        'subject', 'body', 'variables', 'status', 'is_quick_reply',
     ];
 
     protected $casts = [
         'variables' => 'array',
+        'is_quick_reply' => 'boolean',
     ];
 
     public function platform()
@@ -36,5 +37,10 @@ class Template extends Model
     public function scopeForChannel($query, $channel)
     {
         return $query->where('channel', $channel);
+    }
+
+    public function scopeQuickReply($query)
+    {
+        return $query->where('is_quick_reply', true);
     }
 }

@@ -17,6 +17,7 @@ use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientDeletionService;
+use App\Services\ClientOutreachService;
 use App\Services\ClientSegmentService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
@@ -590,6 +591,15 @@ class ClientController extends Controller
             ->exists());
 
         return response()->json($client);
+    }
+
+    public function quickReplies(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        return response()->json(
+            app(ClientOutreachService::class)->quickRepliesFor($client, $request->user())
+        );
     }
 
     private function hydrateBillingPlatformState(Client $client): void

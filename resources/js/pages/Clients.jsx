@@ -12,10 +12,12 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import CloseCaseDialog from '../components/CloseCaseDialog';
 import ConversionQueueView from '../components/clients/ConversionQueueView';
 import ClosedCasesView from '../components/clients/ClosedCasesView';
+import QuickReplyModal from '../components/clients/QuickReplyModal';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
 import { normalizePhone } from '../utils/phone';
+import { copyToClipboard } from '../utils/clipboard';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
 import BulkBioModal from '../components/seo/BulkBioModal';
 import { useAuth } from '../hooks/useAuth';
@@ -392,6 +394,7 @@ export default function Clients() {
     // Close-case dialog state — used by bulk action toolbar.
     const [closeCaseDialog, setCloseCaseDialog] = useState({ open: false, mode: 'bulk', selectedRows: [] });
     const [closeCaseError, setCloseCaseError] = useState(null);
+    const [quickReplyClient, setQuickReplyClient] = useState(null);
 
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -1308,6 +1311,21 @@ export default function Clients() {
         return null;
     }, [data?.search_resolution, search]);
 
+    const handleCopyPhone = async (event, phone) => {
+        event.stopPropagation();
+
+        if (!phone) {
+            return;
+        }
+
+        try {
+            await copyToClipboard(phone);
+            toast.success('Phone number copied');
+        } catch {
+            toast.error('Clipboard blocked. Select the phone number and copy manually.');
+        }
+    };
+
     const columns = [
         {
             key: 'name',
@@ -1343,7 +1361,48 @@ export default function Clients() {
         {
             key: 'phone_normalized',
             label: 'Phone',
-            render: (row) => <span className="crm-mono text-xs text-slate-600">{row.phone_normalized || '—'}</span>,
+            render: (row) => {
+                const phone = row.phone_normalized || '';
+
+                if (!phone) {
+                    return <span className="crm-mono text-xs text-slate-400">—</span>;
+                }
+
+                return (
+                    <button
+                        type="button"
+                        onClick={(event) => handleCopyPhone(event, phone)}
+                        title="Click to copy"
+                        className="group inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-slate-600 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                        <span className="crm-mono">{phone}</span>
+                        <svg className="h-3.5 w-3.5 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" />
+                        </svg>
+                    </button>
+                );
+            },
+        },
+        {
+            key: 'outreach',
+            label: 'Outreach',
+            render: (row) => (
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        setQuickReplyClient(row);
+                    }}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    aria-label={`Open quick outreach for ${row.name || `client ${row.id}`}`}
+                    title="Message"
+                >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5h16v10H8l-4 4V5Z" />
+                    </svg>
+                </button>
+            ),
         },
         {
             key: 'profile_status',
@@ -1947,6 +2006,11 @@ export default function Clients() {
                 clearSelectionKey={clearSelectionKey}
                 perPage={perPage}
                 onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
+            />
+
+            <QuickReplyModal
+                client={quickReplyClient}
+                onClose={() => setQuickReplyClient(null)}
             />
 
             {canDeleteClients ? (

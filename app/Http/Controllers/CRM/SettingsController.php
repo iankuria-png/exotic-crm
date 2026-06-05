@@ -3968,6 +3968,7 @@ class SettingsController extends Controller
             'body' => 'required|string|max:10000',
             'status' => 'required|in:active,draft',
             'variables' => 'nullable|array',
+            'is_quick_reply' => 'sometimes|boolean',
         ]);
 
         if (!empty($validated['platform_id']) && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $validated['platform_id'])) {
@@ -3994,6 +3995,7 @@ class SettingsController extends Controller
             'body' => 'sometimes|string|max:10000',
             'status' => 'sometimes|in:active,draft',
             'variables' => 'nullable|array',
+            'is_quick_reply' => 'sometimes|boolean',
         ]);
 
         $template->update($validated);

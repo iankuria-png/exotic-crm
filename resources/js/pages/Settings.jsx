@@ -6051,7 +6051,14 @@ function TemplatesWorkspace({ canManageTemplates }) {
             label: 'Template',
             render: (row) => (
                 <div>
-                    <p className="text-sm font-semibold text-slate-900">{row.title}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{row.title}</p>
+                        {row.is_quick_reply ? (
+                            <span className="inline-flex items-center rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">
+                                Quick reply
+                            </span>
+                        ) : null}
+                    </div>
                     <p className="truncate text-xs text-slate-500">{row.body}</p>
                 </div>
             ),
@@ -6097,6 +6104,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                 subject: row.subject || '',
                                 body: row.body || '',
                                 status: row.status || 'draft',
+                                is_quick_reply: Boolean(row.is_quick_reply),
                             });
                         }}
                         className="crm-btn-secondary px-3 py-1.5 text-xs"
@@ -6197,6 +6205,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
                         subject: row.subject || '',
                         body: row.body || '',
                         status: row.status || 'draft',
+                        is_quick_reply: Boolean(row.is_quick_reply),
                     });
                 }}
                 isLoading={isLoading}
@@ -6247,6 +6256,16 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                 className="crm-input"
                                 placeholder="Subject (optional)"
                             />
+
+                            <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(editorForm.is_quick_reply)}
+                                    onChange={(event) => setEditorForm({ ...editorForm, is_quick_reply: event.target.checked })}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200"
+                                />
+                                <span className="font-medium">Quick reply</span>
+                            </label>
 
                             <textarea
                                 value={editorForm.body}
