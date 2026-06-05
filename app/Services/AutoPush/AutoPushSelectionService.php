@@ -212,7 +212,7 @@ class AutoPushSelectionService
      * @param  \Illuminate\Support\Collection<int, int|string>  $clientIds
      * @return \Illuminate\Support\Collection<int, \App\Models\Client>
      */
-    private function loadClientsInOrder(Collection $clientIds): Collection
+    public function loadClientsInOrder(Collection $clientIds): Collection
     {
         $ids = $clientIds->map(fn ($id) => (int) $id)->filter()->values();
         if ($ids->isEmpty()) {

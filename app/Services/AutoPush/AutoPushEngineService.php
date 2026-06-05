@@ -18,6 +18,7 @@ class AutoPushEngineService
         private readonly AutoPushCampaignBuilder $campaignBuilder,
         private readonly PushCampaignService $pushCampaignService,
         private readonly AutoPushAlertService $alertService,
+        private readonly AutoPushDraftPackageService $draftPackageService,
     ) {
     }
 
@@ -74,16 +75,33 @@ class AutoPushEngineService
         ]);
 
         try {
+            $draftPackage = $this->draftPackageService->storedSourceOfTruth($plan);
             $selection = $this->selectionService->selectForPlan($plan);
-            $run->forceFill([
-                'bucket_counts' => $selection['bucket_counts'],
-                'candidates_selected' => $selection['primary']->count(),
-                'reserve_count' => $selection['reserve']->count(),
-            ])->save();
 
-            $this->campaignBuilder->persistReserve($run, $selection['reserve']);
+            if ($draftPackage !== null) {
+                $reserveClients = $this->draftPackageService->reserveClientsForSourceOfTruth($plan, $draftPackage);
+                $run->forceFill([
+                    'bucket_counts' => data_get($draftPackage, 'selection.bucket_counts', []),
+                    'candidates_selected' => count((array) ($draftPackage['items'] ?? [])),
+                    'reserve_count' => $reserveClients->count(),
+                ])->save();
 
-            if ($selection['primary']->isEmpty()) {
+                $this->campaignBuilder->persistReserve($run, $reserveClients);
+            } else {
+                $run->forceFill([
+                    'bucket_counts' => $selection['bucket_counts'],
+                    'candidates_selected' => $selection['primary']->count(),
+                    'reserve_count' => $selection['reserve']->count(),
+                ])->save();
+
+                $this->campaignBuilder->persistReserve($run, $selection['reserve']);
+            }
+
+            $itemsSelected = $draftPackage !== null
+                ? count((array) ($draftPackage['items'] ?? []))
+                : $selection['primary']->count();
+
+            if ($itemsSelected === 0) {
                 $run->forceFill([
                     'status' => 'skipped',
                 ])->save();
@@ -102,7 +120,9 @@ class AutoPushEngineService
                 return $run->fresh();
             }
 
-            $campaign = $this->campaignBuilder->build($plan, $run, $selection);
+            $campaign = $draftPackage !== null
+                ? $this->campaignBuilder->buildFromDraftPackage($plan, $run, $draftPackage)
+                : $this->campaignBuilder->build($plan, $run, $selection);
             $firstSlot = $campaign->items()->orderBy('scheduled_at')->value('scheduled_at');
             if ($firstSlot) {
                 $firstSlot = Carbon::parse((string) $firstSlot)->utc();

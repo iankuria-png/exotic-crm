@@ -354,6 +354,73 @@ class AutoPushWorkflowTest extends TestCase
             ->assertJsonPath('items.0.client_id', $clients[2]->id);
     }
 
+    public function test_run_now_builds_campaign_from_saved_draft_package_source_of_truth(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'name' => 'Mellow',
+            'city' => 'Nairobi CBD',
+            'main_image_url' => 'https://images.example/original.jpg',
+        ]);
+        \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'subscription_lifecycle' => 'new',
+            'activated_at' => now()->subHour(),
+            'status' => 'active',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $store = $this->postJson('/api/crm/auto-push/plans', array_merge($this->planRequestPayload($platform->id), [
+            'schedule' => array_merge($this->defaultSchedule(), [
+                'max_items_per_day' => 1,
+            ]),
+        ]));
+        $store->assertCreated();
+        $planId = (int) $store->json('plan.id');
+
+        $draft = $this->getJson("/api/crm/auto-push/plans/{$planId}/draft-package")
+            ->assertOk();
+
+        $item = $draft->json('items.0');
+        $scheduledAt = now()->addHours(6)->toIso8601String();
+
+        $this->putJson("/api/crm/auto-push/plans/{$planId}/draft-package", [
+            'items' => [[
+                ...$item,
+                'name' => 'Edited Name',
+                'city' => 'Westlands',
+                'profile_image_url' => 'https://images.example/edited.jpg',
+                'message' => 'Source of truth message',
+                'scheduled_at' => $scheduledAt,
+                'scheduled_at_market' => $scheduledAt,
+            ]],
+            'ui' => [
+                'active_preview_id' => $item['preview_id'],
+                'preview_device' => 'mobile',
+            ],
+        ])->assertOk();
+
+        $run = $this->postJson("/api/crm/auto-push/plans/{$planId}/run-now")
+            ->assertOk();
+
+        $campaignId = (int) $run->json('campaign.id');
+        $campaignItem = PushCampaignItem::query()->where('campaign_id', $campaignId)->firstOrFail();
+
+        $this->assertSame('Edited Name', $campaignItem->profile_name);
+        $this->assertSame('Westlands', $campaignItem->profile_city);
+        $this->assertSame('https://images.example/edited.jpg', $campaignItem->profile_image_url);
+        $this->assertSame('Source of truth message', $campaignItem->custom_message);
+        $this->assertSame(
+            \Carbon\Carbon::parse($scheduledAt)->utc()->format('Y-m-d H:i'),
+            optional($campaignItem->scheduled_at)->utc()->format('Y-m-d H:i')
+        );
+    }
+
     public function test_run_auto_push_command_skips_not_due_plans_and_runs_due_plans(): void
     {
         Carbon::setTestNow('2026-06-05 08:00:00');

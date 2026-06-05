@@ -125,6 +125,50 @@ class AutoPushDraftPackageService
         return $this->persistPackage($plan, $package);
     }
 
+    public function storedSourceOfTruth(AutoPushPlan $plan): ?array
+    {
+        $stored = is_array($plan->draft_run_package) ? $plan->draft_run_package : [];
+
+        if (($stored['plan_signature'] ?? null) !== $this->planSignature($plan)) {
+            return null;
+        }
+
+        if (empty($stored['items']) || !is_array($stored['items'])) {
+            return null;
+        }
+
+        return $this->normalizeStoredPackage($plan, $stored);
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int,\App\Models\Client>
+     */
+    public function reserveClientsForSourceOfTruth(AutoPushPlan $plan, array $package): Collection
+    {
+        $candidateIds = collect((array) ($package['candidate_client_ids'] ?? []))
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->values();
+
+        if ($candidateIds->isEmpty()) {
+            $candidateIds = $this->selectionService->orderedCandidatesForPlan($plan)['clients']
+                ->map(fn (Client $client) => (int) $client->id)
+                ->values();
+        }
+
+        $usedIds = collect((array) ($package['items'] ?? []))
+            ->pluck('client_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->flip();
+
+        $reserveIds = $candidateIds
+            ->reject(fn (int $id) => $usedIds->has($id))
+            ->values();
+
+        return $this->selectionService->loadClientsInOrder($reserveIds);
+    }
+
     /**
      * @param  \Illuminate\Support\Collection<int,\App\Models\Client>|null  $candidates
      * @param  array<string,int>|null  $bucketCounts
