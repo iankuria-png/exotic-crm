@@ -43,6 +43,12 @@ const pushCampaignNavItem = {
     icon: 'M4.5 6.75h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-3l-3 2.25v-2.25h-9A1.5 1.5 0 0 1 3 15.75v-7.5a1.5 1.5 0 0 1 1.5-1.5Z',
 };
 
+const autoPushNavItem = {
+    to: '/auto-push',
+    label: 'Auto Push',
+    icon: 'M12 3.75v3m0 10.5v3m8.25-8.25h-3M6.75 12h-3m11.031 5.281-2.122-2.122M9.341 8.219 7.22 6.098m0 11.184 2.121-2.122m5.318-5.318 2.122-2.121M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z',
+};
+
 const resourcesGroup = {
     title: 'Resources',
     items: [
@@ -107,7 +113,7 @@ export default function Sidebar({ onClose }) {
             },
             {
                 title: 'Campaigns',
-                items: [pushCampaignNavItem],
+                items: [pushCampaignNavItem, autoPushNavItem],
             },
             resourcesGroup,
         ]
@@ -123,7 +129,7 @@ export default function Sidebar({ onClose }) {
 
                 return {
                     ...group,
-                    items: [...group.items, pushCampaignNavItem],
+                    items: [...group.items, pushCampaignNavItem, autoPushNavItem],
                 };
             }).concat([resourcesGroup])
             : role === 'sales'

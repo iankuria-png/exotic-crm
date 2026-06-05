@@ -27,12 +27,17 @@ class PushCampaignItem extends Model
         'sent_at',
         'error_message',
         'delivery_stats',
+        'provider_meta',
+        'replaces_item_id',
+        'replacement_round',
     ];
 
     protected $casts = [
         'scheduled_at' => 'datetime',
         'sent_at' => 'datetime',
         'delivery_stats' => 'array',
+        'provider_meta' => 'array',
+        'replacement_round' => 'integer',
     ];
 
     public function campaign()
@@ -43,5 +48,15 @@ class PushCampaignItem extends Model
     public function client()
     {
         return $this->belongsTo(Client::class);
+    }
+
+    public function replacementParent()
+    {
+        return $this->belongsTo(self::class, 'replaces_item_id');
+    }
+
+    public function replacements()
+    {
+        return $this->hasMany(self::class, 'replaces_item_id');
     }
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
@@ -227,7 +228,14 @@ export default function PushCampaigns() {
             label: 'Campaign',
             render: (row) => (
                 <div className="min-w-[220px]">
-                    <p className="font-medium text-slate-800">{row.name}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-slate-800">{row.name}</p>
+                        {row.auto_push_plan_id ? (
+                            <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-medium text-teal-700">
+                                auto
+                            </span>
+                        ) : null}
+                    </div>
                     <p className="text-xs text-slate-500">{row.source_filename || 'Manual campaign'}</p>
                 </div>
             ),
@@ -415,7 +423,7 @@ export default function PushCampaigns() {
             </section>
 
             <section className="crm-surface p-4">
-                <div className="grid gap-2 md:grid-cols-[1fr_180px_180px_auto_auto]">
+                <div className="grid gap-2 md:grid-cols-[1fr_180px_180px_auto_auto_auto]">
                     <input
                         value={searchInput}
                         onChange={(event) => setSearchInput(event.target.value)}
@@ -455,6 +463,9 @@ export default function PushCampaigns() {
                     <button type="button" onClick={() => setUploadOpen(true)} className="crm-btn-primary">
                         Upload workbook
                     </button>
+                    <Link to="/auto-push" className="crm-btn-secondary inline-flex items-center justify-center">
+                        Open Auto Push
+                    </Link>
                     <button type="button" onClick={() => setCrmEscortOpen(true)} className="crm-btn-secondary">
                         Select CRM escorts
                     </button>

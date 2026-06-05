@@ -22,6 +22,8 @@ class PushCampaign extends Model
         'completed_at',
         'confirmed_at',
         'created_by',
+        'auto_push_plan_id',
+        'auto_push_run_id',
         'upload_batch_id',
         'source_filename',
     ];
@@ -49,6 +51,16 @@ class PushCampaign extends Model
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function autoPushPlan()
+    {
+        return $this->belongsTo(AutoPushPlan::class, 'auto_push_plan_id');
+    }
+
+    public function autoPushRun()
+    {
+        return $this->belongsTo(AutoPushRun::class, 'auto_push_run_id');
     }
 
     public function scopeForPlatform($query, $platformIds)

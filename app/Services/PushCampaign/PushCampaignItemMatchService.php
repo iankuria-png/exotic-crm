@@ -3,6 +3,7 @@
 namespace App\Services\PushCampaign;
 
 use App\Models\Client;
+use App\Support\ClientProfileUrl;
 
 class PushCampaignItemMatchService
 {
@@ -313,33 +314,10 @@ class PushCampaignItemMatchService
             'profile_status' => $client->profile_status,
             'wp_post_id' => $clientWpPostId ?: null,
             'main_image_url' => $client->main_image_url,
-            'wp_profile_url' => $this->resolveClientProfileUrl($client),
+            'wp_profile_url' => ClientProfileUrl::resolve($client, $client->platform),
             'score' => $score,
             'score_reason' => empty($reasons) ? 'No strong match signals.' : implode(', ', $reasons),
         ];
-    }
-
-    private function resolveClientProfileUrl(Client $client): ?string
-    {
-        if (!empty($client->wp_profile_url)) {
-            return (string) $client->wp_profile_url;
-        }
-
-        $wpPostId = (int) ($client->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
-            return null;
-        }
-
-        $domain = trim((string) ($client->platform?->domain ?? ''));
-        if ($domain === '') {
-            return null;
-        }
-
-        if (!preg_match('#^https?://#i', $domain)) {
-            $domain = 'https://' . $domain;
-        }
-
-        return rtrim($domain, '/') . '/?p=' . $wpPostId;
     }
 
     private function parseWpPostIdFromUrl(string $url): int

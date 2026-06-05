@@ -17,6 +17,7 @@ use App\Http\Controllers\CRM\AiBriefingShareController;
 use App\Http\Controllers\CRM\AiInsightsController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
+use App\Http\Controllers\CRM\AutoPushPlanController;
 use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
@@ -252,6 +253,21 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/{pushCampaign}/analytics', [PushCampaignController::class, 'analytics']);
         Route::post('/{pushCampaign}/reschedule', [PushCampaignController::class, 'reschedule']);
         Route::delete('/{pushCampaign}', [PushCampaignController::class, 'destroy']);
+    });
+
+    Route::middleware('role:marketing,admin,sub_admin')->prefix('auto-push')->group(function () {
+        Route::get('/plans', [AutoPushPlanController::class, 'index']);
+        Route::post('/plans', [AutoPushPlanController::class, 'store']);
+        Route::patch('/plans/{plan}', [AutoPushPlanController::class, 'update']);
+        Route::delete('/plans/{plan}', [AutoPushPlanController::class, 'destroy']);
+        Route::post('/plans/{plan}/clone', [AutoPushPlanController::class, 'clone']);
+        Route::post('/plans/{plan}/toggle', [AutoPushPlanController::class, 'toggle']);
+        Route::post('/plans/{plan}/autopilot', [AutoPushPlanController::class, 'autopilot']);
+        Route::post('/plans/{plan}/preview', [AutoPushPlanController::class, 'preview']);
+        Route::post('/plans/{plan}/run-now', [AutoPushPlanController::class, 'runNow']);
+        Route::get('/runs', [AutoPushPlanController::class, 'runs']);
+        Route::get('/alerts', [AutoPushPlanController::class, 'alerts']);
+        Route::post('/alerts/{alert}/resolve', [AutoPushPlanController::class, 'resolveAlert']);
     });
 
     // Clients (marketing role has read-only access)

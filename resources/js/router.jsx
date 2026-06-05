@@ -12,6 +12,7 @@ import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
 import PushCampaigns from './pages/PushCampaigns';
+import AutoPush from './pages/AutoPush';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
@@ -63,6 +64,7 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/clients')
             || path.startsWith('/kyc')
             || path.startsWith('/push-campaigns')
+            || path.startsWith('/auto-push')
             || path.startsWith('/team')
             || path.startsWith('/faq')
             || path.startsWith('/university');
@@ -135,6 +137,7 @@ export default function AppRouter() {
                 <Route path="campaigns" element={<Campaigns />} />
                 <Route path="kyc" element={<Kyc />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
+                <Route path="auto-push" element={<AutoPush />} />
                 <Route path="team" element={<Team />} />
                 <Route path="faq" element={<FaqHome />} />
                 <Route path="faq/c/:slug" element={<FaqCategory />} />

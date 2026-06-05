@@ -160,6 +160,20 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_dispatch_scheduled_pushes.log'));
 
+        $schedule->command('crm:run-auto-push')
+            ->name('crm_run_auto_push')
+            ->hourly()
+            ->withoutOverlapping(55)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_run_auto_push.log'));
+
+        $schedule->command('crm:maintain-auto-push')
+            ->name('crm_maintain_auto_push')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_maintain_auto_push.log'));
+
         $schedule->command('crm:reconcile-pending-payments')
             ->name('crm_reconcile_pending_payments')
             ->everyFifteenMinutes()

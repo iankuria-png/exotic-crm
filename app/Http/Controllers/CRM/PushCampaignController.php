@@ -21,6 +21,7 @@ use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use App\Services\AuditService;
 use App\Services\WpSyncService;
+use App\Support\ClientProfileUrl;
 use App\Support\MarketTimezone;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -859,7 +860,7 @@ class PushCampaignController extends Controller
         $dateLabel = $scheduledAt ? $scheduledAt->copy()->setTimezone($platformTimezone)->toDateString() : null;
 
         foreach ($clients as $client) {
-            $profileUrl = $this->resolveClientProfileUrl($client, $platform);
+            $profileUrl = ClientProfileUrl::resolve($client, $platform);
             if (!$profileUrl) {
                 $skippedClientIds[] = (int) $client->id;
                 continue;
@@ -1139,7 +1140,7 @@ class PushCampaignController extends Controller
         $profileUrl = (string) $pushCampaignItem->profile_url;
 
         if ($replaceProfileUrl) {
-            $resolvedUrl = $this->resolveClientProfileUrl($client, $pushCampaign->platform);
+            $resolvedUrl = ClientProfileUrl::resolve($client, $pushCampaign->platform);
             if ($resolvedUrl) {
                 $profileUrl = $resolvedUrl;
             }
@@ -3013,29 +3014,6 @@ class PushCampaignController extends Controller
         }
 
         return $normalized;
-    }
-
-    private function resolveClientProfileUrl(Client $client, Platform $platform): ?string
-    {
-        if (!empty($client->wp_profile_url)) {
-            return (string) $client->wp_profile_url;
-        }
-
-        $wpPostId = (int) ($client->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
-            return null;
-        }
-
-        $domain = trim((string) ($platform->domain ?? ''));
-        if ($domain === '') {
-            return null;
-        }
-
-        if (!preg_match('#^https?://#i', $domain)) {
-            $domain = 'https://' . $domain;
-        }
-
-        return rtrim($domain, '/') . '/?p=' . $wpPostId;
     }
 
     private function uploadErrorMessage(int $uploadErrorCode): string

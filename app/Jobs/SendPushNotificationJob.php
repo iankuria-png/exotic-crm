@@ -147,6 +147,11 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             'status' => $success ? 'sent' : 'failed',
             'provider_notification_id' => $result['provider_notification_id'] ?? null,
             'sent_at' => now(),
+            'provider_meta' => [
+                'provider' => $result['provider'] ?? null,
+                'fallback_attempted' => (bool) ($result['fallback_attempted'] ?? false),
+                'fallback_from' => $result['fallback_from'] ?? null,
+            ],
             'error_message' => $success
                 ? null
                 : (is_string($result['provider_response'] ?? null)
