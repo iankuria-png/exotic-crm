@@ -282,6 +282,57 @@ class ProfileExtractionService
         }
     }
 
+    /**
+     * Backfill profile_age on already-built items using their KNOWN wp_post_id.
+     *
+     * Unlike extractProfileBatch(), this trusts the item's stored wp_post_id instead
+     * of re-resolving it from the profile URL, so CRM-sourced items (e.g. auto-push)
+     * never get falsely failed by a URL probe. It only fills age — name/phone/image
+     * are already populated from the CRM client record at build time.
+     */
+    public function hydrateAgeFromWp(Collection $items, Platform $platform): void
+    {
+        if ($items->isEmpty() || !$this->hasWpIntegration($platform)) {
+            return;
+        }
+
+        $wpSync = new WpSyncService($platform);
+        $timezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
+
+        foreach ($items as $item) {
+            if (!$item instanceof PushCampaignItem) {
+                continue;
+            }
+
+            $wpPostId = (int) ($item->wp_post_id ?? 0);
+            if ($wpPostId <= 0 || trim((string) $item->profile_age) !== '') {
+                continue;
+            }
+
+            $payload = $this->safeFetchWpProfilePayload($wpSync, $wpPostId);
+            if (!$payload) {
+                continue;
+            }
+
+            $fields = $this->extractWpProfileFields($payload);
+
+            $age = !empty($fields['age_value']) ? (string) $fields['age_value'] : null;
+            if ($age === null && !empty($fields['birthday'])) {
+                $age = $this->deriveAgeFromBirthday(
+                    (string) $fields['birthday'],
+                    $this->resolveItemAgeReferenceDate($item, $platform),
+                    $timezone
+                );
+            }
+
+            if ($age !== null && $age !== '') {
+                $item->forceFill(['profile_age' => $age])->save();
+            }
+
+            usleep(300000);
+        }
+    }
+
     private function extractViaWp(PushCampaignItem $item, Platform $platform, ?WpSyncService $wpSync): array
     {
         $resolution = $this->resolveWpPostIdForUrl((string) $item->profile_url);

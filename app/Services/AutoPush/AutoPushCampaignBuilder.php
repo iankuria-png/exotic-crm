@@ -7,6 +7,7 @@ use App\Models\AutoPushRun;
 use App\Models\Client;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
+use App\Services\PushCampaign\ProfileExtractionService;
 use App\Support\AutoPushSlotAllocator;
 use App\Support\ClientProfileUrl;
 use App\Support\MarketTimezone;
@@ -18,6 +19,7 @@ class AutoPushCampaignBuilder
 {
     public function __construct(
         private readonly AutoPushMessageService $messageService,
+        private readonly ProfileExtractionService $profileExtractionService,
     ) {
     }
 
@@ -57,6 +59,7 @@ class AutoPushCampaignBuilder
 
         if ($items !== []) {
             PushCampaignItem::query()->insert($items);
+            $this->hydrateAgesFromWp($campaign, $plan);
         }
 
         $campaign->forceFill([
@@ -116,6 +119,7 @@ class AutoPushCampaignBuilder
 
         if ($items !== []) {
             PushCampaignItem::query()->insert($items);
+            $this->hydrateAgesFromWp($campaign, $plan);
         }
 
         $campaign->forceFill([
@@ -131,6 +135,38 @@ class AutoPushCampaignBuilder
         ])->save();
 
         return $campaign->fresh();
+    }
+
+    /**
+     * Backfill profile_age on the freshly-inserted items from WordPress, using each
+     * item's known wp_post_id. Mirrors how the manual push route resolves age, so auto
+     * campaigns show the same data. Best-effort: never blocks campaign creation.
+     */
+    private function hydrateAgesFromWp(PushCampaign $campaign, AutoPushPlan $plan): void
+    {
+        $platform = $plan->platform;
+        if (!$platform) {
+            return;
+        }
+
+        $items = $campaign->items()
+            ->whereNotNull('wp_post_id')
+            ->where('wp_post_id', '>', 0)
+            ->get();
+
+        if ($items->isEmpty()) {
+            return;
+        }
+
+        try {
+            $this->profileExtractionService->hydrateAgeFromWp($items, $platform);
+        } catch (\Throwable $exception) {
+            \Illuminate\Support\Facades\Log::warning('Auto-push age hydration failed', [
+                'campaign_id' => (int) $campaign->id,
+                'platform_id' => (int) $platform->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     public function persistReserve(AutoPushRun $run, Collection $reserveClients): void
