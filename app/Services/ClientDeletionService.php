@@ -39,6 +39,36 @@ class ClientDeletionService
 
     public function deleteClient(Client $client, int $actorId, string $reason): array
     {
+        return $this->deleteClientInternal(
+            $client,
+            $actorId,
+            $reason,
+            createSyncExclusion: true,
+            deleteFromWordPress: true,
+            auditAction: CrmAuditAction::CLIENT_DELETE
+        );
+    }
+
+    public function deleteClientFromSourcePrune(Client $client, ?int $actorId, string $reason): array
+    {
+        return $this->deleteClientInternal(
+            $client,
+            $actorId,
+            $reason,
+            createSyncExclusion: false,
+            deleteFromWordPress: false,
+            auditAction: CrmAuditAction::CLIENT_AUTO_PURGE
+        );
+    }
+
+    private function deleteClientInternal(
+        Client $client,
+        ?int $actorId,
+        string $reason,
+        bool $createSyncExclusion,
+        bool $deleteFromWordPress,
+        string $auditAction
+    ): array {
         $client->loadMissing('platform');
 
         $impact = $this->previewDeletion($client);
@@ -61,8 +91,8 @@ class ClientDeletionService
             'impact' => $impact,
         ];
 
-        DB::transaction(function () use ($client, $clientId, $dealIds, $wpPostId, $actorId, $reason) {
-            if ($wpPostId > 0) {
+        DB::transaction(function () use ($client, $clientId, $dealIds, $wpPostId, $actorId, $reason, $createSyncExclusion) {
+            if ($createSyncExclusion && $wpPostId > 0) {
                 ClientSyncExclusion::query()->updateOrCreate(
                     [
                         'platform_id' => (int) $client->platform_id,
@@ -123,7 +153,7 @@ class ClientDeletionService
         });
 
         $wpDeleted = false;
-        if ($wpPostId > 0) {
+        if ($deleteFromWordPress && $wpPostId > 0) {
             try {
                 WpSyncService::forPlatform($platformId)->deleteClient($wpPostId);
                 $wpDeleted = true;
@@ -140,13 +170,14 @@ class ClientDeletionService
         $this->auditService->record([
             'platform_id' => $platformId,
             'actor_id' => $actorId,
-            'action' => CrmAuditAction::CLIENT_DELETE,
+            'action' => $auditAction,
             'entity_type' => 'client',
             'entity_id' => $clientId,
             'before_state' => $beforeState,
             'after_state' => [
                 'deleted' => true,
                 'wp_deleted' => $wpDeleted,
+                'source_pruned' => !$deleteFromWordPress,
                 'impact' => $impact,
             ],
             'reason' => $reason,
@@ -155,6 +186,7 @@ class ClientDeletionService
         return [
             'deleted' => true,
             'wp_deleted' => $wpDeleted,
+            'source_pruned' => !$deleteFromWordPress,
             'impact' => $impact,
         ];
     }

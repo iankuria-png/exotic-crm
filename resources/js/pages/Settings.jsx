@@ -3101,6 +3101,7 @@ function IntegrationsWorkspace({
     const clientSyncStatusLabel = latestClientSyncRun?.status
         ? latestClientSyncRun.status.replaceAll('_', ' ')
         : 'idle';
+    const latestClientPruned = Number(latestSyncResult?.clients?.pruned || 0);
     const canPushActiveWalletCredentials = selectedHasCredentials && selectedWalletEffectiveMode !== 'disabled';
     const selectedSupportBoardConfigured = Boolean(
         selectedPlatform?.support_board_api_url
@@ -5279,7 +5280,7 @@ function IntegrationsWorkspace({
 
                                 <section className="rounded-lg border border-slate-200 bg-white p-3">
                                     <h4 className="text-sm font-semibold text-slate-900">Manual Sync</h4>
-                                    <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings.</p>
+                                    <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings. Full client syncs reconcile the CRM table to WordPress and remove stale source records.</p>
                                     {showInitialFullSyncCta ? (
                                         <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/70 p-3">
                                             <p className="text-xs font-semibold text-teal-800">New market onboarding</p>
@@ -5364,7 +5365,10 @@ function IntegrationsWorkspace({
                                             <p className="font-semibold text-slate-800">Latest sync summary</p>
                                             <p className="mt-1">Scope: {latestSyncResult.scope || selectedPlatform.sync?.last_scope || 'unknown'} • Dry run: {latestSyncResult.dry_run ? 'yes' : 'no'}</p>
                                             {latestSyncResult.clients ? (
-                                                <p>Clients: {latestSyncResult.clients.created || 0} created, {latestSyncResult.clients.updated || 0} updated</p>
+                                                <p>
+                                                    Clients: {latestSyncResult.clients.created || 0} created, {latestSyncResult.clients.updated || 0} updated
+                                                    {Number(latestSyncResult.clients.pruned || 0) > 0 ? `, ${Number(latestSyncResult.clients.pruned || 0).toLocaleString()} stale deleted` : ''}
+                                                </p>
                                             ) : null}
                                             {latestSyncResult.leads ? (
                                                 <p>Leads: {latestSyncResult.leads.created || 0} created, {latestSyncResult.leads.updated || 0} updated, {latestSyncResult.leads.errors?.length || 0} errors</p>
@@ -5385,6 +5389,12 @@ function IntegrationsWorkspace({
                                                 Processed: <span className="font-medium text-slate-900">{latestClientSyncRun.processed || 0}</span>
                                                 {' • '}
                                                 Created/updated: <span className="font-medium text-slate-900">{latestClientSyncRun.created || 0}/{latestClientSyncRun.updated || 0}</span>
+                                                {latestClientPruned > 0 ? (
+                                                    <>
+                                                        {' • '}
+                                                        Deleted stale: <span className="font-medium text-slate-900">{latestClientPruned.toLocaleString()}</span>
+                                                    </>
+                                                ) : null}
                                             </p>
                                             <p className="mt-1">
                                                 Started: <span className="font-medium text-slate-900">{formatDateTime(latestClientSyncRun.started_at || latestClientSyncRun.created_at)}</span>
@@ -5931,6 +5941,11 @@ function IntegrationsWorkspace({
                     <p><span className="font-semibold text-slate-800">Scope:</span> {syncForm.scope}</p>
                     <p><span className="font-semibold text-slate-800">Mode:</span> {syncForm.mode}</p>
                     <p><span className="font-semibold text-slate-800">Dry run:</span> {syncForm.dry_run ? 'yes' : 'no'}</p>
+                    {syncForm.scope === 'clients' && syncForm.mode === 'full' ? (
+                        <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+                            Full client sync will delete CRM clients in this market whose WordPress post IDs are no longer returned by the source.
+                        </p>
+                    ) : null}
                 </div>
             </ConfirmDialog>
 

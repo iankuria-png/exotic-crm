@@ -358,6 +358,7 @@ class ClientSyncRunService
                 'skipped' => (int) ($payload['skipped'] ?? $run->skipped ?? 0),
                 'total' => (int) ($payload['processed'] ?? $run->processed ?? 0),
                 'tombstones_processed' => (int) ($payload['tombstones_processed'] ?? $run->tombstones_processed ?? 0),
+                'pruned' => (int) ($payload['pruned'] ?? 0),
             ],
             'run_id' => (int) $run->id,
             'error' => $error,

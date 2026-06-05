@@ -31,7 +31,7 @@ class ClientSyncService
      * Full sync: import all profiles from WordPress to CRM clients table
      * Returns count of created, updated, and total records
      */
-    public function fullSync(int $perPage = 100): array
+    public function fullSync(int $perPage = 100, string $syncMode = 'legacy_full'): array
     {
         $page = 1;
         $created = 0;
@@ -43,7 +43,7 @@ class ClientSyncService
             $response = $this->wpSync->getClients($page, $perPage);
             $clients = $response['data'] ?? [];
             $totalPages = $response['pages'] ?? 1;
-            $chunk = $this->applyBulkClients($clients, 'legacy_full');
+            $chunk = $this->applyBulkClients($clients, $syncMode);
             $created += (int) ($chunk['created'] ?? 0);
             $updated += (int) ($chunk['updated'] ?? 0);
             $skipped += (int) ($chunk['skipped'] ?? 0);
@@ -276,16 +276,23 @@ class ClientSyncService
 
     private function runLegacyBulkSync(ClientSyncRun $run, int $perPage, array $capability): array
     {
+        $isReconcile = $run->mode === 'reconcile';
+
         $run->forceFill([
             'protocol' => 'v1',
             'fallback_reason' => $capability['fallback_reason'] ?? 'legacy_feed',
             'capability_snapshot' => $capability,
-            'mode' => $run->mode === 'reconcile' ? 'full_legacy' : $run->mode,
+            'mode' => $isReconcile ? 'full_legacy' : $run->mode,
         ])->save();
 
-        $result = $run->mode === 'reconcile'
-            ? $this->fullSync($perPage)
+        $result = $isReconcile
+            ? $this->fullSync($perPage, 'reconcile')
             : $this->deltaSync($perPage);
+
+        $pruned = 0;
+        if ($isReconcile) {
+            $pruned = $this->pruneClientsNotSeenInReconcile($run);
+        }
 
         $run->forceFill([
             'processed' => (int) ($result['total'] ?? 0),
@@ -295,7 +302,7 @@ class ClientSyncService
             'last_heartbeat_at' => now(),
         ])->save();
 
-        if ($run->mode === 'reconcile') {
+        if ($isReconcile) {
             $this->platform->forceFill([
                 'client_sync_last_reconciled_at' => now(),
                 'client_sync_protocol' => 'v1',
@@ -312,6 +319,7 @@ class ClientSyncService
             'skipped' => (int) ($result['skipped'] ?? 0),
             'processed' => (int) ($result['total'] ?? 0),
             'tombstones_processed' => 0,
+            'pruned' => $pruned,
             'checkpoint_after_run' => null,
         ];
     }
@@ -340,6 +348,7 @@ class ClientSyncService
             'skipped' => 0,
             'processed' => 0,
             'tombstones_processed' => 0,
+            'pruned' => 0,
         ];
 
         do {
@@ -386,7 +395,7 @@ class ClientSyncService
 
         if ($mode === 'reconcile') {
             $summary['tombstones_processed'] = $this->processV2Tombstones($run, $perPage);
-            $this->advanceMissingClientCountsForReconcile($run->started_at ?: now());
+            $summary['pruned'] = $this->pruneClientsNotSeenInReconcile($run);
         }
 
         $checkpointAfterRun = Carbon::parse($runUpperBound, 'UTC')
@@ -709,6 +718,39 @@ class ClientSyncService
                 'source_missing_count' => DB::raw('LEAST(source_missing_count + 1, 2)'),
                 'updated_at' => now(),
             ]);
+    }
+
+    private function pruneClientsNotSeenInReconcile(ClientSyncRun $run): int
+    {
+        $runStartedAt = $run->started_at ?: now();
+        $reason = sprintf(
+            'Deleted by full client sync reconcile #%d because the WordPress source no longer returns this profile.',
+            (int) $run->id
+        );
+        $deleted = 0;
+
+        Client::query()
+            ->where('platform_id', (int) $this->platform->id)
+            ->whereNotNull('wp_post_id')
+            ->where('wp_post_id', '>', 0)
+            ->where(function ($query) use ($runStartedAt) {
+                $query->whereNull('last_seen_in_reconcile_at')
+                    ->orWhere('last_seen_in_reconcile_at', '<', $runStartedAt);
+            })
+            ->orderBy('id')
+            ->chunkById(100, function ($clients) use (&$deleted, $run, $reason): void {
+                /** @var Client $client */
+                foreach ($clients as $client) {
+                    app(ClientDeletionService::class)->deleteClientFromSourcePrune(
+                        $client,
+                        $run->initiated_by ? (int) $run->initiated_by : null,
+                        $reason
+                    );
+                    $deleted++;
+                }
+            });
+
+        return $deleted;
     }
 
     private function resolveCapabilityState(ClientSyncRun $run): array
