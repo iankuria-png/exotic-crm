@@ -23,6 +23,7 @@ use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
+use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PaymentExportController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
@@ -378,6 +379,17 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/payments/import/kpis', [PaymentQueueController::class, 'importKpis']);
         Route::get('/payments/import/candidates', [PaymentQueueController::class, 'importCandidates']);
         Route::post('/payments/import/row-match', [PaymentQueueController::class, 'updateImportRowMatch']);
+        Route::middleware('role:admin,sub_admin')->group(function () {
+            Route::post('/payments/reconcile/preview', [PaymentReconciliationController::class, 'preview']);
+            Route::get('/payments/reconcile/batches', [PaymentReconciliationController::class, 'batches']);
+            Route::get('/payments/reconcile/batches/{batch}', [PaymentReconciliationController::class, 'show']);
+            Route::post('/payments/reconcile/batches/{batch}/close', [PaymentReconciliationController::class, 'close']);
+            Route::post('/payments/reconcile/batches/{batch}/reopen', [PaymentReconciliationController::class, 'reopen']);
+            Route::post('/payments/reconcile/rows/{row}/review', [PaymentReconciliationController::class, 'review']);
+            Route::post('/payments/reconcile/rows/{row}/link', [PaymentReconciliationController::class, 'link']);
+            Route::get('/payments/reconcile/rows/{row}/candidates', [PaymentReconciliationController::class, 'candidates']);
+            Route::get('/payments/reconcile/template', [PaymentReconciliationController::class, 'template']);
+        });
         Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
         Route::post('/payments/{payment}/check-provider-status', [PaymentQueueController::class, 'checkProviderStatus']);
         Route::post('/payments/{payment}/sandbox-reconcile', [PaymentQueueController::class, 'sandboxReconcile']);

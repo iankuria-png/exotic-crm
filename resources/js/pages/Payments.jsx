@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
+import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
@@ -1192,6 +1193,7 @@ export default function Payments() {
     const { user, isLoading: authLoading } = useAuth();
     const canViewTests = user?.role === 'admin';
     const canManageBundleFinanceReview = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canAccessFraudAudit = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
@@ -1223,6 +1225,12 @@ export default function Payments() {
         const requested = (searchParams.get('test_visibility') || '').trim().toLowerCase();
         return allowedTestVisibilityFilters.has(requested) ? requested : 'hide';
     });
+
+    useEffect(() => {
+        if (workspaceTab === 'fraud' && !canAccessFraudAudit) {
+            setWorkspaceTab('payments');
+        }
+    }, [canAccessFraudAudit, workspaceTab]);
     const [confidenceFilter, setConfidenceFilter] = useState(() => {
         const requested = (searchParams.get('match_confidence') || '').trim();
         return allowedConfidenceFilters.has(requested) ? requested : '';
@@ -3039,6 +3047,7 @@ export default function Payments() {
                         {[
                             ['payments', 'Payment queue'],
                             ['recovery', 'Failed recovery'],
+                            ...(canAccessFraudAudit ? [['fraud', 'Fraud audit']] : []),
                         ].map(([key, label]) => (
                             <button
                                 key={key}
@@ -3083,6 +3092,11 @@ export default function Payments() {
                     }}
                     isRangeInvalid={isRangeInvalid}
                     onPresetChange={applyRecoveryPreset}
+                />
+            ) : workspaceTab === 'fraud' && canAccessFraudAudit ? (
+                <FraudAuditWorkspace
+                    platformOptions={platformOptions}
+                    onOpenPayment={(paymentId) => setDiagnosticsDrawer({ open: true, payment: { id: paymentId } })}
                 />
             ) : (
             <>

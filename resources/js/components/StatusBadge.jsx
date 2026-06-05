@@ -18,6 +18,16 @@ const statusStyles = {
     completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     initiated: 'bg-amber-50 text-amber-700 ring-amber-200',
     failed: 'bg-rose-50 text-rose-700 ring-rose-200',
+    matched: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    amount_mismatch: 'bg-amber-50 text-amber-700 ring-amber-200',
+    missing: 'bg-rose-50 text-rose-700 ring-rose-200',
+    unverifiable: 'bg-slate-100 text-slate-600 ring-slate-200',
+    duplicate_in_file: 'bg-amber-50 text-amber-700 ring-amber-200',
+    duplicate_in_crm: 'bg-rose-50 text-rose-700 ring-rose-200',
+    reviewing: 'bg-sky-50 text-sky-700 ring-sky-200',
+    confirmed_fraud: 'bg-rose-50 text-rose-700 ring-rose-200',
+    cleared: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    linked: 'bg-teal-50 text-teal-700 ring-teal-200',
     // Lead statuses
     new: 'bg-sky-50 text-sky-700 ring-sky-200',
     contacted: 'bg-teal-50 text-teal-700 ring-teal-200',
@@ -47,6 +57,10 @@ const statusLabels = {
     auto_high: 'Auto (High)',
     auto_low: 'Auto (Low)',
     manual_review: 'Manual Review',
+    amount_mismatch: 'Amount Mismatch',
+    duplicate_in_file: 'Duplicate in File',
+    duplicate_in_crm: 'Duplicate in CRM',
+    confirmed_fraud: 'Confirmed Fraud',
 };
 
 export default function StatusBadge({ status, label = null, tone = null, className = '' }) {
