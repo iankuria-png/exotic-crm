@@ -1203,7 +1203,7 @@ function IntegrationsWorkspace({
     const [freeTrialPinForm, setFreeTrialPinForm] = useState(defaultFreeTrialPinForm());
     const [discountConfigReason, setDiscountConfigReason] = useState('Updated market discount guardrails');
 
-    const { data, isLoading } = useQuery({
+    const { data, isLoading, error: integrationsError } = useQuery({
         queryKey: ['settings-integrations'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
     });
@@ -8646,7 +8646,13 @@ export default function Settings() {
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
-            {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
+            {activeTab === 'auto-optimize' ? (
+                <AutoOptimizePanel
+                    platforms={platformRows}
+                    platformsLoading={isLoading}
+                    platformsError={integrationsError}
+                />
+            ) : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}

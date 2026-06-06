@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import api from '../../services/api';
-import { useToast } from '../ToastProvider';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { flaggedPlatformLabel } from '../../utils/flags';
 import { useAutoOptimizeMutations, useAutoOptimizePlans } from '../../hooks/useAutoOptimize';
 import AutoOptimizeGenerationCard from './AutoOptimizeGenerationCard';
 
@@ -78,22 +77,53 @@ function NumericField({ label, help, min, max, value, onChange, placeholder }) {
     );
 }
 
-export default function AutoOptimizePanel() {
-    const toast = useToast();
-    const qc = useQueryClient();
+function normalizePlatform(platform) {
+    if (!platform || typeof platform !== 'object') {
+        return null;
+    }
 
-    // Load platforms
-    const platformsQuery = useQuery({
-        queryKey: ['platforms-list'],
-        queryFn: () => api.get('/crm/platforms').then((r) => r.data.data ?? r.data ?? []),
-    });
+    const id = Number(platform.platform_id ?? platform.id ?? 0);
+    if (!id) {
+        return null;
+    }
+
+    return {
+        id,
+        name: platform.platform_name || platform.name || `Market ${id}`,
+        country: platform.country || '',
+        label: flaggedPlatformLabel(platform),
+    };
+}
+
+function SelectStateCard({ tone = 'slate', title, body }) {
+    const toneClasses = {
+        slate: 'border-slate-200 bg-slate-50 text-slate-700',
+        amber: 'border-amber-200 bg-amber-50 text-amber-800',
+        rose: 'border-rose-200 bg-rose-50 text-rose-700',
+    };
+
+    return (
+        <div className={`rounded-xl border px-4 py-4 ${toneClasses[tone] || toneClasses.slate}`}>
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 text-sm opacity-90">{body}</p>
+        </div>
+    );
+}
+
+export default function AutoOptimizePanel({
+    platforms = [],
+    platformsLoading = false,
+    platformsError = null,
+}) {
 
     // Load auto-optimize plans
     const plansQuery = useAutoOptimizePlans();
-    const { savePlan, togglePlan, autopilotPlan } = useAutoOptimizeMutations();
-
-    const platforms = platformsQuery.data ?? [];
+    const { savePlan } = useAutoOptimizeMutations();
     const plans = plansQuery.data ?? [];
+    const marketOptions = useMemo(
+        () => platforms.map(normalizePlatform).filter(Boolean),
+        [platforms]
+    );
 
     const [selectedPlatformId, setSelectedPlatformId] = useState(null);
     const [form, setForm] = useState(null);
@@ -106,10 +136,22 @@ export default function AutoOptimizePanel() {
     });
     const globalGeneration = seoSettingsQuery.data?.config?.generation ?? {};
 
+    useEffect(() => {
+        if (marketOptions.length === 0) {
+            setSelectedPlatformId(null);
+            return;
+        }
+
+        const selectedStillAccessible = marketOptions.some((platform) => platform.id === selectedPlatformId);
+        if (!selectedStillAccessible) {
+            setSelectedPlatformId(marketOptions[0].id);
+        }
+    }, [marketOptions, selectedPlatformId]);
+
     // When platform is selected, load or scaffold plan form
     useEffect(() => {
         if (!selectedPlatformId) { setForm(null); return; }
-        const existing = plans.find((p) => p.platform_id === selectedPlatformId);
+        const existing = plans.find((p) => Number(p.platform_id) === selectedPlatformId);
         if (existing) {
             setForm({
                 id: existing.id,
@@ -124,6 +166,8 @@ export default function AutoOptimizePanel() {
             setForm({ ...DEFAULT_TEMPLATE, platform_id: selectedPlatformId });
         }
     }, [selectedPlatformId, plans]);
+
+    const selectedMarket = marketOptions.find((platform) => platform.id === selectedPlatformId) || null;
 
     const handleSave = () => {
         if (!form) return;
@@ -163,28 +207,105 @@ export default function AutoOptimizePanel() {
     return (
         <div className="space-y-6">
             {/* Market selector */}
-            <section className="crm-surface p-4">
-                <h2 className="mb-3 text-sm font-semibold text-slate-800">Auto Optimize Engine</h2>
-                <p className="mb-4 text-xs text-slate-500">
-                    Configure per-market optimization plans. Each market has its own eligibility criteria, bio generation settings, and scheduling.
-                </p>
-                <Field label="Select a market to configure">
-                    <select
-                        value={selectedPlatformId ?? ''}
-                        onChange={(e) => setSelectedPlatformId(e.target.value ? Number(e.target.value) : null)}
-                        className="crm-input w-full max-w-xs text-sm"
-                    >
-                        <option value="">— Choose market —</option>
-                        {platforms.map((p) => {
-                            const hasPlan = plans.some((pl) => pl.platform_id === p.id);
-                            return (
-                                <option key={p.id} value={p.id}>
-                                    {p.name} {p.country ? `(${p.country})` : ''}{hasPlan ? ' ✓' : ''}
-                                </option>
-                            );
-                        })}
-                    </select>
-                </Field>
+            <section className="crm-surface overflow-hidden p-0">
+                <div className="border-b border-slate-200 bg-gradient-to-r from-teal-50 via-white to-slate-50 px-5 py-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="max-w-2xl">
+                            <h2 className="text-lg font-semibold tracking-tight text-slate-900">Auto Optimize Engine</h2>
+                            <p className="mt-1 text-sm text-slate-600">
+                                Configure per-market optimization plans with clear eligibility, generation defaults, and scheduling guardrails.
+                            </p>
+                        </div>
+                        <div className="rounded-full border border-teal-200 bg-white/90 px-3 py-1 text-xs font-semibold text-teal-700 shadow-sm">
+                            {marketOptions.length} accessible {marketOptions.length === 1 ? 'market' : 'markets'}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-4 px-5 py-5">
+                    {platformsLoading ? (
+                        <SelectStateCard
+                            title="Loading markets"
+                            body="Fetching your accessible markets so you can configure Auto Optimize per market."
+                        />
+                    ) : null}
+
+                    {!platformsLoading && platformsError ? (
+                        <SelectStateCard
+                            tone="rose"
+                            title="Markets failed to load"
+                            body={platformsError?.response?.data?.message || platformsError?.message || 'The market list could not be loaded for Settings.'}
+                        />
+                    ) : null}
+
+                    {!platformsLoading && !platformsError && marketOptions.length === 0 ? (
+                        <SelectStateCard
+                            tone="amber"
+                            title="No accessible markets"
+                            body="This account does not currently have any visible markets to configure in Auto Optimize."
+                        />
+                    ) : null}
+
+                    {!platformsLoading && !platformsError && marketOptions.length > 0 ? (
+                        <>
+                            <Field
+                                label="Select a market to configure"
+                                help="Choose a market to edit its plan, or tap one of the quick-select chips below."
+                            >
+                                <select
+                                    value={selectedPlatformId ?? ''}
+                                    onChange={(e) => setSelectedPlatformId(e.target.value ? Number(e.target.value) : null)}
+                                    className="crm-input w-full max-w-xl text-sm"
+                                >
+                                    {marketOptions.map((platform) => {
+                                        const hasPlan = plans.some((plan) => Number(plan.platform_id) === platform.id);
+
+                                        return (
+                                            <option key={platform.id} value={platform.id}>
+                                                {platform.name}{platform.country ? ` (${platform.country})` : ''}{hasPlan ? ' • plan exists' : ' • new plan'}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                            </Field>
+
+                            <div className="flex flex-wrap gap-2">
+                                {marketOptions.map((platform) => {
+                                    const selected = platform.id === selectedPlatformId;
+                                    const hasPlan = plans.some((plan) => Number(plan.platform_id) === platform.id);
+
+                                    return (
+                                        <button
+                                            key={platform.id}
+                                            type="button"
+                                            onClick={() => setSelectedPlatformId(platform.id)}
+                                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                                selected
+                                                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            {platform.label}
+                                            <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] ${hasPlan ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                {hasPlan ? 'Configured' : 'New'}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {selectedMarket ? (
+                                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Selected market</p>
+                                    <p className="mt-1 text-sm font-semibold text-slate-900">{selectedMarket.name}</p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                        {selectedMarket.country || 'Country unavailable'} · {form?.id ? 'Editing existing plan' : 'Creating first plan'}
+                                    </p>
+                                </div>
+                            ) : null}
+                        </>
+                    ) : null}
+                </div>
             </section>
 
             {/* Plan editor */}
