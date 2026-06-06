@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import api from '../../services/api';
 import { flaggedPlatformLabel } from '../../utils/flags';
 import { useAutoOptimizeMutations, useAutoOptimizePlans } from '../../hooks/useAutoOptimize';
 import AutoOptimizeGenerationCard from './AutoOptimizeGenerationCard';
@@ -110,19 +111,22 @@ function SelectStateCard({ tone = 'slate', title, body }) {
     );
 }
 
-export default function AutoOptimizePanel({
-    platforms = [],
-    platformsLoading = false,
-    platformsError = null,
-}) {
+export default function AutoOptimizePanel() {
+    // Load platforms from the correct endpoint
+    const platformsQuery = useQuery({
+        queryKey: ['platforms-list'],
+        queryFn: () => api.get('/platforms').then((r) => r.data.platforms ?? []),
+        staleTime: 60_000,
+    });
 
     // Load auto-optimize plans
     const plansQuery = useAutoOptimizePlans();
     const { savePlan } = useAutoOptimizeMutations();
     const plans = plansQuery.data ?? [];
+    const platformsRaw = platformsQuery.data ?? [];
     const marketOptions = useMemo(
-        () => platforms.map(normalizePlatform).filter(Boolean),
-        [platforms]
+        () => platformsRaw.map(normalizePlatform).filter(Boolean),
+        [platformsRaw]
     );
 
     const [selectedPlatformId, setSelectedPlatformId] = useState(null);

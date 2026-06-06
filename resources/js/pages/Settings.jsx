@@ -8646,13 +8646,7 @@ export default function Settings() {
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
-            {activeTab === 'auto-optimize' ? (
-                <AutoOptimizePanel
-                    platforms={platformRows}
-                    platformsLoading={isLoading}
-                    platformsError={integrationsError}
-                />
-            ) : null}
+            {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
