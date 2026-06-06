@@ -124,6 +124,7 @@ final class CrmAuditAction
     public const PUSH_CAMPAIGN_CREATE = 'push_campaign_create';
     public const PUSH_CAMPAIGN_EXECUTE = 'push_campaign_execute';
     public const PUSH_CAMPAIGN_SCHEDULE = 'push_campaign_schedule';
+    public const PUSH_CAMPAIGN_CANCEL = 'push_campaign_cancel';
     public const PUSH_NOTIFICATION_SENT = 'push_notification_sent';
     public const PUSH_NOTIFICATION_FAILED = 'push_notification_failed';
     public const PAYMENT_IMPORT_MPESA_XML = 'payment_import_mpesa_xml';

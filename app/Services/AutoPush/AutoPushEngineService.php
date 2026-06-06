@@ -4,6 +4,7 @@ namespace App\Services\AutoPush;
 
 use App\Models\AutoPushPlan;
 use App\Models\AutoPushRun;
+use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Support\AutoPushSlotAllocator;
@@ -36,6 +37,10 @@ class AutoPushEngineService
 
         $windowEnd = Carbon::parse($nowMarketLocal->toDateString() . ' ' . (string) ($schedule['window_end'] ?? '23:00'), $timezone);
         if ($nowMarketLocal->greaterThan($windowEnd)) {
+            return false;
+        }
+
+        if ($this->openCampaignForPlan($plan) !== null) {
             return false;
         }
 
@@ -73,6 +78,21 @@ class AutoPushEngineService
             'platform_id' => (int) $plan->platform_id,
             'status' => 'running',
         ]);
+
+        $existingCampaign = $this->openCampaignForPlan($plan);
+        if ($existingCampaign instanceof PushCampaign) {
+            $run->forceFill([
+                'campaign_id' => (int) $existingCampaign->id,
+                'status' => 'skipped',
+                'error_message' => sprintf(
+                    'Open auto-push campaign "%s" is already %s for this market.',
+                    (string) $existingCampaign->name,
+                    (string) $existingCampaign->status
+                ),
+            ])->save();
+
+            return $run->fresh();
+        }
 
         try {
             $draftPackage = $this->draftPackageService->storedSourceOfTruth($plan);
@@ -174,5 +194,19 @@ class AutoPushEngineService
 
             return $run->fresh();
         }
+    }
+
+    public function openCampaignForPlan(AutoPushPlan $plan): ?PushCampaign
+    {
+        $blockingStatuses = ['processing', 'scheduled', 'running'];
+        if ((bool) data_get($plan->schedule, 'count_unapproved_drafts_as_coverage', true)) {
+            $blockingStatuses[] = 'draft';
+        }
+
+        return PushCampaign::query()
+            ->where('auto_push_plan_id', (int) $plan->id)
+            ->whereIn('status', $blockingStatuses)
+            ->latest('created_at')
+            ->first();
     }
 }

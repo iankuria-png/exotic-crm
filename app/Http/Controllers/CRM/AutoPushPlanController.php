@@ -188,6 +188,14 @@ class AutoPushPlanController extends Controller
         $run = $this->engineService->runPlan($plan->fresh('platform'));
         $run->load('campaign');
 
+        if ($run->status === 'skipped' && $run->campaign_id) {
+            return response()->json([
+                'message' => $run->error_message ?: 'This plan already has an open auto-push campaign.',
+                'run' => $run,
+                'campaign' => $run->campaign,
+            ], 409);
+        }
+
         return response()->json([
             'run' => $run,
             'campaign' => $run->campaign,

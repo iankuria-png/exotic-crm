@@ -137,7 +137,7 @@ class AutoPushDraftPackageService
             return null;
         }
 
-        return $this->normalizeStoredPackage($plan, $stored);
+        return $this->normalizeExecutionPackage($plan, $this->normalizeStoredPackage($plan, $stored));
     }
 
     /**
@@ -253,6 +253,111 @@ class AutoPushDraftPackageService
             : $this->engagementSnapshot($plan);
 
         return $package;
+    }
+
+    private function normalizeExecutionPackage(AutoPushPlan $plan, array $package): array
+    {
+        if (!$this->packageNeedsSlotRefresh($package)) {
+            return $package;
+        }
+
+        $refreshedItems = $this->refreshPackageSlots($plan, (array) ($package['items'] ?? []));
+        if ($refreshedItems === null) {
+            return $package;
+        }
+
+        $package['items'] = $refreshedItems;
+        $package['updated_at'] = now()->toIso8601String();
+
+        return $this->persistPackage($plan, $package);
+    }
+
+    private function packageNeedsSlotRefresh(array $package): bool
+    {
+        $refreshThreshold = now()->utc()->subMinutes(5);
+
+        foreach ((array) ($package['items'] ?? []) as $item) {
+            $scheduledAt = $this->normalizeDateString(data_get($item, 'scheduled_at_market') ?: data_get($item, 'scheduled_at'));
+            if (!$scheduledAt) {
+                return true;
+            }
+
+            try {
+                if (Carbon::parse($scheduledAt)->utc()->lessThanOrEqualTo($refreshThreshold)) {
+                    return true;
+                }
+            } catch (\Throwable) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<int,array<string,mixed>>  $items
+     * @return array<int,array<string,mixed>>|null
+     */
+    private function refreshPackageSlots(AutoPushPlan $plan, array $items): ?array
+    {
+        $requiredCount = count($items);
+        if ($requiredCount === 0) {
+            return [];
+        }
+
+        $slots = $this->futureSlotsForExecution($plan, $requiredCount);
+        if ($slots->isEmpty()) {
+            return null;
+        }
+
+        return collect($items)
+            ->sortBy(fn ($item) => sprintf(
+                '%05d:%s',
+                max(0, (int) data_get($item, 'slot_index', 0)),
+                (string) data_get($item, 'preview_id', '')
+            ))
+            ->values()
+            ->map(function ($item, int $index) use ($slots) {
+                $slot = $slots->get($index);
+                if (!$slot instanceof Carbon) {
+                    return $this->sanitizePreviewItem(is_array($item) ? $item : []);
+                }
+
+                return $this->sanitizePreviewItem(array_merge(
+                    is_array($item) ? $item : [],
+                    [
+                        'slot_index' => $index,
+                        'scheduled_at' => $slot->toIso8601String(),
+                        'scheduled_at_market' => $slot->toIso8601String(),
+                    ]
+                ));
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int,\Carbon\Carbon>
+     */
+    private function futureSlotsForExecution(AutoPushPlan $plan, int $requiredCount): Collection
+    {
+        $plan->loadMissing('platform');
+        $timezone = MarketTimezone::resolve($plan->platform?->timezone, config('app.timezone', 'UTC'));
+        $startOfDay = now($timezone)->copy()->startOfDay();
+        $lookaheadDays = max(1, (int) data_get($plan->schedule, 'lookahead_days', 1));
+        $maxLookaheadDays = max($lookaheadDays, min(14, $lookaheadDays + max(2, $requiredCount)));
+
+        for ($days = $lookaheadDays; $days <= $maxLookaheadDays; $days++) {
+            $slots = AutoPushSlotAllocator::slotGrid($plan, $startOfDay, $days)
+                ->filter(fn (Carbon $slot) => $slot->greaterThan(now()->utc()->subMinutes(5)))
+                ->values();
+
+            if ($slots->count() >= $requiredCount || $days === $maxLookaheadDays) {
+                return $slots;
+            }
+        }
+
+        return collect();
     }
 
     /**

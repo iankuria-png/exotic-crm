@@ -1152,6 +1152,107 @@ class CrmPushCampaignTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_marketing_user_can_cancel_scheduled_campaign_and_delete_it_afterwards(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Scheduled campaign',
+            'platform_id' => $platform->id,
+            'status' => 'scheduled',
+            'created_by' => $user->id,
+            'scheduled_at' => now()->addHour()->utc(),
+        ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=101',
+            'custom_message' => 'Pending send',
+            'scheduled_at' => now()->addHours(2)->utc(),
+            'status' => 'pending',
+        ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=102',
+            'custom_message' => 'Queued send',
+            'scheduled_at' => now()->addHours(3)->utc(),
+            'status' => 'scheduled',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/push-campaigns/{$campaign->id}/cancel")
+            ->assertOk()
+            ->assertJsonPath('campaign.status', 'cancelled')
+            ->assertJsonPath('summary.skipped_count', 2);
+
+        $this->assertDatabaseHas('push_campaign_items', [
+            'campaign_id' => $campaign->id,
+            'status' => 'skipped',
+            'error_message' => 'campaign_cancelled: Cancelled by CRM operator before send.',
+        ]);
+
+        $this->deleteJson("/api/crm/push-campaigns/{$campaign->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Campaign deleted.');
+    }
+
+    public function test_marketing_user_can_cancel_running_campaign_without_touching_sent_items(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Running campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'sent_count' => 1,
+        ]);
+        $sentItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=201',
+            'custom_message' => 'Already sent',
+            'status' => 'sent',
+            'sent_at' => now()->subMinute(),
+        ]);
+        $scheduledItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=202',
+            'custom_message' => 'Still queued',
+            'scheduled_at' => now()->addMinutes(30)->utc(),
+            'status' => 'scheduled',
+        ]);
+        $pendingItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=203',
+            'custom_message' => 'Still pending',
+            'scheduled_at' => now()->addHour()->utc(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/push-campaigns/{$campaign->id}/cancel")
+            ->assertOk()
+            ->assertJsonPath('campaign.status', 'cancelled')
+            ->assertJsonPath('summary.sent_count', 1)
+            ->assertJsonPath('summary.skipped_count', 2);
+
+        $this->assertDatabaseHas('push_campaign_items', [
+            'id' => $sentItem->id,
+            'status' => 'sent',
+        ]);
+        $this->assertDatabaseHas('push_campaign_items', [
+            'id' => $scheduledItem->id,
+            'status' => 'skipped',
+        ]);
+        $this->assertDatabaseHas('push_campaign_items', [
+            'id' => $pendingItem->id,
+            'status' => 'skipped',
+        ]);
+    }
+
     public function test_send_push_job_marks_item_failed_when_send_window_is_missed(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

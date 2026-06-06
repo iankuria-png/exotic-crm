@@ -55,7 +55,7 @@ class PushCampaignController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
-            'status' => 'nullable|in:processing,draft,scheduled,running,completed,partial,failed',
+            'status' => 'nullable|in:processing,draft,scheduled,running,completed,partial,failed,cancelled',
             'batch_id' => 'nullable|string|max:64',
             'search' => 'nullable|string|max:255',
             'per_page' => 'nullable|integer|min:10|max:100',
@@ -1409,6 +1409,12 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
+        if ($pushCampaign->status === 'cancelled') {
+            return response()->json([
+                'message' => 'Cancelled campaigns cannot be executed.',
+            ], 422);
+        }
+
         $pushCampaign->loadMissing('platform:id,timezone');
 
         if ($request->boolean('reschedule_overdue')) {
@@ -1446,6 +1452,12 @@ class PushCampaignController extends Controller
         $this->ensureCampaignAccess($request, $pushCampaign);
         $pushCampaign->loadMissing('platform:id,timezone');
 
+        if ($pushCampaign->status === 'cancelled') {
+            return response()->json([
+                'message' => 'Cancelled campaigns cannot be scheduled again.',
+            ], 422);
+        }
+
         $validated = $request->validate([
             'scheduled_at' => 'required|date',
             'timezone' => 'nullable|string|max:64',
@@ -1479,6 +1491,29 @@ class PushCampaignController extends Controller
         return response()->json([
             'campaign' => $campaign,
             'dispatch_plan' => $readiness,
+        ]);
+    }
+
+    public function cancel(Request $request, PushCampaign $pushCampaign)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+
+        if (!in_array((string) $pushCampaign->status, ['scheduled', 'running'], true)) {
+            return response()->json([
+                'message' => 'Only scheduled or running campaigns can be cancelled.',
+            ], 422);
+        }
+
+        $campaign = $this->pushCampaignService->cancelCampaign($pushCampaign, (int) $request->user()->id);
+
+        return response()->json([
+            'message' => 'Campaign cancelled. Remaining unsent items were skipped.',
+            'campaign' => $campaign,
+            'summary' => [
+                'sent_count' => (int) $campaign->sent_count,
+                'failed_count' => (int) $campaign->failed_count,
+                'skipped_count' => (int) $campaign->items()->where('status', 'skipped')->count(),
+            ],
         ]);
     }
 
@@ -1602,9 +1637,9 @@ class PushCampaignController extends Controller
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
 
-        if (!in_array((string) $pushCampaign->status, ['draft', 'failed'], true)) {
+        if (!in_array((string) $pushCampaign->status, ['draft', 'failed', 'cancelled'], true)) {
             return response()->json([
-                'message' => 'Only draft or failed campaigns can be deleted.',
+                'message' => 'Only draft, failed, or cancelled campaigns can be deleted.',
             ], 422);
         }
 

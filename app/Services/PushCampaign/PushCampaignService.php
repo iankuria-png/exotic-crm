@@ -248,6 +248,61 @@ class PushCampaignService
         return $campaign->fresh();
     }
 
+    public function cancelCampaign(PushCampaign $campaign, int $actorId): PushCampaign
+    {
+        $campaign->loadMissing('platform:id,timezone');
+        $cancellableStatuses = ['pending_extraction', 'needs_preset', 'pending', 'scheduled'];
+        $skippedItemIds = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->whereIn('status', $cancellableStatuses)
+            ->pluck('id');
+
+        $skippedCount = 0;
+        if ($skippedItemIds->isNotEmpty()) {
+            $skippedCount = PushCampaignItem::query()
+                ->whereIn('id', $skippedItemIds->all())
+                ->update([
+                    'status' => 'skipped',
+                    'error_message' => 'campaign_cancelled: Cancelled by CRM operator before send.',
+                    'updated_at' => now(),
+                ]);
+        }
+
+        $sentCount = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->where('status', 'sent')
+            ->count();
+
+        $failedCount = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->where('status', 'failed')
+            ->count();
+
+        $campaign->forceFill([
+            'status' => 'cancelled',
+            'completed_at' => now(),
+            'sent_count' => $sentCount,
+            'failed_count' => $failedCount,
+        ])->save();
+
+        $this->auditService->record([
+            'platform_id' => (int) $campaign->platform_id,
+            'actor_id' => $actorId,
+            'action' => CrmAuditAction::PUSH_CAMPAIGN_CANCEL,
+            'entity_type' => 'push_campaign',
+            'entity_id' => (int) $campaign->id,
+            'after_state' => [
+                'status' => 'cancelled',
+                'skipped_items' => $skippedCount,
+                'sent_items' => $sentCount,
+                'failed_items' => $failedCount,
+            ],
+            'reason' => 'Cancelled push campaign and skipped remaining unsent items.',
+        ]);
+
+        return $campaign->fresh();
+    }
+
     public function refreshAnalytics(PushCampaign $campaign): PushCampaign
     {
         $items = $campaign->items()

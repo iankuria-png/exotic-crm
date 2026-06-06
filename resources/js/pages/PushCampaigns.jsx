@@ -14,6 +14,24 @@ function prettyStatus(status) {
     return (status || 'unknown').replaceAll('_', ' ');
 }
 
+function campaignStatusTone(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (['completed'].includes(normalized)) {
+        return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    }
+    if (['running', 'scheduled'].includes(normalized)) {
+        return 'bg-blue-50 text-blue-700 ring-blue-200';
+    }
+    if (['partial', 'processing'].includes(normalized)) {
+        return 'bg-amber-50 text-amber-700 ring-amber-200';
+    }
+    if (['failed', 'cancelled'].includes(normalized)) {
+        return 'bg-rose-50 text-rose-700 ring-rose-200';
+    }
+
+    return 'bg-slate-100 text-slate-700 ring-slate-200';
+}
+
 function formatQueueDate(value) {
     if (!value) return '—';
     const parsed = new Date(value);
@@ -249,7 +267,7 @@ export default function PushCampaigns() {
             key: 'status',
             label: 'Status',
             render: (row) => (
-                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                <span className={`rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${campaignStatusTone(row.status)}`}>
                     {prettyStatus(row.status)}
                 </span>
             ),
@@ -459,6 +477,7 @@ export default function PushCampaigns() {
                         <option value="completed">Completed</option>
                         <option value="partial">Partial</option>
                         <option value="failed">Failed</option>
+                        <option value="cancelled">Cancelled</option>
                     </select>
                     <button type="button" onClick={() => setUploadOpen(true)} className="crm-btn-primary">
                         Upload workbook

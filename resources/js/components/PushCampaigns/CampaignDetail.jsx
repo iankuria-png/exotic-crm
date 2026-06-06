@@ -8,6 +8,24 @@ function prettyStatus(status) {
     return (status || 'unknown').replaceAll('_', ' ');
 }
 
+function statusTone(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (['completed', 'sent'].includes(normalized)) {
+        return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    }
+    if (['running', 'scheduled'].includes(normalized)) {
+        return 'bg-blue-50 text-blue-700 ring-blue-200';
+    }
+    if (['partial', 'processing'].includes(normalized)) {
+        return 'bg-amber-50 text-amber-700 ring-amber-200';
+    }
+    if (['failed', 'cancelled', 'skipped'].includes(normalized)) {
+        return 'bg-rose-50 text-rose-700 ring-rose-200';
+    }
+
+    return 'bg-slate-100 text-slate-700 ring-slate-200';
+}
+
 function formatDateTime(value, fallback = '--', timeZone = undefined) {
     if (!value) {
         return fallback;
@@ -438,6 +456,19 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
         },
     });
 
+    const cancelMutation = useMutation({
+        mutationFn: () => api.post(`/crm/push-campaigns/${campaignId}/cancel`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
+            onChanged?.();
+            toast.success(response?.message || 'Campaign cancelled.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to cancel campaign.');
+        },
+    });
+
     const [rescheduleShiftDays, setRescheduleShiftDays] = useState(1);
     const rescheduleMutation = useMutation({
         mutationFn: (payload) => api.post(`/crm/push-campaigns/${campaignId}/reschedule`, payload).then((r) => r.data),
@@ -533,8 +564,17 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
     const canDelete = useMemo(() => {
         const status = campaign?.status;
-        return status === 'draft' || status === 'failed';
+        return status === 'draft' || status === 'failed' || status === 'cancelled';
     }, [campaign]);
+
+    const canCancel = useMemo(() => {
+        const status = campaign?.status;
+        return status === 'scheduled' || status === 'running';
+    }, [campaign]);
+
+    const actionsLocked = useMemo(() => (
+        ['processing', 'cancelled'].includes(String(campaign?.status || ''))
+    ), [campaign]);
 
     const previewItem = useMemo(() => (
         items.find((item) => item.id === previewItemId) || items[0] || null
@@ -661,6 +701,21 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         </article>
                     </section>
 
+                    <section className="rounded-lg border border-slate-200 bg-slate-50/80 p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusTone(campaign?.status)}`}>
+                                {prettyStatus(campaign?.status)}
+                            </span>
+                            <p className="text-xs text-slate-600">
+                                {canCancel
+                                    ? 'Cancel stops the remaining unsent items and keeps any already-sent history visible.'
+                                    : (campaign?.status === 'cancelled'
+                                        ? 'This campaign is terminal now. You can review it safely or delete it if it no longer needs to stay on the board.'
+                                        : 'Delete remains limited to terminal campaigns so active sends cannot be removed out from under the dispatcher.')}
+                            </p>
+                        </div>
+                    </section>
+
                     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                             <p className="text-sm font-semibold text-slate-900">Analytics</p>
@@ -784,7 +839,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                             <button
                                 type="button"
                                 onClick={openExecuteConfirmation}
-                                disabled={executeReadinessMutation.isPending || executeMutation.isPending || campaign?.status === 'processing'}
+                                disabled={actionsLocked || executeReadinessMutation.isPending || executeMutation.isPending}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {executeReadinessMutation.isPending
@@ -802,31 +857,49 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                 <button
                                     type="button"
                                     onClick={() => scheduleMutation.mutate()}
-                                    disabled={scheduleMutation.isPending || !scheduleAt}
+                                    disabled={actionsLocked || scheduleMutation.isPending || !scheduleAt}
                                     className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     {scheduleMutation.isPending ? 'Scheduling...' : 'Schedule'}
                                 </button>
                             </div>
 
-                            <button
-                                type="button"
-                                onClick={() => deleteMutation.mutate()}
-                                disabled={deleteMutation.isPending || !canDelete}
-                                className="crm-btn-danger disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                {deleteMutation.isPending ? 'Deleting...' : 'Delete campaign'}
-                            </button>
+                            {canCancel ? (
+                                <button
+                                    type="button"
+                                    onClick={() => cancelMutation.mutate()}
+                                    disabled={cancelMutation.isPending}
+                                    className="crm-btn-danger disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {cancelMutation.isPending ? 'Cancelling...' : 'Cancel campaign'}
+                                </button>
+                            ) : null}
+
+                            {canDelete ? (
+                                <button
+                                    type="button"
+                                    onClick={() => deleteMutation.mutate()}
+                                    disabled={deleteMutation.isPending}
+                                    className="crm-btn-danger disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {deleteMutation.isPending ? 'Deleting...' : 'Delete campaign'}
+                                </button>
+                            ) : null}
                         </div>
                         <p className="mt-2 text-[11px] text-slate-500">
                             Campaign schedule sets activation time only. Each item still sends at its own date/time.
                         </p>
+                        {canCancel ? (
+                            <p className="mt-1 text-[11px] text-slate-500">
+                                Cancel skips every unsent item so delayed jobs and future dispatch windows cannot keep this campaign alive.
+                            </p>
+                        ) : null}
                         <p className="mt-1 text-[11px] text-slate-500">
                             Market local time: <span className="font-semibold text-slate-700">{marketTimezone}</span>
                         </p>
 
                         {/* Reschedule: only show for campaigns with failed/skipped items */}
-                        {['partial', 'failed', 'completed', 'running'].includes(campaign?.status) &&
+                        {['partial', 'failed', 'completed', 'running', 'cancelled'].includes(campaign?.status) &&
                             ((campaign?.failed_count || 0) > 0 || (itemSummary?.skipped || 0) > 0) && (
                             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
                                 <p className="text-xs font-semibold text-amber-800">Reschedule failed/missed items</p>

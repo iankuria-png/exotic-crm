@@ -421,6 +421,101 @@ class AutoPushWorkflowTest extends TestCase
         );
     }
 
+    public function test_run_now_rebases_stale_saved_draft_slots_before_campaign_creation(): void
+    {
+        Carbon::setTestNow('2026-06-06 08:05:00');
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'name' => 'Aisha',
+        ]);
+        \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'subscription_lifecycle' => 'new',
+            'activated_at' => now()->subHour(),
+            'status' => 'active',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $store = $this->postJson('/api/crm/auto-push/plans', array_merge($this->planRequestPayload($platform->id), [
+            'schedule' => array_merge($this->defaultSchedule(), [
+                'max_items_per_day' => 1,
+            ]),
+        ]));
+        $store->assertCreated();
+        $planId = (int) $store->json('plan.id');
+
+        $draft = $this->getJson("/api/crm/auto-push/plans/{$planId}/draft-package")->assertOk();
+        $item = $draft->json('items.0');
+        $staleAt = Carbon::parse('2026-06-06 00:00:00', 'Africa/Nairobi')->toIso8601String();
+
+        $this->putJson("/api/crm/auto-push/plans/{$planId}/draft-package", [
+            'items' => [[
+                ...$item,
+                'message' => 'Preserve my edited copy',
+                'scheduled_at' => $staleAt,
+                'scheduled_at_market' => $staleAt,
+            ]],
+        ])->assertOk();
+
+        $run = $this->postJson("/api/crm/auto-push/plans/{$planId}/run-now")->assertOk();
+        $campaignId = (int) $run->json('campaign.id');
+        $campaignItem = PushCampaignItem::query()->where('campaign_id', $campaignId)->firstOrFail();
+
+        $this->assertSame('Preserve my edited copy', $campaignItem->custom_message);
+        $this->assertTrue($campaignItem->scheduled_at->utc()->greaterThan(now()->utc()));
+    }
+
+    public function test_run_now_returns_conflict_when_plan_already_has_open_campaign(): void
+    {
+        Carbon::setTestNow('2026-06-06 08:05:00');
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+        ]);
+        \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'subscription_lifecycle' => 'new',
+            'activated_at' => now()->subHour(),
+            'status' => 'active',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $store = $this->postJson('/api/crm/auto-push/plans', $this->planRequestPayload($platform->id));
+        $store->assertCreated();
+        $planId = (int) $store->json('plan.id');
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Kenya - 2026-06-06',
+            'platform_id' => $platform->id,
+            'status' => 'scheduled',
+            'auto_push_plan_id' => $planId,
+            'scheduled_at' => now()->addHour()->utc(),
+        ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/?p=1',
+            'custom_message' => 'Already open',
+            'scheduled_at' => now()->addHours(2)->utc(),
+            'status' => 'pending',
+        ]);
+
+        $this->postJson("/api/crm/auto-push/plans/{$planId}/run-now")
+            ->assertStatus(409)
+            ->assertJsonPath('campaign.id', $campaign->id)
+            ->assertJsonPath('run.status', 'skipped');
+    }
+
     public function test_run_auto_push_command_skips_not_due_plans_and_runs_due_plans(): void
     {
         Carbon::setTestNow('2026-06-05 08:00:00');

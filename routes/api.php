@@ -250,6 +250,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
         Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);
+        Route::post('/{pushCampaign}/cancel', [PushCampaignController::class, 'cancel']);
         Route::get('/{pushCampaign}/analytics', [PushCampaignController::class, 'analytics']);
         Route::post('/{pushCampaign}/reschedule', [PushCampaignController::class, 'reschedule']);
         Route::delete('/{pushCampaign}', [PushCampaignController::class, 'destroy']);
