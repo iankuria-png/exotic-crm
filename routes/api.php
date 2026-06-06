@@ -275,6 +275,28 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/alerts/{alert}/resolve', [AutoPushPlanController::class, 'resolveAlert']);
     });
 
+    // Auto Optimize Engine — three permission tiers enforced inside the controller
+    Route::middleware('role:marketing,admin,sub_admin,sales')->prefix('auto-optimize')->group(function () {
+        Route::get('/plans', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'index']);
+        Route::post('/plans', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'store']);
+        Route::patch('/plans/{plan}', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'update']);
+        Route::delete('/plans/{plan}', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'destroy']);
+        Route::post('/plans/{plan}/clone', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'clone']);
+        Route::post('/plans/{plan}/toggle', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'toggle']);
+        Route::post('/plans/{plan}/autopilot', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'autopilot']);
+        Route::post('/plans/{plan}/run-now', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'runNow']);
+        Route::get('/items', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'items']);
+        Route::get('/items/{item}', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'showItem']);
+        Route::post('/items/{item}/approve', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'approve']);
+        Route::post('/items/approve-all', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'approveAll']);
+        Route::post('/items/{item}/revert', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'revert']);
+        Route::post('/items/{item}/skip', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'skip']);
+        Route::get('/runs', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'runs']);
+        Route::get('/metrics', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'metrics']);
+        Route::get('/alerts', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'alerts']);
+        Route::post('/alerts/{alert}/resolve', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'resolveAlert']);
+    });
+
     // Clients (marketing role has read-only access)
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
