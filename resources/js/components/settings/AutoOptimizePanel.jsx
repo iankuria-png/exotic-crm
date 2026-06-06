@@ -119,6 +119,10 @@ export default function AutoOptimizePanel() {
     const { savePlan } = useAutoOptimizeMutations();
     const plans = plansQuery.data ?? [];
     const platformsRaw = platformsQuery.data ?? [];
+    // Render-state derived from the query (the panel was refactored from props
+    // to this hook; these were the missing bindings that crashed the panel).
+    const platformsLoading = platformsQuery.isLoading;
+    const platformsError = platformsQuery.isError ? platformsQuery.error : null;
     const marketOptions = useMemo(
         () => platformsRaw.map(normalizePlatform).filter(Boolean),
         [platformsRaw]
