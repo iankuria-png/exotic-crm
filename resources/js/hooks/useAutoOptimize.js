@@ -15,11 +15,26 @@ export const autoOptimizeKeys = {
 
 // ─── Queries ───────────────────────────────────────────────────────────────
 
+// queryFn returns the full response { data: [...plans], platforms: [...] }
+// so that useAutoOptimizePlatforms can share the same cache entry via select.
+const plansFetcher = () => api.get('/crm/auto-optimize/plans').then((r) => r.data);
+
 export function useAutoOptimizePlans() {
     return useQuery({
         queryKey: autoOptimizeKeys.plans(),
-        queryFn: () => api.get('/crm/auto-optimize/plans').then((r) => r.data.data ?? []),
+        queryFn: plansFetcher,
         staleTime: 60_000,
+        select: (d) => d.data ?? [],
+    });
+}
+
+// Same cache key + queryFn as useAutoOptimizePlans → one HTTP request, two consumers.
+export function useAutoOptimizePlatforms() {
+    return useQuery({
+        queryKey: autoOptimizeKeys.plans(),
+        queryFn: plansFetcher,
+        staleTime: 60_000,
+        select: (d) => d.platforms ?? [],
     });
 }
 

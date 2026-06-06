@@ -8,6 +8,7 @@ use App\Models\AutoOptimizeAlert;
 use App\Models\AutoOptimizeItem;
 use App\Models\AutoOptimizePlan;
 use App\Models\AutoOptimizeRun;
+use App\Models\Platform;
 use App\Services\AutoOptimize\AutoOptimizeApplyService;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\AutoOptimize\AutoOptimizeEngineService;
@@ -36,9 +37,18 @@ class AutoOptimizeController extends Controller
         $query = AutoOptimizePlan::query()->with(['platform:id,name,country,timezone', 'runs' => fn ($q) => $q->latest()->limit(1)]);
         $this->marketAuth->applyPlatformScope($query, $request->user());
 
+        // Return accessible platforms alongside plans so the frontend market
+        // selector dropdown uses the same authenticated request — mirrors the
+        // pattern used by SeoSettingsController::index() successfully.
+        $platformsQuery = Platform::query()->orderBy('name');
+        $this->marketAuth->applyPlatformScope($platformsQuery, $request->user(), 'id');
+
         return response()->json([
             'data' => $query->orderBy('name')->get()
                 ->map(fn ($plan) => $this->planPayload($plan))->values(),
+            'platforms' => $platformsQuery->get(['id', 'name', 'country'])
+                ->map(fn ($p) => ['id' => (int) $p->id, 'name' => $p->name, 'country' => $p->country])
+                ->all(),
         ]);
     }
 

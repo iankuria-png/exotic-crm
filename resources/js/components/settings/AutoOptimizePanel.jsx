@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { flaggedPlatformLabel } from '../../utils/flags';
-import { useAutoOptimizeMutations, useAutoOptimizePlans } from '../../hooks/useAutoOptimize';
+import { useAutoOptimizeMutations, useAutoOptimizePlatforms, useAutoOptimizePlans } from '../../hooks/useAutoOptimize';
 import AutoOptimizeGenerationCard from './AutoOptimizeGenerationCard';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -112,14 +112,9 @@ function SelectStateCard({ tone = 'slate', title, body }) {
 }
 
 export default function AutoOptimizePanel() {
-    // Load platforms from the correct endpoint
-    const platformsQuery = useQuery({
-        queryKey: ['platforms-list'],
-        queryFn: () => api.get('/platforms').then((r) => r.data.platforms ?? []),
-        staleTime: 60_000,
-    });
-
-    // Load auto-optimize plans
+    // Platforms arrive from the same /crm/auto-optimize/plans response that
+    // useAutoOptimizePlans uses — one authenticated request, no separate fetch.
+    const platformsQuery = useAutoOptimizePlatforms();
     const plansQuery = useAutoOptimizePlans();
     const { savePlan } = useAutoOptimizeMutations();
     const plans = plansQuery.data ?? [];
