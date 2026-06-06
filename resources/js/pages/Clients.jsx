@@ -12,6 +12,7 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import CloseCaseDialog from '../components/CloseCaseDialog';
 import ConversionQueueView from '../components/clients/ConversionQueueView';
 import ClosedCasesView from '../components/clients/ClosedCasesView';
+import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
@@ -378,7 +379,7 @@ export default function Clients() {
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
-    const allowedTabs = new Set(['all', 'conversion', 'closed']);
+    const allowedTabs = new Set(['all', 'conversion', 'closed', 'optimizer']);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
     const setTab = (next) => {
@@ -1548,6 +1549,9 @@ export default function Clients() {
                 Closed cases
                 {conversionCount ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {conversionCount.toLocaleString()}</span> : null}
             </button>
+            <button type="button" role="tab" aria-selected={tab === 'optimizer'} className={`${tabClass('optimizer')} rounded-md`} onClick={() => setTab('optimizer')}>
+                ✦ Optimizer
+            </button>
         </div>
     );
 
@@ -1573,6 +1577,19 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <ClosedCasesView platformId={platformFilter} />
+            </div>
+        );
+    }
+
+    if (tab === 'optimizer') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Auto Optimize monitors and improves underperforming profiles automatically."
+                />
+                {tabStrip}
+                <AutoOptimizeView platformId={platformFilter ? Number(platformFilter) : undefined} />
             </div>
         );
     }

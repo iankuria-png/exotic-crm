@@ -21,6 +21,7 @@ import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
 import FieldSalesSettingsPanel from '../components/settings/FieldSalesSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
+import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
@@ -37,6 +38,7 @@ const baseTabs = [
     { id: 'kyc', label: 'KYC' },
     { id: 'billing', label: 'Billing' },
     { id: 'seo-engine', label: 'SEO Engine' },
+    { id: 'auto-optimize', label: 'Auto Optimize' },
     { id: 'ai', label: 'AI Briefings' },
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
@@ -8569,6 +8571,10 @@ export default function Settings() {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
+            if (tab.id === 'auto-optimize') {
+                return ['admin', 'sub_admin', 'marketing'].includes(user?.role || '');
+            }
+
             if (tab.id === 'ai') {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
@@ -8640,6 +8646,7 @@ export default function Settings() {
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
+            {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
