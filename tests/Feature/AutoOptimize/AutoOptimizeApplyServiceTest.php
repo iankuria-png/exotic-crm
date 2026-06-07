@@ -345,8 +345,11 @@ class AutoOptimizeApplyServiceTest extends TestCase
 
     private function makeApplyService(WpSyncService $wpMock): AutoOptimizeApplyService
     {
+        $factory = $this->createMock(\App\Services\WpSyncFactory::class);
+        $factory->method('forPlatform')->willReturn($wpMock);
+
         return new AutoOptimizeApplyService(
-            $wpMock,
+            $factory,
             app(SeoScorer::class),
             app(ClientProfileImageService::class),
             app(\App\Services\AutoOptimize\AutoOptimizeAlertService::class),

@@ -2,7 +2,7 @@
 
 namespace App\Services\AutoOptimize;
 
-use App\Services\WpSyncService;
+use App\Services\WpSyncFactory;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -15,7 +15,7 @@ class AutoOptimizeMarketStats
 {
     private const CACHE_TTL = 300; // 5 minutes
 
-    public function __construct(private readonly WpSyncService $wpSync) {}
+    public function __construct(private readonly WpSyncFactory $wpSyncFactory) {}
 
     /**
      * Returns:
@@ -43,8 +43,11 @@ class AutoOptimizeMarketStats
         $page = 1;
         $perPage = 200;
 
+        // Resolve a platform-scoped client (NOT the container-injected one).
+        $wpSync = $this->wpSyncFactory->forPlatform($platformId);
+
         while (true) {
-            $response = $this->wpSync->getAnalyticsBulk([
+            $response = $wpSync->getAnalyticsBulk([
                 'from' => $from,
                 'to' => $to,
                 'page' => $page,

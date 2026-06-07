@@ -8,7 +8,7 @@ use App\Models\User;
 use App\Services\ClientProfileImageService;
 use App\Services\Seo\ProfileSnapshot;
 use App\Services\Seo\SeoScorer;
-use App\Services\WpSyncService;
+use App\Services\WpSyncFactory;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -18,7 +18,7 @@ class AutoOptimizeApplyService
     private const MAX_RESERVED_WRITES = 6; // bio + image + score + up to 3 compensation writes
 
     public function __construct(
-        private readonly WpSyncService $wpSync,
+        private readonly WpSyncFactory $wpSyncFactory,
         private readonly SeoScorer $scorer,
         private readonly ClientProfileImageService $imageService,
         private readonly AutoOptimizeAlertService $alertService,
@@ -89,6 +89,8 @@ class AutoOptimizeApplyService
 
         $item->forceFill(['status' => 'applying'])->save();
 
+        // Platform-scoped WP client (NOT the container-injected one).
+        $wpSync = $this->wpSyncFactory->forPlatform((int) $item->platform_id);
         $wpPostId = (int) $client->wp_post_id;
         $actionsApplied = [];
         $consumedWrites = 0;
@@ -97,7 +99,7 @@ class AutoOptimizeApplyService
             // Action-scoped conflict pre-check
             if ($willApplyBio) {
                 try {
-                    $currentProfile = $this->wpSync->getClientProfile($wpPostId);
+                    $currentProfile = $wpSync->getClientProfile($wpPostId);
                     $currentBio = $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
                     $currentHash = md5($currentBio);
 
@@ -127,7 +129,7 @@ class AutoOptimizeApplyService
 
             // Apply bio
             if ($willApplyBio) {
-                $this->wpSync->updateClientProfile($wpPostId, ['content' => $item->new_bio_html]);
+                $wpSync->updateClientProfile($wpPostId, ['content' => $item->new_bio_html]);
                 $consumedWrites++;
                 $this->ledger->consume($reservationId);
                 $actionsApplied['bio'] = true;
@@ -135,7 +137,7 @@ class AutoOptimizeApplyService
 
             // Apply image
             if ($willApplyImage) {
-                $this->wpSync->setClientMainImage($wpPostId, (int) $item->new_main_attachment_id);
+                $wpSync->setClientMainImage($wpPostId, (int) $item->new_main_attachment_id);
                 $consumedWrites++;
                 $this->ledger->consume($reservationId);
                 $actionsApplied['image'] = true;
@@ -143,7 +145,7 @@ class AutoOptimizeApplyService
 
             // Recompute score on the resulting profile state
             [$score, $breakdown] = $this->recomputeScore($item, $actionsApplied, $plan);
-            $this->wpSync->writeSeoScore($wpPostId, $score, $breakdown);
+            $wpSync->writeSeoScore($wpPostId, $score, $breakdown);
             $consumedWrites++;
             $this->ledger->consume($reservationId);
             $actionsApplied['score'] = true;
@@ -209,7 +211,7 @@ class AutoOptimizeApplyService
             ]);
 
             // Compensating rollback of completed steps
-            $this->compensate($item, $actionsApplied, $wpPostId, $client, $actorId);
+            $this->compensate($wpSync, $item, $actionsApplied, $wpPostId, $client, $actorId);
 
             $item->forceFill(['status' => 'failed', 'error_message' => $e->getMessage()])->save();
 
@@ -241,6 +243,9 @@ class AutoOptimizeApplyService
         $reliability = $cfg['reliability'];
         $wpPostId = (int) $client->wp_post_id;
 
+        // Platform-scoped WP client (NOT the container-injected one).
+        $wpSync = $this->wpSyncFactory->forPlatform((int) $item->platform_id);
+
         $maxPerHour = (int) ($reliability['max_writes_per_hour'] ?? 60);
         $reservationId = null;
 
@@ -264,7 +269,7 @@ class AutoOptimizeApplyService
             // Revert bio if it was applied
             if ($actionsApplied['bio'] ?? false) {
                 if (!$force) {
-                    $currentProfile = $this->wpSync->getClientProfile($wpPostId);
+                    $currentProfile = $wpSync->getClientProfile($wpPostId);
                     $currentBio = $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
                     if (md5($currentBio) !== $item->applied_bio_hash) {
                         $this->alertService->raise(
@@ -280,7 +285,7 @@ class AutoOptimizeApplyService
                     }
                 }
 
-                $this->wpSync->updateClientProfile($wpPostId, ['content' => (string) $item->previous_bio_html]);
+                $wpSync->updateClientProfile($wpPostId, ['content' => (string) $item->previous_bio_html]);
                 $this->ledger->consume($reservationId);
                 $reverted['bio'] = true;
             }
@@ -292,7 +297,7 @@ class AutoOptimizeApplyService
                 }
 
                 if ($item->previous_main_attachment_id) {
-                    $this->wpSync->setClientMainImage($wpPostId, (int) $item->previous_main_attachment_id);
+                    $wpSync->setClientMainImage($wpPostId, (int) $item->previous_main_attachment_id);
                     $this->ledger->consume($reservationId);
                     $reverted['image'] = true;
                 }
@@ -304,7 +309,7 @@ class AutoOptimizeApplyService
                     (int) ($item->previous_score ?? 0),
                     is_array($item->previous_score_breakdown) ? $item->previous_score_breakdown : [],
                 ];
-                $this->wpSync->writeSeoScore($wpPostId, $score, $breakdown);
+                $wpSync->writeSeoScore($wpPostId, $score, $breakdown);
                 $this->ledger->consume($reservationId);
 
                 $client->forceFill([
@@ -398,21 +403,21 @@ class AutoOptimizeApplyService
         return [$result['total'], $result['breakdown']];
     }
 
-    private function compensate(AutoOptimizeItem $item, array $actionsApplied, int $wpPostId, $client, int $actorId): void
+    private function compensate(\App\Services\WpSyncService $wpSync, AutoOptimizeItem $item, array $actionsApplied, int $wpPostId, $client, int $actorId): void
     {
         try {
             if ($actionsApplied['bio'] ?? false) {
-                $this->wpSync->updateClientProfile($wpPostId, ['content' => (string) $item->previous_bio_html]);
+                $wpSync->updateClientProfile($wpPostId, ['content' => (string) $item->previous_bio_html]);
             }
             if ($actionsApplied['image'] ?? false) {
                 if ($item->previous_main_attachment_id) {
-                    $this->wpSync->setClientMainImage($wpPostId, (int) $item->previous_main_attachment_id);
+                    $wpSync->setClientMainImage($wpPostId, (int) $item->previous_main_attachment_id);
                 }
             }
             if ($actionsApplied['score'] ?? false) {
                 $prevScore = (int) ($item->previous_score ?? 0);
                 $prevBreakdown = is_array($item->previous_score_breakdown) ? $item->previous_score_breakdown : [];
-                $this->wpSync->writeSeoScore($wpPostId, $prevScore, $prevBreakdown);
+                $wpSync->writeSeoScore($wpPostId, $prevScore, $prevBreakdown);
             }
         } catch (\Throwable $e) {
             Log::error('auto_optimize.compensation_failed', ['item_id' => $item->id, 'error' => $e->getMessage()]);

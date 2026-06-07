@@ -8,7 +8,7 @@ use App\Services\Seo\BioGenerationService;
 use App\Services\Seo\LanguageDetector;
 use App\Services\Seo\ProfileSnapshot;
 use App\Services\Seo\ProfileSnapshotBuilder;
-use App\Services\WpSyncService;
+use App\Services\WpSyncFactory;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -16,7 +16,7 @@ use RuntimeException;
 class AutoOptimizeBuilder
 {
     public function __construct(
-        private readonly WpSyncService $wpSync,
+        private readonly WpSyncFactory $wpSyncFactory,
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
         private readonly BioGenerationService $bioGenerator,
         private readonly AutoOptimizeImagePicker $imagePicker,
@@ -40,6 +40,9 @@ class AutoOptimizeBuilder
 
         $item->forceFill(['status' => 'building'])->save();
 
+        // Platform-scoped WP client (NOT the container-injected one).
+        $wpSync = $this->wpSyncFactory->forPlatform((int) $item->platform_id);
+
         try {
             $wpPostId = (int) ($client->wp_post_id ?? 0);
             if ($wpPostId === 0) {
@@ -49,7 +52,7 @@ class AutoOptimizeBuilder
 
             // Fetch canonical WP profile (NOT ProfileSnapshotBuilder — it swallows failures)
             try {
-                $wpProfile = $this->wpSync->getClientProfile($wpPostId);
+                $wpProfile = $wpSync->getClientProfile($wpPostId);
             } catch (\Throwable $e) {
                 $this->fail($item, $plan, 'WP profile fetch failed: ' . $e->getMessage());
                 return;
@@ -146,7 +149,7 @@ class AutoOptimizeBuilder
             // ── Image optimization ──
             if ((bool) ($actions['switch_main_image'] ?? false)) {
                 try {
-                    $mediaPayload = $this->wpSync->getClientMedia($wpPostId);
+                    $mediaPayload = $wpSync->getClientMedia($wpPostId);
                     $imageQualityCfg = is_array($actions['image_quality'] ?? null) ? $actions['image_quality'] : [];
                     $pickedImage = $this->imagePicker->pickBetterMain($mediaPayload, $sourceMainId, $imageQualityCfg);
 

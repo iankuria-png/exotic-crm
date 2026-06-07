@@ -4,6 +4,7 @@ namespace Tests\Unit\AutoOptimize;
 
 use App\Services\AutoOptimize\AutoOptimizeMarketStats;
 use App\Services\WpSyncService;
+use App\Services\WpSyncFactory;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
@@ -24,7 +25,7 @@ class AutoOptimizeMarketStatsTest extends TestCase
                 'market_averages' => ['views' => 150.0, 'contact_rate' => 15.0, 'engagement' => 10.0],
             ]);
 
-        $service = new AutoOptimizeMarketStats($mockWp);
+        $service = new AutoOptimizeMarketStats($this->factoryFor($mockWp));
         Cache::flush();
 
         $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
@@ -50,7 +51,7 @@ class AutoOptimizeMarketStatsTest extends TestCase
                 ['profiles' => $page2, 'market_averages' => ['views' => 10.0, 'contact_rate' => 5.0, 'engagement' => 2.0]],
             );
 
-        $service = new AutoOptimizeMarketStats($mockWp);
+        $service = new AutoOptimizeMarketStats($this->factoryFor($mockWp));
         Cache::flush();
 
         $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
@@ -63,7 +64,7 @@ class AutoOptimizeMarketStatsTest extends TestCase
         $mockWp = $this->createMock(WpSyncService::class);
         $mockWp->method('getAnalyticsBulk')->willReturn(['profiles' => []]);
 
-        $service = new AutoOptimizeMarketStats($mockWp);
+        $service = new AutoOptimizeMarketStats($this->factoryFor($mockWp));
         Cache::flush();
 
         $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
@@ -85,7 +86,7 @@ class AutoOptimizeMarketStatsTest extends TestCase
                 'market_averages' => ['views' => 50.0, 'contact_rate' => 5.0, 'engagement' => 2.0],
             ]);
 
-        $service = new AutoOptimizeMarketStats($mockWp);
+        $service = new AutoOptimizeMarketStats($this->factoryFor($mockWp));
         Cache::flush();
 
         $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
@@ -107,7 +108,7 @@ class AutoOptimizeMarketStatsTest extends TestCase
                 'market_averages' => ['views' => 999.0, 'contact_rate' => 33.3, 'engagement' => 77.0],
             ]);
 
-        $service = new AutoOptimizeMarketStats($mockWp);
+        $service = new AutoOptimizeMarketStats($this->factoryFor($mockWp));
         Cache::flush();
 
         $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
@@ -115,5 +116,35 @@ class AutoOptimizeMarketStatsTest extends TestCase
         $this->assertSame(999.0, $result['averages']['views']);
         $this->assertSame(33.3, $result['averages']['contact_rate']);
         $this->assertSame(77.0, $result['averages']['engagement']);
+    }
+
+    /**
+     * Regression: the analytics call MUST be scoped to the requested platform
+     * via WpSyncFactory::forPlatform($platformId) — not a container-injected
+     * WpSyncService bound to an empty Platform (which silently misrouted every
+     * WP call to an empty URL and made selection return 0 in production).
+     */
+    public function test_resolves_wpsync_for_the_requested_platform(): void
+    {
+        $mockWp = $this->createMock(WpSyncService::class);
+        $mockWp->method('getAnalyticsBulk')->willReturn(['profiles' => [
+            ['wp_post_id' => 1, 'views' => 10, 'contact_rate' => 1, 'engagement' => 1],
+        ]]);
+
+        $factory = $this->createMock(WpSyncFactory::class);
+        $factory->expects($this->once())
+            ->method('forPlatform')
+            ->with(7) // the platform id passed to forPlatform()
+            ->willReturn($mockWp);
+
+        Cache::flush();
+        (new AutoOptimizeMarketStats($factory))->forPlatform(7, ['from' => '2026-05-01', 'to' => '2026-06-01']);
+    }
+
+    private function factoryFor(WpSyncService $mock): WpSyncFactory
+    {
+        $factory = $this->createMock(WpSyncFactory::class);
+        $factory->method('forPlatform')->willReturn($mock);
+        return $factory;
     }
 }
