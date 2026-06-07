@@ -18,8 +18,11 @@ class AutoOptimizeMarketStatsTest extends TestCase
 
         $mockWp = $this->createMock(WpSyncService::class);
         $mockWp->expects($this->once())
-            ->method('getAnalyticsRankings')
-            ->willReturn(['data' => $profiles]);
+            ->method('getAnalyticsBulk')
+            ->willReturn([
+                'profiles' => $profiles,
+                'market_averages' => ['views' => 150.0, 'contact_rate' => 15.0, 'engagement' => 10.0],
+            ]);
 
         $service = new AutoOptimizeMarketStats($mockWp);
         Cache::flush();
@@ -36,15 +39,15 @@ class AutoOptimizeMarketStatsTest extends TestCase
 
     public function test_paginates_until_last_page(): void
     {
-        $page1 = array_map(fn ($i) => ['wp_post_id' => $i, 'views' => 10, 'contact_rate' => 5, 'engagement' => 2], range(1, 100));
-        $page2 = array_map(fn ($i) => ['wp_post_id' => $i, 'views' => 10, 'contact_rate' => 5, 'engagement' => 2], range(101, 150));
+        $page1 = array_map(fn ($i) => ['wp_post_id' => $i, 'views' => 10, 'contact_rate' => 5, 'engagement' => 2], range(1, 200));
+        $page2 = array_map(fn ($i) => ['wp_post_id' => $i, 'views' => 10, 'contact_rate' => 5, 'engagement' => 2], range(201, 250));
 
         $mockWp = $this->createMock(WpSyncService::class);
         $mockWp->expects($this->exactly(2))
-            ->method('getAnalyticsRankings')
+            ->method('getAnalyticsBulk')
             ->willReturnOnConsecutiveCalls(
-                ['data' => $page1],
-                ['data' => $page2],
+                ['profiles' => $page1, 'market_averages' => ['views' => 10.0, 'contact_rate' => 5.0, 'engagement' => 2.0]],
+                ['profiles' => $page2, 'market_averages' => ['views' => 10.0, 'contact_rate' => 5.0, 'engagement' => 2.0]],
             );
 
         $service = new AutoOptimizeMarketStats($mockWp);
@@ -52,13 +55,13 @@ class AutoOptimizeMarketStatsTest extends TestCase
 
         $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
 
-        $this->assertSame(150, $result['sampleSize']);
+        $this->assertSame(250, $result['sampleSize']);
     }
 
     public function test_returns_zero_averages_for_empty_response(): void
     {
         $mockWp = $this->createMock(WpSyncService::class);
-        $mockWp->method('getAnalyticsRankings')->willReturn(['data' => []]);
+        $mockWp->method('getAnalyticsBulk')->willReturn(['profiles' => []]);
 
         $service = new AutoOptimizeMarketStats($mockWp);
         Cache::flush();
@@ -76,13 +79,41 @@ class AutoOptimizeMarketStatsTest extends TestCase
         $mockWp = $this->createMock(WpSyncService::class);
         // Should only be called once even if we call forPlatform twice
         $mockWp->expects($this->once())
-            ->method('getAnalyticsRankings')
-            ->willReturn(['data' => $profiles]);
+            ->method('getAnalyticsBulk')
+            ->willReturn([
+                'profiles' => $profiles,
+                'market_averages' => ['views' => 50.0, 'contact_rate' => 5.0, 'engagement' => 2.0],
+            ]);
 
         $service = new AutoOptimizeMarketStats($mockWp);
         Cache::flush();
 
         $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
         $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
+    }
+
+    public function test_prefers_server_market_averages_over_local_recompute(): void
+    {
+        $profiles = [
+            ['wp_post_id' => 101, 'views' => 100, 'contact_rate' => 10.0, 'engagement' => 5.0],
+            ['wp_post_id' => 102, 'views' => 200, 'contact_rate' => 20.0, 'engagement' => 15.0],
+        ];
+
+        $mockWp = $this->createMock(WpSyncService::class);
+        $mockWp->expects($this->once())
+            ->method('getAnalyticsBulk')
+            ->willReturn([
+                'profiles' => $profiles,
+                'market_averages' => ['views' => 999.0, 'contact_rate' => 33.3, 'engagement' => 77.0],
+            ]);
+
+        $service = new AutoOptimizeMarketStats($mockWp);
+        Cache::flush();
+
+        $result = $service->forPlatform(1, ['from' => '2026-05-01', 'to' => '2026-06-01']);
+
+        $this->assertSame(999.0, $result['averages']['views']);
+        $this->assertSame(33.3, $result['averages']['contact_rate']);
+        $this->assertSame(77.0, $result['averages']['engagement']);
     }
 }

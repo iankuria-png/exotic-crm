@@ -8,9 +8,9 @@ namespace App\Services\Seo;
  */
 class SeoScorer
 {
-    public function score(string $bioHtml, ProfileSnapshot $profile): array
+    public function score(string $bioHtml, ProfileSnapshot $profile, ?array $weights = null): array
     {
-        $weights = config('services.seo_engine.scorer_weights', [
+        $weights = $weights ?? config('services.seo_engine.scorer_weights', [
             'word_count'   => 25,
             'links'        => 25,
             'completeness' => 25,

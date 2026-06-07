@@ -147,7 +147,20 @@ class BioGenerationService
         }
 
         // Generate bio text
-        [$rawText, $providerUsed, $usage] = $this->generateText($snapshot, $forceProvider, $generationOptions, $overlay ?? []);
+        $providersOrder = is_array($generationOptions['providers_order'] ?? null)
+            ? $generationOptions['providers_order']
+            : null;
+        $scorerWeights = is_array($generationOptions['scorer_weights'] ?? null)
+            ? $generationOptions['scorer_weights']
+            : null;
+
+        [$rawText, $providerUsed, $usage, $fallbackUsed] = $this->generateText(
+            $snapshot,
+            $forceProvider,
+            $generationOptions,
+            $overlay ?? [],
+            $providersOrder,
+        );
         $rawText = $this->sanitizeOutput($rawText);
         $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
 
@@ -171,7 +184,7 @@ class BioGenerationService
         }
 
         // Score
-        $scoreResult = $this->scorer->score($bioHtml, $snapshot);
+        $scoreResult = $this->scorer->score($bioHtml, $snapshot, $scorerWeights);
         $usage = $this->withCostEstimate($providerUsed, $usage);
 
         Log::info('seo.bio_generated', [
@@ -188,6 +201,8 @@ class BioGenerationService
             'score'         => $scoreResult['total'],
             'breakdown'     => $scoreResult['breakdown'],
             'provider_used' => $providerUsed,
+            'language_used' => (string) ($generationOptions['language'] ?? 'en'),
+            'fallback_used' => $fallbackUsed,
             'usage'         => $usage,
             'generation_options' => $generationOptions,
         ];
@@ -195,9 +210,15 @@ class BioGenerationService
 
     // -------------------------------------------------------------------------
 
-    private function generateText(ProfileSnapshot $snapshot, ?string $forceProvider, array $options, array $overlay): array
+    private function generateText(
+        ProfileSnapshot $snapshot,
+        ?string $forceProvider,
+        array $options,
+        array $overlay,
+        ?array $providersOrder = null,
+    ): array
     {
-        $waterfall = ProviderWaterfall::fromConfig($forceProvider);
+        $waterfall = ProviderWaterfall::fromConfig($forceProvider, $providersOrder);
 
         try {
             $response = $waterfall->generate(
@@ -210,7 +231,7 @@ class BioGenerationService
                 'input_tokens' => $response->inputTokens,
                 'output_tokens' => $response->outputTokens,
                 'total_tokens' => $response->inputTokens + $response->outputTokens,
-            ]];
+            ], false];
         } catch (AllProvidersFailedException $e) {
             Log::notice('seo.all_providers_failed', [
                 'platform_id' => $snapshot->platformId,
@@ -222,7 +243,7 @@ class BioGenerationService
             'input_tokens' => 0,
             'output_tokens' => 0,
             'total_tokens' => 0,
-        ]];
+        ], true];
     }
 
     private function buildSystemPrompt(ProfileSnapshot $snapshot, array $options): string
@@ -375,6 +396,15 @@ PROMPT;
             ? $options['contact_channel']
             : self::DEFAULT_GENERATION['contact_channel'];
         $options['custom_prompt'] = trim((string) $options['custom_prompt']);
+        $options['providers_order'] = is_array($options['providers_order'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn ($provider): string => strtolower(trim((string) $provider)),
+                $options['providers_order']
+            ), static fn (string $provider): bool => $provider !== ''))
+            : null;
+        $options['scorer_weights'] = is_array($options['scorer_weights'] ?? null)
+            ? $options['scorer_weights']
+            : null;
 
         $lang = strtolower(trim((string) ($options['language'] ?? 'en')));
         $options['language'] = array_key_exists($lang, self::SUPPORTED_LANGUAGES)

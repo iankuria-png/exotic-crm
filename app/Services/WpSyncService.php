@@ -163,6 +163,19 @@ class WpSyncService
     }
 
     /**
+     * Fetch lean, cached bulk analytics for one WordPress platform.
+     */
+    public function getAnalyticsBulk(array $params = []): array
+    {
+        $params = array_filter(
+            $params,
+            fn ($value) => $value !== null && $value !== ''
+        );
+
+        return $this->get('/analytics/bulk', $params);
+    }
+
+    /**
      * Update editable profile fields on WordPress.
      */
     public function updateClientProfile(int $postId, array $fields): array

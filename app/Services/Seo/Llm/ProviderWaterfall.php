@@ -69,7 +69,7 @@ class ProviderWaterfall
      *
      * @param  string|null  $forceProvider  If set, only attempt this provider.
      */
-    public static function fromConfig(?string $forceProvider = null): self
+    public static function fromConfig(?string $forceProvider = null, ?array $providersOrder = null): self
     {
         $adapterMap = [
             'claude'   => \App\Services\Seo\Llm\Adapters\ClaudeAdapter::class,
@@ -78,7 +78,9 @@ class ProviderWaterfall
             'deepseek' => \App\Services\Seo\Llm\Adapters\DeepSeekAdapter::class,
         ];
 
-        $configuredOrder = config('services.seo_engine.providers', ['claude', 'openai', 'gemini', 'deepseek']);
+        $configuredOrder = is_array($providersOrder)
+            ? $providersOrder
+            : config('services.seo_engine.providers', ['claude', 'openai', 'gemini', 'deepseek']);
 
         if ($forceProvider !== null && isset($adapterMap[$forceProvider])) {
             $configuredOrder = [$forceProvider];

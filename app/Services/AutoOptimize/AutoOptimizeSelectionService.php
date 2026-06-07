@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Selects underperforming clients eligible for optimization.
- * Makes exactly ONE analytics call per market (getAnalyticsRankings via AutoOptimizeMarketStats).
+ * Makes exactly ONE analytics call per market (getAnalyticsBulk via AutoOptimizeMarketStats).
  * Zero per-client WP calls.
  */
 class AutoOptimizeSelectionService
@@ -37,10 +37,8 @@ class AutoOptimizeSelectionService
 
         $stats = $this->marketStats->forPlatform((int) $plan->platform_id, $window);
 
-        // Enforce small-market cap until P2 (lean bulk analytics) ships
         $maxMarketSize = (int) config('auto_optimize.max_unoptimized_market_size', 500);
         if ($stats['sampleSize'] > $maxMarketSize) {
-            // Still run but limit scope (P2 prerequisite note)
             $stats['perProfile'] = array_slice($stats['perProfile'], 0, $maxMarketSize, true);
         }
 

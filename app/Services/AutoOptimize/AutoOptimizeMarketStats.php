@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Cache;
  * Fetches per-platform analytics baselines once per market/window,
  * returning averages and a per-profile map keyed by wp_post_id.
  *
- * Selection never makes per-client WP calls; only this class touches getAnalyticsRankings.
+ * Selection never makes per-client WP calls; only this class touches getAnalyticsBulk.
  */
 class AutoOptimizeMarketStats
 {
@@ -39,16 +39,18 @@ class AutoOptimizeMarketStats
     private function fetchAndAggregate(int $platformId, string $from, string $to): array
     {
         $perProfile = [];
+        $lastResponse = null;
         $page = 1;
-        $perPage = 100;
+        $perPage = 200;
 
         while (true) {
-            $response = $this->wpSync->getAnalyticsRankings([
+            $response = $this->wpSync->getAnalyticsBulk([
                 'from' => $from,
                 'to' => $to,
                 'page' => $page,
                 'per_page' => $perPage,
             ]);
+            $lastResponse = $response;
 
             $rows = $response['data'] ?? $response['profiles'] ?? (is_array($response) && !isset($response['data']) ? $response : []);
 
@@ -95,16 +97,25 @@ class AutoOptimizeMarketStats
             ];
         }
 
-        $count = count($perProfile);
-        $averages = [
-            'views' => array_sum(array_column($perProfile, 'views')) / $count,
-            'contact_rate' => array_sum(array_column($perProfile, 'contact_rate')) / $count,
-            'engagement' => array_sum(array_column($perProfile, 'engagement')) / $count,
-        ];
+        $serverAverages = $lastResponse['market_averages'] ?? null;
+        if (is_array($serverAverages)) {
+            $averages = [
+                'views' => (float) ($serverAverages['views'] ?? 0),
+                'contact_rate' => (float) ($serverAverages['contact_rate'] ?? 0),
+                'engagement' => (float) ($serverAverages['engagement'] ?? 0),
+            ];
+        } else {
+            $count = count($perProfile);
+            $averages = [
+                'views' => array_sum(array_column($perProfile, 'views')) / $count,
+                'contact_rate' => array_sum(array_column($perProfile, 'contact_rate')) / $count,
+                'engagement' => array_sum(array_column($perProfile, 'engagement')) / $count,
+            ];
+        }
 
         return [
             'averages' => $averages,
-            'sampleSize' => $count,
+            'sampleSize' => count($perProfile),
             'perProfile' => $perProfile,
         ];
     }
