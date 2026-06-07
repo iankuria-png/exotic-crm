@@ -105,6 +105,10 @@ class AutoOptimizeEngineService
                         'client_id' => $client->id,
                         'status' => 'queued',
                         'reason' => 'Selected by engine run #' . $run->id,
+                        // Capture the current score at selection so the "Before" ring
+                        // shows immediately (the builder confirms it from canonical WP later).
+                        'previous_score' => $client->seo_score !== null ? (int) $client->seo_score : null,
+                        'previous_score_breakdown' => is_array($client->seo_score_breakdown) ? $client->seo_score_breakdown : null,
                     ]);
                     $itemIds[] = $item->id;
                 }

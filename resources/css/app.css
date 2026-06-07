@@ -155,3 +155,9 @@
         @apply inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50;
     }
 }
+
+/* Auto Optimize — processing shimmer sweep */
+@keyframes shimmer {
+    0% { transform: translateX(-120%); }
+    100% { transform: translateX(420%); }
+}

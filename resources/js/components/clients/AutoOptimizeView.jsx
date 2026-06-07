@@ -188,11 +188,73 @@ const STATUS_TONE = {
     reverted: 'neutral', failed: 'danger',
 };
 
+const PROCESSING_STATUSES = ['queued', 'building', 'applying'];
+
+// Relative "x ago" / "in x" from an ISO timestamp.
+function relativeTime(iso) {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const secs = Math.round((Date.now() - then) / 1000);
+    const abs = Math.abs(secs);
+    if (abs < 60) return `${secs < 0 ? 'in ' : ''}${abs}s${secs >= 0 ? ' ago' : ''}`;
+    if (abs < 3600) return `${Math.round(abs / 60)}m ago`;
+    if (abs < 86400) return `${Math.round(abs / 3600)}h ago`;
+    return `${Math.round(abs / 86400)}d ago`;
+}
+
+// Per-item pipeline tracker — shows exactly which step a processing profile is on.
+function StepTracker({ status }) {
+    const STEPS = [
+        { key: 'queued', label: 'Queued' },
+        { key: 'building', label: 'Generating bio' },
+        { key: 'applying', label: 'Applying' },
+        { key: 'applied', label: 'Done' },
+    ];
+    const order = { queued: 0, building: 1, applying: 2, applied: 3 };
+    const current = order[status] ?? 0;
+    return (
+        <div className="mt-3 flex items-center gap-1.5" aria-label={`Pipeline step: ${status}`}>
+            {STEPS.map((step, i) => {
+                const done = i < current;
+                const active = i === current;
+                return (
+                    <React.Fragment key={step.key}>
+                        <div className="flex items-center gap-1.5">
+                            <span className={`inline-block h-2 w-2 rounded-full ${done ? 'bg-teal-500' : active ? 'bg-teal-500 animate-pulse ring-2 ring-teal-200' : 'bg-slate-200'}`} />
+                            <span className={`text-[10px] font-medium ${active ? 'text-teal-700' : done ? 'text-slate-500' : 'text-slate-300'}`}>{step.label}</span>
+                        </div>
+                        {i < STEPS.length - 1 && <span className={`h-px w-4 ${done ? 'bg-teal-300' : 'bg-slate-200'}`} />}
+                    </React.Fragment>
+                );
+            })}
+        </div>
+    );
+}
+
+// Shimmer bar for the in-progress bio generation.
+function ProcessingShimmer() {
+    return (
+        <div className="mt-3 space-y-2" aria-hidden="true">
+            <div className="h-3 w-full overflow-hidden rounded bg-slate-100">
+                <div className="h-full w-1/3 animate-[shimmer_1.4s_infinite] rounded bg-gradient-to-r from-transparent via-teal-300 to-transparent" />
+            </div>
+            <div className="h-3 w-3/4 overflow-hidden rounded bg-slate-100">
+                <div className="h-full w-1/3 animate-[shimmer_1.6s_infinite] rounded bg-gradient-to-r from-transparent via-teal-200 to-transparent" />
+            </div>
+        </div>
+    );
+}
+
 function ItemCard({ item, canApply, onApprove, onRevert, onSkip }) {
     const [confirmRevert, setConfirmRevert] = useState(false);
     const client = item.client;
     const name = client?.name ?? `Client #${item.client_id}`;
     const actionsApplied = item.actions_applied ?? {};
+    const isProcessing = PROCESSING_STATUSES.includes(item.status);
+    // "Before" = the score staged at selection, falling back to the client's current score.
+    const beforeScore = item.previous_score ?? client?.seo_score ?? null;
+    const hasAfter = item.new_score != null && !isProcessing;
 
     return (
         <article
@@ -220,6 +282,10 @@ function ItemCard({ item, canApply, onApprove, onRevert, onSkip }) {
                                 {item.language_used}
                             </span>
                         )}
+                        {/* Per-item timestamp — when it was queued / last changed */}
+                        <span className="text-[10px] text-slate-400" title={item.updated_at}>
+                            {isProcessing ? `queued ${relativeTime(item.created_at)}` : relativeTime(item.applied_at || item.updated_at)}
+                        </span>
                     </div>
                     {client?.city && <p className="mt-0.5 text-[11px] text-slate-400">{client.city}</p>}
                     {item.reason && <p className="mt-0.5 text-[11px] italic text-slate-400">{item.reason}</p>}
@@ -228,19 +294,38 @@ function ItemCard({ item, canApply, onApprove, onRevert, onSkip }) {
                 {/* Score before → after */}
                 <div className="flex items-center gap-2 shrink-0" aria-label="Score change">
                     <div className="flex flex-col items-center">
-                        <ScoreRing score={item.previous_score} size={40} />
-                        <span className="mt-0.5 text-[9px] text-slate-400">Before</span>
+                        <ScoreRing score={beforeScore ?? 0} size={40} />
+                        <span className="mt-0.5 text-[9px] text-slate-400">Current</span>
                     </div>
-                    <div className="flex flex-col items-center gap-1">
-                        <ScoreDelta prev={item.previous_score} next={item.new_score} />
-                        <span className="text-slate-300">→</span>
-                    </div>
-                    <div className="flex flex-col items-center">
-                        <ScoreRing score={item.new_score} size={40} />
-                        <span className="mt-0.5 text-[9px] text-slate-400">After</span>
-                    </div>
+                    {hasAfter ? (
+                        <>
+                            <div className="flex flex-col items-center gap-1">
+                                <ScoreDelta prev={beforeScore} next={item.new_score} />
+                                <span className="text-slate-300">→</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                                <ScoreRing score={item.new_score} size={40} />
+                                <span className="mt-0.5 text-[9px] text-slate-400">After</span>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="flex flex-col items-center">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-dashed border-slate-200 text-[10px] text-slate-300">
+                                {isProcessing ? '…' : '—'}
+                            </div>
+                            <span className="mt-0.5 text-[9px] text-slate-400">{isProcessing ? 'Working' : 'Proposed'}</span>
+                        </div>
+                    )}
                 </div>
             </div>
+
+            {/* In-progress pipeline: step tracker + shimmer (replaces the static look) */}
+            {isProcessing && (
+                <>
+                    <StepTracker status={item.status} />
+                    {item.status === 'building' && <ProcessingShimmer />}
+                </>
+            )}
 
             {/* Actions applied chips */}
             {Object.keys(actionsApplied).filter((k) => actionsApplied[k] && k !== 'score').length > 0 && (
