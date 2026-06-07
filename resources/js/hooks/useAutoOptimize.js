@@ -45,7 +45,13 @@ export function useAutoOptimizeItems({ platformId, status, planId } = {}) {
             api.get('/crm/auto-optimize/items', {
                 params: { platform_id: platformId, status, plan_id: planId, per_page: 50 },
             }).then((r) => r.data),
-        staleTime: 30_000,
+        staleTime: 15_000,
+        // Poll only while work is in flight so queued→applied transitions are visible live.
+        refetchInterval: (query) => {
+            const rows = query?.state?.data?.data ?? [];
+            const active = rows.some((i) => ['queued', 'building', 'applying'].includes(i.status));
+            return active ? 8_000 : false;
+        },
     });
 }
 

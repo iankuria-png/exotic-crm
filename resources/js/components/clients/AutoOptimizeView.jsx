@@ -1,9 +1,74 @@
 import React, { useState } from 'react';
-import { useAutoOptimizeItems, useAutoOptimizeMetrics, useAutoOptimizeMutations, useAutoOptimizePlans } from '../../hooks/useAutoOptimize';
+import { useAutoOptimizeItems, useAutoOptimizeMetrics, useAutoOptimizeMutations, useAutoOptimizePlans, useAutoOptimizeAlerts } from '../../hooks/useAutoOptimize';
 import MetricCard from '../MetricCard';
 import StatusBadge from '../StatusBadge';
 import ConfirmDialog from '../ConfirmDialog';
 import { useAuth } from '../../hooks/useAuth';
+
+// ─── Run-result banner: makes "Run now" observable ─────────────────────────
+
+function RunResultBanner({ run, onDismiss }) {
+    if (!run) return null;
+    const scanned = run.candidates_scanned ?? 0;
+    const selected = run.candidates_selected ?? 0;
+    const status = run.status;
+    const failed = status === 'failed';
+    const nothing = (status === 'skipped') || selected === 0;
+
+    const tone = failed
+        ? 'border-rose-200 bg-rose-50 text-rose-800'
+        : nothing
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : 'border-emerald-200 bg-emerald-50 text-emerald-800';
+
+    let headline;
+    if (failed) headline = 'Run failed';
+    else if (nothing) headline = 'Run finished — no profiles queued';
+    else headline = `Run dispatched — ${selected} profile${selected === 1 ? '' : 's'} queued`;
+
+    return (
+        <div className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-3 ${tone}`} role="status">
+            <div className="min-w-0">
+                <p className="text-sm font-semibold">{headline}</p>
+                <p className="mt-0.5 text-xs opacity-90">
+                    Scanned <strong>{scanned.toLocaleString()}</strong> · selected <strong>{selected.toLocaleString()}</strong> · status <strong>{status}</strong>
+                    {run.jobs_total ? <> · {run.jobs_total} job{run.jobs_total === 1 ? '' : 's'} queued</> : null}
+                </p>
+                {failed && run.error_message && (
+                    <p className="mt-1 break-words text-xs font-mono opacity-80">{run.error_message}</p>
+                )}
+                {nothing && !failed && (
+                    <p className="mt-1 text-xs opacity-80">
+                        Likely causes: no profiles below market average, the analytics window has no data, or the WordPress <code>/analytics/bulk</code> endpoint isn’t reachable. Check Alerts below.
+                    </p>
+                )}
+            </div>
+            <button type="button" onClick={onDismiss} className="shrink-0 text-xs font-medium underline opacity-70 hover:opacity-100">Dismiss</button>
+        </div>
+    );
+}
+
+// ─── Alerts strip: surfaces the "why" (no_candidates, run_failed, …) ───────
+
+function AlertsStrip({ alerts, onResolve }) {
+    if (!alerts || alerts.length === 0) return null;
+    const TONE = { critical: 'border-rose-200 bg-rose-50 text-rose-700', warning: 'border-amber-200 bg-amber-50 text-amber-800', info: 'border-slate-200 bg-slate-50 text-slate-600' };
+    return (
+        <div className="space-y-2" aria-label="Engine alerts">
+            {alerts.slice(0, 5).map((a) => (
+                <div key={a.id} className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-2.5 ${TONE[a.severity] || TONE.info}`}>
+                    <div className="min-w-0">
+                        <p className="text-xs font-semibold">{a.title}</p>
+                        {a.body && <p className="mt-0.5 break-words text-[11px] opacity-90">{a.body}</p>}
+                    </div>
+                    {onResolve && (
+                        <button type="button" onClick={() => onResolve(a.id)} className="shrink-0 text-[11px] font-medium underline opacity-70 hover:opacity-100">Resolve</button>
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+}
 
 // ─── Score ring ───────────────────────────────────────────────────────────
 
@@ -281,25 +346,44 @@ export default function AutoOptimizeView({ platformId }) {
     const canConfigure = ['admin', 'sub_admin', 'marketing'].includes(user?.role);
 
     const [statusFilter, setStatusFilter] = useState('');
-    const [selectedPlanId, setSelectedPlanId] = useState(null);
+    const [lastRun, setLastRun] = useState(null);
 
     const plansQuery = useAutoOptimizePlans();
     const itemsQuery = useAutoOptimizeItems({ platformId, status: statusFilter || undefined });
     const metricsQuery = useAutoOptimizeMetrics(platformId);
-    const { approve, approveAll, revert, skip, runNow } = useAutoOptimizeMutations();
+    const alertsQuery = useAutoOptimizeAlerts();
+    const { approve, approveAll, revert, skip, runNow, resolveAlert } = useAutoOptimizeMutations();
 
     const plans = plansQuery.data ?? [];
     const items = itemsQuery.data?.data ?? [];
     const metrics = metricsQuery.data ?? {};
+    const alerts = alertsQuery.data ?? [];
 
     const pendingCount = metrics.pending ?? 0;
     const pctImproved = metrics.pct_improved != null ? `${metrics.pct_improved}%` : '—';
 
+    // In-flight work (queued/building/applying) — what's "being processed"
+    const processingCount = items.filter((i) => ['queued', 'building', 'applying'].includes(i.status)).length;
+
     // Active plan for current platform
     const activePlan = plans.find((p) => (!platformId || p.platform_id === Number(platformId)) && p.enabled);
 
+    // Run now — capture the result so the operator can SEE what happened.
+    const handleRunNow = () => {
+        if (!activePlan) return;
+        runNow.mutate(activePlan.id, {
+            onSuccess: (data) => {
+                setLastRun(data?.run ?? null);
+                metricsQuery.refetch();
+                itemsQuery.refetch();
+                alertsQuery.refetch();
+            },
+        });
+    };
+
     const STATUS_FILTERS = [
         { label: 'All', value: '' },
+        { label: 'Processing', value: 'queued' },
         { label: 'Pending', value: 'pending' },
         { label: 'Applied', value: 'applied' },
         { label: 'Skipped', value: 'skipped' },
@@ -380,7 +464,7 @@ export default function AutoOptimizeView({ platformId }) {
                 {canConfigure && activePlan && (
                     <button
                         type="button"
-                        onClick={() => runNow.mutate(activePlan.id)}
+                        onClick={handleRunNow}
                         disabled={runNow.isPending}
                         className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-teal-300 hover:bg-teal-50 disabled:opacity-50"
                     >
@@ -388,6 +472,20 @@ export default function AutoOptimizeView({ platformId }) {
                     </button>
                 )}
             </div>
+
+            {/* Run result — surfaced so "Run now" is not a black box */}
+            <RunResultBanner run={lastRun} onDismiss={() => setLastRun(null)} />
+
+            {/* Processing indicator: what's in the queue being worked on right now */}
+            {processingCount > 0 && (
+                <div className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm text-teal-800">
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-teal-500" aria-hidden="true" />
+                    Processing <strong>{processingCount}</strong> profile{processingCount === 1 ? '' : 's'} — the worker generates bios and applies changes in the background.
+                </div>
+            )}
+
+            {/* Engine alerts — the "why" behind skipped/empty runs */}
+            <AlertsStrip alerts={alerts} onResolve={canConfigure ? (id) => resolveAlert.mutate(id) : null} />
 
             {/* Autopilot notice */}
             {activePlan && !activePlan.autopilot && pendingCount > 0 && (
@@ -408,10 +506,14 @@ export default function AutoOptimizeView({ platformId }) {
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                     <div className="mb-3 text-4xl" aria-hidden="true">✨</div>
                     <p className="text-base font-semibold text-slate-700">
-                        {statusFilter ? `No ${statusFilter} items` : 'No profiles need attention right now'}
+                        {statusFilter ? `No ${statusFilter} items` : 'Nothing in the queue yet'}
                     </p>
-                    <p className="mt-1 text-sm text-slate-400">
-                        {statusFilter ? 'Try a different filter.' : 'The engine will queue profiles on its next run.'}
+                    <p className="mt-1 max-w-md text-sm text-slate-400">
+                        {statusFilter
+                            ? 'Try a different filter.'
+                            : alerts.length > 0
+                                ? 'The last run produced no items — see the alert(s) above for the reason.'
+                                : 'Press “Run now” to scan this market, or wait for the daily run. The result will appear here and in the banner above.'}
                     </p>
                 </div>
             ) : (
