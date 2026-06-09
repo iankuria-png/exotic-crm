@@ -69,24 +69,16 @@ class AutoPushWorkflowTest extends TestCase
 
         // Active, published escorts with active deals — but activated long ago, so
         // the new_subscriptions bucket (48h lookback) matches nothing.
-        $product = \App\Models\Product::factory()->create(['platform_id' => $platform->id]);
-        $clients = Client::factory()->count(5)->create([
+        // Production scenario: published, live escort profiles synced from WordPress
+        // with NO deal records — the buckets all require deals/insights, so they
+        // match nothing, but these profiles are "active" by the CRM's definition.
+        Client::factory()->count(5)->create([
             'platform_id' => $platform->id,
             'client_type' => 'escort',
             'profile_status' => 'publish',
             'needs_payment' => false,
             'notactive' => false,
         ]);
-        foreach ($clients as $client) {
-            \App\Models\Deal::factory()->create([
-                'platform_id' => $platform->id,
-                'client_id' => $client->id,
-                'product_id' => $product->id,
-                'subscription_lifecycle' => 'new',
-                'status' => 'active',
-                'activated_at' => now()->subDays(30),
-            ]);
-        }
 
         $plan = $this->makePlan($platform, [
             'schedule' => array_merge($this->defaultSchedule(), ['max_items_per_day' => 3]),
@@ -107,24 +99,13 @@ class AutoPushWorkflowTest extends TestCase
     {
         $platform = $this->createPlatform('Nigeria', 'nigeria.example', 'Nigeria');
 
-        $product = \App\Models\Product::factory()->create(['platform_id' => $platform->id]);
-        $clients = Client::factory()->count(3)->create([
+        Client::factory()->count(3)->create([
             'platform_id' => $platform->id,
             'client_type' => 'escort',
             'profile_status' => 'publish',
             'needs_payment' => false,
             'notactive' => false,
         ]);
-        foreach ($clients as $client) {
-            \App\Models\Deal::factory()->create([
-                'platform_id' => $platform->id,
-                'client_id' => $client->id,
-                'product_id' => $product->id,
-                'subscription_lifecycle' => 'new',
-                'status' => 'active',
-                'activated_at' => now()->subDays(30),
-            ]);
-        }
 
         $plan = $this->makePlan($platform, [
             'reliability' => array_merge($this->defaultReliability(), [

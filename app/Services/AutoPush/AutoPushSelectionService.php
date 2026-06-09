@@ -211,8 +211,15 @@ class AutoPushSelectionService
     }
 
     /**
-     * Fallback pool: active, published escort profiles on the market (excluding
-     * needs_payment / notactive), used to top up when bucket filters fall short.
+     * Fallback pool: active, published escort profiles on the market, used to top
+     * up when the bucket filters fall short.
+     *
+     * "Active" here matches the CRM's own definition (Client::scopeActive):
+     * profile_status = publish, not needs_payment, not notactive. We deliberately
+     * do NOT require an active `deals` row — synced WordPress profiles in quieter
+     * markets (Botswana, Malawi, etc.) are published and live but frequently have
+     * no CRM deal record, so a deal requirement would exclude exactly the profiles
+     * this fallback exists to reach.
      *
      * @param  array<int, int>  $excludeClientIds
      * @return \Illuminate\Support\Collection<int, \App\Models\Client>
@@ -228,20 +235,7 @@ class AutoPushSelectionService
         $query = Client::query()
             ->where('platform_id', (int) $plan->platform_id)
             ->where('client_type', 'escort')
-            ->where('profile_status', 'publish')
-            ->where(function (Builder $builder) {
-                $builder->whereNull('needs_payment')->orWhere('needs_payment', false);
-            })
-            ->where(function (Builder $builder) {
-                $builder->whereNull('notactive')->orWhere('notactive', false);
-            })
-            ->whereExists(function ($sub) use ($plan) {
-                $sub->select(DB::raw(1))
-                    ->from('deals')
-                    ->whereColumn('deals.client_id', 'clients.id')
-                    ->where('deals.platform_id', (int) $plan->platform_id)
-                    ->where('deals.status', 'active');
-            });
+            ->active();
 
         if ($excludeClientIds !== []) {
             $query->whereNotIn('id', $excludeClientIds);
