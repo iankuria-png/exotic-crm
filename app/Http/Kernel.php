@@ -39,11 +39,16 @@ class Kernel extends HttpKernel
         ],
 
         'api' => [
+            // NOTE: EnsureFrontendRequestsAreStateful is intentionally omitted.
+            // The /api surface is bearer-token only (see config/sanctum.php
+            // 'guard' => []). Dropping stateful mode decouples API auth from the
+            // session lifetime and removes CSRF/419 failures on session expiry.
+            // StartSession remains so the login/logout endpoints can still do
+            // their session housekeeping, but it never authenticates /api.
             \App\Http\Middleware\EncryptCookies::class,
             \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
             \Illuminate\Session\Middleware\StartSession::class,
             \Illuminate\View\Middleware\ShareErrorsFromSession::class,
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
             \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],

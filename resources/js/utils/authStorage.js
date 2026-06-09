@@ -123,10 +123,10 @@ export function storeAuthSnapshot(token, user) {
     }
 
     sessionStorage.removeItem(IMPERSONATION_KEY);
+    // Only ever persist a real token. An empty/missing token must never clobber
+    // an existing valid one — clearing is the explicit job of clearAuthSnapshot().
     if (token) {
         localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-        localStorage.removeItem(AUTH_TOKEN_KEY);
     }
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
     emitAuthChange();

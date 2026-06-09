@@ -50,6 +50,11 @@ use App\Http\Controllers\GoogleAuthController;
 Route::get('/auth/google/redirect', [GoogleAuthController::class, 'redirectToGoogle'])->name('google.redirect');
 Route::get('/auth/google/callback', [GoogleAuthController::class, 'handleGoogleCallback'])->name('google.callback');
 Route::get('/google-auth-success', [GoogleAuthController::class, 'googleAuthSuccess']);
+
+// Session -> bearer token handoff. Lives on the web middleware group so it can
+// authenticate via the first-party session cookie even though /api is bearer-only.
+Route::post('/crm/auth/exchange', [CrmAuthController::class, 'exchangeSessionToken'])
+    ->name('crm.auth.exchange');
 Route::get('/crm/impersonation/{bridge}', [CrmAuthController::class, 'consumeImpersonationBridge'])
     ->middleware('signed')
     ->name('crm.impersonation.consume');

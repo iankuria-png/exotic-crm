@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../services/api';
-import { storeAuthSnapshot } from '../utils/authStorage';
+import webClient from '../services/webClient';
+import { rotateSessionToken, storeAuthSnapshot } from '../utils/authStorage';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
@@ -34,8 +35,46 @@ export default function Login() {
     const [checkingSetup, setCheckingSetup] = useState(true);
     const [authConfig, setAuthConfig] = useState(null);
     const [authConfigError, setAuthConfigError] = useState('');
+    const [retryingConfig, setRetryingConfig] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
+
+    // Load login options with bounded retry/backoff so a single transient failure
+    // (e.g. a brief throttle behind a shared office IP) does not leave a dead
+    // login screen requiring repeated hard refreshes.
+    const loadAuthConfig = useCallback(async () => {
+        const backoffs = [0, 600, 1800];
+
+        for (let attempt = 0; attempt < backoffs.length; attempt += 1) {
+            if (backoffs[attempt]) {
+                await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]));
+            }
+
+            try {
+                const { data } = await api.get('/crm/auth/config');
+                setAuthConfig(data);
+                setAuthConfigError('');
+                return true;
+            } catch {
+                if (attempt === backoffs.length - 1) {
+                    setAuthConfig(null);
+                    setAuthConfigError('We could not load all login options. You can still continue with Google, or retry.');
+                }
+            }
+        }
+
+        return false;
+    }, []);
+
+    const handleRetryConfig = useCallback(async () => {
+        setRetryingConfig(true);
+        setAuthConfigError('');
+        try {
+            await loadAuthConfig();
+        } finally {
+            setRetryingConfig(false);
+        }
+    }, [loadAuthConfig]);
 
     useEffect(() => {
         let cancelled = false;
@@ -65,23 +104,22 @@ export default function Login() {
                     // Fall through to auth config. Login options should not depend on setup status availability.
                 }
 
-                try {
-                    const configResponse = await api.get('/crm/auth/config');
-                    if (!cancelled) {
-                        setAuthConfig(configResponse.data);
-                        setAuthConfigError('');
-                    }
-                } catch {
-                    if (!cancelled) {
-                        setAuthConfigError('Unable to load login options. Refresh the page or contact an administrator.');
-                    }
+                if (!cancelled) {
+                    await loadAuthConfig();
                 }
 
                 if (params.get('google') === 'success') {
-                    const meResponse = await api.get('/crm/me');
-                    if (!cancelled) {
-                        storeAuthSnapshot(meResponse.data.token || '', meResponse.data.user);
-                        navigate(consumePostLoginRedirect(), { replace: true });
+                    try {
+                        const { data } = await webClient.post('/crm/auth/exchange');
+                        if (!cancelled && data?.token) {
+                            rotateSessionToken();
+                            storeAuthSnapshot(data.token, data.user);
+                            navigate(consumePostLoginRedirect(), { replace: true });
+                        }
+                    } catch {
+                        if (!cancelled) {
+                            setError('We could not finish signing you in. Please try again.');
+                        }
                     }
                 }
             } finally {
@@ -96,7 +134,7 @@ export default function Login() {
         return () => {
             cancelled = true;
         };
-    }, [navigate]);
+    }, [navigate, loadAuthConfig]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -120,12 +158,19 @@ export default function Login() {
     };
 
     const authConfigReady = Boolean(authConfig);
+    const configFailed = Boolean(authConfigError) && !authConfigReady;
     const passwordEnabled = authConfigReady && authConfig.password?.enabled !== false;
     const googleEnabled = authConfigReady && Boolean(authConfig.google?.enabled);
     const googlePrimary = googleEnabled && Boolean(authConfig.google?.primary);
     const passwordFallbackRequested = new URLSearchParams(window.location.search).get('password') === '1';
     const showPasswordForm = passwordEnabled && (!googleEnabled || passwordFallbackRequested);
-    const singleSsoMode = googleEnabled && !showPasswordForm;
+    // Offer Google even when config failed to load: the redirect endpoint itself
+    // validates whether Google is enabled, so a best-effort button beats a dead screen.
+    const showGoogleButton = googleEnabled || configFailed;
+    // Only claim password login is disabled when config actually loaded and says so —
+    // never when we simply failed to fetch the config.
+    const showPasswordDisabledNotice = authConfigReady && !googleEnabled && !showPasswordForm;
+    const singleSsoMode = showGoogleButton && !showPasswordForm;
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -169,11 +214,19 @@ export default function Login() {
 
                             {authConfigError ? (
                                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-                                    {authConfigError}
+                                    <p>{authConfigError}</p>
+                                    <button
+                                        type="button"
+                                        onClick={handleRetryConfig}
+                                        disabled={retryingConfig}
+                                        className="mt-2 inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {retryingConfig ? 'Retrying…' : 'Retry'}
+                                    </button>
                                 </div>
                             ) : null}
 
-                            {googleEnabled ? (
+                            {showGoogleButton ? (
                                 <button
                                     type="button"
                                     onClick={handleGoogleLogin}
@@ -189,7 +242,7 @@ export default function Login() {
                                 </button>
                             ) : null}
 
-                            {googleEnabled && showPasswordForm ? (
+                            {showGoogleButton && showPasswordForm ? (
                                 <div className="flex items-center gap-3">
                                     <div className="h-px flex-1 bg-slate-200" />
                                     <span className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">or</span>
@@ -249,7 +302,7 @@ export default function Login() {
                                 {loading ? 'Signing in...' : 'Sign in'}
                             </button>
                                 </form>
-                            ) : !googleEnabled ? (
+                            ) : showPasswordDisabledNotice ? (
                                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                                     Password login is disabled. Use Google SSO to access the CRM.
                                 </div>

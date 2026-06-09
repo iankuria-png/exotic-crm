@@ -113,8 +113,10 @@ class GoogleAuthController extends Controller
 
             Auth::guard('web')->login($user);
             $request->session()->regenerate();
-            $request->session()->put('crm_pending_login_token', $user->createToken('crm-google-session')->plainTextToken);
 
+            // The SPA completes the handoff by calling POST /crm/auth/exchange
+            // once, which deterministically mints the bearer token from this
+            // authenticated web session. No token is stashed in the session.
             return redirect('/login?google=success');
         } catch (ValidationException $exception) {
             if ($mode === 'test') {

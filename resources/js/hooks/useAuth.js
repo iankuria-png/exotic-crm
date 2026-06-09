@@ -5,6 +5,7 @@ import {
     clearImpersonationSnapshot,
     ensureSessionToken,
     readAuthSnapshot,
+    readImpersonationSnapshot,
     readSessionToken,
     rotateSessionToken,
     storeAuthSnapshot,
@@ -26,6 +27,15 @@ export function useAuth() {
     useEffect(() => {
         let cancelled = false;
 
+        // Token-first: with no credential there is nothing to validate. Skipping
+        // the guaranteed-401 round-trip avoids the logout churn it would trigger.
+        if (!token && !readImpersonationSnapshot()) {
+            setIsLoading(false);
+            return () => {
+                cancelled = true;
+            };
+        }
+
         api.get('/crm/me')
             .then(({ data }) => {
                 if (cancelled) {
@@ -35,12 +45,16 @@ export function useAuth() {
                 updateStoredUser(data.user);
                 ensureSessionToken();
             })
-            .catch(() => {
+            .catch((error) => {
                 if (cancelled) {
                     return;
                 }
 
-                clearAuthSnapshot({ clearSessionToken: true });
+                // Only a confirmed credential rejection ends the session. Network
+                // failures or 5xx must never wipe an otherwise-valid token.
+                if (error.response?.status === 401) {
+                    clearAuthSnapshot({ clearSessionToken: true });
+                }
             })
             .finally(() => {
                 if (!cancelled) {

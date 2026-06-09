@@ -56,7 +56,36 @@ class AuthController extends Controller
         $user = $request->user();
 
         return response()->json([
-            'token' => $request->session()->pull('crm_pending_login_token'),
+            'user' => $this->serializeUser($user),
+        ]);
+    }
+
+    /**
+     * Exchange an authenticated first-party web session for a bearer token.
+     *
+     * This is the deterministic handoff used after Google SSO: the OAuth
+     * callback logs the user into the web session, then the SPA calls this
+     * route (via the session-aware web client) exactly once to obtain a token.
+     * It is idempotent within a session and is the ONLY consumer of the login
+     * token, so it can never lose a race with /crm/me.
+     */
+    public function exchangeSessionToken(Request $request)
+    {
+        $user = Auth::guard('web')->user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if (($user->status ?? 'active') !== 'active') {
+            Auth::guard('web')->logout();
+            return response()->json(['message' => 'Account is inactive. Contact your administrator.'], 403);
+        }
+
+        $token = $user->createToken('crm-session')->plainTextToken;
+
+        return response()->json([
+            'token' => $token,
             'user' => $this->serializeUser($user),
         ]);
     }

@@ -32,9 +32,16 @@ return [
     | are able to authenticate the request, Sanctum will use the bearer
     | token that's present on an incoming request for authentication.
     |
+    | Intentionally empty: the CRM SPA authenticates the /api surface purely
+    | with the never-expiring personal access token. Leaning on the first-party
+    | `web` session here made the 120-minute session the real authenticator,
+    | which silently logged users out when the session lapsed. The OAuth token
+    | handoff still uses the session, but only on the dedicated /crm/auth/exchange
+    | web route — never on /api.
+    |
     */
 
-    'guard' => ['web'],
+    'guard' => [],
 
     /*
     |--------------------------------------------------------------------------

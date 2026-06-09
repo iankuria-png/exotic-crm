@@ -84,7 +84,7 @@ class AuthSettingsTest extends TestCase
         ])->assertForbidden();
     }
 
-    public function test_crm_session_auth_can_resolve_user_on_api_requests(): void
+    public function test_login_returns_a_bearer_token_that_authenticates_api_requests(): void
     {
         $password = 'secret-password';
         $user = User::factory()->create([
@@ -94,17 +94,54 @@ class AuthSettingsTest extends TestCase
             'status' => 'active',
         ]);
 
-        $this->postJson('/api/crm/login', [
+        $token = $this->postJson('/api/crm/login', [
             'email' => $user->email,
             'password' => $password,
-        ])->assertOk();
+        ])->assertOk()->json('token');
 
-        $this->getJson('/api/crm/me')
+        $this->assertNotEmpty($token);
+
+        $this->withToken($token)
+            ->getJson('/api/crm/me')
             ->assertOk()
             ->assertJsonPath('user.email', $user->email);
     }
 
-    public function test_crm_me_returns_pending_google_login_token_once(): void
+    public function test_bearer_token_still_authenticates_after_the_session_is_flushed(): void
+    {
+        // Regression guard for the "random logout" bug: API auth must NOT depend
+        // on the first-party session. A flushed/expired session must not revoke
+        // an otherwise-valid bearer token.
+        $password = 'secret-password';
+        $user = User::factory()->create([
+            'email' => 'persists@example.com',
+            'password' => bcrypt($password),
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $token = $this->postJson('/api/crm/login', [
+            'email' => $user->email,
+            'password' => $password,
+        ])->assertOk()->json('token');
+
+        // Simulate the session lapsing out from under a long-lived tab.
+        $this->flushSession();
+
+        $this->withToken($token)
+            ->getJson('/api/crm/me')
+            ->assertOk()
+            ->assertJsonPath('user.email', $user->email);
+    }
+
+    public function test_api_requests_without_a_token_are_rejected(): void
+    {
+        // With token-first auth, a stale session cookie alone must never grant
+        // access to protected /api routes.
+        $this->getJson('/api/crm/me')->assertUnauthorized();
+    }
+
+    public function test_crm_me_does_not_return_a_token(): void
     {
         $user = User::factory()->create([
             'email' => 'google-admin@example.com',
@@ -112,18 +149,49 @@ class AuthSettingsTest extends TestCase
             'status' => 'active',
         ]);
 
-        $response = $this->actingAs($user)
-            ->withSession(['crm_pending_login_token' => 'google-token'])
-            ->getJson('/api/crm/me');
+        Sanctum::actingAs($user);
 
-        $response
+        $this->getJson('/api/crm/me')
             ->assertOk()
-            ->assertJsonPath('token', 'google-token')
+            ->assertJsonMissingPath('token')
             ->assertJsonPath('user.email', $user->email);
+    }
+
+    public function test_session_token_exchange_mints_a_bearer_token_for_authenticated_session(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'exchange-admin@example.com',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $first = $this->actingAs($user)->postJson('/crm/auth/exchange');
+        $first->assertOk()
+            ->assertJsonPath('user.email', $user->email);
+        $this->assertNotEmpty($first->json('token'));
+
+        // Idempotent within a session: a second call still succeeds and never
+        // depends on a one-time value that an earlier request could consume.
+        $second = $this->actingAs($user)->postJson('/crm/auth/exchange');
+        $second->assertOk();
+        $this->assertNotEmpty($second->json('token'));
+    }
+
+    public function test_session_token_exchange_requires_an_authenticated_session(): void
+    {
+        $this->postJson('/crm/auth/exchange')->assertUnauthorized();
+    }
+
+    public function test_session_token_exchange_rejects_inactive_accounts(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'inactive@example.com',
+            'role' => 'admin',
+            'status' => 'inactive',
+        ]);
 
         $this->actingAs($user)
-            ->getJson('/api/crm/me')
-            ->assertOk()
-            ->assertJsonPath('token', null);
+            ->postJson('/crm/auth/exchange')
+            ->assertForbidden();
     }
 }
