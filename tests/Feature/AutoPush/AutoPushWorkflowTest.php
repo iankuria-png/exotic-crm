@@ -63,6 +63,81 @@ class AutoPushWorkflowTest extends TestCase
         $this->assertSame($clients[0]->id, $result->first()->id);
     }
 
+    public function test_fallback_tops_up_to_daily_target_when_buckets_are_empty(): void
+    {
+        $platform = $this->createPlatform('Nigeria', 'nigeria.example', 'Nigeria');
+
+        // Active, published escorts with active deals — but activated long ago, so
+        // the new_subscriptions bucket (48h lookback) matches nothing.
+        $product = \App\Models\Product::factory()->create(['platform_id' => $platform->id]);
+        $clients = Client::factory()->count(5)->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        foreach ($clients as $client) {
+            \App\Models\Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $client->id,
+                'product_id' => $product->id,
+                'subscription_lifecycle' => 'new',
+                'status' => 'active',
+                'activated_at' => now()->subDays(30),
+            ]);
+        }
+
+        $plan = $this->makePlan($platform, [
+            'schedule' => array_merge($this->defaultSchedule(), ['max_items_per_day' => 3]),
+            'reliability' => array_merge($this->defaultReliability(), [
+                'fallback_enabled' => true,
+                'fallback_ordering' => 'recent',
+            ]),
+        ]);
+
+        $selection = app(AutoPushSelectionService::class)->selectForPlan($plan);
+
+        $this->assertCount(3, $selection['primary']);
+        $this->assertArrayHasKey('fallback', $selection['bucket_counts']);
+        $this->assertGreaterThan(0, $selection['bucket_counts']['fallback']);
+    }
+
+    public function test_fallback_disabled_leaves_quiet_market_empty(): void
+    {
+        $platform = $this->createPlatform('Nigeria', 'nigeria.example', 'Nigeria');
+
+        $product = \App\Models\Product::factory()->create(['platform_id' => $platform->id]);
+        $clients = Client::factory()->count(3)->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        foreach ($clients as $client) {
+            \App\Models\Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $client->id,
+                'product_id' => $product->id,
+                'subscription_lifecycle' => 'new',
+                'status' => 'active',
+                'activated_at' => now()->subDays(30),
+            ]);
+        }
+
+        $plan = $this->makePlan($platform, [
+            'reliability' => array_merge($this->defaultReliability(), [
+                'fallback_enabled' => false,
+            ]),
+        ]);
+
+        $selection = app(AutoPushSelectionService::class)->selectForPlan($plan);
+
+        $this->assertCount(0, $selection['primary']);
+        $this->assertArrayNotHasKey('fallback', $selection['bucket_counts']);
+    }
+
     public function test_slot_allocator_respects_same_day_and_next_active_day_spillover(): void
     {
         Carbon::setTestNow('2026-06-05 06:00:00');

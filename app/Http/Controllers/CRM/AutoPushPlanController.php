@@ -310,6 +310,8 @@ class AutoPushPlanController extends Controller
             'reliability.exclude_pushed_within_days' => 'nullable|integer|min:0|max:30',
             'reliability.replacement_spillover' => ['nullable', 'string', Rule::in(['same_day', 'next_active_day'])],
             'reliability.sms_alerts_enabled' => 'nullable|boolean',
+            'reliability.fallback_enabled' => 'nullable|boolean',
+            'reliability.fallback_ordering' => ['nullable', 'string', Rule::in(['random', 'recent', 'newest'])],
         ]);
 
         return [
@@ -349,6 +351,8 @@ class AutoPushPlanController extends Controller
                 'exclude_pushed_within_days' => (int) ($validated['reliability']['exclude_pushed_within_days'] ?? 3),
                 'replacement_spillover' => (string) ($validated['reliability']['replacement_spillover'] ?? 'next_active_day'),
                 'sms_alerts_enabled' => (bool) ($validated['reliability']['sms_alerts_enabled'] ?? false),
+                'fallback_enabled' => (bool) ($validated['reliability']['fallback_enabled'] ?? true),
+                'fallback_ordering' => (string) ($validated['reliability']['fallback_ordering'] ?? 'random'),
             ],
         ];
     }

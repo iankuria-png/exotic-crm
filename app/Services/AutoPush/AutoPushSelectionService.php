@@ -180,6 +180,24 @@ class AutoPushSelectionService
 
         $maxItems = max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1));
         $reserveMultiplier = max(1.0, (float) data_get($plan->reliability, 'reserve_multiplier', 1.5));
+
+        // Fallback top-up: when the bucket filters fill fewer than the daily target
+        // (+ reserve headroom), auto-select active published escorts so quiet markets
+        // still run instead of skipping with "no candidates". Configurable per plan.
+        $fallbackEnabled = (bool) data_get($plan->reliability, 'fallback_enabled', true);
+        $targetTotal = $maxItems + (int) ceil($maxItems * $reserveMultiplier);
+
+        if ($fallbackEnabled && $orderedClients->count() < $targetTotal) {
+            $needed = $targetTotal - $orderedClients->count();
+            $excludeIds = $orderedClients->map(fn (Client $client) => (int) $client->id)->all();
+            $fallbackClients = $this->selectFallback($plan, $excludeIds, $needed);
+
+            if ($fallbackClients->isNotEmpty()) {
+                $orderedClients = $orderedClients->concat($fallbackClients)->values();
+                $bucketCounts['fallback'] = $fallbackClients->count();
+            }
+        }
+
         $primary = $orderedClients->take($maxItems)->values();
         $reserve = $orderedClients
             ->slice($primary->count(), (int) ceil($primary->count() * $reserveMultiplier))
@@ -190,6 +208,66 @@ class AutoPushSelectionService
             'reserve' => $reserve,
             'bucket_counts' => $bucketCounts,
         ];
+    }
+
+    /**
+     * Fallback pool: active, published escort profiles on the market (excluding
+     * needs_payment / notactive), used to top up when bucket filters fall short.
+     *
+     * @param  array<int, int>  $excludeClientIds
+     * @return \Illuminate\Support\Collection<int, \App\Models\Client>
+     */
+    public function selectFallback(AutoPushPlan $plan, array $excludeClientIds, int $limit): Collection
+    {
+        if ($limit <= 0) {
+            return collect();
+        }
+
+        $ordering = (string) data_get($plan->reliability, 'fallback_ordering', 'random');
+
+        $query = Client::query()
+            ->where('platform_id', (int) $plan->platform_id)
+            ->where('client_type', 'escort')
+            ->where('profile_status', 'publish')
+            ->where(function (Builder $builder) {
+                $builder->whereNull('needs_payment')->orWhere('needs_payment', false);
+            })
+            ->where(function (Builder $builder) {
+                $builder->whereNull('notactive')->orWhere('notactive', false);
+            })
+            ->whereExists(function ($sub) use ($plan) {
+                $sub->select(DB::raw(1))
+                    ->from('deals')
+                    ->whereColumn('deals.client_id', 'clients.id')
+                    ->where('deals.platform_id', (int) $plan->platform_id)
+                    ->where('deals.status', 'active');
+            });
+
+        if ($excludeClientIds !== []) {
+            $query->whereNotIn('id', $excludeClientIds);
+        }
+
+        // Honor the same recent-push exclusion window the buckets use.
+        $excludeDays = max(0, (int) data_get($plan->reliability, 'exclude_pushed_within_days', 3));
+        if ($excludeDays > 0) {
+            $query->whereNotExists(function ($sub) use ($plan, $excludeDays) {
+                $sub->select(DB::raw(1))
+                    ->from('push_campaign_items')
+                    ->join('push_campaigns', 'push_campaigns.id', '=', 'push_campaign_items.campaign_id')
+                    ->whereColumn('push_campaign_items.client_id', 'clients.id')
+                    ->where('push_campaigns.platform_id', (int) $plan->platform_id)
+                    ->whereNotNull('push_campaign_items.sent_at')
+                    ->where('push_campaign_items.sent_at', '>=', now()->subDays($excludeDays));
+            });
+        }
+
+        $query = match ($ordering) {
+            'recent' => $query->orderByRaw('COALESCE(last_online_at, 0) DESC'),
+            'newest' => $query->orderByDesc('created_at'),
+            default => $query->inRandomOrder(),
+        };
+
+        return $query->with('platform')->limit($limit)->get()->values();
     }
 
     private function bucketByType(AutoPushPlan $plan, string $type): array

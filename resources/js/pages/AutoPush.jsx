@@ -34,6 +34,12 @@ const SPILLOVER_OPTIONS = [
     { value: 'same_day', label: 'Same day only' },
 ];
 
+const FALLBACK_ORDERING_OPTIONS = [
+    { value: 'random', label: 'Random' },
+    { value: 'recent', label: 'Recently online first' },
+    { value: 'newest', label: 'Newest profiles first' },
+];
+
 const EMPTY_FORM = {
     id: null,
     name: '',
@@ -69,6 +75,8 @@ const EMPTY_FORM = {
         exclude_pushed_within_days: 3,
         replacement_spillover: 'next_active_day',
         sms_alerts_enabled: false,
+        fallback_enabled: true,
+        fallback_ordering: 'random',
     },
 };
 
@@ -182,6 +190,8 @@ function normalizePlanToForm(plan) {
             exclude_pushed_within_days: Number(plan.reliability?.exclude_pushed_within_days || 3),
             replacement_spillover: plan.reliability?.replacement_spillover || 'next_active_day',
             sms_alerts_enabled: Boolean(plan.reliability?.sms_alerts_enabled),
+            fallback_enabled: plan.reliability?.fallback_enabled ?? true,
+            fallback_ordering: plan.reliability?.fallback_ordering || 'random',
         },
     };
 }
@@ -222,6 +232,8 @@ function planToPayload(form) {
             exclude_pushed_within_days: Number(form.reliability.exclude_pushed_within_days || 0),
             replacement_spillover: form.reliability.replacement_spillover,
             sms_alerts_enabled: Boolean(form.reliability.sms_alerts_enabled),
+            fallback_enabled: Boolean(form.reliability.fallback_enabled),
+            fallback_ordering: form.reliability.fallback_ordering || 'random',
         },
     };
 }
@@ -1493,6 +1505,37 @@ export default function AutoPush() {
                                         <span className="block text-xs text-slate-500">Keep operational intent visible in the plan configuration.</span>
                                     </span>
                                 </label>
+
+                                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.reliability.fallback_enabled}
+                                        onChange={(event) => setForm((current) => ({
+                                            ...current,
+                                            reliability: { ...current.reliability, fallback_enabled: event.target.checked },
+                                        }))}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    <span>
+                                        <span className="block text-sm font-medium text-slate-800">Auto-select fallback</span>
+                                        <span className="block text-xs text-slate-500">When the buckets fill fewer than the daily target, top up the remaining slots with active published profiles so quiet markets still run.</span>
+                                    </span>
+                                </label>
+
+                                {form.reliability.fallback_enabled ? (
+                                    <SelectField
+                                        label="Fallback ordering"
+                                        value={form.reliability.fallback_ordering}
+                                        onChange={(event) => setForm((current) => ({
+                                            ...current,
+                                            reliability: { ...current.reliability, fallback_ordering: event.target.value },
+                                        }))}
+                                    >
+                                        {FALLBACK_ORDERING_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </SelectField>
+                                ) : null}
 
                                 <label className="space-y-1">
                                     <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Seed phrases</span>
