@@ -323,6 +323,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/boost', [ClientController::class, 'boost'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::delete('/clients/{client}/boost', [ClientController::class, 'unboost'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/tours', [ClientController::class, 'addTour'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::delete('/clients/{client}/tours/{tourId}', [ClientController::class, 'deleteTour'])->middleware('role:admin,sub_admin,sales,field_sales');

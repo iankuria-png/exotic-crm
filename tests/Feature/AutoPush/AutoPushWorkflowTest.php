@@ -119,6 +119,89 @@ class AutoPushWorkflowTest extends TestCase
         $this->assertArrayNotHasKey('fallback', $selection['bucket_counts']);
     }
 
+    public function test_boosted_client_is_prioritised_and_bypasses_recent_push_exclusion(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $product = \App\Models\Product::factory()->create(['platform_id' => $platform->id]);
+
+        // Normal bucket candidate (recent new subscription).
+        $bucketClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+        \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $bucketClient->id,
+            'product_id' => $product->id,
+            'subscription_lifecycle' => 'new',
+            'status' => 'active',
+            'activated_at' => now()->subHour(),
+        ]);
+
+        // Boosted client who was pushed an hour ago — would normally be excluded.
+        $boostedClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'boosted_until' => now()->addHours(48),
+            'boosted_at' => now(),
+        ]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Prior push',
+            'platform_id' => $platform->id,
+            'status' => 'completed',
+        ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $boostedClient->id,
+            'profile_url' => 'https://kenya.example/escort/boosted',
+            'custom_message' => 'hi',
+            'status' => 'sent',
+            'sent_at' => now()->subHour(),
+        ]);
+
+        $plan = $this->makePlan($platform, [
+            'reliability' => array_merge($this->defaultReliability(), [
+                'exclude_pushed_within_days' => 3,
+            ]),
+        ]);
+
+        $selection = app(AutoPushSelectionService::class)->selectForPlan($plan);
+
+        $this->assertSame($boostedClient->id, $selection['primary']->first()->id);
+        $this->assertArrayHasKey('boosted', $selection['bucket_counts']);
+        $this->assertTrue($selection['primary']->contains(fn ($c) => (int) $c->id === (int) $bucketClient->id));
+    }
+
+    public function test_sales_user_can_boost_and_unboost_client(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('sales', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 48])
+            ->assertOk()
+            ->assertJson(['is_boosted' => true]);
+
+        $client->refresh();
+        $this->assertTrue($client->boosted_until?->isFuture());
+        $this->assertSame((int) $user->id, (int) $client->boosted_by);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}/boost")
+            ->assertOk()
+            ->assertJson(['is_boosted' => false]);
+
+        $client->refresh();
+        $this->assertNull($client->boosted_until);
+    }
+
     public function test_slot_allocator_respects_same_day_and_next_active_day_spillover(): void
     {
         Carbon::setTestNow('2026-06-05 06:00:00');

@@ -790,6 +790,7 @@ export default function ClientDetail() {
     const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
+    const [showBoostMenu, setShowBoostMenu] = useState(false);
     const [dealActionDialog, setDealActionDialog] = useState({ type: null, deal: null });
     const [clientDeactivateDialog, setClientDeactivateDialog] = useState({
         open: false,
@@ -1034,6 +1035,30 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to add note.');
+        },
+    });
+
+    const boostMutation = useMutation({
+        mutationFn: (hours) =>
+            api.post(`/crm/clients/${id}/boost`, { hours }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            toast.success(data?.message || 'Client boosted for push.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to boost client.');
+        },
+    });
+
+    const unboostMutation = useMutation({
+        mutationFn: () => api.delete(`/crm/clients/${id}/boost`).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            toast.success(data?.message || 'Boost removed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to remove boost.');
         },
     });
 
@@ -2594,6 +2619,15 @@ export default function ClientDetail() {
                             <h2 className="crm-page-title">{client.name || 'Unnamed'}</h2>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
                                 {client.is_high_risk ? <span className="inline-flex shrink-0 items-center rounded-md bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">High Risk</span> : null}
+                                {client.is_boosted ? (
+                                    <span
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-md bg-fuchsia-50 px-2.5 py-0.5 text-xs font-semibold text-fuchsia-700 ring-1 ring-inset ring-fuchsia-200"
+                                        title={`Prioritised for auto-push${client.boost_remaining_hours ? ` — ~${client.boost_remaining_hours}h left` : ''}`}
+                                    >
+                                        <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path d="M11.3 1.046a1 1 0 00-1.78-.13L3.66 9.4A1 1 0 004.5 11h3.2l-1.02 7.954a1 1 0 001.78.73l6.86-9.084A1 1 0 0014.48 9H11.3l1-7.954z" /></svg>
+                                        Boosted{client.boost_remaining_hours ? ` · ${client.boost_remaining_hours}h` : ''}
+                                    </span>
+                                ) : null}
                                 <StatusBadge status={profileState.status} tone={profileState.tone} label={profileState.label} />
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
@@ -2650,6 +2684,63 @@ export default function ClientDetail() {
                                     </svg>
                                     {syncMutation.isPending ? 'Syncing…' : 'Sync from WP'}
                                 </button>
+
+                                {/* Boost — prioritise this client for auto-push */}
+                                <div className="relative">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowBoostMenu((open) => !open)}
+                                        disabled={boostMutation.isPending || unboostMutation.isPending}
+                                        title={client.is_boosted
+                                            ? `Boosted for auto-push${client.boost_remaining_hours ? ` — ~${client.boost_remaining_hours}h left` : ''}`
+                                            : 'Prioritise this client for the next auto-push runs'}
+                                        className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                            client.is_boosted
+                                                ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100'
+                                                : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700'
+                                        }`}
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M11.3 1.046a1 1 0 00-1.78-.13L3.66 9.4A1 1 0 004.5 11h3.2l-1.02 7.954a1 1 0 001.78.73l6.86-9.084A1 1 0 0014.48 9H11.3l1-7.954z" /></svg>
+                                        {boostMutation.isPending
+                                            ? 'Boosting…'
+                                            : client.is_boosted
+                                                ? `Boosted${client.boost_remaining_hours ? ` · ${client.boost_remaining_hours}h` : ''}`
+                                                : 'Boost'}
+                                    </button>
+                                    {showBoostMenu ? (
+                                        <>
+                                            <div className="fixed inset-0 z-10" onClick={() => setShowBoostMenu(false)} />
+                                            <div className="absolute right-0 z-20 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                                                <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                                    {client.is_boosted ? 'Manage boost' : 'Boost for auto-push'}
+                                                </p>
+                                                {[
+                                                    { label: '24 hours', hours: 24 },
+                                                    { label: '48 hours', hours: 48 },
+                                                    { label: '72 hours', hours: 72 },
+                                                ].map((option) => (
+                                                    <button
+                                                        key={option.hours}
+                                                        type="button"
+                                                        onClick={() => { setShowBoostMenu(false); boostMutation.mutate(option.hours); }}
+                                                        className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-fuchsia-50 hover:text-fuchsia-700"
+                                                    >
+                                                        <span>{client.is_boosted ? `Extend ${option.label}` : option.label}</span>
+                                                    </button>
+                                                ))}
+                                                {client.is_boosted ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { setShowBoostMenu(false); unboostMutation.mutate(); }}
+                                                        className="mt-1 flex w-full items-center rounded-lg border-t border-slate-100 px-2 py-1.5 text-left text-sm text-rose-600 hover:bg-rose-50"
+                                                    >
+                                                        Remove boost
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </>
+                                    ) : null}
+                                </div>
 
                                 {/* Client access */}
                                 <button

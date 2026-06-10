@@ -178,6 +178,17 @@ class AutoPushSelectionService
         $orderedClients = $ordered['clients'];
         $bucketCounts = $ordered['bucket_counts'];
 
+        // Boosted clients (sales force-prioritised) jump to the front and bypass
+        // the recent-push exclusion — the whole point of a boost is "push now".
+        $boosted = $this->selectBoosted($plan);
+        if ($boosted->isNotEmpty()) {
+            $boostedIds = $boosted->map(fn (Client $client) => (int) $client->id)->flip();
+            $orderedClients = $boosted
+                ->concat($orderedClients->reject(fn (Client $client) => $boostedIds->has((int) $client->id)))
+                ->values();
+            $bucketCounts['boosted'] = $boosted->count();
+        }
+
         $maxItems = max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1));
         $reserveMultiplier = max(1.0, (float) data_get($plan->reliability, 'reserve_multiplier', 1.5));
 
@@ -208,6 +219,25 @@ class AutoPushSelectionService
             'reserve' => $reserve,
             'bucket_counts' => $bucketCounts,
         ];
+    }
+
+    /**
+     * Currently-boosted escort profiles on the market, most recently boosted first.
+     * Boost is a deliberate sales override, so it bypasses bucket filters and the
+     * recent-push exclusion window.
+     *
+     * @return \Illuminate\Support\Collection<int, \App\Models\Client>
+     */
+    public function selectBoosted(AutoPushPlan $plan): Collection
+    {
+        return Client::query()
+            ->where('platform_id', (int) $plan->platform_id)
+            ->where('client_type', 'escort')
+            ->boosted()
+            ->orderByDesc('boosted_at')
+            ->with('platform')
+            ->get()
+            ->values();
     }
 
     /**

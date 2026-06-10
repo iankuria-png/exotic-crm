@@ -1480,6 +1480,100 @@ class ClientController extends Controller
         return response()->json($client);
     }
 
+    // ─── Auto-push boost ─────────────────────────────────────────────────────────
+
+    /**
+     * Boost a client for auto-push: force-prioritise them in the next auto-push
+     * run(s) for their market for a bounded window (default 48h).
+     */
+    public function boost(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'hours' => 'nullable|integer|min:1|max:168',
+        ]);
+
+        $hours = (int) ($validated['hours'] ?? 48);
+        $before = [
+            'boosted_until' => $client->boosted_until?->toIso8601String(),
+        ];
+
+        $client->update([
+            'boosted_until' => now()->addHours($hours),
+            'boosted_at' => now(),
+            'boosted_by' => (int) $request->user()->id,
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_BOOST_SET,
+            'client',
+            (int) $client->id,
+            $before,
+            [
+                'boosted_until' => $client->boosted_until?->toIso8601String(),
+                'hours' => $hours,
+            ]
+        );
+
+        TimelineEvent::query()->create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_boosted',
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'hours' => $hours,
+                'boosted_until' => $client->boosted_until?->toIso8601String(),
+            ],
+            'created_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => sprintf('Boosted for %d hours.', $hours),
+            'is_boosted' => true,
+            'boosted_until' => $client->boosted_until?->toIso8601String(),
+            'boost_remaining_hours' => $client->boost_remaining_hours,
+        ]);
+    }
+
+    /**
+     * Clear an active boost.
+     */
+    public function unboost(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $before = [
+            'boosted_until' => $client->boosted_until?->toIso8601String(),
+        ];
+
+        $client->update([
+            'boosted_until' => null,
+            'boosted_at' => null,
+            'boosted_by' => null,
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_BOOST_CLEAR,
+            'client',
+            (int) $client->id,
+            $before,
+            ['boosted_until' => null]
+        );
+
+        return response()->json([
+            'message' => 'Boost removed.',
+            'is_boosted' => false,
+            'boosted_until' => null,
+            'boost_remaining_hours' => null,
+        ]);
+    }
+
     // ─── Tours ──────────────────────────────────────────────────────────────────
 
     public function tours(Request $request, Client $client)

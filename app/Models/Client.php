@@ -46,6 +46,9 @@ class Client extends Model
         'needs_payment',
         'notactive',
         'is_high_risk',
+        'boosted_until',
+        'boosted_at',
+        'boosted_by',
         'risk_reason_code',
         'risk_marked_at',
         'risk_marked_by',
@@ -96,6 +99,8 @@ class Client extends Model
         'notactive' => 'boolean',
         'premium' => 'boolean',
         'is_high_risk' => 'boolean',
+        'boosted_until' => 'datetime',
+        'boosted_at' => 'datetime',
         'featured' => 'boolean',
         'verified' => 'boolean',
         'kyc_required' => 'boolean',
@@ -128,7 +133,33 @@ class Client extends Model
         'wp_profile_url',
         'plan_key',
         'plan_label',
+        'is_boosted',
+        'boost_remaining_hours',
     ];
+
+    public function getIsBoostedAttribute(): bool
+    {
+        return $this->boosted_until !== null && $this->boosted_until->isFuture();
+    }
+
+    public function getBoostRemainingHoursAttribute(): ?int
+    {
+        if ($this->boosted_until === null || $this->boosted_until->isPast()) {
+            return null;
+        }
+
+        return (int) ceil(now()->diffInMinutes($this->boosted_until) / 60);
+    }
+
+    public function booster()
+    {
+        return $this->belongsTo(User::class, 'boosted_by');
+    }
+
+    public function scopeBoosted($query)
+    {
+        return $query->whereNotNull('boosted_until')->where('boosted_until', '>', now());
+    }
 
     public function platform()
     {
