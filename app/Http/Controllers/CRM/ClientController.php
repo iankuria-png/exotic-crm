@@ -704,6 +704,72 @@ class ClientController extends Controller
         ]);
     }
 
+    /**
+     * Bulk force-expire selected clients. Only clients that are genuinely past
+     * their expiry but still public are deactivated (the reconciler's isStuck
+     * guard); ineligible or unauthorized clients are reported, not acted on.
+     */
+    public function bulkExpire(Request $request)
+    {
+        $validated = $request->validate([
+            'client_ids' => 'required|array|min:1|max:100',
+            'client_ids.*' => 'integer|exists:clients,id',
+        ]);
+
+        $clients = Client::with('platform')->whereIn('id', $validated['client_ids'])->get();
+
+        $authorized = collect();
+        $unauthorizedIds = [];
+        foreach ($clients as $client) {
+            try {
+                $this->authorizeClientAccess($request, $client);
+                $authorized->push($client);
+            } catch (\Throwable $exception) {
+                $unauthorizedIds[] = (int) $client->id;
+            }
+        }
+
+        $actorId = (int) optional($request->user())->id;
+        $outcome = $this->expiredSubscriptionReconciler->reconcileMany($authorized, $actorId ?: null);
+
+        // Audit each deactivated profile against its own market.
+        $byId = $authorized->keyBy('id');
+        foreach ($outcome['results'] as $row) {
+            if (($row['action'] ?? null) !== 'deactivated') {
+                continue;
+            }
+            $client = $byId->get($row['client_id']);
+            if (!$client) {
+                continue;
+            }
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'profile_status' => 'private',
+                    'deactivation_scope' => 'expired_subscription_reconcile_bulk',
+                ],
+                'Bulk force-expired stuck profile (past WP expiry)'
+            );
+        }
+
+        foreach ($unauthorizedIds as $unauthorizedId) {
+            $outcome['results'][] = [
+                'client_id' => $unauthorizedId,
+                'action' => 'failed',
+                'error' => 'forbidden',
+            ];
+            $outcome['summary']['total']++;
+            $outcome['summary']['failed']++;
+        }
+
+        return response()->json($outcome);
+    }
+
     private function hydrateBillingPlatformState(Client $client): void
     {
         if (!$client->platform) {

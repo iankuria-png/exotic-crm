@@ -184,6 +184,71 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         $this->assertSame('expired_public', $response->json('data.0.expiry_state'));
     }
 
+    public function test_bulk_expire_only_deactivates_eligible_and_reports_skips(): void
+    {
+        $platform = $this->createPlatform();
+        $stuck = $this->createStuckClient($platform, 124009);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $stuck->id,
+            'status' => 'active',
+        ]);
+        $active = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 124010,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'escort_expire' => now()->addDays(20)->timestamp,
+        ]);
+        $this->fakeWpDeactivation($platform, 124009);
+
+        Sanctum::actingAs($this->createAuthorizedUser($platform));
+
+        $this->postJson('/api/crm/clients/bulk-expire', [
+            'client_ids' => [$stuck->id, $active->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('summary.total', 2)
+            ->assertJsonPath('summary.expired', 1)
+            ->assertJsonPath('summary.skipped', 1)
+            ->assertJsonPath('summary.failed', 0);
+
+        $this->assertSame('private', $stuck->fresh()->profile_status);
+        $this->assertSame('expired', $deal->fresh()->status);
+        $this->assertSame('publish', $active->fresh()->profile_status);
+    }
+
+    public function test_bulk_expire_reports_clients_outside_the_reps_market(): void
+    {
+        $platform = $this->createPlatform();
+        $otherPlatform = $this->createPlatform();
+        $stuck = $this->createStuckClient($platform, 124012);
+        $foreign = $this->createStuckClient($otherPlatform, 124013);
+        $this->fakeWpDeactivation($platform, 124012);
+
+        $sales = User::query()->create([
+            'name' => 'Scoped Sales',
+            'email' => 'scoped-' . Str::random(6) . '@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'assigned_market_ids' => [$platform->id],
+            'status' => 'active',
+        ]);
+        Sanctum::actingAs($sales);
+
+        $response = $this->postJson('/api/crm/clients/bulk-expire', [
+            'client_ids' => [$stuck->id, $foreign->id],
+        ])->assertOk()
+            ->assertJsonPath('summary.expired', 1)
+            ->assertJsonPath('summary.failed', 1);
+
+        $forbidden = collect($response->json('results'))->firstWhere('client_id', $foreign->id);
+        $this->assertSame('failed', $forbidden['action']);
+        $this->assertSame('forbidden', $forbidden['error']);
+        $this->assertSame('publish', $foreign->fresh()->profile_status);
+    }
+
     private function createStuckClient(Platform $platform, int $wpPostId): Client
     {
         return Client::factory()->create([

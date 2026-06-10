@@ -9,6 +9,7 @@ use App\Models\TimelineEvent;
 use App\Support\MarketTimezone;
 use App\Support\SubscriptionExpiry;
 use Illuminate\Support\Collection;
+use Throwable;
 
 /**
  * Single source of truth for force-expiring a CRM profile whose synced WordPress
@@ -74,6 +75,44 @@ class ExpiredSubscriptionReconciler
             ->filter(fn (Client $client) => $this->isStuck($client))
             ->take($limit)
             ->values();
+    }
+
+    /**
+     * Reconcile a batch of (already authorized) clients. Each is guarded by
+     * isStuck, so ineligible clients are skipped with no writes; per-client
+     * failures are isolated so one bad profile cannot abort the batch.
+     *
+     * @param  Collection<int, Client>  $clients
+     * @return array{results: array<int, array<string, mixed>>, summary: array<string, int>}
+     */
+    public function reconcileMany(Collection $clients, ?int $actorId): array
+    {
+        $results = [];
+        $summary = ['total' => 0, 'expired' => 0, 'skipped' => 0, 'failed' => 0];
+
+        foreach ($clients as $client) {
+            $summary['total']++;
+
+            try {
+                $row = $this->reconcileClient($client, $actorId, false);
+                $results[] = $row;
+
+                if (($row['action'] ?? null) === 'deactivated') {
+                    $summary['expired']++;
+                } else {
+                    $summary['skipped']++;
+                }
+            } catch (Throwable $e) {
+                $summary['failed']++;
+                $results[] = [
+                    'client_id' => (int) $client->id,
+                    'action' => 'failed',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return ['results' => $results, 'summary' => $summary];
     }
 
     /**

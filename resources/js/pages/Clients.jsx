@@ -378,6 +378,7 @@ export default function Clients() {
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
+    const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
     const allowedTabs = new Set(['all', 'conversion', 'closed', 'optimizer']);
     const tabParam = searchParams.get('tab') || 'all';
@@ -471,6 +472,8 @@ export default function Clients() {
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [bulkThumbnailRefreshSelection, setBulkThumbnailRefreshSelection] = useState([]);
     const [showBulkThumbnailRefreshConfirm, setShowBulkThumbnailRefreshConfirm] = useState(false);
+    const [bulkExpireSelection, setBulkExpireSelection] = useState([]);
+    const [showBulkExpireConfirm, setShowBulkExpireConfirm] = useState(false);
     const [bulkDeleteDialog, setBulkDeleteDialog] = useState(() => createBulkDeleteDialogState(''));
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
@@ -891,6 +894,36 @@ export default function Clients() {
         },
     });
 
+    const bulkExpireMutation = useMutation({
+        mutationFn: (clientIds) => api.post('/crm/clients/bulk-expire', {
+            client_ids: clientIds,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            setClearSelectionKey((current) => current + 1);
+            setShowBulkExpireConfirm(false);
+            setBulkExpireSelection([]);
+
+            const expired = Number(payload?.summary?.expired || 0);
+            const skipped = Number(payload?.summary?.skipped || 0);
+            const failed = Number(payload?.summary?.failed || 0);
+            const summary = [
+                `${expired} expired`,
+                skipped ? `${skipped} skipped` : null,
+                failed ? `${failed} failed` : null,
+            ].filter(Boolean).join(' · ');
+
+            if (failed > 0) {
+                toast.warning(`Bulk expire finished with issues: ${summary}.`);
+                return;
+            }
+            toast.success(`Bulk expire complete: ${summary}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Bulk expire failed.');
+        },
+    });
+
     const closeBulkDeleteDialog = () => {
         if (bulkDeletePreviewMutation.isPending || bulkDeleteMutation.isPending) {
             return;
@@ -1026,6 +1059,21 @@ export default function Clients() {
                 setCloseCaseError(null);
                 setCloseCaseDialog({ open: true, mode: 'bulk', selectedRows: rowsSelection });
             },
+        }] : []),
+        ...(canBulkExpire ? [{
+            key: 'bulk-expire',
+            label: 'Expire selected',
+            variant: 'warning',
+            onClick: (rowsSelection) => {
+                setBulkExpireSelection(rowsSelection);
+                setShowBulkExpireConfirm(true);
+            },
+            isDisabled: (rowsSelection) => !rowsSelection.some((row) => String(row.expiry_state || '') === 'expired_public'),
+            getDisabledReason: (rowsSelection) => (
+                rowsSelection.some((row) => String(row.expiry_state || '') === 'expired_public')
+                    ? undefined
+                    : 'None of the selected clients are past their expiry. Use the “Expired (still public)” status filter to find them.'
+            ),
         }] : []),
     ];
 
@@ -2100,6 +2148,60 @@ export default function Clients() {
                     {bulkThumbnailRefreshSelection.length.toLocaleString()} selected client{bulkThumbnailRefreshSelection.length === 1 ? '' : 's'} will have their cached thumbnails refreshed.
                 </div>
             </ConfirmDialog>
+
+            {(() => {
+                const eligible = bulkExpireSelection.filter((row) => String(row.expiry_state || '') === 'expired_public');
+                const skipped = bulkExpireSelection.length - eligible.length;
+                const BULK_EXPIRE_CAP = 100;
+                const toProcess = eligible.slice(0, BULK_EXPIRE_CAP);
+                const overCap = eligible.length - toProcess.length;
+
+                return (
+                    <ConfirmDialog
+                        open={showBulkExpireConfirm}
+                        title="Expire selected clients"
+                        message="Only clients that are past their expiry but still public will be set to private in WordPress. Active and not-yet-expired clients are skipped automatically."
+                        tone="warning"
+                        confirmLabel={`Expire ${toProcess.length} profile${toProcess.length === 1 ? '' : 's'}`}
+                        confirmDisabled={toProcess.length === 0 || bulkExpireMutation.isPending}
+                        isPending={bulkExpireMutation.isPending}
+                        onCancel={() => {
+                            if (bulkExpireMutation.isPending) {
+                                return;
+                            }
+                            setShowBulkExpireConfirm(false);
+                            setBulkExpireSelection([]);
+                        }}
+                        onConfirm={() => {
+                            const clientIds = toProcess
+                                .map((client) => Number(client.id))
+                                .filter((clientId) => clientId > 0);
+                            if (clientIds.length === 0) {
+                                return;
+                            }
+                            bulkExpireMutation.mutate(clientIds);
+                        }}
+                    >
+                        <div className="space-y-2 text-sm">
+                            <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                <span>Will be expired (past expiry, still public)</span>
+                                <span className="font-semibold">{toProcess.length.toLocaleString()}</span>
+                            </div>
+                            {skipped > 0 ? (
+                                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                                    <span>Skipped (not past expiry)</span>
+                                    <span className="font-semibold">{skipped.toLocaleString()}</span>
+                                </div>
+                            ) : null}
+                            {overCap > 0 ? (
+                                <p className="text-xs text-amber-700">
+                                    {overCap.toLocaleString()} more eligible client{overCap === 1 ? '' : 's'} will not be processed this run (max {BULK_EXPIRE_CAP} per run). Run again to continue.
+                                </p>
+                            ) : null}
+                        </div>
+                    </ConfirmDialog>
+                );
+            })()}
 
             <ConfirmDialog
                 open={showCsvConfirm}
