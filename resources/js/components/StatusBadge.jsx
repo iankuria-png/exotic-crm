@@ -4,6 +4,7 @@ const statusStyles = {
     // Profile statuses
     publish: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     private: 'bg-slate-100 text-slate-600 ring-slate-200',
+    expired_public: 'bg-amber-50 text-amber-800 ring-amber-300',
     draft: 'bg-amber-50 text-amber-700 ring-amber-200',
     pending: 'bg-amber-50 text-amber-700 ring-amber-200',
     // Deal statuses

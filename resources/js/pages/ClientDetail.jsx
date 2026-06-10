@@ -1147,6 +1147,19 @@ export default function ClientDetail() {
         },
     });
 
+    const expireNowMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/expire-now`).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success(data?.message || 'Profile expired and set to private.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not expire this profile.');
+        },
+    });
+
     const reopenCaseMutation = useMutation({
         mutationFn: () => api.post(`/crm/clients/${id}/reopen`).then((r) => r.data),
         onSuccess: () => {
@@ -2734,6 +2747,24 @@ export default function ClientDetail() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-7a2 2 0 00-2-2H6a2 2 0 00-2 2v7a2 2 0 002 2zm10-12V7a4 4 0 00-8 0v4h8z" />
                                         </svg>
                                         Close case
+                                    </button>
+                                ) : null}
+                                {!isReadOnly && client?.expiry_state === 'expired_public' ? (
+                                    <button
+                                        type="button"
+                                        disabled={expireNowMutation.isPending}
+                                        onClick={() => {
+                                            if (window.confirm('This profile is past its expiry but still public. Set it to private now (deactivate in WordPress)?')) {
+                                                expireNowMutation.mutate();
+                                            }
+                                        }}
+                                        title="Force-expire this profile now (past its expiry but still public)"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        {expireNowMutation.isPending ? 'Expiring…' : 'Expire now'}
                                     </button>
                                 ) : null}
                                 {canDeleteClient ? (

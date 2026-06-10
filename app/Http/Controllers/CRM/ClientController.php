@@ -28,6 +28,7 @@ use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
+use App\Services\ExpiredSubscriptionReconciler;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
@@ -76,6 +77,7 @@ class ClientController extends Controller
         private readonly ClientProfileImageService $clientProfileImageService,
         private readonly ClientCaseClosureService $clientCaseClosureService,
         private readonly ClientSegmentService $clientSegmentService,
+        private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
     ) {
     }
 
@@ -133,7 +135,17 @@ class ClientController extends Controller
         }
 
         if ($request->filled('status')) {
-            $query->where('profile_status', $request->status);
+            if ((string) $request->status === 'expired_public') {
+                // Stuck profiles: still publicly active but past their WP expiry.
+                // Raw "escort_expire < now" is intentionally inclusive for a review
+                // queue; the precise per-market cutoff still gates actual deactivation.
+                $query->active()
+                    ->whereNotNull('escort_expire')
+                    ->where('escort_expire', '>', 0)
+                    ->where('escort_expire', '<', now()->timestamp);
+            } else {
+                $query->where('profile_status', $request->status);
+            }
         }
 
         if ($request->filled('platform_id')) {
@@ -253,6 +265,18 @@ class ClientController extends Controller
             $newUsersStatsQuery->where('created_at', '>=', now()->subDays(6)->startOfDay());
         }
 
+        // Stuck-profile count is independent of the current status filter so the
+        // "Expired (still public)" card always reflects the true backlog.
+        $expiredPublicBase = Client::query();
+        $this->marketAuthorizationService->applyPlatformScope($expiredPublicBase, $request->user());
+        if ($request->filled('platform_id')) {
+            $expiredPublicBase->where('platform_id', $request->platform_id);
+        }
+        $expiredPublicBase->notClosed()->active()
+            ->whereNotNull('escort_expire')
+            ->where('escort_expire', '>', 0)
+            ->where('escort_expire', '<', now()->timestamp);
+
         $stats = [
             'total' => (clone $statsQuery)->count(),
             'active' => (clone $statsQuery)->active()->count(),
@@ -260,6 +284,7 @@ class ClientController extends Controller
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'high_risk' => (clone $statsQuery)->where('is_high_risk', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
+            'expired_public' => $expiredPublicBase->count(),
             'with_chat' => (clone $statsQuery)->whereNotNull('sb_user_id')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
             'new_users' => $newUsersStatsQuery->count(),
@@ -279,6 +304,7 @@ class ClientController extends Controller
         );
 
         $clients = $query->paginate($request->get('per_page', 25));
+        $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
 
         $payload = $clients->toArray();
         $payload['stats'] = $stats;
@@ -589,8 +615,22 @@ class ClientController extends Controller
                 ->where('active', true)
                 ->where('kill_switch_enabled', false))
             ->exists());
+        $this->decorateExpiryState($client);
 
         return response()->json($client);
+    }
+
+    /**
+     * Attach the derived `expiry_state` ('expired_public' when the profile is still
+     * publicly active but past its timezone-aware expiry cutoff, else null) so the
+     * frontend badge needs no market-timezone logic.
+     */
+    private function decorateExpiryState(Client $client): void
+    {
+        $client->setAttribute(
+            'expiry_state',
+            $this->expiredSubscriptionReconciler->isStuck($client) ? 'expired_public' : null
+        );
     }
 
     public function quickReplies(Request $request, Client $client)
@@ -600,6 +640,68 @@ class ClientController extends Controller
         return response()->json(
             app(ClientOutreachService::class)->quickRepliesFor($client, $request->user())
         );
+    }
+
+    /**
+     * Manually force-expire a profile that is past its WP expiry but still
+     * publicly active. Uses the same reconciler as the daily cron. Rejected
+     * (422) for profiles that are not actually expired — generic deactivation
+     * is handled by deactivateSubscription().
+     */
+    public function expireNow(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+        $client->loadMissing('platform');
+
+        if (!$this->expiredSubscriptionReconciler->isStuck($client)) {
+            return response()->json([
+                'message' => 'This profile is not past its expiry, so it cannot be force-expired. Use Deactivate subscription instead.',
+            ], 422);
+        }
+
+        $before = [
+            'profile_status' => $client->profile_status,
+            'escort_expire' => $client->escort_expire,
+        ];
+
+        try {
+            $result = $this->expiredSubscriptionReconciler->reconcileClient($client, (int) $request->user()->id, false);
+        } catch (\Throwable $e) {
+            Log::error('Manual expire-now failed', [
+                'client_id' => $client->id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to deactivate the profile in WordPress. Please retry.',
+            ], 502);
+        }
+
+        $fresh = $client->fresh(['platform']);
+        $this->decorateExpiryState($fresh);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+            'client',
+            (int) $client->id,
+            $before,
+            [
+                'profile_status' => $fresh->profile_status,
+                'escort_expire' => $fresh->escort_expire,
+                'deactivation_scope' => 'expired_subscription_reconcile',
+                'deals_expired' => $result['deals_expired'] ?? 0,
+            ],
+            'Force-expired stuck profile (past WP expiry)'
+        );
+
+        return response()->json([
+            'message' => 'Profile expired and set to private.',
+            'client' => $fresh,
+            'result' => $result,
+        ]);
     }
 
     private function hydrateBillingPlatformState(Client $client): void

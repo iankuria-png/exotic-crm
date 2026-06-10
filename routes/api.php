@@ -319,6 +319,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
@@ -408,6 +409,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
         // Reports
         Route::get('/reports/summary', [ReportController::class, 'summary']);
+        Route::get('/reports/expiry-reconciliation', [ReportController::class, 'expiryReconciliation']);
         Route::get('/reports/scorecard/preview', [ScorecardExportController::class, 'weeklyScorecard']);
         Route::post('/reports/scorecard/export', [ScorecardExportController::class, 'exportScorecard']);
 

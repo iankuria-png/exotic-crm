@@ -36,6 +36,16 @@ class Kernel extends ConsoleKernel
                  ->onOneServer()
                  ->sendOutputTo(storage_path('logs/subscription_check.log'));
 
+        // CRM safety net: force-expire profiles past their WP expiry but still
+        // publicly active, in case the WordPress check_expired() sweep didn't run
+        // (low-traffic markets / wp-cron not firing). Runs after subscriptions:check.
+        $schedule->command('crm:reconcile-expired-subscriptions')
+                 ->name('crm_reconcile_expired_subscriptions')
+                 ->dailyAt('00:25')
+                 ->withoutOverlapping(30)
+                 ->onOneServer()
+                 ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));
+
         $schedule->command('crm:compute-daily-stats')
             ->name('crm_compute_daily_stats')
             ->dailyAt('00:07')

@@ -49,6 +49,20 @@ export function deriveClientProfileState(client) {
     }
 
     if (profileStatus === 'publish') {
+        // Past expiry but WordPress hasn't deactivated it yet (the server derives
+        // this from the timezone-aware escort_expire cutoff). Still public, but the
+        // green "Active" badge would be misleading — surface it honestly.
+        if (String(client?.expiry_state || '') === 'expired_public') {
+            return {
+                status: 'expired_public',
+                tone: 'expired_public',
+                label: 'Expired',
+                detail: 'Past expiry — pending deactivation',
+                isConflict: false,
+                isPubliclyActive: true,
+            };
+        }
+
         return {
             status: 'publish',
             tone: 'publish',

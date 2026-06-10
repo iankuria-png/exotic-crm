@@ -359,7 +359,7 @@ function formatLastSeenMeta(unixTs) {
 }
 
 export default function Clients() {
-    const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
+    const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending', 'expired_public']);
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedHighRiskFilters = new Set(['1']);
@@ -1103,6 +1103,7 @@ export default function Clients() {
                 verified: Number(data.stats.verified || 0),
                 with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
+                expired_public: Number(data.stats.expired_public || 0),
                 total: Number(data.stats.total || 0),
                 segments: data.stats.segments || {},
             };
@@ -1119,6 +1120,7 @@ export default function Clients() {
             verified: rows.filter((row) => row.verified).length,
             with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
+            expired_public: rows.filter((row) => String(row.expiry_state || '') === 'expired_public').length,
             total: Number(data?.total || rows.length),
             segments: {},
         };
@@ -1750,6 +1752,7 @@ export default function Clients() {
                         options={[
                             { value: '', label: 'All statuses' },
                             { value: 'publish', label: 'Active' },
+                            { value: 'expired_public', label: `Expired (still public)${stats?.expired_public ? ` · ${stats.expired_public}` : ''}` },
                             { value: 'private', label: 'Inactive' },
                             { value: 'draft', label: 'Draft' },
                             { value: 'pending', label: 'Pending' },

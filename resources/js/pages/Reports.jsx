@@ -307,6 +307,12 @@ export default function Reports() {
             }).then((response) => response.data),
         enabled: !isRangeInvalid && Boolean(platformFilter),
     });
+    const { data: expiryReconciliation } = useQuery({
+        queryKey: ['reports-expiry-reconciliation'],
+        queryFn: () => api.get('/crm/reports/expiry-reconciliation').then((response) => response.data),
+        enabled: !isMarketing,
+        refetchInterval: 5 * 60 * 1000,
+    });
 
     useEffect(() => {
         if (!hasInitializedFrom && data?.baseline_cutoff) {
@@ -518,6 +524,51 @@ export default function Reports() {
                 <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                     Select a valid reporting range: the start date must be earlier than or equal to the end date.
                 </p>
+            ) : null}
+
+            {!isMarketing && expiryReconciliation ? (
+                <section className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-700">Expiry reconciliation</h3>
+                            <p className="text-xs text-slate-500">
+                                Daily safety net that force-expires profiles past their expiry but still public.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-4 text-right">
+                            <div>
+                                <p className={`text-lg font-semibold ${Number(expiryReconciliation.current_backlog) > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                    {Number(expiryReconciliation.current_backlog || 0).toLocaleString()}
+                                </p>
+                                <p className="text-[11px] uppercase tracking-wide text-slate-400">Stuck now</p>
+                            </div>
+                            {expiryReconciliation.latest ? (
+                                <div>
+                                    <p className="text-lg font-semibold text-slate-700">
+                                        {Number(expiryReconciliation.latest.processed || 0).toLocaleString()}
+                                    </p>
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-400">
+                                        Last run ({expiryReconciliation.latest.mode})
+                                    </p>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                    {expiryReconciliation.latest?.breakdown && Object.keys(expiryReconciliation.latest.breakdown).length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                            {Object.entries(expiryReconciliation.latest.breakdown).map(([market, info]) => (
+                                <span key={market} className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                                    {market}: {Number(info?.count || 0)}
+                                </span>
+                            ))}
+                        </div>
+                    ) : null}
+                    {expiryReconciliation.latest?.finished_at ? (
+                        <p className="mt-2 text-[11px] text-slate-400">
+                            Last run {new Date(expiryReconciliation.latest.finished_at).toLocaleString()}
+                        </p>
+                    ) : null}
+                </section>
             ) : null}
 
             {!isMarketing ? (

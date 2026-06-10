@@ -6,6 +6,7 @@ use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\ExpiryReconciliationRun;
 use App\Models\IntegrationSetting;
 use App\Models\Lead;
 use App\Models\Payment;
@@ -426,6 +427,39 @@ class ReportController extends Controller
                 : null,
             'renewal_health' => $renewalHealth,
             'baseline_cutoff' => $baselineCutoff?->toDateString(),
+        ]);
+    }
+
+    /**
+     * Latest expired-subscription reconciliation run(s) plus the current backlog
+     * of profiles that are past expiry but still publicly active.
+     */
+    public function expiryReconciliation(Request $request)
+    {
+        $latest = ExpiryReconciliationRun::query()
+            ->whereNotNull('finished_at')
+            ->with('platform:id,name')
+            ->latest('finished_at')
+            ->first();
+
+        $recent = ExpiryReconciliationRun::query()
+            ->whereNotNull('finished_at')
+            ->with('platform:id,name')
+            ->latest('finished_at')
+            ->limit(10)
+            ->get();
+
+        $backlogQuery = Client::query();
+        $this->marketAuthorizationService->applyPlatformScope($backlogQuery, $request->user());
+        $backlogQuery->notClosed()->active()
+            ->whereNotNull('escort_expire')
+            ->where('escort_expire', '>', 0)
+            ->where('escort_expire', '<', now()->timestamp);
+
+        return response()->json([
+            'latest' => $latest,
+            'recent' => $recent,
+            'current_backlog' => $backlogQuery->count(),
         ]);
     }
 
