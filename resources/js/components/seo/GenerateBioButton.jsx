@@ -60,11 +60,7 @@ export default function GenerateBioButton({
 
         const resp = await fetch('/api/crm/seo/generate-bio', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                'X-XSRF-TOKEN': getCsrfToken(),
-            },
+            headers: authHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify(body),
         });
@@ -112,11 +108,7 @@ export default function GenerateBioButton({
 
         const resp = await fetch('/api/crm/seo/translate-bio', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                'X-XSRF-TOKEN': getCsrfToken(),
-            },
+            headers: authHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify({ bio_html: bioHtml, from_language: lang }),
         });
@@ -144,11 +136,7 @@ export default function GenerateBioButton({
         };
         fetch('/api/crm/seo/feedback', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                'X-XSRF-TOKEN': getCsrfToken(),
-            },
+            headers: authHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify(body),
         }).catch(() => {
@@ -286,4 +274,17 @@ export default function GenerateBioButton({
 function getCsrfToken() {
     const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
+}
+
+// These endpoints are auth:sanctum protected. The CRM /api surface is bearer-token
+// only, so every request must carry the token from localStorage (the same one the
+// shared axios client attaches) — the session cookie alone no longer authenticates.
+function authHeaders() {
+    const token = localStorage.getItem('crm_token');
+    return {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-XSRF-TOKEN': getCsrfToken(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
 }

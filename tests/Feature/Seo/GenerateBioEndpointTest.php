@@ -14,6 +14,21 @@ class GenerateBioEndpointTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_crm_generate_bio_requires_a_bearer_token(): void
+    {
+        // Token-first contract: the /api SEO routes must reject requests that
+        // arrive without a bearer token (e.g. a stale session cookie alone).
+        // The CRM SPA must attach Authorization: Bearer for these calls.
+        config(['services.seo_engine.enabled' => true]);
+
+        $this->postJson('/api/crm/seo/generate-bio', [])
+            ->assertUnauthorized();
+        $this->postJson('/api/crm/seo/translate-bio', [])
+            ->assertUnauthorized();
+        $this->postJson('/api/crm/seo/feedback', [])
+            ->assertUnauthorized();
+    }
+
     public function test_crm_generate_bio_accepts_edit_profile_payload_shape(): void
     {
         Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
