@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientChurnStamper;
 use App\Support\CrmClientChurnReason;
@@ -137,5 +139,128 @@ class ClientChurnTrackingTest extends TestCase
         $this->assertSame(1, $summary['comparison']['signups']['delta']);
 
         Carbon::setTestNow();
+    }
+
+    public function test_churn_summary_estimates_daily_revenue_at_risk_from_average_ticket(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+
+        Payment::factory()->count(2)->create([
+            'platform_id' => $platform->id,
+            'client_id' => null,
+            'amount' => 15,
+            'currency' => 'USD',
+            'completed_at' => '2026-06-10 12:00:00',
+            'created_at' => '2026-06-10 12:00:00',
+        ]);
+
+        Client::factory()->count(3)->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+
+        $summary = app(ChurnAggregatorService::class)->summary(
+            Carbon::parse('2026-06-10'),
+            Carbon::parse('2026-06-10'),
+            [$platform->id],
+        );
+
+        $this->assertSame(15.0, $summary['daily'][0]['average_ticket_usd']);
+        $this->assertSame(45.0, $summary['daily'][0]['estimated_revenue_at_risk_usd']);
+        $this->assertSame(45.0, $summary['revenue_at_risk']['estimated_total']);
+        $this->assertSame(100.0, $summary['revenue_at_risk']['coverage_percent']);
+    }
+
+    public function test_churn_revenue_estimate_is_unavailable_when_fx_data_is_missing(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'GHS']);
+
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => null,
+            'amount' => 150,
+            'currency' => 'GHS',
+            'completed_at' => '2026-06-10 12:00:00',
+            'created_at' => '2026-06-10 12:00:00',
+        ]);
+
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+
+        $summary = app(ChurnAggregatorService::class)->summary(
+            Carbon::parse('2026-06-10'),
+            Carbon::parse('2026-06-10'),
+            [$platform->id],
+        );
+
+        $this->assertNull($summary['daily'][0]['average_ticket_usd']);
+        $this->assertNull($summary['daily'][0]['estimated_revenue_at_risk_usd']);
+        $this->assertSame(0, $summary['revenue_at_risk']['covered_churn_count']);
+        $this->assertSame(0.0, $summary['revenue_at_risk']['coverage_percent']);
+    }
+
+    public function test_tier_breakdown_uses_last_paid_tier_before_churn(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $basic = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'tier' => 'basic',
+            'name' => 'Basic',
+            'display_name' => 'Basic',
+        ]);
+        $vip = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'tier' => 'vip',
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+        ]);
+
+        $basicClients = Client::factory()->count(2)->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+        $vipClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+
+        foreach ($basicClients as $client) {
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $client->id,
+                'product_id' => $basic->id,
+                'plan_type' => 'basic',
+                'status' => 'expired',
+                'activated_at' => '2026-06-01 12:00:00',
+                'created_at' => '2026-06-01 12:00:00',
+            ]);
+        }
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $vipClient->id,
+            'product_id' => $vip->id,
+            'plan_type' => 'vip',
+            'status' => 'expired',
+            'activated_at' => '2026-04-01 12:00:00',
+            'created_at' => '2026-04-01 12:00:00',
+        ]);
+
+        $tiers = app(ChurnAggregatorService::class)->tierBreakdown(
+            Carbon::parse('2026-06-01'),
+            Carbon::parse('2026-06-11'),
+            [$platform->id],
+        );
+
+        $this->assertSame('basic', $tiers[0]['key']);
+        $this->assertSame(2, $tiers[0]['churn_count']);
+        $this->assertSame(100.0, $tiers[0]['early_churn_percent']);
+        $this->assertSame('vip', $tiers[1]['key']);
+        $this->assertSame(0.0, $tiers[1]['early_churn_percent']);
     }
 }

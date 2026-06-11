@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
     Area,
+    Bar,
     CartesianGrid,
     ComposedChart,
     Line,
@@ -13,6 +14,7 @@ import {
     YAxis,
 } from 'recharts';
 import api from '../../services/api';
+import { formatCurrency } from '../../utils/currency';
 import { useToast } from '../ToastProvider';
 import ConfirmDialog from '../ConfirmDialog';
 import CloseCaseDialog from '../CloseCaseDialog';
@@ -106,6 +108,27 @@ function formatDate(iso) {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+function InfoHint({ label, text }) {
+    return (
+        <span className="group relative inline-flex align-middle">
+            <button
+                type="button"
+                aria-label={`About ${label}`}
+                onClick={(event) => event.stopPropagation()}
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold normal-case text-slate-500 transition hover:border-teal-400 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            >
+                ?
+            </button>
+            <span
+                role="tooltip"
+                className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-white shadow-xl group-hover:block group-focus-within:block"
+            >
+                {text}
+            </span>
+        </span>
+    );
+}
 
 function comparisonText(comparison, inverse = false) {
     if (!comparison) return null;
@@ -236,6 +259,186 @@ function TrendChart({ daily, visibleSeries }) {
     );
 }
 
+function RevenueRiskTooltip({ active, payload, label }) {
+    if (!active || !payload?.length) return null;
+    const point = payload[0]?.payload || {};
+
+    return (
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+            <p className="text-xs font-semibold text-slate-500">{label}</p>
+            <p className="mt-1 text-sm font-semibold text-rose-700">
+                {point.estimated_revenue_at_risk_usd == null
+                    ? 'Revenue estimate unavailable'
+                    : `${formatCurrency(point.estimated_revenue_at_risk_usd, 'USD')} at risk`}
+            </p>
+            <p className="mt-1 text-xs text-slate-600">
+                {Number(point.churn || 0).toLocaleString()} churned · {point.average_ticket_usd == null
+                    ? 'No usable daily ticket'
+                    : `${formatCurrency(point.average_ticket_usd, 'USD')} average ticket`}
+            </p>
+            <p className="text-xs text-slate-400">{Number(point.successful_payments || 0).toLocaleString()} successful payments sampled</p>
+        </div>
+    );
+}
+
+function RevenueRiskChart({ daily }) {
+    const data = (daily || []).map((point) => ({
+        ...point,
+        date: point.date?.slice(5) ?? point.date,
+    }));
+    const hasEstimate = data.some((point) => point.estimated_revenue_at_risk_usd != null && point.churn > 0);
+
+    if (!hasEstimate) {
+        return (
+            <div className="flex h-56 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 text-center text-sm text-slate-500">
+                No daily revenue estimate is available for this period. Successful payment and FX data are required.
+            </div>
+        );
+    }
+
+    return (
+        <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                    <YAxis
+                        yAxisId="risk"
+                        tick={{ fontSize: 10, fill: '#94a3b8' }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={54}
+                        tickFormatter={(value) => `$${Number(value || 0).toLocaleString()}`}
+                    />
+                    <YAxis
+                        yAxisId="ticket"
+                        orientation="right"
+                        tick={{ fontSize: 10, fill: '#94a3b8' }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={42}
+                        tickFormatter={(value) => `$${Number(value || 0).toLocaleString()}`}
+                    />
+                    <Tooltip content={<RevenueRiskTooltip />} />
+                    <Bar
+                        yAxisId="risk"
+                        dataKey="estimated_revenue_at_risk_usd"
+                        name="Estimated revenue at risk"
+                        fill="#fb7185"
+                        radius={[4, 4, 0, 0]}
+                        maxBarSize={28}
+                    />
+                    <Line
+                        yAxisId="ticket"
+                        type="monotone"
+                        dataKey="average_ticket_usd"
+                        name="Daily average ticket"
+                        stroke="#0f766e"
+                        strokeWidth={2.5}
+                        dot={false}
+                        connectNulls={false}
+                    />
+                </ComposedChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
+const TIER_COLORS = {
+    basic: '#f59e0b',
+    featured: '#14b8a6',
+    premium: '#6366f1',
+    vip: '#8b5cf6',
+    vvip: '#d946ef',
+    unknown: '#94a3b8',
+};
+
+function TierBreakdown({ tiers }) {
+    if (!tiers?.length) {
+        return (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                No paid-tier history is available for churned clients in this period.
+            </div>
+        );
+    }
+
+    const leader = tiers.find((tier) => tier.key !== 'unknown') || tiers[0];
+
+    return (
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div>
+                    <div className="flex items-center">
+                        <h3 className="text-sm font-semibold text-slate-900">Churn concentration by last paid tier</h3>
+                        <InfoHint
+                            label="tier churn concentration"
+                            text="Groups each churned client by their most recent paid tier before churn. This shows where churn is concentrated, not a causal churn rate across all customers exposed to each tier."
+                        />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">Compare volume, share of churn, and how quickly customers left their last tier.</p>
+                </div>
+                <div className="rounded-lg bg-amber-50 px-3 py-2 text-right ring-1 ring-amber-200">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Highest concentration</p>
+                    <p className="text-sm font-bold text-amber-900">{leader.label} · {leader.share_of_churn_percent}%</p>
+                </div>
+            </div>
+            <div className="grid gap-5 p-5 lg:grid-cols-[1.15fr_1fr]">
+                <div className="space-y-4">
+                    {tiers.map((tier) => (
+                        <div key={tier.key}>
+                            <div className="flex items-center justify-between gap-4 text-xs">
+                                <span className="font-semibold text-slate-800">{tier.label}</span>
+                                <span className="font-semibold text-slate-900">
+                                    {tier.churn_count.toLocaleString()} · {tier.share_of_churn_percent}%
+                                </span>
+                            </div>
+                            <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                        width: `${Math.max(2, tier.share_of_churn_percent)}%`,
+                                        backgroundColor: TIER_COLORS[tier.key] || TIER_COLORS.unknown,
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-slate-100 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                <th className="pb-2">Tier</th>
+                                <th className="pb-2 text-right">Avg days on tier</th>
+                                <th className="pb-2 text-right">
+                                    Left in 30d
+                                    <InfoHint
+                                        label="left within 30 days"
+                                        text="Share of churned clients with known tier dates who left within 30 days of starting their last paid tier."
+                                    />
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {tiers.map((tier) => (
+                                <tr key={tier.key}>
+                                    <td className="py-2.5 font-medium text-slate-800">{tier.label}</td>
+                                    <td className="py-2.5 text-right text-slate-600">{formatDays(tier.avg_days_on_last_tier)}</td>
+                                    <td className={`py-2.5 text-right font-semibold ${
+                                        Number(tier.early_churn_percent || 0) >= 50 ? 'text-rose-700' : 'text-slate-700'
+                                    }`}>
+                                        {tier.early_churn_percent == null ? '—' : `${tier.early_churn_percent}%`}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    );
+}
+
 function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
     const [sortKey, setSortKey] = useState('churn_count');
     const [sortDir, setSortDir] = useState('desc');
@@ -275,8 +478,22 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                 <thead className="bg-slate-50">
                     <tr>
                         <th className={thClass('name')} onClick={() => handleSort('name')}>Market<SortIcon k="name" /></th>
-                        <th className={thClass('avg_paid_lifetime_days')} onClick={() => handleSort('avg_paid_lifetime_days')}>Avg paid lifetime<SortIcon k="avg_paid_lifetime_days" /></th>
-                        <th className={thClass('avg_total_relationship_days')} onClick={() => handleSort('avg_total_relationship_days')}>Avg total relationship<SortIcon k="avg_total_relationship_days" /></th>
+                        <th className={thClass('avg_paid_lifetime_days')} onClick={() => handleSort('avg_paid_lifetime_days')}>
+                            Paid tenure before churn
+                            <InfoHint
+                                label="paid tenure before churn"
+                                text="Average days from a customer's first successful payment or activation until they churned."
+                            />
+                            <SortIcon k="avg_paid_lifetime_days" />
+                        </th>
+                        <th className={thClass('avg_total_relationship_days')} onClick={() => handleSort('avg_total_relationship_days')}>
+                            Relationship before churn
+                            <InfoHint
+                                label="customer relationship before churn"
+                                text="Average days from the customer's CRM signup date until they churned, including time before their first payment."
+                            />
+                            <SortIcon k="avg_total_relationship_days" />
+                        </th>
                         <th className={thClass('signup_count')} onClick={() => handleSort('signup_count')}>Signups<SortIcon k="signup_count" /></th>
                         <th className={thClass('churn_count')} onClick={() => handleSort('churn_count')}>Churned<SortIcon k="churn_count" /></th>
                         <th className={thClass('net_delta')} onClick={() => handleSort('net_delta')}>Net delta<SortIcon k="net_delta" /></th>
@@ -638,6 +855,10 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const summary = summaryQuery.data;
     const totals = summary?.totals || { signups: 0, activations: 0, churn: 0, net: 0 };
     const comparison = summary?.comparison || {};
+    const revenueAtRisk = summary?.revenue_at_risk || {};
+    const hasRevenueEstimate =
+        Number(revenueAtRisk.covered_churn_count || 0) > 0 ||
+        Number(revenueAtRisk.total_churn_count || 0) === 0;
     const health = summary?.health || 'neutral';
     const rows = listQuery.data?.data || [];
     const pagination = listQuery.data;
@@ -720,7 +941,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
             ) : null}
 
             {/* Metric strip */}
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                     label="Net movement"
                     value={totals.net > 0 ? `+${totals.net.toLocaleString()}` : totals.net.toLocaleString()}
@@ -737,7 +958,13 @@ export default function ChurnedQueueView({ platformId = '' }) {
                     accent="rose"
                 />
                 <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-amber-500">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Avg duration — all markets</p>
+                    <div className="flex items-center">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Paid tenure before churn</p>
+                        <InfoHint
+                            label="paid tenure before churn"
+                            text="Average days from first successful payment or activation to churn, weighted by churned customers across the selected markets."
+                        />
+                    </div>
                     {summaryQuery.isLoading ? (
                         <div className="mt-3 space-y-2">
                             <div className="h-8 w-28 animate-pulse rounded bg-slate-100" />
@@ -747,15 +974,46 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         <>
                             <p className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
                                 {formatDays(summary.averages.paid_lifetime_days)}
-                                <span className="ml-1 text-sm font-medium text-slate-500">paid</span>
+                                <span className="ml-1 text-sm font-medium text-slate-500">as a paying customer</span>
                             </p>
                             <p className="mt-0.5 text-xs text-slate-500">
-                                {formatDays(summary.averages.total_relationship_days)} total relationship
+                                {formatDays(summary.averages.total_relationship_days)} from signup to churn
                             </p>
-                            <p className="mt-2 text-xs font-medium text-slate-500">Weighted by churned clients, not market count</p>
+                            <p className="mt-2 text-xs font-medium text-slate-500">Customer-weighted across the selected markets</p>
                         </>
                     ) : (
-                        <p className="mt-3 text-sm text-slate-500">No churned clients with duration history in this period.</p>
+                        <p className="mt-3 text-sm text-slate-500">No churned customers with usable paid-tenure history in this period.</p>
+                    )}
+                </div>
+                <div className="relative overflow-hidden rounded-xl border border-rose-200 bg-gradient-to-br from-white to-rose-50 p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-rose-500">
+                    <div className="flex items-center">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Estimated revenue at risk</p>
+                        <InfoHint
+                            label="estimated revenue at risk"
+                            text="For each day: successful non-wallet revenue divided by successful payments, multiplied by customers who churned that day. This is an operating estimate, not booked accounting loss."
+                        />
+                    </div>
+                    {summaryQuery.isLoading ? (
+                        <div className="mt-3 space-y-2">
+                            <div className="h-8 w-32 animate-pulse rounded bg-rose-100" />
+                            <div className="h-3 w-40 animate-pulse rounded bg-rose-100" />
+                        </div>
+                    ) : (
+                        <>
+                            <p className={`${hasRevenueEstimate ? 'text-3xl' : 'text-xl'} mt-1 font-bold tracking-tight text-rose-800`}>
+                                {hasRevenueEstimate
+                                    ? formatCurrency(revenueAtRisk.estimated_total || 0, revenueAtRisk.currency || 'USD')
+                                    : 'Unavailable'}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-600">
+                                {revenueAtRisk.weighted_average_ticket == null
+                                    ? 'No usable daily ticket'
+                                    : `${formatCurrency(revenueAtRisk.weighted_average_ticket, revenueAtRisk.currency || 'USD')} churn-weighted ticket`}
+                            </p>
+                            <p className="mt-2 text-xs font-semibold text-slate-500">
+                                {Number(revenueAtRisk.coverage_percent ?? 0).toFixed(1)}% of churn covered by payment data
+                            </p>
+                        </>
                     )}
                 </div>
             </div>
@@ -776,16 +1034,42 @@ export default function ChurnedQueueView({ platformId = '' }) {
                 )}
             </div>
 
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="flex items-center">
+                            <h3 className="text-sm font-semibold text-slate-900">Daily churn revenue estimate</h3>
+                            <InfoHint
+                                label="daily churn revenue estimate"
+                                text="Rose bars estimate revenue at risk from churn. The teal line is the successful average ticket for that day in USD. Missing daily ticket data creates a gap rather than inventing a value."
+                            />
+                        </div>
+                        <p className="mt-0.5 text-xs text-slate-500">Daily average ticket × customers churned that day.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500">
+                        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" /> Revenue at risk</span>
+                        <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-teal-700" /> Average ticket</span>
+                    </div>
+                </div>
+                {summaryQuery.isLoading ? (
+                    <div className="h-64 animate-pulse rounded-xl bg-slate-100" />
+                ) : (
+                    <RevenueRiskChart daily={summary?.daily} />
+                )}
+            </section>
+
             {/* Market duration table */}
             <div>
-                <h3 className="text-sm font-semibold text-slate-900">Market retention</h3>
-                <p className="mb-2 mt-0.5 text-xs text-slate-500">Compare acquisition, churn, and paid lifetime. Select a row to focus the full view.</p>
+                <h3 className="text-sm font-semibold text-slate-900">Market retention patterns</h3>
+                <p className="mb-2 mt-0.5 text-xs text-slate-500">Compare acquisition, churn, paid tenure, and the full customer relationship. Select a row to focus the full view.</p>
                 <MarketDurationTable
                     durations={summary?.durations_by_market}
                     onSelectMarket={(id) => { setSelectedMarketId(id); setPage(1); }}
                     selectedMarketId={selectedMarketId}
                 />
             </div>
+
+            <TierBreakdown tiers={summary?.tier_breakdown} />
 
             {/* Reason aggregator */}
             <div>

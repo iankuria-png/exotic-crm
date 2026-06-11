@@ -3,14 +3,20 @@
 namespace App\Services;
 
 use App\Models\Client;
-use App\Models\Platform;
+use App\Models\Deal;
+use App\Models\Payment;
 use App\Support\CrmClientChurnReason;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 class ChurnAggregatorService
 {
+    public function __construct(
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+    ) {}
+
     /**
      * Compute the full churn summary for a date range + optional platform scope.
      *
@@ -22,10 +28,11 @@ class ChurnAggregatorService
         $totals = $this->totals($daily);
         $durations = $this->durationsByMarket($from, $to, $platformIds);
         $reasons = $this->reasonBreakdown($from, $to, $platformIds);
+        $tierBreakdown = $this->tierBreakdown($from, $to, $platformIds);
         $dayCount = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
         $previousTo = $from->copy()->subDay()->endOfDay();
         $previousFrom = $previousTo->copy()->subDays($dayCount - 1)->startOfDay();
-        $previousTotals = $this->totals($this->dailySeries($previousFrom, $previousTo, $platformIds));
+        $previousTotals = $this->totals($this->dailySeries($previousFrom, $previousTo, $platformIds, false));
 
         $health = $this->healthLabel($totals);
 
@@ -43,16 +50,22 @@ class ChurnAggregatorService
             'comparison' => $this->comparison($totals, $previousTotals),
             'health' => $health,
             'averages' => $this->weightedAverages($durations),
+            'revenue_at_risk' => $this->revenueAtRiskSummary($daily),
             'durations_by_market' => $durations,
             'reason_breakdown' => $reasons,
+            'tier_breakdown' => $tierBreakdown,
         ];
     }
 
     /**
      * Build a daily time series of signups, activations, and churn.
      */
-    public function dailySeries(Carbon $from, Carbon $to, array $platformIds = []): array
-    {
+    public function dailySeries(
+        Carbon $from,
+        Carbon $to,
+        array $platformIds = [],
+        bool $includeRevenueRisk = true,
+    ): array {
         // Signups per day
         $signupsQuery = Client::query()
             ->selectRaw('DATE(created_at) as date, COUNT(*) as cnt')
@@ -84,6 +97,9 @@ class ChurnAggregatorService
             $churnQuery->whereIn('platform_id', $platformIds);
         }
         $churn = $churnQuery->pluck('cnt', 'date');
+        $tickets = $includeRevenueRisk
+            ? $this->dailyAverageTickets($from, $to, $platformIds)
+            : [];
 
         // Fill every day in the range (including days with 0s)
         $period = CarbonPeriod::create($from->copy()->startOfDay(), '1 day', $to->copy()->endOfDay());
@@ -95,6 +111,11 @@ class ChurnAggregatorService
                 'signups' => (int) ($signups[$dateStr] ?? 0),
                 'activations' => (int) ($activations[$dateStr] ?? 0),
                 'churn' => (int) ($churn[$dateStr] ?? 0),
+                'average_ticket_usd' => $tickets[$dateStr]['average_ticket_usd'] ?? null,
+                'successful_payments' => (int) ($tickets[$dateStr]['payments_count'] ?? 0),
+                'estimated_revenue_at_risk_usd' => isset($tickets[$dateStr]['average_ticket_usd'])
+                    ? round((float) $tickets[$dateStr]['average_ticket_usd'] * (int) ($churn[$dateStr] ?? 0), 2)
+                    : null,
             ];
         }
 
@@ -224,6 +245,167 @@ class ChurnAggregatorService
         usort($grouped, fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return array_values($grouped);
+    }
+
+    public function tierBreakdown(Carbon $from, Carbon $to, array $platformIds = []): array
+    {
+        $clientsQuery = Client::query()
+            ->whereNotNull('churned_at')
+            ->whereBetween('churned_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()]);
+
+        if (! empty($platformIds)) {
+            $clientsQuery->whereIn('platform_id', $platformIds);
+        }
+
+        $clients = $clientsQuery->get(['id', 'churned_at']);
+        if ($clients->isEmpty()) {
+            return [];
+        }
+
+        $churnedAtByClient = $clients->pluck('churned_at', 'id');
+        $deals = Deal::query()
+            ->with('product:id,name,display_name,slug,tier')
+            ->whereIn('client_id', $clients->pluck('id'))
+            ->where(function (Builder $query) {
+                $query->whereNotNull('activated_at')
+                    ->orWhereIn('status', ClientFunnelService::PAID_DEAL_STATUSES);
+            })
+            ->orderByRaw('COALESCE(activated_at, created_at) DESC')
+            ->orderByDesc('id')
+            ->get()
+            ->filter(function (Deal $deal) use ($churnedAtByClient): bool {
+                $churnedAt = $churnedAtByClient->get($deal->client_id);
+                $startedAt = $deal->activated_at ?? $deal->created_at;
+
+                return $churnedAt !== null && $startedAt !== null && $startedAt->lte($churnedAt);
+            })
+            ->unique('client_id');
+
+        $unknownCount = $clients->count() - $deals->count();
+        $rows = $deals->map(function (Deal $deal) use ($churnedAtByClient): array {
+            $presentation = Client::planPresentationFromPackageValues(
+                $deal->product?->tier,
+                $deal->product?->display_name ?: $deal->product?->name ?: $deal->plan_type,
+                $deal->product?->slug,
+            ) ?? ['key' => 'unknown', 'label' => 'Unknown'];
+            $churnedAt = Carbon::parse($churnedAtByClient->get($deal->client_id));
+            $startedAt = Carbon::parse($deal->activated_at ?? $deal->created_at);
+
+            return [
+                'key' => $presentation['key'],
+                'label' => $presentation['label'],
+                'days_on_last_tier' => max(0, $startedAt->diffInDays($churnedAt)),
+            ];
+        });
+
+        if ($unknownCount > 0) {
+            for ($index = 0; $index < $unknownCount; $index++) {
+                $rows->push([
+                    'key' => 'unknown',
+                    'label' => 'Unknown',
+                    'days_on_last_tier' => null,
+                ]);
+            }
+        }
+
+        $total = $rows->count();
+
+        return $rows
+            ->groupBy('key')
+            ->map(function ($tierRows): array {
+                $knownTenures = $tierRows->pluck('days_on_last_tier')->filter(fn ($value) => $value !== null);
+                $earlyCount = $knownTenures->filter(fn ($days) => $days <= 30)->count();
+
+                return [
+                    'key' => $tierRows->first()['key'],
+                    'label' => $tierRows->first()['label'],
+                    'churn_count' => $tierRows->count(),
+                    'avg_days_on_last_tier' => $knownTenures->isNotEmpty()
+                        ? round((float) $knownTenures->avg(), 1)
+                        : null,
+                    'early_churn_count' => $earlyCount,
+                    'early_churn_percent' => $knownTenures->isNotEmpty()
+                        ? round(($earlyCount / $knownTenures->count()) * 100, 1)
+                        : null,
+                ];
+            })
+            ->map(function (array $row) use ($total): array {
+                $row['share_of_churn_percent'] = $total > 0
+                    ? round(($row['churn_count'] / $total) * 100, 1)
+                    : 0.0;
+
+                return $row;
+            })
+            ->sortByDesc('churn_count')
+            ->values()
+            ->all();
+    }
+
+    private function dailyAverageTickets(Carbon $from, Carbon $to, array $platformIds): array
+    {
+        $dateExpression = DB::connection()->getDriverName() === 'sqlite'
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
+
+        $rows = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$from->copy()->startOfDay()->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) <= ?', [$to->copy()->endOfDay()->toDateTimeString()])
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+            ->selectRaw("{$dateExpression} as event_date")
+            ->selectRaw('payments.platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, 'USD') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->groupByRaw($dateExpression)
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, 'USD')")
+            ->get();
+
+        return $rows
+            ->groupBy('event_date')
+            ->map(function ($dateRows, string $date): array {
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($dateRows, 'USD', false);
+                $paymentsCount = (int) $dateRows->sum('payments_count');
+                $normalizedTotal = $normalized['normalized_total'];
+
+                return [
+                    'average_ticket_usd' => $normalizedTotal !== null && $paymentsCount > 0
+                        ? round((float) $normalizedTotal / $paymentsCount, 2)
+                        : null,
+                    'payments_count' => $paymentsCount,
+                    'normalization_partial' => (bool) data_get($normalized, 'normalization_meta.partial', false),
+                    'date' => $date,
+                ];
+            })
+            ->all();
+    }
+
+    private function revenueAtRiskSummary(array $daily): array
+    {
+        $coveredRows = collect($daily)->filter(
+            fn (array $row) => $row['churn'] > 0 && $row['estimated_revenue_at_risk_usd'] !== null
+        );
+        $churnWithTicket = (int) $coveredRows->sum('churn');
+        $totalChurn = array_sum(array_column($daily, 'churn'));
+
+        return [
+            'currency' => 'USD',
+            'estimated_total' => round((float) $coveredRows->sum('estimated_revenue_at_risk_usd'), 2),
+            'weighted_average_ticket' => $churnWithTicket > 0
+                ? round((float) $coveredRows->sum('estimated_revenue_at_risk_usd') / $churnWithTicket, 2)
+                : null,
+            'covered_churn_count' => $churnWithTicket,
+            'total_churn_count' => $totalChurn,
+            'coverage_percent' => $totalChurn > 0
+                ? round(($churnWithTicket / $totalChurn) * 100, 1)
+                : 100.0,
+            'method' => 'daily_average_ticket_times_churn',
+        ];
     }
 
     private function comparison(array $totals, array $previousTotals): array
