@@ -15,7 +15,9 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
+use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
+use App\Services\ClientChurnStamper;
 use App\Services\ClientDeletionService;
 use App\Services\ClientOutreachService;
 use App\Services\ClientSegmentService;
@@ -39,6 +41,7 @@ use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use App\Support\CrmClientChurnReason;
 use App\Support\CrmClientCloseReason;
 use App\Support\DealDeactivationReason;
 use App\Support\DeactivationRequest;
@@ -78,6 +81,8 @@ class ClientController extends Controller
         private readonly ClientCaseClosureService $clientCaseClosureService,
         private readonly ClientSegmentService $clientSegmentService,
         private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
+        private readonly ChurnAggregatorService $churnAggregatorService,
+        private readonly ClientChurnStamper $clientChurnStamper,
     ) {
     }
 
@@ -4725,5 +4730,145 @@ class ClientController extends Controller
             return 'orange';
         }
         return 'red';
+    }
+
+    // ─── Churn Queue endpoints ────────────────────────────────────────────────
+
+    public function churnSummary(Request $request)
+    {
+        [$from, $to] = $this->resolveChurnRange($request);
+
+        // null means admin = all platforms; empty array means no access
+        $accessibleIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $platformIds = $accessibleIds ?? []; // empty = no restriction in aggregator
+
+        // Narrow to a specific market if requested
+        if ($request->filled('platform_id')) {
+            $requested = (int) $request->input('platform_id');
+            // Admins (null) can access any platform; others must have it in their list
+            if ($accessibleIds === null || in_array($requested, $accessibleIds, true)) {
+                $platformIds = [$requested];
+            }
+        }
+
+        $summary = $this->churnAggregatorService->summary($from, $to, $platformIds);
+
+        return response()->json($summary);
+    }
+
+    public function churned(Request $request)
+    {
+        [$from, $to] = $this->resolveChurnRange($request);
+
+        $query = Client::query()
+            ->with([
+                'platform:id,name',
+                'assignedAgent:id,name',
+                'retentionInsight:client_id,band,primary_tag',
+                'activeDeal.product:id,name,display_name,tier',
+            ])
+            ->whereNotNull('churned_at')
+            ->whereBetween('churned_at', [$from->startOfDay(), $to->endOfDay()]);
+
+        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+
+        if ($request->filled('platform_id')) {
+            $query->where('platform_id', (int) $request->input('platform_id'));
+        }
+
+        if ($request->filled('reason_code')) {
+            $query->where('churn_reason_code', $request->input('reason_code'));
+        }
+
+        if ($request->filled('source')) {
+            $query->where('churn_source', $request->input('source'));
+        }
+
+        $query->orderBy('churned_at', 'desc');
+
+        $clients = $query->paginate($request->integer('per_page', 25));
+
+        return response()->json($clients);
+    }
+
+    public function markWonBack(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'note' => 'nullable|string|max:500',
+        ]);
+
+        if ($client->churned_at === null) {
+            return response()->json([
+                'message' => 'This client is not currently marked as churned.',
+            ], 422);
+        }
+
+        $this->clientChurnStamper->clear($client, $validated['note'] ?? 'Manually marked as won-back');
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_MARK_WON_BACK,
+            'client',
+            (int) $client->id,
+            ['churned_at' => optional($client->churned_at)?->toDateTimeString(), 'churn_reason_code' => $client->churn_reason_code],
+            ['churned_at' => null, 'note' => $validated['note'] ?? null],
+            $validated['note'] ?? 'Manually marked as won-back'
+        );
+
+        return response()->json([
+            'message' => 'Client marked as won-back.',
+            'client' => $client->fresh(['platform', 'assignedAgent']),
+        ]);
+    }
+
+    private function resolveChurnRange(Request $request): array
+    {
+        $now = now();
+
+        $from = trim((string) $request->input('from', ''));
+        $to = trim((string) $request->input('to', ''));
+
+        if ($from !== '' || $to !== '') {
+            try {
+                $start = $from !== '' ? Carbon::parse($from)->startOfDay() : $now->copy()->subDays(30)->startOfDay();
+                $end = $to !== '' ? Carbon::parse($to)->endOfDay() : $now->copy()->endOfDay();
+
+                // Cap at 365 days
+                $cap = $now->copy()->subYear();
+                if ($start->lt($cap)) {
+                    $start = $cap;
+                }
+
+                return [$start, $end];
+            } catch (\Throwable) {
+                // fall through to default
+            }
+        }
+
+        $week = (string) $request->input('week', 'this');
+
+        if ($week === 'last') {
+            return [
+                $now->copy()->subWeek()->startOfWeek(Carbon::MONDAY),
+                $now->copy()->subWeek()->endOfWeek(Carbon::SUNDAY),
+            ];
+        }
+
+        if ($week === 'month') {
+            return [
+                $now->copy()->subDays(30)->startOfDay(),
+                $now->copy()->endOfDay(),
+            ];
+        }
+
+        // Default: this week Mon → now
+        return [
+            $now->copy()->startOfWeek(Carbon::MONDAY)->startOfDay(),
+            $now->copy()->endOfDay(),
+        ];
     }
 }

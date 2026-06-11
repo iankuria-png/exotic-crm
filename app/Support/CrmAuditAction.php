@@ -112,6 +112,7 @@ final class CrmAuditAction
     public const CLIENT_REOPEN = 'client_reopen';
     public const CLIENT_BULK_CLOSE_CASE = 'client_bulk_close_case';
     public const CLIENT_AUTO_PURGE = 'client_auto_purge';
+    public const CLIENT_MARK_WON_BACK = 'client_mark_won_back';
     public const PAYMENT_CLOSE_VIA_CLIENT = 'payment_close_via_client';
     public const CLIENT_WALLET_TOPUP = 'client_wallet_topup';
     public const CLIENT_WALLET_ADJUSTMENT = 'client_wallet_adjustment';

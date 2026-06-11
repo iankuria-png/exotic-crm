@@ -33,9 +33,10 @@ export default function CloseCaseDialog({
     deactivateUrl = null, // deep-link target when blocked
     isPending = false,
     error = null,
+    initialReasonCode = '', // optional pre-selected reason (e.g. from churn queue)
 }) {
     const reasonsQuery = useCloseReasons();
-    const [reasonCode, setReasonCode] = useState('');
+    const [reasonCode, setReasonCode] = useState(initialReasonCode || '');
     const [note, setNote] = useState('');
     const firstFieldRef = useRef(null);
 
@@ -48,9 +49,13 @@ export default function CloseCaseDialog({
 
     useEffect(() => {
         if (!open) {
-            setReasonCode('');
+            setReasonCode(initialReasonCode || '');
             setNote('');
             return undefined;
+        }
+        // Pre-fill from initialReasonCode when dialog opens
+        if (initialReasonCode) {
+            setReasonCode(initialReasonCode);
         }
 
         // Focus the reason dropdown on mount.

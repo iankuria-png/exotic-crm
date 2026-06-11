@@ -80,6 +80,10 @@ class Client extends Model
         'close_reason_note',
         'closed_by',
         'purge_after',
+        'churned_at',
+        'churn_reason_code',
+        'churn_source',
+        'first_activated_at',
         'first_contact_at',
         'last_contact_at',
         'last_online_at',
@@ -125,6 +129,8 @@ class Client extends Model
         'seo_score_updated_at' => 'datetime',
         'closed_at' => 'datetime',
         'purge_after' => 'datetime',
+        'churned_at' => 'datetime',
+        'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
         'last_contact_at' => 'datetime',
     ];
@@ -331,6 +337,16 @@ class Client extends Model
         return $query->whereNotNull('closed_at')
             ->whereNotNull('purge_after')
             ->where('purge_after', '<=', now());
+    }
+
+    public function scopeChurned($query)
+    {
+        return $query->whereNotNull('churned_at');
+    }
+
+    public function scopeNotChurned($query)
+    {
+        return $query->whereNull('churned_at');
     }
 
     public function getWpProfileUrlAttribute(): ?string

@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Services\ClientChurnStamper;
 use App\Services\ClientRetentionInsightService;
+use App\Support\CrmClientChurnReason;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -20,6 +22,11 @@ class Deal extends Model
                     app(\App\Services\Kyc\KycSettingsService::class)->recomputeClientRequirement($client);
                 }
             }
+
+            // Churn lifecycle hooks — only fire when status or activated_at changed
+            if ($deal->isDirty('status') || $deal->isDirty('activated_at')) {
+                static::handleChurnHooks($deal);
+            }
         });
 
         static::deleted(function (Deal $deal): void {
@@ -31,6 +38,61 @@ class Deal extends Model
                 }
             }
         });
+    }
+
+    protected static function handleChurnHooks(Deal $deal): void
+    {
+        if (!$deal->client_id) {
+            return;
+        }
+
+        try {
+            /** @var \App\Models\Client $client */
+            $client = $deal->client()->first();
+            if (!$client) {
+                return;
+            }
+
+            $stamper = app(ClientChurnStamper::class);
+            $status = (string) $deal->status;
+
+            // Handle first_activated_at population
+            if ($deal->isDirty('activated_at') && $deal->activated_at !== null) {
+                $stamper->refreshFirstActivatedAt($client);
+            }
+
+            // New active deal → clear any existing churn stamp
+            if ($status === 'active' && $client->churned_at !== null) {
+                $stamper->clear($client, 'new_subscription_activated');
+                return;
+            }
+
+            // Churn-triggering status transitions
+            if (in_array($status, ['cancelled', 'expired', 'deactivated'], true)) {
+                [$reasonCode, $source] = match ($status) {
+                    'cancelled' => [
+                        CrmClientChurnReason::fromDealCancellation($deal->cancellation_reason_code),
+                        'deal_cancelled',
+                    ],
+                    'expired' => [
+                        CrmClientChurnReason::fromDealExpiry(),
+                        'deal_expired',
+                    ],
+                    'deactivated' => [
+                        CrmClientChurnReason::fromAdminDeactivation($deal->cancellation_reason_code),
+                        'deal_deactivated',
+                    ],
+                };
+                $stamper->stamp($client, $reasonCode, $source, now());
+            }
+        } catch (\Throwable $e) {
+            // Never let churn hooks break the deal save — log and continue
+            \Illuminate\Support\Facades\Log::warning('ClientChurnStamper hook failed', [
+                'deal_id' => $deal->id,
+                'client_id' => $deal->client_id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     protected $fillable = [

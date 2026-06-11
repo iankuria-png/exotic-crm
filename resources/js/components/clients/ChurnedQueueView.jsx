@@ -1,0 +1,803 @@
+import React, { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+    CartesianGrid,
+    Legend,
+    Line,
+    LineChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from 'recharts';
+import api from '../../services/api';
+import { useToast } from '../ToastProvider';
+import ConfirmDialog from '../ConfirmDialog';
+import CloseCaseDialog from '../CloseCaseDialog';
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const CHURN_REASON_LABELS = {
+    payment_reversed: 'Payment Reversed',
+    invalid_reference: 'Invalid Reference',
+    fraud_suspected: 'Fraud Suspected',
+    customer_request: 'Customer Request',
+    duplicate_entry: 'Duplicate Entry',
+    expired_unrenewed: 'Expired (Unrenewed)',
+    admin_deactivated: 'Admin Deactivated',
+    not_serious: 'Not Serious',
+    no_response: 'No Response',
+    declined: 'Declined to Proceed',
+    invalid_contact: 'Invalid Contact Details',
+    inappropriate: 'Inappropriate Behaviour',
+    payment_issue: 'Payment Issue Not Resolved',
+    duplicate: 'Duplicate Contact',
+    other: 'Other',
+};
+
+const CHURN_SOURCE_LABELS = {
+    deal_cancelled: 'Deal Cancelled',
+    deal_expired: 'Deal Expired',
+    deal_deactivated: 'Deal Deactivated',
+    case_closed: 'Case Closed',
+};
+
+const CLOSE_CASE_REASON_CODES = new Set([
+    'not_serious', 'no_response', 'declined', 'invalid_contact',
+    'inappropriate', 'payment_issue', 'duplicate', 'other',
+]);
+
+const PRESETS = [
+    { key: 'this', label: 'This week' },
+    { key: 'last', label: 'Last week' },
+    { key: 'month', label: 'Last 30 days' },
+    { key: 'custom', label: 'Custom' },
+];
+
+const ALLOWED_PRESETS = new Set(PRESETS.map((p) => p.key));
+
+const SERIES = [
+    { key: 'signups', label: 'Signups', color: '#14b8a6' },
+    { key: 'activations', label: 'Activations', color: '#f59e0b' },
+    { key: 'churn', label: 'Churn', color: '#f43f5e' },
+];
+
+// ─── URL state helpers ────────────────────────────────────────────────────────
+
+function readChurnRangeFromUrl(searchParams) {
+    const from = searchParams.get('from') || '';
+    const to = searchParams.get('to') || '';
+    if (from || to) {
+        return { mode: 'custom', from, to };
+    }
+    const preset = searchParams.get('week') || 'this';
+    return { mode: 'preset', preset: ALLOWED_PRESETS.has(preset) ? preset : 'this' };
+}
+
+function rangeParamsFromState(range) {
+    if (range.mode === 'custom') {
+        return { from: range.from || undefined, to: range.to || undefined };
+    }
+    return { week: range.preset === 'this' ? undefined : range.preset };
+}
+
+// ─── Helper formatters ────────────────────────────────────────────────────────
+
+function formatDays(days) {
+    if (days === null || days === undefined) return '—';
+    const d = parseFloat(days);
+    if (Number.isNaN(d)) return '—';
+    return `${d.toFixed(0)}d`;
+}
+
+function healthStyles(health) {
+    if (health === 'healthy') return { dot: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' };
+    if (health === 'watch') return { dot: 'bg-amber-500', text: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200' };
+    return { dot: 'bg-rose-600', text: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' };
+}
+
+function formatDate(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function MetricCard({ label, value, subValue, health }) {
+    const styles = health ? healthStyles(health) : null;
+    return (
+        <div className={`rounded-lg border bg-white p-4 ${styles ? `${styles.border}` : 'border-slate-200'}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+            <p className={`mt-1 text-2xl font-bold ${styles ? styles.text : 'text-slate-900'}`}>{value}</p>
+            {subValue ? <p className="mt-0.5 text-xs text-slate-500">{subValue}</p> : null}
+            {health ? (
+                <div className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.bg} ${styles.text}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${styles.dot}`} />
+                    {health.charAt(0).toUpperCase() + health.slice(1)}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function SeriesToggle({ visibleSeries, onToggle }) {
+    return (
+        <div className="flex flex-wrap gap-2">
+            {SERIES.map((s) => {
+                const active = visibleSeries.has(s.key);
+                return (
+                    <button
+                        key={s.key}
+                        type="button"
+                        onClick={() => onToggle(s.key)}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                            active
+                                ? 'border-transparent text-white'
+                                : 'border-slate-300 bg-white text-slate-500'
+                        }`}
+                        style={active ? { backgroundColor: s.color, borderColor: s.color } : {}}
+                    >
+                        <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: active ? 'rgba(255,255,255,0.8)' : s.color }}
+                        />
+                        {s.label}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+function TrendChart({ daily, visibleSeries }) {
+    const data = (daily || []).map((d) => ({
+        date: d.date?.slice(5) ?? d.date, // Show MM-DD
+        signups: d.signups,
+        activations: d.activations,
+        churn: d.churn,
+    }));
+
+    if (!data.length) {
+        return (
+            <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
+                No data for this range.
+            </div>
+        );
+    }
+
+    return (
+        <div className="h-48 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 4, right: 12, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                    <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}
+                        labelStyle={{ fontWeight: 600, color: '#334155' }}
+                    />
+                    {SERIES.filter((s) => visibleSeries.has(s.key)).map((s) => (
+                        <Line
+                            key={s.key}
+                            type="monotone"
+                            dataKey={s.key}
+                            stroke={s.color}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                        />
+                    ))}
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
+function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
+    const [sortKey, setSortKey] = useState('churn_count');
+    const [sortDir, setSortDir] = useState('desc');
+
+    const handleSort = (key) => {
+        if (sortKey === key) {
+            setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        } else {
+            setSortKey(key);
+            setSortDir('desc');
+        }
+    };
+
+    const sorted = [...(durations || [])].sort((a, b) => {
+        const aVal = a[sortKey] ?? -Infinity;
+        const bVal = b[sortKey] ?? -Infinity;
+        return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+
+    const thClass = (key) =>
+        `cursor-pointer select-none px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700 ${sortKey === key ? 'text-teal-600' : ''}`;
+
+    const SortIcon = ({ k }) => {
+        if (sortKey !== k) return <span className="opacity-30"> ↕</span>;
+        return <span>{sortDir === 'asc' ? ' ↑' : ' ↓'}</span>;
+    };
+
+    return (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50">
+                    <tr>
+                        <th className={thClass('name')} onClick={() => handleSort('name')}>Market<SortIcon k="name" /></th>
+                        <th className={thClass('avg_paid_lifetime_days')} onClick={() => handleSort('avg_paid_lifetime_days')}>Avg paid lifetime<SortIcon k="avg_paid_lifetime_days" /></th>
+                        <th className={thClass('avg_total_relationship_days')} onClick={() => handleSort('avg_total_relationship_days')}>Avg total relationship<SortIcon k="avg_total_relationship_days" /></th>
+                        <th className={thClass('churn_count')} onClick={() => handleSort('churn_count')}>Churned<SortIcon k="churn_count" /></th>
+                        <th className={thClass('net_delta')} onClick={() => handleSort('net_delta')}>Net delta<SortIcon k="net_delta" /></th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                    {sorted.length === 0 ? (
+                        <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">No market data for this range.</td></tr>
+                    ) : sorted.map((row) => {
+                        const isSelected = selectedMarketId === row.platform_id;
+                        const netColor = row.net_delta > 0 ? 'text-emerald-600' : row.net_delta < 0 ? 'text-rose-600' : 'text-slate-500';
+                        return (
+                            <tr
+                                key={row.platform_id}
+                                onClick={() => onSelectMarket(isSelected ? null : row.platform_id)}
+                                className={`cursor-pointer transition hover:bg-slate-50 ${isSelected ? 'bg-teal-50' : ''}`}
+                            >
+                                <td className="px-3 py-2 font-medium text-slate-800">{row.name}</td>
+                                <td className="px-3 py-2 text-slate-600">
+                                    {formatDays(row.avg_paid_lifetime_days)}
+                                    <span className="ml-1 text-[10px] text-slate-400">paid</span>
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                    {formatDays(row.avg_total_relationship_days)}
+                                    <span className="ml-1 text-[10px] text-slate-400">total</span>
+                                </td>
+                                <td className="px-3 py-2 text-slate-700">{row.churn_count.toLocaleString()}</td>
+                                <td className={`px-3 py-2 font-semibold ${netColor}`}>
+                                    {row.net_delta > 0 ? '+' : ''}{row.net_delta}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+function ReasonAggregator({ reasons, onSelectReason, selectedReason }) {
+    if (!reasons?.length) {
+        return (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                No churn reason data for this range.
+            </div>
+        );
+    }
+
+    const maxCount = Math.max(...reasons.map((r) => r.count), 1);
+
+    return (
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-4 py-3">
+                <h3 className="text-sm font-semibold text-slate-800">Churn reasons</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">Click a bar to filter the client list below.</p>
+            </div>
+            <ul className="divide-y divide-slate-100 p-3">
+                {reasons.map((r) => {
+                    const isSelected = selectedReason === r.code;
+                    const pct = Math.round((r.count / maxCount) * 100);
+                    return (
+                        <li
+                            key={r.code}
+                            onClick={() => onSelectReason(isSelected ? null : r.code)}
+                            className={`cursor-pointer rounded-md px-2 py-2 transition hover:bg-slate-50 ${isSelected ? 'bg-teal-50 ring-1 ring-teal-200' : ''}`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-xs font-medium text-slate-700">{r.label}</span>
+                                <div className="flex items-center gap-2">
+                                    {Object.entries(r.by_source || {}).map(([src, cnt]) => (
+                                        <span key={src} className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                            {CHURN_SOURCE_LABELS[src] ?? src} · {cnt}
+                                        </span>
+                                    ))}
+                                    <span className="w-8 text-right text-xs font-semibold text-slate-600">{r.count}</span>
+                                </div>
+                            </div>
+                            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                    className="h-full rounded-full bg-rose-400 transition-all"
+                                    style={{ width: `${pct}%` }}
+                                />
+                            </div>
+                        </li>
+                    );
+                })}
+            </ul>
+        </div>
+    );
+}
+
+function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCloseCase }) {
+    return (
+        <tr className="hover:bg-slate-50">
+            <td className="px-4 py-2.5">
+                <button type="button" onClick={onReactivate} className="text-left">
+                    <p className="text-sm font-semibold text-slate-800 hover:text-teal-700">{row.name || '—'}</p>
+                    <p className="text-xs text-slate-500 crm-mono">{row.phone_normalized || ''}</p>
+                </button>
+            </td>
+            <td className="px-4 py-2.5 text-xs text-slate-500">{row.platform?.name || '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-slate-600">{formatDate(row.first_activated_at)}</td>
+            <td className="px-4 py-2.5 text-xs text-slate-600">{formatDate(row.churned_at)}</td>
+            <td className="px-4 py-2.5">
+                <div className="flex flex-col gap-0.5">
+                    <span className="text-xs font-medium text-slate-700">
+                        {CHURN_REASON_LABELS[row.churn_reason_code] || row.churn_reason_code || '—'}
+                    </span>
+                    {row.churn_source ? (
+                        <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                            {CHURN_SOURCE_LABELS[row.churn_source] || row.churn_source}
+                        </span>
+                    ) : null}
+                </div>
+            </td>
+            <td className="px-4 py-2.5 text-xs text-slate-600">{row.plan_label || '—'}</td>
+            <td className="px-4 py-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                        type="button"
+                        onClick={onWinBackSms}
+                        className="rounded-md bg-teal-700 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-teal-800"
+                    >
+                        Win-back SMS
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onReactivate}
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                        Reactivate
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onMarkWonBack}
+                        className="rounded-md border border-emerald-300 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                    >
+                        Mark won-back
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onCloseCase}
+                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
+                    >
+                        Close case
+                    </button>
+                </div>
+            </td>
+        </tr>
+    );
+}
+
+// ─── Win-back SMS dialog ──────────────────────────────────────────────────────
+
+function WinBackSmsDialog({ open, client, onCancel, onConfirm, isPending }) {
+    const [message, setMessage] = useState('');
+
+    const defaultMsg = client
+        ? `Hi ${client.name || 'there'}, we noticed your subscription expired. We'd love to have you back — contact us to reactivate at a special rate!`
+        : '';
+
+    React.useEffect(() => {
+        if (open && client) setMessage(defaultMsg);
+    }, [open, client?.id]);
+
+    if (!open) return null;
+
+    return (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4" onClick={isPending ? undefined : onCancel}>
+            <div role="dialog" aria-modal="true" className="w-full max-w-lg overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Send win-back SMS</h3>
+                        <p className="crm-panel-subtitle">Sending to {client?.phone_normalized}</p>
+                    </div>
+                </header>
+                <div className="p-4">
+                    <textarea
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        rows={4}
+                        maxLength={480}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                        placeholder="Type your win-back message…"
+                        disabled={isPending}
+                    />
+                    <p className="mt-1 text-right text-[11px] text-slate-400">{message.length}/480</p>
+                </div>
+                <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                    <button type="button" onClick={onCancel} disabled={isPending} className="crm-btn-secondary">Cancel</button>
+                    <button
+                        type="button"
+                        disabled={!message.trim() || isPending}
+                        onClick={() => onConfirm({ message: message.trim() })}
+                        className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {isPending ? 'Sending…' : 'Send SMS'}
+                    </button>
+                </footer>
+            </div>
+        </div>
+    );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export default function ChurnedQueueView({ platformId = '' }) {
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const toast = useToast();
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    // Range state from URL
+    const range = useMemo(() => readChurnRangeFromUrl(searchParams), [searchParams]);
+    const [customFrom, setCustomFrom] = useState(range.from || '');
+    const [customTo, setCustomTo] = useState(range.to || '');
+    const [showCustom, setShowCustom] = useState(range.mode === 'custom');
+
+    // Filters
+    const [selectedMarketId, setSelectedMarketId] = useState(platformId ? Number(platformId) : null);
+    const [selectedReason, setSelectedReason] = useState(null);
+    const [visibleSeries, setVisibleSeries] = useState(new Set(['signups', 'activations', 'churn']));
+
+    // Row dialogs
+    const [wonBackDialog, setWonBackDialog] = useState({ open: false, client: null });
+    const [smsDialog, setSmsDialog] = useState({ open: false, client: null });
+    const [closeCaseDialog, setCloseCaseDialog] = useState({ open: false, client: null });
+    const [closeCaseError, setCloseCaseError] = useState(null);
+
+    // Pagination
+    const [page, setPage] = useState(1);
+
+    const rangeParams = useMemo(() => rangeParamsFromState(range), [range]);
+    const platformParam = selectedMarketId || (platformId ? Number(platformId) : null);
+
+    const summaryParams = {
+        ...rangeParams,
+        ...(platformParam ? { platform_id: platformParam } : {}),
+    };
+
+    const summaryQuery = useQuery({
+        queryKey: ['clients-churn-summary', summaryParams],
+        queryFn: () => api.get('/crm/clients/churn-summary', { params: summaryParams }).then((r) => r.data),
+        staleTime: 60_000,
+    });
+
+    const listParams = {
+        ...rangeParams,
+        ...(platformParam ? { platform_id: platformParam } : {}),
+        ...(selectedReason ? { reason_code: selectedReason } : {}),
+        page,
+        per_page: 25,
+    };
+
+    const listQuery = useQuery({
+        queryKey: ['clients-churned', listParams],
+        queryFn: () => api.get('/crm/clients/churned', { params: listParams }).then((r) => r.data),
+        keepPreviousData: true,
+        staleTime: 30_000,
+    });
+
+    const setPreset = (preset) => {
+        const params = new URLSearchParams(searchParams);
+        params.delete('from');
+        params.delete('to');
+        params.delete('week');
+        if (preset !== 'this') params.set('week', preset);
+        setShowCustom(preset === 'custom');
+        if (preset !== 'custom') setSearchParams(params, { replace: true });
+        setPage(1);
+    };
+
+    const applyCustomRange = () => {
+        const params = new URLSearchParams(searchParams);
+        params.delete('week');
+        if (customFrom) params.set('from', customFrom);
+        if (customTo) params.set('to', customTo);
+        setSearchParams(params, { replace: true });
+        setPage(1);
+    };
+
+    const toggleSeries = (key) => {
+        setVisibleSeries((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) {
+                if (next.size === 1) return prev; // Keep at least one
+                next.delete(key);
+            } else {
+                next.add(key);
+            }
+            return next;
+        });
+    };
+
+    const wonBackMutation = useMutation({
+        mutationFn: ({ clientId, note }) =>
+            api.post(`/crm/clients/${clientId}/mark-won-back`, { note }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients-churned'] });
+            queryClient.invalidateQueries({ queryKey: ['clients-churn-summary'] });
+            toast?.success?.('Client marked as won-back.');
+            setWonBackDialog({ open: false, client: null });
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Failed to mark as won-back.'),
+    });
+
+    const smsMutation = useMutation({
+        mutationFn: ({ clientId, message }) =>
+            api.post(`/crm/conversations/clients/${clientId}/send`, {
+                channel: 'sms',
+                message,
+                context: 'win_back',
+            }).then((r) => r.data),
+        onSuccess: () => {
+            toast?.success?.('Win-back SMS sent.');
+            setSmsDialog({ open: false, client: null });
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'SMS send failed.'),
+    });
+
+    const closeCaseMutation = useMutation({
+        mutationFn: ({ clientId, payload }) =>
+            api.post(`/crm/clients/${clientId}/close-case`, payload).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients-churned'] });
+            queryClient.invalidateQueries({ queryKey: ['clients-churn-summary'] });
+            toast?.success?.('Case closed and removed from churned queue.');
+            setCloseCaseDialog({ open: false, client: null });
+            setCloseCaseError(null);
+        },
+        onError: (err) => {
+            const msg = err?.response?.data?.message || 'Close case failed.';
+            setCloseCaseError(msg);
+        },
+    });
+
+    const summary = summaryQuery.data;
+    const totals = summary?.totals || { signups: 0, activations: 0, churn: 0, net: 0 };
+    const health = summary?.health || 'neutral';
+    const rows = listQuery.data?.data || [];
+    const pagination = listQuery.data;
+
+    const currentPreset = range.mode === 'custom' ? 'custom' : (range.preset || 'this');
+
+    return (
+        <div className="space-y-5">
+            {/* Range selector */}
+            <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                    {PRESETS.map((p) => (
+                        <button
+                            key={p.key}
+                            type="button"
+                            onClick={() => setPreset(p.key)}
+                            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
+                                currentPreset === p.key
+                                    ? 'bg-white text-teal-700 shadow-sm'
+                                    : 'text-slate-600 hover:text-slate-800'
+                            }`}
+                        >
+                            {p.label}
+                        </button>
+                    ))}
+                </div>
+                {showCustom && (
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="date"
+                            value={customFrom}
+                            onChange={(e) => setCustomFrom(e.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                        />
+                        <span className="text-sm text-slate-400">→</span>
+                        <input
+                            type="date"
+                            value={customTo}
+                            onChange={(e) => setCustomTo(e.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                        />
+                        <button
+                            type="button"
+                            onClick={applyCustomRange}
+                            disabled={!customFrom && !customTo}
+                            className="rounded-md bg-teal-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                        >
+                            Apply
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Metric strip */}
+            <div className="grid gap-3 md:grid-cols-3">
+                <MetricCard
+                    label="Net movement"
+                    value={totals.net > 0 ? `+${totals.net.toLocaleString()}` : totals.net.toLocaleString()}
+                    subValue={`${totals.signups} signups · ${totals.churn} churned`}
+                    health={health}
+                />
+                <MetricCard
+                    label="Churned in range"
+                    value={totals.churn.toLocaleString()}
+                    subValue={`vs ${totals.activations} activated`}
+                />
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Avg duration — all markets</p>
+                    {summaryQuery.isLoading ? (
+                        <p className="mt-2 text-sm text-slate-400">Loading…</p>
+                    ) : (summary?.durations_by_market?.length > 0) ? (
+                        (() => {
+                            const allDurations = summary.durations_by_market;
+                            const avgPaid = allDurations.reduce((sum, d) => sum + (d.avg_paid_lifetime_days || 0), 0) / allDurations.length;
+                            const avgTotal = allDurations.reduce((sum, d) => sum + (d.avg_total_relationship_days || 0), 0) / allDurations.length;
+                            return (
+                                <>
+                                    <p className="mt-1 text-2xl font-bold text-slate-900">{formatDays(avgPaid)} <span className="text-sm font-medium text-slate-500">paid</span></p>
+                                    <p className="mt-0.5 text-xs text-slate-500">{formatDays(avgTotal)} total relationship</p>
+                                </>
+                            );
+                        })()
+                    ) : (
+                        <p className="mt-2 text-sm text-slate-400">No data</p>
+                    )}
+                </div>
+            </div>
+
+            {/* Net movement chart */}
+            <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-slate-800">Net movement over time</h3>
+                    <SeriesToggle visibleSeries={visibleSeries} onToggle={toggleSeries} />
+                </div>
+                <TrendChart daily={summary?.daily} visibleSeries={visibleSeries} />
+            </div>
+
+            {/* Market duration table */}
+            <div>
+                <h3 className="mb-2 text-sm font-semibold text-slate-800">Duration by market</h3>
+                <p className="mb-2 text-xs text-slate-500">Click a row to filter the client list below to that market.</p>
+                <MarketDurationTable
+                    durations={summary?.durations_by_market}
+                    onSelectMarket={(id) => { setSelectedMarketId(id); setPage(1); }}
+                    selectedMarketId={selectedMarketId}
+                />
+            </div>
+
+            {/* Reason aggregator */}
+            <div>
+                <ReasonAggregator
+                    reasons={summary?.reason_breakdown}
+                    onSelectReason={(code) => { setSelectedReason(code); setPage(1); }}
+                    selectedReason={selectedReason}
+                />
+            </div>
+
+            {/* Active filters */}
+            {(selectedMarketId || selectedReason) ? (
+                <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-500">Filtering by:</span>
+                    {selectedMarketId ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-700">
+                            Market: {summary?.durations_by_market?.find((d) => d.platform_id === selectedMarketId)?.name || `#${selectedMarketId}`}
+                            <button type="button" onClick={() => { setSelectedMarketId(null); setPage(1); }} className="ml-1 hover:text-teal-900">×</button>
+                        </span>
+                    ) : null}
+                    {selectedReason ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                            Reason: {CHURN_REASON_LABELS[selectedReason] || selectedReason}
+                            <button type="button" onClick={() => { setSelectedReason(null); setPage(1); }} className="ml-1 hover:text-rose-900">×</button>
+                        </span>
+                    ) : null}
+                </div>
+            ) : null}
+
+            {/* Client list */}
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-4 py-3">
+                    <h3 className="text-sm font-semibold text-slate-800">
+                        Churned clients
+                        {listQuery.data?.total != null ? <span className="ml-2 font-normal text-slate-400">({listQuery.data.total.toLocaleString()})</span> : null}
+                    </h3>
+                </div>
+                <table className="min-w-full divide-y divide-slate-100 text-sm">
+                    <thead className="bg-slate-50">
+                        <tr>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Client</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">First activated</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Churned</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reason</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last plan</th>
+                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {listQuery.isLoading ? (
+                            <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">Loading churned clients…</td></tr>
+                        ) : rows.length === 0 ? (
+                            <tr>
+                                <td colSpan={7} className="px-4 py-10 text-center">
+                                    <p className="text-sm font-medium text-slate-700">No churn this week — that&rsquo;s the goal.</p>
+                                    <p className="mt-1 text-xs text-slate-500">Try broadening the range or clearing the filters above.</p>
+                                </td>
+                            </tr>
+                        ) : rows.map((row) => (
+                            <ChurnedClientRow
+                                key={row.id}
+                                row={row}
+                                onWinBackSms={() => setSmsDialog({ open: true, client: row })}
+                                onReactivate={() => navigate(`/clients/${row.id}?tab=deals`)}
+                                onMarkWonBack={() => setWonBackDialog({ open: true, client: row })}
+                                onCloseCase={() => {
+                                    setCloseCaseError(null);
+                                    setCloseCaseDialog({ open: true, client: row });
+                                }}
+                            />
+                        ))}
+                    </tbody>
+                </table>
+
+                {pagination && pagination.last_page > 1 ? (
+                    <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+                        <span>Page {pagination.current_page} of {pagination.last_page} · {pagination.total} total</span>
+                        <div className="flex gap-1">
+                            <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium disabled:opacity-40">Prev</button>
+                            <button type="button" disabled={page >= pagination.last_page} onClick={() => setPage((p) => p + 1)} className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium disabled:opacity-40">Next</button>
+                        </div>
+                    </div>
+                ) : null}
+            </div>
+
+            {/* Dialogs */}
+            <WinBackSmsDialog
+                open={smsDialog.open}
+                client={smsDialog.client}
+                isPending={smsMutation.isPending}
+                onCancel={() => { if (!smsMutation.isPending) setSmsDialog({ open: false, client: null }); }}
+                onConfirm={({ message }) => smsMutation.mutate({ clientId: smsDialog.client?.id, message })}
+            />
+
+            <ConfirmDialog
+                open={wonBackDialog.open && !!wonBackDialog.client}
+                title={`Mark ${wonBackDialog.client?.name || 'client'} as won-back?`}
+                message="This clears the churn stamp — the client returns to active queues. Only use if you've confirmed they've re-engaged outside of a new subscription."
+                confirmLabel="Mark as won-back"
+                tone="default"
+                isPending={wonBackMutation.isPending}
+                onCancel={() => { if (!wonBackMutation.isPending) setWonBackDialog({ open: false, client: null }); }}
+                onConfirm={() => wonBackMutation.mutate({ clientId: wonBackDialog.client?.id, note: 'Manually marked as won-back from churned queue' })}
+            />
+
+            <CloseCaseDialog
+                open={closeCaseDialog.open}
+                clientName={closeCaseDialog.client?.name || ''}
+                isPending={closeCaseMutation.isPending}
+                error={closeCaseError}
+                initialReasonCode={
+                    closeCaseDialog.client?.churn_reason_code &&
+                    CLOSE_CASE_REASON_CODES.has(closeCaseDialog.client.churn_reason_code)
+                        ? closeCaseDialog.client.churn_reason_code
+                        : undefined
+                }
+                onCancel={() => {
+                    if (!closeCaseMutation.isPending) {
+                        setCloseCaseDialog({ open: false, client: null });
+                        setCloseCaseError(null);
+                    }
+                }}
+                onConfirm={(payload) => closeCaseMutation.mutate({ clientId: closeCaseDialog.client?.id, payload })}
+            />
+        </div>
+    );
+}

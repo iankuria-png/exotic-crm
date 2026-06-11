@@ -12,6 +12,7 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import CloseCaseDialog from '../components/CloseCaseDialog';
 import ConversionQueueView from '../components/clients/ConversionQueueView';
 import ClosedCasesView from '../components/clients/ClosedCasesView';
+import ChurnedQueueView from '../components/clients/ChurnedQueueView';
 import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import { useToast } from '../components/ToastProvider';
@@ -380,7 +381,7 @@ export default function Clients() {
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
-    const allowedTabs = new Set(['all', 'conversion', 'closed', 'optimizer']);
+    const allowedTabs = new Set(['all', 'conversion', 'closed', 'churned', 'optimizer']);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
     const setTab = (next) => {
@@ -1595,6 +1596,9 @@ export default function Clients() {
             <button type="button" role="tab" aria-selected={tab === 'conversion'} className={`${tabClass('conversion')} rounded-md`} onClick={() => setTab('conversion')}>
                 Conversion queue
             </button>
+            <button type="button" role="tab" aria-selected={tab === 'churned'} className={`${tabClass('churned')} rounded-md`} onClick={() => setTab('churned')}>
+                Churned queue
+            </button>
             <button type="button" role="tab" aria-selected={tab === 'closed'} className={`${tabClass('closed')} rounded-md`} onClick={() => setTab('closed')}>
                 Closed cases
                 {conversionCount ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {conversionCount.toLocaleString()}</span> : null}
@@ -1627,6 +1631,19 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <ClosedCasesView platformId={platformFilter} />
+            </div>
+        );
+    }
+
+    if (tab === 'churned') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Clients who paid and then left — track churn trends, reasons, and win them back."
+                />
+                {tabStrip}
+                <ChurnedQueueView platformId={platformFilter} />
             </div>
         );
     }

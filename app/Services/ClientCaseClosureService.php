@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Support\CrmAuditAction;
+use App\Support\CrmClientChurnReason;
 use App\Support\CrmClientCloseReason;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +23,7 @@ class ClientCaseClosureService
     public function __construct(
         private readonly AuditService $auditService,
         private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly ClientChurnStamper $churnStamper,
     ) {
     }
 
@@ -138,6 +140,14 @@ class ClientCaseClosureService
                 'client_close_audit_id' => $clientCloseAuditId,
             ];
         });
+
+        // Stamp churn for paid clients (those who activated at least one deal).
+        // Never-paid case closures belong in Closed Cases, not Churned queue.
+        $client->refresh();
+        if ($client->first_activated_at !== null) {
+            $churnReasonCode = CrmClientChurnReason::fromCloseCase($reasonCode);
+            $this->churnStamper->stamp($client, $churnReasonCode, 'case_closed', $purgeAfter->copy()->subDays(ClientCaseClosureService::SOFT_CLOSE_DAYS));
+        }
 
         return [
             'client' => $client->fresh(['platform', 'closedBy']),

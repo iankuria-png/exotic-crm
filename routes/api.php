@@ -309,6 +309,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients/close-reasons', [ClientController::class, 'closeReasons'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/closed-reasons-summary', [ClientController::class, 'closedReasonsSummary'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/conversion-queue', [ClientController::class, 'conversionQueue'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::get('/clients/churn-summary', [ClientController::class, 'churnSummary'])->middleware('role:admin,sub_admin,sales,marketing,field_sales');
+    Route::get('/clients/churned', [ClientController::class, 'churned'])->middleware('role:admin,sub_admin,sales,marketing,field_sales');
     Route::post('/clients/bulk-close', [ClientController::class, 'bulkClose'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-expire', [ClientController::class, 'bulkExpire'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
@@ -334,6 +336,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/close-case', [ClientController::class, 'closeCase'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/reopen', [ClientController::class, 'reopen'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/contacted', [ClientController::class, 'markContacted'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/mark-won-back', [ClientController::class, 'markWonBack'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/analytics', [ClientController::class, 'profileAnalytics'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales,field_sales');
