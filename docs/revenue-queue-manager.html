@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Revenue Queue Manager — Role Specification · Exotic</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink:        #16140f;
+    --ink-soft:   #4a463d;
+    --ink-faint:  #847d6e;
+    --paper:      #f7f4ee;
+    --paper-card: #fffdf8;
+    --line:       #e6e0d3;
+    --line-soft:  #efeadf;
+    --gold:       #b8842b;
+    --gold-deep:  #8a5e16;
+    --gold-wash:  #f6edda;
+    --plum:       #6d2f4d;
+    --teal:       #1f5f5b;
+    --rust:       #a8431f;
+    --ok:         #2f6b3a;
+    --shadow:     0 1px 2px rgba(40,30,10,.04), 0 12px 32px -16px rgba(40,30,10,.18);
+    --shadow-lg:  0 2px 4px rgba(40,30,10,.05), 0 30px 60px -28px rgba(40,30,10,.30);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(184,132,43,.08), transparent 60%),
+      radial-gradient(900px 500px at -10% 30%, rgba(109,47,77,.05), transparent 55%),
+      var(--paper);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.003em;
+  }
+
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 28px 120px;
+  }
+
+  /* ---------- HERO ---------- */
+  .hero {
+    padding: 88px 0 56px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--gold-deep);
+    margin-bottom: 26px;
+  }
+  .eyebrow .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 0 4px var(--gold-wash);
+  }
+  .eyebrow .sep { color: var(--line); font-weight: 400; }
+  .eyebrow .muted { color: var(--ink-faint); letter-spacing: .12em; }
+
+  h1.title {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(40px, 7vw, 68px);
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 22px;
+  }
+  h1.title .accent {
+    font-style: italic;
+    font-weight: 500;
+    color: var(--gold-deep);
+  }
+
+  .lede {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin-bottom: 36px;
+  }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .meta-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--paper-card);
+    box-shadow: var(--shadow);
+  }
+  .meta-strip > div {
+    padding: 18px 22px;
+    border-right: 1px solid var(--line-soft);
+  }
+  .meta-strip > div:last-child { border-right: none; }
+  .meta-strip .k {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 6px;
+  }
+  .meta-strip .v {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .alt-titles {
+    margin-top: 28px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .alt-titles .label {
+    font-size: 13px;
+    color: var(--ink-faint);
+  }
+  .chip {
+    font-size: 13px;
+    font-weight: 500;
+    padding: 5px 13px;
+    border-radius: 999px;
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+  }
+  .chip.is-current {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+  }
+
+  /* ---------- SECTION SCAFFOLD ---------- */
+  section { padding-top: 72px; scroll-margin-top: 24px; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .sec-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gold-deep);
+    background: var(--gold-wash);
+    border: 1px solid #ecdcbb;
+    padding: 4px 10px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  h2 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(26px, 4vw, 34px);
+    letter-spacing: -0.015em;
+    line-height: 1.1;
+    color: var(--ink);
+  }
+  .sec-intro {
+    font-size: 16.5px;
+    color: var(--ink-soft);
+    max-width: 64ch;
+    margin: -14px 0 34px 0;
+  }
+
+  /* ---------- PURPOSE CALLOUT ---------- */
+  .purpose {
+    position: relative;
+    background: linear-gradient(180deg, var(--paper-card), #fbf7ee);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 40px 42px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+  }
+  .purpose::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 5px;
+    background: linear-gradient(180deg, var(--gold), var(--plum));
+  }
+  .purpose .q {
+    font-family: 'Fraunces', serif;
+    font-size: 23px;
+    line-height: 1.4;
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .purpose .q em { color: var(--gold-deep); font-style: italic; }
+  .purpose p { color: var(--ink-soft); font-size: 16px; margin-top: 18px; }
+
+  /* ---------- QUEUE CARDS ---------- */
+  .queues {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+  }
+  .qcard {
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 26px 26px 24px;
+    box-shadow: var(--shadow);
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    position: relative;
+  }
+  .qcard:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+    border-color: #d8cfba;
+  }
+  .qcard .qhead {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .qicon {
+    width: 38px; height: 38px;
+    border-radius: 11px;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .qicon svg { width: 19px; height: 19px; }
+  .qcard h3 {
+    font-size: 16px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .qcard ul { list-style: none; display: grid; gap: 7px; margin-bottom: 14px; }
+  .qcard li {
+    font-size: 14px;
+    color: var(--ink-soft);
+    padding-left: 18px;
+    position: relative;
+  }
+  .qcard li::before {
+    content: "";
+    position: absolute;
+    left: 2px; top: 9px;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--gold);
+    opacity: .7;
+  }
+  .qcard .sla {
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    border-top: 1px dashed var(--line);
+    padding-top: 12px;
+    font-style: italic;
+  }
+  /* accent variants */
+  .v-gold  .qicon { background: var(--gold-wash); color: var(--gold-deep); }
+  .v-rust  .qicon { background: #fbe9e0; color: var(--rust); }
+  .v-teal  .qicon { background: #e1efed; color: var(--teal); }
+  .v-plum  .qicon { background: #f4e7ee; color: var(--plum); }
+  .v-ink   .qicon { background: #ece9e1; color: var(--ink); }
+
+  /* ---------- PRIORITY LADDER ---------- */
+  .ladder { display: grid; gap: 12px; }
+  .rung {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 18px;
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+  }
+  .rung .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 11px;
+    border-radius: 9px;
+    white-space: nowrap;
+    letter-spacing: .02em;
+  }
+  .rung.p1 { border-left: 4px solid var(--rust); }
+  .rung.p1 .badge { background: #fbe9e0; color: var(--rust); }
+  .rung.p2 { border-left: 4px solid var(--gold); }
+  .rung.p2 .badge { background: var(--gold-wash); color: var(--gold-deep); }
+  .rung.p3 { border-left: 4px solid var(--teal); }
+  .rung.p3 .badge { background: #e1efed; color: var(--teal); }
+  .rung.p4 { border-left: 4px solid var(--plum); }
+  .rung.p4 .badge { background: #f4e7ee; color: var(--plum); }
+  .rung .desc { font-size: 15px; color: var(--ink); font-weight: 500; }
+
+  /* ---------- REPORTING GRID ---------- */
+  .report-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .rcard {
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+  }
+  .rcard .rtitle {
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--ink);
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 9px;
+  }
+  .rcard .rtitle .pip { width: 8px; height: 8px; border-radius: 2px; }
+  .rcard ul { list-style: none; display: grid; gap: 10px; }
+  .rcard li { font-size: 13.5px; color: var(--ink-soft); display: flex; gap: 9px; }
+  .rcard li svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 3px; color: var(--gold); }
+
+  /* ---------- TWO-COL GENERIC ---------- */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .panel {
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 26px;
+    box-shadow: var(--shadow);
+  }
+  .panel h3 {
+    font-size: 15px; font-weight: 650; color: var(--ink); margin-bottom: 14px;
+  }
+  .panel ul { list-style: none; display: grid; gap: 9px; }
+  .panel li { font-size: 14.5px; color: var(--ink-soft); padding-left: 20px; position: relative; }
+  .panel li::before {
+    content: "→"; position: absolute; left: 0; top: 0;
+    color: var(--gold-deep); font-size: 13px;
+  }
+
+  /* coordination */
+  .coord-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .coord {
+    display: flex; gap: 15px;
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .coord .tag {
+    font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--gold-deep);
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    border-right: 1px solid var(--line-soft); padding-right: 14px;
+  }
+  .coord .body h3 { font-size: 15px; font-weight: 650; margin-bottom: 4px; color: var(--ink); }
+  .coord .body p { font-size: 14px; color: var(--ink-soft); }
+
+  /* ---------- KPI ---------- */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .kpi {
+    background: var(--paper-card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi .kcat {
+    font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 16px;
+  }
+  .kpi .metric { margin-bottom: 12px; }
+  .kpi .metric:last-child { margin-bottom: 0; }
+  .kpi .num {
+    font-family: 'Fraunces', serif;
+    font-size: 30px; font-weight: 600; line-height: 1;
+    color: var(--gold-deep); letter-spacing: -0.02em;
+  }
+  .kpi .num.txt { font-size: 18px; color: var(--ink); }
+  .kpi .desc { font-size: 13px; color: var(--ink-soft); margin-top: 4px; }
+
+  /* ---------- TIMELINE ---------- */
+  .timeline { position: relative; padding-left: 36px; }
+  .timeline::before {
+    content: ""; position: absolute; left: 9px; top: 8px; bottom: 8px;
+    width: 2px; background: linear-gradient(180deg, var(--gold), var(--plum));
+  }
+  .tnode { position: relative; padding-bottom: 26px; }
+  .tnode:last-child { padding-bottom: 0; }
+  .tnode::before {
+    content: ""; position: absolute; left: -32px; top: 4px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--paper-card); border: 3px solid var(--gold);
+  }
+  .tnode .when {
+    font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--gold-deep); margin-bottom: 8px;
+  }
+  .tnode .tcard {
+    background: var(--paper-card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px 22px; box-shadow: var(--shadow);
+  }
+  .tnode .tcard .lead { font-size: 14px; color: var(--ink-faint); margin-bottom: 8px; }
+  .tnode .tcard ul { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tnode .tcard li {
+    font-size: 13.5px; color: var(--ink-soft);
+    background: var(--paper); border: 1px solid var(--line-soft);
+    padding: 4px 11px; border-radius: 8px;
+  }
+
+  /* ---------- BEFORE / AFTER ---------- */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+  .compare .col { padding: 30px 30px 32px; }
+  .compare .before { background: #f3efe7; }
+  .compare .after { background: linear-gradient(180deg, #1d1a14, #2a251b); color: #f3ead6; }
+  .compare .ctitle {
+    font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    margin-bottom: 18px; display: flex; align-items: center; gap: 9px;
+  }
+  .compare .before .ctitle { color: var(--ink-faint); }
+  .compare .after .ctitle { color: var(--gold); }
+  .compare ul { list-style: none; display: grid; gap: 13px; }
+  .compare li { font-size: 14.5px; padding-left: 26px; position: relative; line-height: 1.45; }
+  .compare .before li { color: var(--ink-soft); }
+  .compare .before li::before { content: "✕"; position: absolute; left: 0; top: 0; color: var(--rust); font-weight: 700; }
+  .compare .after li { color: #ece3d0; }
+  .compare .after li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--gold); font-weight: 700; }
+
+  /* ---------- CLOSING ---------- */
+  .closing {
+    margin-top: 48px;
+    background: linear-gradient(135deg, #2a251b, #1d1a14);
+    border-radius: 22px;
+    padding: 52px 48px;
+    color: #f3ead6;
+    box-shadow: var(--shadow-lg);
+    position: relative;
+    overflow: hidden;
+  }
+  .closing::after {
+    content: "";
+    position: absolute; right: -80px; top: -80px;
+    width: 280px; height: 280px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(184,132,43,.22), transparent 70%);
+  }
+  .closing .tower {
+    font-family: 'Fraunces', serif; font-style: italic; font-weight: 500;
+    font-size: clamp(24px, 4vw, 32px); line-height: 1.3;
+    color: #fff; max-width: 24ch; position: relative; z-index: 1;
+  }
+  .closing .tower .g { color: var(--gold); }
+  .closing p {
+    font-size: 16px; color: #cabfa8; margin-top: 22px; max-width: 60ch;
+    position: relative; z-index: 1;
+  }
+
+  /* ---------- FOOTER ---------- */
+  footer {
+    margin-top: 64px; padding-top: 28px;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 14px;
+    font-size: 13px; color: var(--ink-faint);
+  }
+  footer .brand { font-family: 'Fraunces', serif; font-weight: 600; color: var(--ink); font-size: 15px; }
+
+  /* ---------- RESPONSIVE ---------- */
+  @media (max-width: 720px) {
+    .meta-strip { grid-template-columns: 1fr; }
+    .meta-strip > div { border-right: none; border-bottom: 1px solid var(--line-soft); }
+    .queues, .report-grid, .kpi-grid, .two-col, .coord-grid, .compare { grid-template-columns: 1fr; }
+    .compare { border-radius: 18px; }
+  }
+
+  /* ---------- PRINT ---------- */
+  @media print {
+    body { background: #fff; }
+    .page { max-width: 100%; padding: 0; }
+    .qcard, .rcard, .kpi, .rung, .panel, .coord, .tnode .tcard, .purpose { box-shadow: none; }
+    .qcard:hover { transform: none; }
+    section { break-inside: avoid; }
+    .closing, .compare .after { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .hero { padding-top: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="eyebrow">
+      <span class="dot"></span>
+      Role Specification
+      <span class="sep">/</span>
+      <span class="muted">Sales &amp; Customer Success</span>
+    </div>
+
+    <h1 class="title">Revenue&nbsp;Queue <span class="accent">Manager</span></h1>
+
+    <p class="lede">
+      The <strong>air-traffic controller of revenue.</strong> This role does not manage salespeople —
+      it manages revenue opportunities, ensuring that no signup, renewal, failed payment, churned
+      customer, or verification ever falls through the cracks.
+    </p>
+
+    <div class="meta-strip">
+      <div>
+        <div class="k">Department</div>
+        <div class="v">Sales &amp; Customer Success</div>
+      </div>
+      <div>
+        <div class="k">Reports To</div>
+        <div class="v">Head of Sales &amp; CS</div>
+      </div>
+      <div>
+        <div class="k">Function</div>
+        <div class="v">Revenue Operations</div>
+      </div>
+    </div>
+
+    <div class="alt-titles">
+      <span class="label">Title options:</span>
+      <span class="chip is-current">Revenue Queue Manager</span>
+      <span class="chip">Revenue Operations Coordinator</span>
+    </div>
+  </header>
+
+  <!-- PURPOSE -->
+  <section id="purpose">
+    <div class="sec-head">
+      <span class="sec-num">00</span>
+      <h2>Purpose of the Role</h2>
+    </div>
+    <div class="purpose">
+      <p class="q">
+        The Revenue Queue Manager owns Exotic's revenue opportunity pipeline and ensures
+        <em>no potential revenue is left unattended.</em>
+      </p>
+      <p>
+        The role monitors, prioritizes, assigns, and tracks every revenue-generating queue —
+        new signups, failed payments, pending payments, renewal workloads, churned customers,
+        KYC-pending accounts, and profile-activation opportunities. The objective: maximize
+        conversion, retention, payment recovery, and renewal performance, keeping Sales and
+        Customer Success focused on the highest-value work.
+      </p>
+    </div>
+  </section>
+
+  <!-- 1. QUEUE OWNERSHIP -->
+  <section id="queues">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>Revenue Queue Ownership</h2>
+    </div>
+    <p class="sec-intro">Every revenue opportunity enters a queue. Every queue has an owner, an SLA, and a conversion target.</p>
+
+    <div class="queues">
+      <!-- New Signup -->
+      <div class="qcard v-gold">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+          </span>
+          <h3>New Signup Queue</h3>
+        </div>
+        <ul>
+          <li>New signups &amp; first impressions</li>
+          <li>Profile completion progress</li>
+          <li>First-payment conversion</li>
+        </ul>
+        <div class="sla">All leads assigned &amp; contacted within SLA.</div>
+      </div>
+
+      <!-- Failed Payment -->
+      <div class="qcard v-rust">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="m15 15 4 4M19 15l-4 4"/></svg>
+          </span>
+          <h3>Failed Payment Queue</h3>
+        </div>
+        <ul>
+          <li>Failed transactions</li>
+          <li>Unmatched &amp; pending payments</li>
+          <li>Recovery actions initiated</li>
+        </ul>
+        <div class="sla">Coordinate with agents to convert failures into revenue.</div>
+      </div>
+
+      <!-- Renewal -->
+      <div class="qcard v-teal">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+          </span>
+          <h3>Renewal Queue</h3>
+        </div>
+        <ul>
+          <li>0–3 day renewals (urgent)</li>
+          <li>4–14 day renewals (warming)</li>
+          <li>High-value accounts prioritized</li>
+        </ul>
+        <div class="sla">Escalate high-risk accounts before expiry.</div>
+      </div>
+
+      <!-- Churn -->
+      <div class="qcard v-plum">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          </span>
+          <h3>Churned Customer Queue</h3>
+        </div>
+        <ul>
+          <li>Recently churned users</li>
+          <li>High-value historical customers</li>
+          <li>Dormant profiles</li>
+        </ul>
+        <div class="sla">Coordinate reactivation &amp; win-back campaigns.</div>
+      </div>
+
+      <!-- KYC -->
+      <div class="qcard v-ink">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+          </span>
+          <h3>KYC Queue</h3>
+        </div>
+        <ul>
+          <li>Pending verification</li>
+          <li>Rejected verification</li>
+          <li>Reverification requests</li>
+        </ul>
+        <div class="sla">Compliance reviews completed within SLA.</div>
+      </div>
+
+      <!-- Activation -->
+      <div class="qcard v-gold">
+        <div class="qhead">
+          <span class="qicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-3 7h5l-3 7"/><path d="M5 12a7 7 0 0 0 7 7M19 12a7 7 0 0 0-7-7"/></svg>
+          </span>
+          <h3>Profile Activation</h3>
+        </div>
+        <ul>
+          <li>Incomplete profiles</li>
+          <li>Unpublished opportunities</li>
+          <li>Activation nudges</li>
+        </ul>
+        <div class="sla">Convert dormant signups into published, paying profiles.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. PRIORITIZATION -->
+  <section id="priority">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>Queue Prioritization</h2>
+    </div>
+    <p class="sec-intro">A daily priority list tells Sales &amp; CS exactly what to work first — ranked by revenue impact and time sensitivity.</p>
+
+    <div class="ladder">
+      <div class="rung p1">
+        <span class="badge">PRIORITY 1</span>
+        <span class="desc">VIP renewals expiring within 48 hours</span>
+      </div>
+      <div class="rung p2">
+        <span class="badge">PRIORITY 2</span>
+        <span class="desc">Failed payments above $20</span>
+      </div>
+      <div class="rung p3">
+        <span class="badge">PRIORITY 3</span>
+        <span class="desc">New signups less than 24 hours old</span>
+      </div>
+      <div class="rung p4">
+        <span class="badge">PRIORITY 4</span>
+        <span class="desc">Churned users less than 30 days old</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. REPORTING -->
+  <section id="reporting">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>Reporting &amp; Analytics</h2>
+    </div>
+    <p class="sec-intro">Daily and weekly reports that make revenue performance — and revenue at risk — visible to leadership in real time.</p>
+
+    <div class="report-grid">
+      <div class="rcard">
+        <div class="rtitle"><span class="pip" style="background:var(--teal)"></span>Conversion Metrics</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Signup → Published</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Published → Paid</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Paid → Renewed</li>
+        </ul>
+      </div>
+      <div class="rcard">
+        <div class="rtitle"><span class="pip" style="background:var(--rust)"></span>Recovery Metrics</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Failed payment recovery rate</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Renewal recovery rate</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Churn reactivation rate</li>
+        </ul>
+      </div>
+      <div class="rcard">
+        <div class="rtitle"><span class="pip" style="background:var(--gold)"></span>Agent Metrics</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Queue clearance rate</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>Conversion performance</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>SLA adherence</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. PROCESS + 5. COORDINATION -->
+  <section id="optimize">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>Process Optimization</h2>
+    </div>
+    <div class="two-col">
+      <div class="panel">
+        <h3>Continuously Identify</h3>
+        <ul>
+          <li>Queue bottlenecks</li>
+          <li>Revenue leakage</li>
+          <li>Delayed follow-ups</li>
+          <li>Conversion drop-offs</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Recommend</h3>
+        <ul>
+          <li>Automation opportunities</li>
+          <li>CRM improvements</li>
+          <li>Workflow improvements</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="coordination">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>Cross-Department Coordination</h2>
+    </div>
+    <div class="coord-grid">
+      <div class="coord">
+        <span class="tag">Sales</span>
+        <div class="body"><h3>Sales</h3><p>Ensure every revenue opportunity is actioned, not just noticed.</p></div>
+      </div>
+      <div class="coord">
+        <span class="tag">CS</span>
+        <div class="body"><h3>Customer Success</h3><p>Ensure retention risks are surfaced and addressed early.</p></div>
+      </div>
+      <div class="coord">
+        <span class="tag">Mktg</span>
+        <div class="body"><h3>Marketing</h3><p>Support win-back and reactivation campaigns with queue data.</p></div>
+      </div>
+      <div class="coord">
+        <span class="tag">R&amp;D</span>
+        <div class="body"><h3>Product / R&amp;D</h3><p>Provide requirements for automations, CRM &amp; reporting enhancements.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- KPIs -->
+  <section id="kpis">
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>Key Performance Indicators</h2>
+    </div>
+    <p class="sec-intro">The numbers this role is accountable for — measured weekly, reviewed monthly.</p>
+
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kcat">Queue Management</div>
+        <div class="metric"><div class="num">95%</div><div class="desc">queue visibility</div></div>
+        <div class="metric"><div class="num">90%</div><div class="desc">cleared within SLA</div></div>
+      </div>
+      <div class="kpi">
+        <div class="kcat">New Signups</div>
+        <div class="metric"><div class="num">&lt;15<span style="font-size:16px"> min</span></div><div class="desc">first response time</div></div>
+        <div class="metric"><div class="num txt">Conversion rate</div><div class="desc">signup → paid, tracked daily</div></div>
+      </div>
+      <div class="kpi">
+        <div class="kcat">Failed Payments</div>
+        <div class="metric"><div class="num txt">Recovery rate %</div><div class="desc">of failed transactions</div></div>
+        <div class="metric"><div class="num txt">Revenue recovered</div><div class="desc">absolute $ reclaimed</div></div>
+      </div>
+      <div class="kpi">
+        <div class="kcat">Renewals</div>
+        <div class="metric"><div class="num txt">Renewal conversion</div><div class="desc">rate across windows</div></div>
+        <div class="metric"><div class="num txt">Revenue retained</div><div class="desc">from active base</div></div>
+      </div>
+      <div class="kpi">
+        <div class="kcat">Churn</div>
+        <div class="metric"><div class="num txt">Reactivation rate</div><div class="desc">of churned users</div></div>
+        <div class="metric"><div class="num txt">Reactivated revenue</div><div class="desc">won back</div></div>
+      </div>
+      <div class="kpi">
+        <div class="kcat">Operations</div>
+        <div class="metric"><div class="num txt">Average queue age</div><div class="desc">time-to-action</div></div>
+        <div class="metric"><div class="num txt">Opportunity backlog</div><div class="desc">unactioned revenue</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DAILY WORKFLOW -->
+  <section id="workflow">
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2>Daily Workflow</h2>
+    </div>
+
+    <div class="timeline">
+      <div class="tnode">
+        <div class="when">Morning · Set the board</div>
+        <div class="tcard">
+          <div class="lead">Review the overnight build-up and assign the day's workload.</div>
+          <ul><li>New signups</li><li>Failed payments</li><li>Expiring renewals</li><li>Assign workload</li></ul>
+        </div>
+      </div>
+      <div class="tnode">
+        <div class="when">Midday · Keep it moving</div>
+        <div class="tcard">
+          <div class="lead">Monitor live progress and intervene where queues stall.</div>
+          <ul><li>Agent progress</li><li>Queue movement</li><li>SLA compliance</li></ul>
+        </div>
+      </div>
+      <div class="tnode">
+        <div class="when">End of Day · Publish the truth</div>
+        <div class="tcard">
+          <div class="lead">Close the loop with a daily revenue scoreboard.</div>
+          <ul><li>Opportunities created</li><li>Opportunities closed</li><li>Revenue recovered</li><li>Revenue at risk</li></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SUCCESS / BEFORE-AFTER -->
+  <section id="success">
+    <div class="sec-head">
+      <span class="sec-num">08</span>
+      <h2>What Success Looks Like</h2>
+    </div>
+    <p class="sec-intro">Six months in, the difference is structural — not a busier team, but a system where revenue can no longer slip away unseen.</p>
+
+    <div class="compare">
+      <div class="col before">
+        <div class="ctitle">Before</div>
+        <ul>
+          <li>Opportunities scattered across tools and inboxes</li>
+          <li>Agents decide what to work on, ad hoc</li>
+          <li>Revenue leakage is invisible to leadership</li>
+        </ul>
+      </div>
+      <div class="col after">
+        <div class="ctitle">After</div>
+        <ul>
+          <li>Every revenue opportunity enters a queue</li>
+          <li>Every queue has an owner and an SLA</li>
+          <li>Every queue has a conversion target</li>
+          <li>Leadership sees revenue at risk in real time</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="closing">
+      <div class="tower">
+        The role becomes the <span class="g">air-traffic controller of revenue.</span>
+      </div>
+      <p>
+        No signup, renewal, failed payment, churned customer, or verification opportunity
+        falls through the cracks. For a business like Exotic, this role would likely generate
+        more revenue than hiring another field salesperson — because it improves conversion
+        across the entire customer lifecycle.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span class="brand">Exotic · Revenue Operations</span>
+    <span>Role Specification — Revenue Queue Manager · v1.0</span>
+  </footer>
+
+</div>
+</body>
+</html>

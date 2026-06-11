@@ -133,10 +133,10 @@ class UniversityPhase2Seeder
         $certification->fill([
             'course_id' => $course->id,
             'title' => 'Core Sales/CS Certification',
-            'description' => 'Scenario-grounded certification covering discovery, package selection, failure recovery, and renewals. 25 questions, 80% to pass, 35 minutes, 3 attempts per 30 days, valid 12 months.',
+            'description' => 'Scenario-grounded certification covering discovery, package selection, profile verification, payments, failure recovery, renewals, queue prioritization, revenue recovery, sales conduct, and account safety. 35 questions, 80% to pass, 50 minutes, 3 attempts per 30 days, valid 12 months.',
             'pass_threshold' => 80,
-            'time_limit_minutes' => 35,
-            'question_count' => 25,
+            'time_limit_minutes' => 50,
+            'question_count' => 35,
             'max_attempts_per_window' => 3,
             'attempt_window_days' => 30,
             'validity_months' => 12,
@@ -441,9 +441,9 @@ Market → competitor → urgency is least-to-most personal. Asking about urgenc
 
 **Step 4.** Ask Q3 → "Yeah this week if possible, things have been quiet." → urgency confirmed → move directly to package recommendation.
 
-**Step 5.** Quote KES pricing for Featured (mid-tier — see Subscription Selection lesson). Joy says she'll think and call back tomorrow.
+**Step 5.** Quote KES pricing for Premium (the entry paid tier — see Subscription Selection lesson). Joy says she'll think and call back tomorrow.
 
-**Step 6.** **Before you hang up**, set the disposition in the CRM: Lead → Status `Interested`, Next action `Callback Tomorrow 10am`, Note `Quoted Featured, considering. Returns to platform after free-site disappointment.`
+**Step 6.** **Before you hang up**, set the disposition in the CRM: Lead → Status `Interested`, Next action `Callback Tomorrow 10am`, Note `Quoted Premium, considering. Returns to platform after free-site disappointment.`
 :::
 
 ## Common mistakes
@@ -471,7 +471,7 @@ MD,
             'subtitle' => 'Stage 5a — match the offer to the customer',
             'duration' => 16,
             'playbook_url' => 'https://exoticonline.mintlify.app/product/stage-5a-subscription-selection',
-            'quick_reference' => "PACKAGE MATRIX (visibility low → high):\nBasic → Featured → Premium → VIP → VVIP\n\nDEFAULT RECOMMENDATIONS:\n- Brand-new escort, no prior platform: Featured\n- Returning after break: Featured or Premium\n- Established with strong portfolio: Premium or VIP\n- Top earner, wants top-of-page: VVIP\n\nFREE TRIAL: only if approved by supervisor PIN. Never offer unprompted.\n\nCURRENCY: always quote in the market's local currency (KES, NGN, GHS, etc.) — never USD.",
+            'quick_reference' => "PACKAGE MATRIX (visibility low → high):\nBasic (Kenya only) → Premium → VIP → VVIP\n\nDEFAULT RECOMMENDATIONS:\n- New / first-time advertiser testing the platform: Premium (Basic only if Kenya + very price-sensitive)\n- Returning after a break, strong portfolio: VIP\n- Established / wants prominent placement + marketing: VIP\n- Top earner, wants top-of-page banner + international reach: VVIP\n\nFREE TRIAL: only if approved by supervisor PIN. Never offer unprompted.\n\nCURRENCY: always quote in the market's local currency (KES, NGN, GHS, etc.) — never USD.",
             'body' => <<<'MD'
 ## Why this matters
 
@@ -479,15 +479,14 @@ Package selection is where the conversation turns into revenue. Over- or under-q
 
 The right package is **the lowest tier where they will actually feel the platform working** within the first two weeks. That number is rarely the cheapest one.
 
-## The five tiers, in plain English
+## The four tiers, in plain English
 
 | Tier | Visibility | Best for |
 |------|-----------|----------|
-| **Basic** | Listed in category. No homepage exposure. | Cautious first-timers who want to test the platform with minimum spend. Conversion is slow — expect them to renew at Featured or churn. |
-| **Featured** | Higher in category, occasional homepage rotation. | Default for new escorts. The package that "feels like the platform is working" within 7 days. |
-| **Premium** | Top of category, persistent homepage banner. | Returning escorts and established workers. Strong renewal rate. |
-| **VIP** | Persistent top placement + premium badge. | High earners optimising for fewer-but-better clients. |
-| **VVIP** | Top-of-page, hero placement, VVIP badge. | Top 1% — limited slots per city. |
+| **Basic** *(Kenya only)* | Bottom-of-page listing. No marketing or promotion. | Very price-sensitive first-timers in Kenya who just want to test the platform. Not available outside Kenya. |
+| **Premium** | Listed below VIP. Contact details hidden until a viewer clicks in. Minimal marketing. | Budget-conscious clients and first-time advertisers testing the platform — the entry paid tier in most markets. |
+| **VIP** | Top-tier listing above Premium, dual exposure in the VIP and Premium sections, contact shown prominently, regular marketing support. | Serious or returning escorts who want real visibility and elite clientele. |
+| **VVIP** | Top-of-site banner + animated GIF across all pages, plus an extra profile on Exotic Africa (the mother site) for international reach. Dedicated marketing. | High-end providers who want maximum exposure and international visibility. |
 
 :::script Recommending a package
 "Based on what you've told me — you're [new/returning/established] and you're [actively looking/exploring] — I'd suggest [tier]. That gives you [visibility outcome] and at [local price] it's the package that most [matching segment] are happy renewing after the first month. We can always upgrade you to [next tier] when you're ready."
@@ -495,9 +494,9 @@ The right package is **the lowest tier where they will actually feel the platfor
 
 ## The big three signals that drive the recommendation
 
-1. **Prior platform experience.** Total newcomer → Featured. Returning after break → Featured or Premium depending on how long they're back for.
-2. **Portfolio strength.** Strong photos, multiple, verified → can support Premium+. Weak portfolio → start at Featured and revisit at renewal.
-3. **Stated goal.** "I want more bookings" → Featured/Premium. "I want fewer-but-higher-paying clients" → VIP. "I want top of the homepage" → VVIP.
+1. **Prior platform experience.** Total newcomer → Premium. Returning after a break → VIP, so they re-establish visibility quickly.
+2. **Portfolio strength.** Strong photos, multiple, verified → can support VIP+. Weak portfolio → start at Premium and revisit at renewal.
+3. **Stated goal.** "I want more bookings" → Premium/VIP. "I want fewer-but-higher-paying clients" → VIP. "I want top of the page and international reach" → VVIP.
 
 :::tip The unfair upgrade
 The single highest-leverage move in this stage is asking: *"Are you optimising for more bookings, or for better-paying bookings?"* The answer changes the recommendation by a tier in either direction and is the question most agents forget to ask.
@@ -508,11 +507,11 @@ The single highest-leverage move in this stage is asking: *"Are you optimising f
 :::scenario Avoiding the price-anchoring trap
 **Lead:** Sarah, Lagos. Worked on a competitor site for 18 months, taking a 3-month break, now coming back. Has a professional portfolio.
 
-**Wrong move:** quote Basic because "she'll renew up later".
+**Wrong move:** quote Premium because "she'll renew up later" — Premium hides her contact until a click and carries minimal marketing, underusing her portfolio. (Basic isn't even sold in Lagos.)
 
-**Right move:** quote Premium with a one-line rationale: *"With your portfolio and previous experience, Basic would underuse what you've already built. Premium gets you visible in the first 48 hours, which matters more after a break because the algorithm needs to re-establish you."*
+**Right move:** quote VIP with a one-line rationale: *"With your portfolio and previous experience, the budget tier would hide your contact and underuse what you've already built. VIP shows your contact prominently, comes with marketing support, and gets you visible fast — which matters more after a break because the algorithm needs to re-establish you."*
 
-She paid Premium. Spending the next tier up *because the rationale was specific* converted faster than offering a discount on Basic.
+She paid VIP. Recommending the right tier *because the rationale was specific* converted faster than discounting a lower tier.
 :::
 
 ## Free trial — when and how
@@ -541,7 +540,7 @@ Always quote in the local market currency. The CRM auto-detects from the platfor
 :::warning
 - **Quoting USD by accident.** Always local currency.
 - **Recommending Basic to anyone with a strong portfolio.** They will churn and blame the platform.
-- **Mentioning all five tiers.** Anchor on one recommendation, mention one alternative. More than two options paralyses the buyer.
+- **Mentioning all four tiers.** Anchor on one recommendation, mention one alternative. More than two options paralyses the buyer.
 :::
 
 ## Knowledge check
@@ -668,9 +667,9 @@ If the numbers are weak, **do not lie about them**. Skip the proof line and move
 
 **Step 1 — diagnose, don't discount.** Pull up the profile in the CRM and check completeness: photos, description, contact info, package tier.
 
-**You:** "Let me check your profile right now... I can see [specific gap — e.g., 'only 3 photos and no recent updates']. The clients who get the most enquiries on Featured usually have 6+ photos and refresh their profile weekly. Let's fix that during the renewal call and renew on the same tier — I'll bet you'll see different numbers next month."
+**You:** "Let me check your profile right now... I can see [specific gap — e.g., 'only 3 photos and no recent updates']. The clients who get the most enquiries usually have 6+ photos and refresh their profile weekly. Let's fix that during the renewal call and renew on the same tier — I'll bet you'll see different numbers next month."
 
-**If the profile is complete and views are still low:** propose a tier upgrade with a specific rationale, not a discount. "You're maxing out what Featured can deliver in your market. Premium gets you visible to the next-tier client and is the natural step up."
+**If the profile is complete and views are still low:** propose a tier upgrade with a specific rationale, not a discount. "You're maxing out what your current tier can deliver in your market. VIP gets you prominent placement and marketing support, and is the natural step up."
 :::
 
 :::objection "I'm taking a break"
@@ -867,10 +866,10 @@ MD,
     {
         return [
             'slug' => 'package-tiers-deep-dive',
-            'title' => 'The Five Tiers, In Detail',
+            'title' => 'The Four Tiers, In Detail',
             'duration' => 14,
             'playbook_url' => 'https://exoticonline.mintlify.app/clients/subscription',
-            'quick_reference' => "TIERS (low → high visibility):\nBasic | Featured | Premium | VIP | VVIP\n\nFEATURE DIFFERENCES:\n- Listing rank in category\n- Homepage rotation\n- Persistent banner\n- Badges (Premium, VIP, VVIP)\n- Slot scarcity (VVIP is capped per city)",
+            'quick_reference' => "TIERS (low → high visibility):\nBasic (Kenya only) | Premium | VIP | VVIP\n\nPRICING (USD base): Basic \$20 (Kenya) | Premium \$30 | VIP \$50 | VVIP \$80\n\nKEY DIFFERENCES:\n- Basic: bottom of page, no marketing (Kenya only)\n- Premium: below VIP, contact hidden until click, minimal marketing\n- VIP: top listing, dual-section exposure, contact shown, regular marketing\n- VVIP: top banner + GIF on all pages + extra profile on Exotic Africa (international)",
             'body' => <<<'MD'
 ## Why this matters
 
@@ -878,51 +877,45 @@ Every conversation about price is really a conversation about a tier. You can't 
 
 ## What each tier actually delivers
 
-### Basic
-- Listed inside the relevant city/category.
-- No homepage exposure, no badge.
-- Lowest price point.
-- Best for: extremely price-sensitive first-timers who want to test the platform.
-
-### Featured
-- Higher placement inside the category.
-- Occasional homepage rotation.
-- Most common "first paid" tier.
-- Best for: brand-new escorts who want to feel the platform working.
+### Basic *(Kenya only)*
+- Listed at the bottom of the page.
+- No marketing or promotional features, no badge.
+- Very limited client exposure. USD $20 base.
+- **Only available in Kenya.** Best for: very price-sensitive first-timers who just want to test the platform.
 
 ### Premium
-- Top of the category list.
-- Persistent homepage banner during peak hours.
-- Premium badge on profile.
-- Best for: returning escorts, established workers, anyone with a strong portfolio.
+- Listed below the VIP section, shown with a red background.
+- Contact details are hidden until a viewer clicks into the profile.
+- Minimal marketing support. USD $30 base.
+- The entry paid tier in most markets. Best for: budget-conscious clients and first-time advertisers testing the platform.
 
 ### VIP
-- Top placement + permanent badge.
-- Featured in city-specific premium sections.
-- Higher trust signal to customers.
-- Best for: high-earners optimising for fewer-but-better bookings.
+- Top-tier listing, placed above Premium.
+- Shown in both the VIP and Premium sections for dual exposure.
+- Contact details shown prominently, with regular marketing support. USD $50 base.
+- Best for: serious or returning escorts who want real visibility and elite clientele.
 
 ### VVIP
-- Hero placement at top of every relevant page.
-- VVIP badge — highest trust signal.
-- **Capped per city** — limited slots, often a waitlist.
-- Best for: top 1% earners. Treat as a status purchase, not just a visibility purchase.
+- A banner at the top of the site with an animated GIF displayed across all pages and profiles.
+- A VIP-level profile locally **plus an extra profile on Exotic Africa** (the mother site) for international visibility.
+- Dedicated extra marketing and push exposure. USD $80 base.
+- Best for: high-end providers who want maximum exposure. Treat it as a status-and-reach purchase, not just a visibility purchase.
 
-:::tip The slot-scarcity move
-VVIP being capped is a genuine sales asset. *"I've got two VVIP slots left in Nairobi this month — if you're seriously considering it, we should lock yours in today."* This is a true statement, not a pressure tactic. Use it when accurate.
+:::tip The international-reach move
+VVIP's extra profile on Exotic Africa is a genuine sales asset for ambitious clients. *"VVIP doesn't just put you at the top locally — it also lists you on Exotic Africa, our international site, so clients searching from outside the country can find you too."* Use it when it's accurate to their goals.
 :::
 
 ## Common confusion to clear up
 
-:::warning "Featured" vs "Premium" sounds samey
-Customers often think Featured = Premium. Be explicit: *"Featured gets you visible in the category. Premium pins you to the homepage. They're a meaningful step apart."*
+:::warning "Premium" vs "VIP" sounds samey
+Customers often think Premium = VIP. Be explicit: *"Premium lists you, but your contact stays hidden until someone clicks in, and marketing is minimal. VIP puts you in the top section, shows your contact straight away, and adds marketing support. They're a meaningful step apart."*
 :::
 
 ## Knowledge check
 
-1. What's the actual capacity difference between VIP and VVIP?
-2. Why is VVIP capped per city?
-3. What's the easiest way to differentiate Featured from Premium in 10 seconds?
+1. What does VVIP include that VIP does not?
+2. In which country is the Basic tier available?
+3. What's the easiest way to differentiate Premium from VIP in 10 seconds?
 MD,
         ];
     }
@@ -989,14 +982,14 @@ Customers ask "why aren't I getting clients?" constantly. If you don't understan
 
 ## The visibility stack
 
-1. **Tier.** The biggest lever. A Featured profile genuinely sees 3–5x the views of a Basic profile in the same city. Numbers vary, but the order of magnitude holds.
+1. **Tier.** The biggest lever. A Premium profile genuinely sees 3–5x the views of a Basic profile in the same city. Numbers vary, but the order of magnitude holds.
 2. **Profile completeness.** Photos (6+ is the threshold), description with specifics, contact info, working hours. Incomplete profiles get deprioritised by the platform regardless of tier.
 3. **Recency.** Profiles updated in the last 7 days are scored higher than profiles untouched for a month. "Updated" means edited content — not just logging in.
 4. **Verified status.** Verified profiles get a trust badge that materially improves enquiry conversion.
 5. **City demand.** Some cities have a glut of profiles; visibility is harder in saturated markets. This is honest information, not an excuse.
 
 :::tip Coaching a low-traffic client
-Walk through the stack with them on the phone. *"You're on Featured — that's the right tier. Let's check completeness. You have 4 photos — let's get to 6. Last update was 22 days ago — let's edit one thing now. Verified? Yes. Nairobi is competitive but you've got room to climb."* By the end they have specific actions, not a complaint.
+Walk through the stack with them on the phone. *"You're on Premium — that's a solid tier. Let's check completeness. You have 4 photos — let's get to 6. Last update was 22 days ago — let's edit one thing now. Verified? Yes. Nairobi is competitive but you've got room to climb."* By the end they have specific actions, not a complaint.
 :::
 
 ## What doesn't help
@@ -1214,7 +1207,7 @@ Now respond based on what you actually find:
 
 ### If the profile is strong but views are low
 :::script
-"Your profile is in great shape — photos, description, all updated. What's happening is you're maxing out what Featured can deliver in your market. Premium pins you to the homepage and gets you to the next-tier customer. Want to step up for the next cycle?"
+"Your profile is in great shape — photos, description, all updated. What's happening is you're maxing out what your current tier can deliver in your market. VIP gives you prominent placement and marketing support and gets you to the next-tier customer. Want to step up for the next cycle?"
 :::
 
 ### If the city is saturated
@@ -1502,7 +1495,7 @@ MD,
 ## F4: Wrong package activated
 
 ### Symptom
-"I paid for Premium but my profile shows Featured."
+"I paid for VIP but my profile shows Premium."
 
 ### Diagnostic
 Open the client's deals tab. The deal record will show which package was activated. Usually one of:
@@ -1517,7 +1510,7 @@ Open the client's deals tab. The deal record will show which package was activat
 
 ### Recovery dialog
 :::script
-"You're right, I see Featured on your record but you paid for Premium. I'm correcting that now — your profile will reflect Premium within 5 minutes. I apologise for the mix-up."
+"You're right, I see Premium on your record but you paid for VIP. I'm correcting that now — your profile will reflect VIP within 5 minutes. I apologise for the mix-up."
 :::
 
 ### Audit
@@ -1748,15 +1741,15 @@ MD,
                 'explanation' => 'Refusal to verify is a non-negotiable disqualifier. The other items are normal discovery-call signals, not disqualifiers.',
             ],
             ['kind' => 'mcq', 'topic' => 'Discover',
-                'prompt' => 'What is the recommended order of the three qualifying questions?',
+                'prompt' => 'Which qualifying question should you ask FIRST, and why?',
                 'options' => [
-                    'Urgency → competitor → market',
-                    'Market → competitor → urgency',
-                    'Competitor → urgency → market',
-                    'Market → urgency → competitor',
+                    'Urgency — qualify out time-wasters before investing any effort',
+                    'Market (city/country) — it is the least personal and procedural, so it earns honest answers before the more loaded questions',
+                    'Competitor — find out what you are up against before anything else',
+                    'Budget — so you never waste time on a quote they cannot afford',
                 ],
                 'correct' => 1,
-                'explanation' => 'Least-personal to most-personal. Market is procedural and earns honesty; urgency is the most loaded and benefits from the trust built by the first two questions.',
+                'explanation' => 'Open with the least-personal question. Market is procedural and earns honesty, which builds the trust needed for the more loaded competitor and urgency questions that follow.',
             ],
             ['kind' => 'scenario', 'topic' => 'Discover',
                 'scenario' => 'A lead says she is "just exploring" and not actively looking. She has a strong portfolio.',
@@ -1787,12 +1780,12 @@ MD,
                 'prompt' => 'Which package tier should you recommend?',
                 'options' => [
                     'Basic — let her test the platform cheaply',
-                    'Featured — safest default',
-                    'Premium — strong portfolio + need to re-establish visibility after break',
+                    'Premium — the budget entry tier',
+                    'VIP — prominent placement and marketing to re-establish visibility for a strong returning portfolio',
                     'VVIP — top of page placement',
                 ],
                 'correct' => 2,
-                'explanation' => 'After a break, the algorithm has to re-rank her. Premium gets her visible in 48 hours. Basic would waste her portfolio; VVIP is over-spending.',
+                'explanation' => 'After a break the algorithm has to re-rank her, so she needs visibility fast. VIP gives prominent placement, dual-section exposure, and marketing support. Premium hides her contact until a click and carries minimal marketing, underusing her portfolio; Basic is not even sold outside Kenya; VVIP is over-spending for a re-entry.',
             ],
             ['kind' => 'mcq', 'topic' => 'Subscription',
                 'prompt' => 'Who can authorise a free trial?',
@@ -1816,17 +1809,17 @@ MD,
                 'correct' => 1,
                 'explanation' => 'XOF (West African CFA) and XAF (Central African CFA) are different currencies despite both being called "CFA franc". The CRM stores the correct one — always quote with the explicit currency code when in doubt.',
             ],
-            ['kind' => 'scenario', 'topic' => 'Subscription',
-                'scenario' => 'A customer paid Ksh 2,500 by M-Pesa. The package is Ksh 3,000. Auto-match flags it "low confidence".',
-                'prompt' => 'What is the correct first action?',
+            ['kind' => 'scenario', 'topic' => 'Safety',
+                'scenario' => 'While reviewing accounts you notice several subscriptions that are active even though there is no matching payment record in the CRM.',
+                'prompt' => 'What is the right way to handle this?',
                 'options' => [
-                    'Silently activate Basic instead of the package they intended',
-                    'Refund and ask them to retry',
-                    'Contact the customer with two options: top up the Ksh 500, or move to a cheaper package',
-                    'Ignore the mismatch — it\'s within rounding',
+                    'Ignore it and move on — if the profiles are live, something must have gone right',
+                    'Immediately deactivate every affected customer and close the issue',
+                    'Investigate the cause first: ask IT to confirm the WordPress-admin emergency access is deactivated (it is a break-glass layer that should rarely or never be used), and check whether the profile is being kept active on purpose for SEO density — only deactivate the customer if it is neither',
+                    'Assume it is a sync glitch and re-run the payment import without checking anything',
                 ],
                 'correct' => 2,
-                'explanation' => 'A Ksh 500 shortfall on a Ksh 3,000 package is 16%, outside the ±5% rounding tolerance. Silent activation of a different package destroys trust. Refunding skips the chance to recover.',
+                'explanation' => 'An active subscription with no payment record is a red flag, not proof of fraud — root-cause it before acting. A live WP-admin "break-glass" login is the most likely backdoor and should be confirmed deactivated, and some profiles are deliberately kept active to maintain SEO/listing density. Only when it is neither a sanctioned activation nor an SEO-density placeholder should you deactivate the customer. Deactivating first risks punishing a legitimate account; ignoring it leaves a possible security hole open.',
             ],
             // Failures (5)
             ['kind' => 'scenario', 'topic' => 'Failures',
@@ -1842,15 +1835,15 @@ MD,
                 'explanation' => 'Multiple simultaneous unmatched payments from one provider is the signature of a webhook backlog (F6). Retrying STK during a backlog creates duplicates (F9). Always escalate F6 first.',
             ],
             ['kind' => 'mcq', 'topic' => 'Failures',
-                'prompt' => 'The amount-mismatch auto-match tolerance is:',
+                'prompt' => 'Auto-match tags a payment as "high confidence" when the amount is within what tolerance of a known package price?',
                 'options' => [
                     '±1%',
                     '±5%',
                     '±10%',
                     '±20%',
                 ],
-                'correct' => 1,
-                'explanation' => '±5% covers rounding while preventing silent activation of cheaper tiers. Outside this, manual review is required.',
+                'correct' => 2,
+                'explanation' => 'Within ±10% of a known price → high confidence. The matcher still surfaces candidates up to 30% away, but anything outside ±10% needs manual review before activation — it covers rounding while preventing silent activation of a cheaper tier.',
             ],
             ['kind' => 'scenario', 'topic' => 'Failures',
                 'scenario' => 'A customer says: "I paid twice by accident — give me a refund."',
@@ -1958,15 +1951,15 @@ MD,
                 'explanation' => 'We sell visibility, lead quality, and support — not outcomes. Promising specific booking numbers is a trust risk and a refund risk.',
             ],
             ['kind' => 'mcq', 'topic' => 'Product',
-                'prompt' => 'What is the #1 driver of visibility on the platform?',
+                'prompt' => 'What are the two strongest drivers of how visible a profile is on the platform?',
                 'options' => [
-                    'Subscription tier',
-                    'Daily logins',
-                    'Owning multiple profiles',
-                    'Asking the agent to "boost" the profile',
+                    'Subscription tier and how recently the profile has been updated/active',
+                    'Simply logging in every day, regardless of content changes',
+                    'Owning multiple profiles for more exposure',
+                    'Asking the agent to manually "boost" the profile',
                 ],
                 'correct' => 0,
-                'explanation' => 'Tier is the biggest lever. Daily logins do not affect ranking; multiple profiles get duplicate-flagged; manual boost is not a feature.',
+                'explanation' => 'Tier is the biggest lever and recency is next — a profile updated/active in the last 7 days outranks a stale one at the same tier. Note: merely logging in does not count, editing content does. Multiple profiles get duplicate-flagged and manual boost is not a feature.',
             ],
             ['kind' => 'mcq', 'topic' => 'Product',
                 'prompt' => 'Which payment path is the primary channel for Kenya?',
@@ -1978,17 +1971,6 @@ MD,
                 ],
                 'correct' => 2,
                 'explanation' => 'M-Pesa STK is the primary path in Kenya. Pesapal and KopoKopo are fallbacks.',
-            ],
-            ['kind' => 'mcq', 'topic' => 'Product',
-                'prompt' => 'What does "lapsed" mean in the retention taxonomy?',
-                'options' => [
-                    'Customer paid late this cycle',
-                    'Customer\'s subscription is 30+ days expired',
-                    'Customer requested a refund',
-                    'Customer is on a free trial',
-                ],
-                'correct' => 1,
-                'explanation' => '30+ days expired = lapsed. Lapsed customers go to the reactivation queue, not the renewal flow.',
             ],
             ['kind' => 'scenario', 'topic' => 'Product',
                 'scenario' => 'A customer asks "if I let my subscription expire, will my photos and profile data be deleted?"',
@@ -2002,6 +1984,139 @@ MD,
                 'correct' => 2,
                 'explanation' => 'Data preservation is a deliberate retention asset — it removes the silent fear behind "I\'m taking a break" and makes reactivation frictionless.',
             ],
+            // Queues & Prioritization (3)
+            ['kind' => 'mcq', 'topic' => 'Queues',
+                'prompt' => 'You start your shift and every revenue queue has items waiting — new signups, failed payments, expiring renewals, and churned users. Which do you work FIRST?',
+                'options' => [
+                    'The newest signups, because first impressions matter most',
+                    'A VIP renewal expiring within the next 48 hours',
+                    'The oldest churned users, because there are the most of them',
+                    'A failed payment of $3, because failed payments always come first',
+                ],
+                'correct' => 1,
+                'explanation' => 'Queues are ranked by revenue impact × time-sensitivity: (1) VIP/high-value renewals expiring within 48h, (2) failed payments above $20, (3) new signups under 24h, (4) churned users under 30 days. A high-value subscription about to lapse is revenue lost permanently if you miss the window.',
+            ],
+            ['kind' => 'scenario', 'topic' => 'Queues',
+                'scenario' => 'Your manager asks you to "describe your day" running the revenue queues.',
+                'prompt' => 'Which sequence describes a well-run day?',
+                'options' => [
+                    'Morning: clear whatever queue feels easiest. Midday: more of the same. End of day: log off once the list looks shorter.',
+                    'Morning: review the overnight build-up and assign the day\'s workload across queues. Midday: monitor live progress and step in where a queue stalls or an SLA is slipping. End of day: publish a scoreboard — opportunities created and closed, revenue recovered, and revenue still at risk.',
+                    'Wait for customers and agents to flag problems, then react to them as they come in.',
+                    'Spend the whole morning on reporting, then leave the queues for whoever has time later.',
+                ],
+                'correct' => 1,
+                'explanation' => 'Set the board in the morning (triage overnight build-up, assign work), keep it moving at midday (watch queue movement and SLA compliance, unstick stalls), and publish the truth at end of day (a revenue scoreboard). The job is proactive air-traffic control of revenue, not reacting to whoever shouts loudest.',
+            ],
+            ['kind' => 'scenario', 'topic' => 'Queues',
+                'scenario' => 'Sales are down this week and the backlog is clearing slowly. At the same time there is a pile of signups from the last 24 hours, a cluster of subscriptions expiring in 2 days, and several customers stuck mid-payment.',
+                'prompt' => 'Where do you focus to recover revenue fastest?',
+                'options' => [
+                    'Work the oldest churned users first — there are the most of them',
+                    'Chase the money already in motion: high-value renewals expiring in 48h and customers stuck mid-payment, then convert the fresh signups while intent is still hot',
+                    'Clear the slow backlog strictly in the order it arrived',
+                    'Push a blanket discount to the whole base to stimulate sales',
+                ],
+                'correct' => 1,
+                'explanation' => 'Recovery means going after revenue already in motion. Expiring renewals (especially high-value) and stuck/failed payments are customers who already want to pay — the fastest, highest-probability money. Fresh signups are high-intent within 24h. Cold churned users and a discount-everyone reflex are the lowest return per hour.',
+            ],
+            // Safety (1)
+            ['kind' => 'scenario', 'topic' => 'Safety',
+                'scenario' => 'A customer sends you an M-Pesa confirmation code as "proof" they paid and asks you to activate their profile. The code is not showing in the CRM, and the format looks off.',
+                'prompt' => 'What do you do?',
+                'options' => [
+                    'Activate the profile — a customer would not make up a code',
+                    'Ask for a screenshot and activate if it looks genuine',
+                    'Do not activate. A code with no matching transaction in the system is unverified — withhold access, tell the customer you can only confirm a payment the system has actually received, and escalate per the fraud protocol',
+                    'Refund the customer immediately to be safe',
+                ],
+                'correct' => 2,
+                'explanation' => 'Never activate on a customer-supplied code alone. Only a transaction the system has actually received counts as payment — screenshots and pasted codes can be forged or recycled, and a mismatched or odd-looking code is a known fraud signal. Verify against the record, withhold access until confirmed, and escalate. There is nothing to refund because no payment was received.',
+            ],
+            // Profile Verification (3) — from the Sales Playbook, Section 4
+            ['kind' => 'mcq', 'topic' => 'Verification',
+                'prompt' => 'Before a new profile is activated, what must the client provide for verification?',
+                'options' => [
+                    'At least 3–5 photos, one clear unfiltered selfie (a view-once photo is fine), and an ID or passport number photo used only for age and identity verification — never published',
+                    'Just three attractive photos — the ID is optional',
+                    'A nude photo to prove the pictures are really of them',
+                    'Only a selfie; the ID is then uploaded to the public profile to build trust',
+                ],
+                'correct' => 0,
+                'explanation' => 'Verification requires a minimum of 3–5 images, one unfiltered full-face selfie (view-once acceptable), plus an ID/passport number photo used solely for age and identity checks and never posted. No profile goes live unverified.',
+            ],
+            ['kind' => 'mcq', 'topic' => 'Verification',
+                'prompt' => 'Which submitted photo is acceptable for a profile?',
+                'options' => [
+                    'A clear lingerie or bikini shot, or implied nudity covered with arms or sheets',
+                    'A photo with exposed nipples but tasteful lighting',
+                    'A screenshot from another escort site with the watermark cropped out',
+                    'A heavily filtered, slightly blurry glamour shot',
+                ],
+                'correct' => 0,
+                'explanation' => 'Acceptable content is lingerie/bikini, bra-and-panty sets, and implied nudity (covered). Reject anything with visible genitals or nipples, toys/masturbation, watermarked or screenshotted content, and over-filtered or blurry images.',
+            ],
+            ['kind' => 'scenario', 'topic' => 'Verification',
+                'scenario' => 'A client\'s photos look unusually polished and you suspect they may have been lifted from another site.',
+                'prompt' => 'What does the playbook require you to do?',
+                'options' => [
+                    'Run a mandatory reverse image search (Google Images, Yandex, or TinEye); if still unclear, get a second opinion or escalate to the Head of Sales before activating',
+                    'Activate anyway — polished photos convert better',
+                    'Ask the client to promise the photos are theirs and proceed',
+                    'Reject the client permanently with no further checks',
+                ],
+                'correct' => 0,
+                'explanation' => 'Reverse image search is mandatory for suspicious cases (Google Images, Yandex, TinEye). If it remains unclear, consult a trusted teammate or escalate to the Head of Sales — never activate a suspicious or unverified profile.',
+            ],
+            // Payment & Confirmation SOP (2) — from the Sales Playbook, Section 6
+            ['kind' => 'scenario', 'topic' => 'Payment',
+                'scenario' => 'A client says: "Just activate me now as a favour and I\'ll send the money to your own M-Pesa later — I\'m good for it."',
+                'prompt' => 'What do you do?',
+                'options' => [
+                    'Decline. No profile goes live without confirmed payment through an official channel, and reps must never accept payment to a personal account — explain the process and activate only after confirmation',
+                    'Activate it as a one-time favour to build goodwill',
+                    'Take the payment on your personal number, activate, then move the money to the company account later',
+                    'Activate now and chase the payment after expiry',
+                ],
+                'correct' => 0,
+                'explanation' => 'The Golden Rule: no profile is activated without payment confirmation — this includes "favours" and trials unless specifically authorised. Accepting payment into a personal account is expressly prohibited. Activating unverified profiles invites fraud, complaints, and revenue loss.',
+            ],
+            ['kind' => 'scenario', 'topic' => 'Payment',
+                'scenario' => 'On a platform that uses a country-based third-party payment agent, a client sends you a screenshot showing they paid the agent.',
+                'prompt' => 'What is the correct next step before activating?',
+                'options' => [
+                    'Forward the screenshot to the platform\'s payment-confirmation group (CEO, Head of Sales, local recipient) with the client name, country, and amount, and wait for the recipient to confirm receipt',
+                    'Activate immediately — a screenshot is proof enough',
+                    'Confirm it yourself on the platform SIM and skip the group',
+                    'Ask the client to also pay the company Till just to be safe',
+                ],
+                'correct' => 0,
+                'explanation' => 'For third-party payments, forward the screenshot to the designated confirmation group (CEO, HoS, local recipient) as "Payment from [Client] – [Country] – [Amount] – Confirmed?" and activate only once the recipient confirms. Confirming on the platform SIM is the flow for direct Till/Send-Money payments, not third-party ones.',
+            ],
+            // Sales Conduct (1) — from the Sales Playbook, Section 9
+            ['kind' => 'mcq', 'topic' => 'Conduct',
+                'prompt' => 'Which of the following is against Exotic\'s rules of engagement?',
+                'options' => [
+                    'Contacting clients from your personal phone or social media, blue-ticking them, or sharing their photos, ID, or screenshots in external groups',
+                    'Responding to client inquiries within 5 minutes during work hours',
+                    'Cross-selling a client who is interested in another country\'s platform',
+                    'Using pet names and emojis to keep a warm, friendly tone',
+                ],
+                'correct' => 0,
+                'explanation' => 'Prohibited conduct includes personal-number/social contact, blue-ticking (reading without replying), and sharing client content externally — photos, IDs, and screenshots are confidential. The other three are encouraged practices.',
+            ],
+            // Package knowledge (1) — from the Sales Playbook, Section 3
+            ['kind' => 'mcq', 'topic' => 'Product',
+                'prompt' => 'What does the VVIP package include that lower tiers do not?',
+                'options' => [
+                    'A top-of-site banner with an animated GIF across all pages, plus an extra profile on Exotic Africa (the mother site) for international visibility',
+                    'A guaranteed number of bookings each week',
+                    'Contact details hidden until a viewer clicks into the profile',
+                    'Bottom-of-page placement with no marketing',
+                ],
+                'correct' => 0,
+                'explanation' => 'VVIP adds a top banner with an animated GIF across all pages and profiles, a VIP-level local profile, and a second profile on Exotic Africa for international reach. Hidden-until-click contact is a Premium trait, bottom-of-page no-marketing is Basic, and guaranteed bookings is something we never promise.',
+            ],
         ];
     }
 
@@ -2012,11 +2127,10 @@ MD,
     private function glossary(): array
     {
         return [
-            ['term' => 'Basic', 'topic' => 'Packages', 'definition' => 'Lowest-tier subscription. Profile is listed within its category with no homepage exposure. Best for cautious first-timers.'],
-            ['term' => 'Featured', 'topic' => 'Packages', 'definition' => 'Mid-low tier subscription. Higher in category + occasional homepage rotation. The default "first paid" tier for new escorts.'],
-            ['term' => 'Premium', 'topic' => 'Packages', 'definition' => 'Mid-high tier. Top of category, persistent homepage banner, Premium badge. Best for returning or established escorts.'],
-            ['term' => 'VIP', 'topic' => 'Packages', 'definition' => 'High tier. Permanent top placement and VIP badge. For high-earners optimising for fewer but better bookings.'],
-            ['term' => 'VVIP', 'topic' => 'Packages', 'definition' => 'Top tier. Hero placement on every relevant page, VVIP badge, slot-capped per city. Top 1% of clients.'],
+            ['term' => 'Basic', 'topic' => 'Packages', 'definition' => 'Lowest tier. Bottom-of-page listing with no marketing or promotion. Available in Kenya only. USD $20 base.'],
+            ['term' => 'Premium', 'topic' => 'Packages', 'definition' => 'Entry paid tier in most markets. Listed below VIP with contact details hidden until a viewer clicks in, and minimal marketing. Best for budget-conscious or first-time advertisers. USD $30 base.'],
+            ['term' => 'VIP', 'topic' => 'Packages', 'definition' => 'Top-tier listing above Premium, with dual exposure in the VIP and Premium sections, contact shown prominently, and regular marketing support. For serious escorts seeking visibility and elite clientele. USD $50 base.'],
+            ['term' => 'VVIP', 'topic' => 'Packages', 'definition' => 'Top tier. Top-of-site banner with an animated GIF across all pages, plus an extra profile on Exotic Africa (the mother site) for international reach, and dedicated marketing. USD $80 base.'],
             ['term' => 'STK Push', 'topic' => 'Payments', 'definition' => 'M-Pesa "SIM Toolkit" Push — initiates a payment prompt directly on the customer\'s phone. Primary payment path in Kenya.', 'aliases' => ['M-Pesa Push']],
             ['term' => 'Webhook', 'topic' => 'Payments', 'definition' => 'A server-to-server callback that notifies the CRM when a payment succeeds. When webhooks fail in bulk, see Failure F6.'],
             ['term' => 'Free Trial', 'topic' => 'Sales', 'definition' => 'Short-term complimentary subscription, granted only via supervisor PIN. One per phone number ever. All free trials are logged and audited monthly.'],
