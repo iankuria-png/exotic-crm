@@ -7,11 +7,13 @@ use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\User;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientChurnStamper;
 use App\Support\CrmClientChurnReason;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class ClientChurnTrackingTest extends TestCase
@@ -262,5 +264,154 @@ class ClientChurnTrackingTest extends TestCase
         $this->assertSame(100.0, $tiers[0]['early_churn_percent']);
         $this->assertSame('vip', $tiers[1]['key']);
         $this->assertSame(0.0, $tiers[1]['early_churn_percent']);
+    }
+
+    public function test_churned_queue_uses_last_paid_plan_and_supports_filtering_sorting_and_pagination(): void
+    {
+        Carbon::setTestNow('2026-06-11 12:00:00');
+
+        try {
+            $admin = User::factory()->create([
+                'role' => 'admin',
+                'status' => 'active',
+                'assigned_market_ids' => [],
+            ]);
+            $platform = Platform::factory()->create(['currency_code' => 'USD']);
+            $basic = Product::factory()->create([
+                'platform_id' => $platform->id,
+                'tier' => 'basic',
+                'name' => 'Basic',
+                'display_name' => 'Basic',
+            ]);
+            $vip = Product::factory()->create([
+                'platform_id' => $platform->id,
+                'tier' => 'vip',
+                'name' => 'VIP',
+                'display_name' => 'VIP',
+            ]);
+            $vvip = Product::factory()->create([
+                'platform_id' => $platform->id,
+                'tier' => 'vvip',
+                'name' => 'VVIP',
+                'display_name' => 'VVIP',
+            ]);
+
+            $vipClient = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Zuri VIP Client',
+                'phone_normalized' => '254700000001',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-10 18:00:00',
+                'churn_reason_code' => 'expired_unrenewed',
+                'churn_source' => 'deal_expired',
+            ]);
+            $basicClient = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Amina Basic Client',
+                'phone_normalized' => '254700000002',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-09 18:00:00',
+                'churn_reason_code' => 'customer_request',
+                'churn_source' => 'deal_cancelled',
+            ]);
+            $vvipClient = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Yara VVIP Client',
+                'phone_normalized' => '254700000003',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-10 17:00:00',
+                'churn_reason_code' => 'expired_unrenewed',
+                'churn_source' => 'deal_expired',
+            ]);
+
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $vipClient->id,
+                'product_id' => $basic->id,
+                'plan_type' => 'basic',
+                'status' => 'expired',
+                'activated_at' => '2026-04-01 12:00:00',
+                'created_at' => '2026-04-01 12:00:00',
+            ]);
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $vipClient->id,
+                'product_id' => $vip->id,
+                'plan_type' => 'vip',
+                'status' => 'expired',
+                'activated_at' => '2026-06-01 12:00:00',
+                'created_at' => '2026-06-01 12:00:00',
+            ]);
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $vipClient->id,
+                'product_id' => $vvip->id,
+                'plan_type' => 'vip',
+                'status' => 'expired',
+                'activated_at' => '2026-06-12 12:00:00',
+                'created_at' => '2026-06-12 12:00:00',
+            ]);
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $basicClient->id,
+                'product_id' => $basic->id,
+                'plan_type' => 'basic',
+                'status' => 'expired',
+                'activated_at' => '2026-06-01 12:00:00',
+                'created_at' => '2026-06-01 12:00:00',
+            ]);
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $vvipClient->id,
+                'product_id' => $vvip->id,
+                'plan_type' => 'vip',
+                'status' => 'expired',
+                'activated_at' => '2026-06-02 12:00:00',
+                'created_at' => '2026-06-02 12:00:00',
+            ]);
+
+            Client::factory()->count(9)->sequence(
+                fn ($sequence) => [
+                    'platform_id' => $platform->id,
+                    'name' => sprintf('Queue Filler %02d', $sequence->index + 1),
+                    'profile_status' => 'private',
+                    'churned_at' => '2026-06-08 18:00:00',
+                    'churn_reason_code' => 'expired_unrenewed',
+                    'churn_source' => 'profile_inactive',
+                ],
+            )->create();
+
+            Sanctum::actingAs($admin);
+
+            $pageOne = $this->getJson('/api/crm/clients/churned?week=month&sort_by=name&sort_direction=asc&per_page=10');
+            $pageOne->assertOk()
+                ->assertJsonPath('total', 12)
+                ->assertJsonPath('per_page', 10)
+                ->assertJsonPath('last_page', 2)
+                ->assertJsonPath('data.0.id', $basicClient->id)
+                ->assertJsonPath('data.0.last_plan_key', 'basic')
+                ->assertJsonPath('data.0.last_plan_label', 'Basic');
+
+            $vipResponse = $this->getJson('/api/crm/clients/churned?week=month&plan=vip&search=Zuri&source=deal_expired');
+            $vipResponse->assertOk()
+                ->assertJsonPath('total', 1)
+                ->assertJsonPath('data.0.id', $vipClient->id)
+                ->assertJsonPath('data.0.last_plan_key', 'vip')
+                ->assertJsonPath('data.0.last_plan_label', 'VIP');
+
+            $vvipResponse = $this->getJson('/api/crm/clients/churned?week=month&plan=vvip');
+            $vvipResponse->assertOk()
+                ->assertJsonPath('total', 1)
+                ->assertJsonPath('data.0.id', $vvipClient->id)
+                ->assertJsonPath('data.0.last_plan_key', 'vvip');
+
+            $lastPlanSort = $this->getJson('/api/crm/clients/churned?week=month&sort_by=last_plan&sort_direction=desc');
+            $lastPlanSort->assertOk()
+                ->assertJsonPath('data.0.id', $vvipClient->id)
+                ->assertJsonPath('data.1.id', $vipClient->id)
+                ->assertJsonPath('data.2.id', $basicClient->id);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 }

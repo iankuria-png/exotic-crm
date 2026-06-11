@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -67,6 +68,25 @@ const SERIES = [
     { key: 'churn', label: 'Churn', color: '#f43f5e' },
 ];
 
+const PLAN_OPTIONS = [
+    { key: '', label: 'All last plans' },
+    { key: 'basic', label: 'Basic' },
+    { key: 'featured', label: 'Featured' },
+    { key: 'premium', label: 'Premium' },
+    { key: 'vip', label: 'VIP' },
+    { key: 'vvip', label: 'VVIP' },
+    { key: 'unknown', label: 'Unknown' },
+];
+
+const PLAN_BADGE_STYLES = {
+    basic: 'border-amber-200 bg-amber-50 text-amber-800',
+    featured: 'border-teal-200 bg-teal-50 text-teal-800',
+    premium: 'border-indigo-200 bg-indigo-50 text-indigo-800',
+    vip: 'border-violet-200 bg-violet-50 text-violet-800',
+    vvip: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800',
+    unknown: 'border-slate-200 bg-slate-50 text-slate-600',
+};
+
 // ─── URL state helpers ────────────────────────────────────────────────────────
 
 function readChurnRangeFromUrl(searchParams) {
@@ -107,26 +127,182 @@ function formatDate(iso) {
     return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function paginationItems(currentPage, lastPage) {
+    if (lastPage <= 7) return Array.from({ length: lastPage }, (_, index) => index + 1);
+
+    const pages = new Set([1, lastPage, currentPage - 1, currentPage, currentPage + 1]);
+    const visible = [...pages].filter((page) => page >= 1 && page <= lastPage).sort((a, b) => a - b);
+    const items = [];
+
+    visible.forEach((page, index) => {
+        if (index > 0 && page - visible[index - 1] > 1) items.push(`ellipsis-${page}`);
+        items.push(page);
+    });
+
+    return items;
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function InfoHint({ label, text }) {
+    const buttonRef = useRef(null);
+    const tooltipId = useMemo(() => `info-hint-${Math.random().toString(36).slice(2, 10)}`, []);
+    const [open, setOpen] = useState(false);
+    const [position, setPosition] = useState(null);
+
+    useEffect(() => {
+        if (!open) {
+            setPosition(null);
+            return undefined;
+        }
+
+        const updatePosition = () => {
+            const button = buttonRef.current;
+            if (!button) return;
+
+            const rect = button.getBoundingClientRect();
+            const width = Math.min(256, window.innerWidth - 24);
+            const left = Math.min(
+                window.innerWidth - (width / 2) - 12,
+                Math.max((width / 2) + 12, rect.left + (rect.width / 2)),
+            );
+            const placeBelow = rect.top < 120;
+
+            setPosition({
+                left,
+                top: placeBelow ? rect.bottom + 8 : rect.top - 8,
+                transform: placeBelow ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+                width,
+            });
+        };
+
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.removeEventListener('scroll', updatePosition, true);
+        };
+    }, [open]);
+
+    const tooltip = open && position && typeof document !== 'undefined'
+        ? createPortal(
+            <span
+                id={tooltipId}
+                role="tooltip"
+                style={position}
+                className="pointer-events-none fixed z-[200] rounded-lg bg-slate-950 px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-white shadow-2xl ring-1 ring-white/10"
+            >
+                {text}
+            </span>,
+            document.body,
+        )
+        : null;
+
     return (
-        <span className="group relative inline-flex align-middle">
+        <span
+            className="inline-flex align-middle"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={() => setOpen(false)}
+        >
             <button
+                ref={buttonRef}
                 type="button"
                 aria-label={`About ${label}`}
-                onClick={(event) => event.stopPropagation()}
+                aria-describedby={open ? tooltipId : undefined}
+                aria-expanded={open}
+                onFocus={() => setOpen(true)}
+                onBlur={() => setOpen(false)}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    setOpen(true);
+                }}
                 className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold normal-case text-slate-500 transition hover:border-teal-400 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
                 ?
             </button>
-            <span
-                role="tooltip"
-                className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-white shadow-xl group-hover:block group-focus-within:block"
-            >
-                {text}
-            </span>
+            {tooltip}
         </span>
+    );
+}
+
+function SortableHeader({ label, sortKey, activeSort, direction, onSort, className = '' }) {
+    const active = activeSort === sortKey;
+
+    return (
+        <th
+            scope="col"
+            aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+            className={`px-4 py-3 text-left ${className}`}
+        >
+            <button
+                type="button"
+                onClick={() => onSort(sortKey)}
+                className={`inline-flex min-h-8 items-center gap-1 rounded-md text-[11px] font-semibold uppercase tracking-wide transition focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                    active ? 'text-teal-700' : 'text-slate-500 hover:text-slate-800'
+                }`}
+            >
+                {label}
+                <span aria-hidden="true" className="text-[10px]">
+                    {active ? (direction === 'asc' ? '▲' : '▼') : '↕'}
+                </span>
+            </button>
+        </th>
+    );
+}
+
+function TablePagination({ pagination, page, onPageChange }) {
+    if (!pagination || pagination.total === 0) return null;
+
+    const start = pagination.from ?? ((page - 1) * pagination.per_page) + 1;
+    const end = pagination.to ?? Math.min(page * pagination.per_page, pagination.total);
+    const items = paginationItems(pagination.current_page, pagination.last_page);
+
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+            <p className="text-xs text-slate-600">
+                Showing <span className="font-semibold text-slate-800">{start.toLocaleString()}-{end.toLocaleString()}</span> of{' '}
+                <span className="font-semibold text-slate-800">{pagination.total.toLocaleString()}</span> clients
+            </p>
+            <nav aria-label="Churned clients pagination" className="flex items-center gap-1">
+                <button
+                    type="button"
+                    disabled={page <= 1}
+                    onClick={() => onPageChange(page - 1)}
+                    className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                    Previous
+                </button>
+                {items.map((item) => (
+                    typeof item === 'number' ? (
+                        <button
+                            key={item}
+                            type="button"
+                            aria-current={item === page ? 'page' : undefined}
+                            onClick={() => onPageChange(item)}
+                            className={`min-h-9 min-w-9 rounded-lg border px-2 text-xs font-semibold transition ${
+                                item === page
+                                    ? 'border-teal-700 bg-teal-700 text-white'
+                                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            {item}
+                        </button>
+                    ) : (
+                        <span key={item} className="px-1 text-xs text-slate-400">…</span>
+                    )
+                ))}
+                <button
+                    type="button"
+                    disabled={page >= pagination.last_page}
+                    onClick={() => onPageChange(page + 1)}
+                    className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                    Next
+                </button>
+            </nav>
+        </div>
     );
 }
 
@@ -600,19 +776,27 @@ function ReasonAggregator({ reasons, onSelectReason, selectedReason }) {
 
 function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCloseCase }) {
     const [menuOpen, setMenuOpen] = useState(false);
+    const planKey = row.last_plan_key || 'unknown';
 
     return (
-        <tr className="hover:bg-slate-50">
-            <td className="px-4 py-2.5">
-                <button type="button" onClick={onReactivate} className="text-left">
-                    <p className="text-sm font-semibold text-slate-800 hover:text-teal-700">{row.name || '—'}</p>
-                    <p className="text-xs text-slate-500 crm-mono">{row.phone_normalized || ''}</p>
+        <tr className="group transition hover:bg-teal-50/35">
+            <td className="px-4 py-3">
+                <button type="button" onClick={onReactivate} className="rounded text-left focus:outline-none focus:ring-2 focus:ring-teal-500">
+                    <p className="max-w-64 truncate text-sm font-semibold text-slate-900 transition group-hover:text-teal-800">{row.name || '—'}</p>
+                    <p className="mt-0.5 text-xs text-slate-500 crm-mono">{row.phone_normalized || 'No phone number'}</p>
                 </button>
             </td>
-            <td className="px-4 py-2.5 text-xs text-slate-500">{row.platform?.name || '—'}</td>
-            <td className="px-4 py-2.5 text-xs text-slate-600">{formatDate(row.first_activated_at)}</td>
-            <td className="px-4 py-2.5 text-xs text-slate-600">{formatDate(row.churned_at)}</td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-3 text-xs font-medium text-slate-600">{row.platform?.name || '—'}</td>
+            <td className="px-4 py-3 text-xs text-slate-600">{formatDate(row.first_activated_at)}</td>
+            <td className="px-4 py-3">
+                <p className="text-xs font-medium text-slate-700">{formatDate(row.churned_at)}</p>
+                {row.first_activated_at && row.churned_at ? (
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                        {formatDays((new Date(row.churned_at) - new Date(row.first_activated_at)) / 86400000)} paid tenure
+                    </p>
+                ) : null}
+            </td>
+            <td className="px-4 py-3">
                 <div className="flex flex-col gap-0.5">
                     <span className="text-xs font-medium text-slate-700">
                         {CHURN_REASON_LABELS[row.churn_reason_code] || row.churn_reason_code || '—'}
@@ -624,20 +808,29 @@ function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCl
                     ) : null}
                 </div>
             </td>
-            <td className="px-4 py-2.5 text-xs text-slate-600">{row.plan_label || '—'}</td>
-            <td className="px-4 py-2.5">
-                <div className="flex items-center gap-2">
+            <td className="px-4 py-3">
+                <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                    PLAN_BADGE_STYLES[planKey] || PLAN_BADGE_STYLES.unknown
+                }`}>
+                    {row.last_plan_label || 'Unknown'}
+                </span>
+                {row.last_plan_started_at ? (
+                    <p className="mt-1 text-[10px] text-slate-400">Started {formatDate(row.last_plan_started_at)}</p>
+                ) : null}
+            </td>
+            <td className="px-4 py-3">
+                <div className="flex items-center justify-end gap-2">
                     <button
                         type="button"
                         onClick={onWinBackSms}
-                        className="min-h-9 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2"
+                        className="min-h-9 whitespace-nowrap rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2"
                     >
                         Win-back SMS
                     </button>
                     <button
                         type="button"
                         onClick={onReactivate}
-                        className="min-h-9 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        className="min-h-9 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-500"
                     >
                         Reactivate
                     </button>
@@ -738,6 +931,13 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const [selectedMarketId, setSelectedMarketId] = useState(platformId ? Number(platformId) : null);
     const [selectedReason, setSelectedReason] = useState(null);
     const [visibleSeries, setVisibleSeries] = useState(new Set(['signups', 'activations', 'churn']));
+    const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
+    const [planFilter, setPlanFilter] = useState('');
+    const [sourceFilter, setSourceFilter] = useState('');
+    const [sortBy, setSortBy] = useState('churned_at');
+    const [sortDirection, setSortDirection] = useState('desc');
+    const [perPage, setPerPage] = useState(25);
 
     // Row dialogs
     const [wonBackDialog, setWonBackDialog] = useState({ open: false, client: null });
@@ -766,8 +966,13 @@ export default function ChurnedQueueView({ platformId = '' }) {
         ...rangeParams,
         ...(platformParam ? { platform_id: platformParam } : {}),
         ...(selectedReason ? { reason_code: selectedReason } : {}),
+        ...(search ? { search } : {}),
+        ...(planFilter ? { plan: planFilter } : {}),
+        ...(sourceFilter ? { source: sourceFilter } : {}),
+        sort_by: sortBy,
+        sort_direction: sortDirection,
         page,
-        per_page: 25,
+        per_page: perPage,
     };
 
     const listQuery = useQuery({
@@ -808,6 +1013,31 @@ export default function ChurnedQueueView({ platformId = '' }) {
             }
             return next;
         });
+    };
+
+    const applyTableSearch = (event) => {
+        event.preventDefault();
+        setSearch(searchInput.trim());
+        setPage(1);
+    };
+
+    const handleTableSort = (key) => {
+        if (sortBy === key) {
+            setSortDirection((direction) => direction === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortBy(key);
+            setSortDirection(key === 'name' || key === 'market' || key === 'last_plan' ? 'asc' : 'desc');
+        }
+        setPage(1);
+    };
+
+    const clearTableFilters = () => {
+        setSearchInput('');
+        setSearch('');
+        setPlanFilter('');
+        setSourceFilter('');
+        setSelectedReason(null);
+        setPage(1);
     };
 
     const wonBackMutation = useMutation({
@@ -864,6 +1094,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const pagination = listQuery.data;
 
     const currentPreset = range.mode === 'custom' ? 'custom' : (range.preset || 'this');
+    const tableFilterCount = [search, planFilter, sourceFilter, selectedReason].filter(Boolean).length;
 
     return (
         <div className="space-y-6">
@@ -1101,23 +1332,109 @@ export default function ChurnedQueueView({ platformId = '' }) {
 
             {/* Client list */}
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-100 px-4 py-3">
-                    <h3 className="text-sm font-semibold text-slate-800">
-                        Churned clients
-                        {listQuery.data?.total != null ? <span className="ml-2 font-normal text-slate-400">({listQuery.data.total.toLocaleString()})</span> : null}
-                    </h3>
+                <div className="border-b border-slate-200 bg-slate-50/60 px-4 py-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-semibold text-slate-900">Churned client queue</h3>
+                                {listQuery.data?.total != null ? (
+                                    <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                        {listQuery.data.total.toLocaleString()}
+                                    </span>
+                                ) : null}
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">Search, segment, and arrange the queue before starting win-back outreach.</p>
+                        </div>
+                        {tableFilterCount > 0 ? (
+                            <button
+                                type="button"
+                                onClick={clearTableFilters}
+                                className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            >
+                                Clear {tableFilterCount} {tableFilterCount === 1 ? 'filter' : 'filters'}
+                            </button>
+                        ) : null}
+                    </div>
+
+                    <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(280px,1.4fr)_repeat(2,minmax(160px,0.7fr))_auto]">
+                        <form onSubmit={applyTableSearch}>
+                            <label htmlFor="churn-client-search" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                Search clients
+                            </label>
+                            <div className="relative">
+                                <input
+                                    id="churn-client-search"
+                                    type="search"
+                                    value={searchInput}
+                                    onChange={(event) => setSearchInput(event.target.value)}
+                                    placeholder="Name, phone, or email"
+                                    className="min-h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-20 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                                />
+                                <button
+                                    type="submit"
+                                    className="absolute right-1.5 top-1.5 min-h-8 rounded-md bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                                >
+                                    Search
+                                </button>
+                            </div>
+                        </form>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Last paid plan</span>
+                            <select
+                                value={planFilter}
+                                onChange={(event) => { setPlanFilter(event.target.value); setPage(1); }}
+                                className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                            >
+                                {PLAN_OPTIONS.map((option) => (
+                                    <option key={option.key || 'all'} value={option.key}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Churn source</span>
+                            <select
+                                value={sourceFilter}
+                                onChange={(event) => { setSourceFilter(event.target.value); setPage(1); }}
+                                className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                            >
+                                <option value="">All sources</option>
+                                {Object.entries(CHURN_SOURCE_LABELS).map(([key, label]) => (
+                                    <option key={key} value={key}>{label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rows</span>
+                            <select
+                                value={perPage}
+                                onChange={(event) => { setPerPage(Number(event.target.value)); setPage(1); }}
+                                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                            >
+                                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                            </select>
+                        </label>
+                    </div>
+
+                    {search ? (
+                        <p className="mt-3 text-xs text-slate-500">
+                            Results matching <span className="font-semibold text-slate-800">“{search}”</span>
+                        </p>
+                    ) : null}
                 </div>
                 <div className="overflow-x-auto">
-                <table className="min-w-[1100px] divide-y divide-slate-100 text-sm">
-                    <thead className="bg-slate-50">
+                <table className="min-w-[1180px] divide-y divide-slate-100 text-sm">
+                    <thead className="bg-white">
                         <tr>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Client</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">First activated</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Churned</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reason</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last plan</th>
-                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                            <SortableHeader label="Client" sortKey="name" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <SortableHeader label="Market" sortKey="market" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <SortableHeader label="First activated" sortKey="first_activated_at" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <SortableHeader label="Churned" sortKey="churned_at" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <SortableHeader label="Reason" sortKey="reason" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <SortableHeader label="Last paid plan" sortKey="last_plan" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+                            <th scope="col" className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1147,15 +1464,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
                 </table>
                 </div>
 
-                {pagination && pagination.last_page > 1 ? (
-                    <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
-                        <span>Page {pagination.current_page} of {pagination.last_page} · {pagination.total} total</span>
-                        <div className="flex gap-1">
-                            <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium disabled:opacity-40">Prev</button>
-                            <button type="button" disabled={page >= pagination.last_page} onClick={() => setPage((p) => p + 1)} className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium disabled:opacity-40">Next</button>
-                        </div>
-                    </div>
-                ) : null}
+                <TablePagination pagination={pagination} page={page} onPageChange={setPage} />
             </div>
 
             {/* Dialogs */}

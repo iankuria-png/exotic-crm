@@ -19,6 +19,7 @@ use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientChurnStamper;
 use App\Services\ClientDeletionService;
+use App\Services\ClientFunnelService;
 use App\Services\ClientOutreachService;
 use App\Services\ClientSegmentService;
 use App\Services\ClientSubscriptionActionResolver;
@@ -4759,15 +4760,26 @@ class ClientController extends Controller
 
     public function churned(Request $request)
     {
+        $validated = $request->validate([
+            'search' => 'nullable|string|max:120',
+            'plan' => 'nullable|string|in:basic,featured,premium,vip,vvip,unknown',
+            'reason_code' => 'nullable|string|max:80',
+            'source' => 'nullable|string|max:80',
+            'sort_by' => 'nullable|string|in:name,market,first_activated_at,churned_at,reason,last_plan',
+            'sort_direction' => 'nullable|string|in:asc,desc',
+            'per_page' => 'nullable|integer|in:10,25,50,100',
+        ]);
         [$from, $to] = $this->resolveChurnRange($request);
+        $latestPaidDealIdSql = $this->latestPaidDealIdSql();
 
         $query = Client::query()
+            ->select('clients.*')
             ->with([
                 'platform:id,name',
                 'assignedAgent:id,name',
                 'retentionInsight:client_id,band,primary_tag',
-                'activeDeal.product:id,name,display_name,tier',
             ])
+            ->selectRaw("({$latestPaidDealIdSql}) as last_paid_deal_id")
             ->whereNotNull('churned_at')
             ->whereBetween('churned_at', [$from->startOfDay(), $to->endOfDay()]);
 
@@ -4777,19 +4789,167 @@ class ClientController extends Controller
             $query->where('platform_id', (int) $request->input('platform_id'));
         }
 
-        if ($request->filled('reason_code')) {
-            $query->where('churn_reason_code', $request->input('reason_code'));
+        if (! empty($validated['search'])) {
+            $this->applyClientTextSearch($query, [$validated['search']]);
         }
 
-        if ($request->filled('source')) {
-            $query->where('churn_source', $request->input('source'));
+        if (! empty($validated['reason_code'])) {
+            $query->where('churn_reason_code', $validated['reason_code']);
         }
 
-        $query->orderBy('churned_at', 'desc');
+        if (! empty($validated['source'])) {
+            $query->where('churn_source', $validated['source']);
+        }
 
-        $clients = $query->paginate($request->integer('per_page', 25));
+        if (! empty($validated['plan'])) {
+            $this->applyChurnLastPlanFilter($query, $validated['plan'], $latestPaidDealIdSql);
+        }
+
+        $this->applyChurnListSort(
+            $query,
+            $validated['sort_by'] ?? 'churned_at',
+            $validated['sort_direction'] ?? 'desc',
+            $latestPaidDealIdSql,
+        );
+
+        $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
+        $this->decorateChurnLastPlans($clients->getCollection());
 
         return response()->json($clients);
+    }
+
+    private function latestPaidDealIdSql(): string
+    {
+        $paidStatuses = collect(ClientFunnelService::PAID_DEAL_STATUSES)
+            ->map(fn (string $status) => DB::getPdo()->quote($status))
+            ->implode(', ');
+
+        return <<<SQL
+            SELECT latest_paid_deal.id
+            FROM deals AS latest_paid_deal
+            WHERE latest_paid_deal.client_id = clients.id
+              AND (
+                latest_paid_deal.activated_at IS NOT NULL
+                OR latest_paid_deal.status IN ({$paidStatuses})
+              )
+              AND COALESCE(latest_paid_deal.activated_at, latest_paid_deal.created_at) <= clients.churned_at
+            ORDER BY COALESCE(latest_paid_deal.activated_at, latest_paid_deal.created_at) DESC, latest_paid_deal.id DESC
+            LIMIT 1
+            SQL;
+    }
+
+    private function applyChurnLastPlanFilter($query, string $plan, string $latestPaidDealIdSql): void
+    {
+        if ($plan === 'unknown') {
+            $query->whereRaw("({$latestPaidDealIdSql}) IS NULL");
+
+            return;
+        }
+
+        $query->whereExists(function ($dealQuery) use ($plan, $latestPaidDealIdSql) {
+            $planKeySql = $this->churnPlanKeySql('selected_churn_deal', 'selected_churn_product');
+
+            $dealQuery
+                ->selectRaw('1')
+                ->from('deals as selected_churn_deal')
+                ->leftJoin('products as selected_churn_product', 'selected_churn_product.id', '=', 'selected_churn_deal.product_id')
+                ->whereRaw("selected_churn_deal.id = ({$latestPaidDealIdSql})")
+                ->whereRaw("{$planKeySql} = ?", [$plan]);
+        });
+    }
+
+    private function applyChurnListSort($query, string $sortBy, string $direction, string $latestPaidDealIdSql): void
+    {
+        $direction = strtolower($direction) === 'asc' ? 'asc' : 'desc';
+        $unknownPlanSortValue = $direction === 'asc' ? 'zzzz' : '';
+
+        match ($sortBy) {
+            'name' => $query->orderBy('clients.name', $direction),
+            'market' => $query->orderBy(
+                Platform::query()->select('name')->whereColumn('platforms.id', 'clients.platform_id')->limit(1),
+                $direction,
+            ),
+            'first_activated_at' => $query->orderBy('clients.first_activated_at', $direction),
+            'reason' => $query->orderBy('clients.churn_reason_code', $direction),
+            'last_plan' => $query->orderByRaw(
+                "COALESCE(NULLIF((
+                    SELECT {$this->churnPlanKeySql('churn_deal', 'churn_product')}
+                    FROM deals AS churn_deal
+                    LEFT JOIN products AS churn_product ON churn_product.id = churn_deal.product_id
+                    WHERE churn_deal.id = ({$latestPaidDealIdSql})
+                    LIMIT 1
+                ), 'unknown'), '{$unknownPlanSortValue}') {$direction}"
+            ),
+            default => $query->orderBy('clients.churned_at', $direction),
+        };
+
+        $query->orderBy('clients.id', 'desc');
+    }
+
+    private function churnPlanKeySql(string $dealAlias, string $productAlias): string
+    {
+        $productValues = [
+            "{$productAlias}.tier",
+            "COALESCE(NULLIF({$productAlias}.display_name, ''), {$productAlias}.name)",
+            "{$productAlias}.slug",
+        ];
+        $cases = [];
+
+        foreach ($productValues as $value) {
+            $normalized = "TRIM(LOWER(REPLACE(REPLACE(COALESCE({$value}, ''), '_', ' '), '-', ' ')))";
+            $cases[] = "WHEN {$normalized} LIKE '%vvip%' THEN 'vvip'";
+            $cases[] = "WHEN {$normalized} = 'vip' THEN 'vip'";
+            $cases[] = "WHEN {$normalized} LIKE '%premium%' THEN 'premium'";
+            $cases[] = "WHEN {$normalized} LIKE '%featured%' THEN 'featured'";
+            $cases[] = "WHEN {$normalized} LIKE '%basic%' THEN 'basic'";
+        }
+
+        $productValuesEmpty = collect($productValues)
+            ->map(fn (string $value) => "TRIM(COALESCE({$value}, '')) = ''")
+            ->implode(' AND ');
+        $fallbackAllowed = "({$productAlias}.id IS NULL OR ({$productValuesEmpty}))";
+        $fallback = "TRIM(LOWER(REPLACE(REPLACE(COALESCE({$dealAlias}.plan_type, ''), '_', ' '), '-', ' ')))";
+
+        $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%vvip%' THEN 'vvip'";
+        $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} = 'vip' THEN 'vip'";
+        $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%premium%' THEN 'premium'";
+        $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%featured%' THEN 'featured'";
+        $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%basic%' THEN 'basic'";
+
+        return 'CASE ' . implode(' ', $cases) . " ELSE 'unknown' END";
+    }
+
+    private function decorateChurnLastPlans($clients): void
+    {
+        $dealIds = $clients
+            ->pluck('last_paid_deal_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $deals = Deal::query()
+            ->with('product:id,name,display_name,slug,tier')
+            ->whereIn('id', $dealIds)
+            ->get()
+            ->keyBy('id');
+
+        $clients->each(function (Client $client) use ($deals): void {
+            $deal = $deals->get((int) $client->last_paid_deal_id);
+            $presentation = $deal
+                ? Client::planPresentationFromPackageValues(
+                    $deal->product?->tier,
+                    $deal->product?->display_name ?: $deal->product?->name ?: $deal->plan_type,
+                    $deal->product?->slug,
+                )
+                : null;
+
+            $client->setAttribute('last_plan_key', $presentation['key'] ?? 'unknown');
+            $client->setAttribute('last_plan_label', $presentation['label'] ?? 'Unknown');
+            $client->setAttribute('last_plan_started_at', $deal?->activated_at ?? $deal?->created_at);
+            $client->setAttribute('last_plan_status', $deal?->status);
+            $client->makeHidden(['plan_key', 'plan_label', 'last_paid_deal_id']);
+        });
     }
 
     public function markWonBack(Request $request, Client $client)
