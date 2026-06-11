@@ -325,24 +325,26 @@ function comparisonText(comparison, inverse = false) {
 function MetricCard({ label, value, subValue, health, comparison, inverseComparison = false, accent = 'slate' }) {
     const styles = health ? healthStyles(health) : null;
     const change = comparisonText(comparison, inverseComparison);
-    const accentClass = accent === 'rose'
-        ? 'before:bg-rose-500'
-        : accent === 'amber'
-            ? 'before:bg-amber-500'
-            : 'before:bg-teal-500';
+    const accentDots = {
+        amber: 'bg-amber-500',
+        rose: 'bg-rose-500',
+        slate: 'bg-teal-500',
+    };
+    const dotClass = styles?.dot || accentDots[accent] || accentDots.slate;
 
     return (
-        <div className={`relative overflow-hidden rounded-xl border bg-white p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 ${accentClass} ${styles ? `${styles.border}` : 'border-slate-200'}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+        <div className={`rounded-xl border bg-white p-5 shadow-sm ${styles ? styles.border : 'border-slate-200'}`}>
+            <div className="flex items-center gap-2">
+                <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`}
+                    title={health ? health.charAt(0).toUpperCase() + health.slice(1) : undefined}
+                />
+                {health ? <span className="sr-only">Status: {health}</span> : null}
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+            </div>
             <p className={`mt-1 text-3xl font-bold tracking-tight ${styles ? styles.text : 'text-slate-900'}`}>{value}</p>
             {subValue ? <p className="mt-0.5 text-xs text-slate-500">{subValue}</p> : null}
             {change ? <p className={`mt-2 text-xs font-semibold ${change.tone}`}>{change.label}</p> : null}
-            {health ? (
-                <div className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.bg} ${styles.text}`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${styles.dot}`} />
-                    {health.charAt(0).toUpperCase() + health.slice(1)}
-                </div>
-            ) : null}
         </div>
     );
 }
@@ -486,15 +488,6 @@ function RevenueRiskChart({ daily }) {
                         width={54}
                         tickFormatter={(value) => `$${Number(value || 0).toLocaleString()}`}
                     />
-                    <YAxis
-                        yAxisId="ticket"
-                        orientation="right"
-                        tick={{ fontSize: 10, fill: '#94a3b8' }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={42}
-                        tickFormatter={(value) => `$${Number(value || 0).toLocaleString()}`}
-                    />
                     <Tooltip content={<RevenueRiskTooltip />} />
                     <Bar
                         yAxisId="risk"
@@ -503,16 +496,6 @@ function RevenueRiskChart({ daily }) {
                         fill="#fb7185"
                         radius={[4, 4, 0, 0]}
                         maxBarSize={28}
-                    />
-                    <Line
-                        yAxisId="ticket"
-                        type="monotone"
-                        dataKey="average_ticket_usd"
-                        name="Daily average ticket"
-                        stroke="#0f766e"
-                        strokeWidth={2.5}
-                        dot={false}
-                        connectNulls={false}
                     />
                 </ComposedChart>
             </ResponsiveContainer>
@@ -1188,8 +1171,9 @@ export default function ChurnedQueueView({ platformId = '' }) {
                     inverseComparison
                     accent="rose"
                 />
-                <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-amber-500">
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex items-center">
+                        <span className="mr-2 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Paid tenure before churn</p>
                         <InfoHint
                             label="paid tenure before churn"
@@ -1216,8 +1200,9 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         <p className="mt-3 text-sm text-slate-500">No churned customers with usable paid-tenure history in this period.</p>
                     )}
                 </div>
-                <div className="relative overflow-hidden rounded-xl border border-rose-200 bg-gradient-to-br from-white to-rose-50 p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-rose-500">
+                <div className="rounded-xl border border-rose-200 bg-gradient-to-br from-white to-rose-50 p-5 shadow-sm">
                     <div className="flex items-center">
+                        <span className="mr-2 h-2 w-2 shrink-0 rounded-full bg-rose-500" />
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Estimated revenue at risk</p>
                         <InfoHint
                             label="estimated revenue at risk"
@@ -1272,14 +1257,13 @@ export default function ChurnedQueueView({ platformId = '' }) {
                             <h3 className="text-sm font-semibold text-slate-900">Daily churn revenue estimate</h3>
                             <InfoHint
                                 label="daily churn revenue estimate"
-                                text="Rose bars estimate revenue at risk from churn. The teal line is the successful average ticket for that day in USD. Missing daily ticket data creates a gap rather than inventing a value."
+                                text="Rose bars estimate daily revenue at risk from churn. Each bar uses that day's successful average ticket in USD. Missing daily ticket data creates a gap rather than inventing a value."
                             />
                         </div>
                         <p className="mt-0.5 text-xs text-slate-500">Daily average ticket × customers churned that day.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500">
                         <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" /> Revenue at risk</span>
-                        <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-teal-700" /> Average ticket</span>
                     </div>
                 </div>
                 {summaryQuery.isLoading ? (
