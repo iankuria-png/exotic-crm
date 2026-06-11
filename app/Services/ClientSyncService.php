@@ -562,6 +562,15 @@ class ClientSyncService
                     ]
                 );
             });
+
+            $syncedClientIds = Client::query()
+                ->where('platform_id', (int) $this->platform->id)
+                ->whereIn('wp_post_id', array_column($rows, 'wp_post_id'))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+            app(ClientChurnStamper::class)->syncClientIds($syncedClientIds);
         }
 
         // Dispatch recompute jobs for any clients whose WP bio was edited directly

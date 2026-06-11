@@ -2,10 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+    Area,
     CartesianGrid,
-    Legend,
+    ComposedChart,
     Line,
-    LineChart,
+    ReferenceLine,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -41,6 +42,7 @@ const CHURN_SOURCE_LABELS = {
     deal_expired: 'Deal Expired',
     deal_deactivated: 'Deal Deactivated',
     case_closed: 'Case Closed',
+    profile_inactive: 'Profile Inactive',
 };
 
 const CLOSE_CASE_REASON_CODES = new Set([
@@ -94,6 +96,7 @@ function formatDays(days) {
 function healthStyles(health) {
     if (health === 'healthy') return { dot: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' };
     if (health === 'watch') return { dot: 'bg-amber-500', text: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200' };
+    if (health === 'neutral') return { dot: 'bg-slate-400', text: 'text-slate-600', bg: 'bg-slate-100', border: 'border-slate-200' };
     return { dot: 'bg-rose-600', text: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' };
 }
 
@@ -104,13 +107,37 @@ function formatDate(iso) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function MetricCard({ label, value, subValue, health }) {
+function comparisonText(comparison, inverse = false) {
+    if (!comparison) return null;
+    if (comparison.delta === 0) return { label: 'No change vs prior period', tone: 'text-slate-500' };
+
+    const improved = inverse ? comparison.delta < 0 : comparison.delta > 0;
+    const direction = comparison.delta > 0 ? 'up' : 'down';
+    const amount = comparison.percent === null
+        ? `${Math.abs(comparison.delta).toLocaleString()}`
+        : `${Math.abs(comparison.percent).toLocaleString()}%`;
+
+    return {
+        label: `${direction === 'up' ? 'Up' : 'Down'} ${amount} vs prior period`,
+        tone: improved ? 'text-emerald-700' : 'text-rose-700',
+    };
+}
+
+function MetricCard({ label, value, subValue, health, comparison, inverseComparison = false, accent = 'slate' }) {
     const styles = health ? healthStyles(health) : null;
+    const change = comparisonText(comparison, inverseComparison);
+    const accentClass = accent === 'rose'
+        ? 'before:bg-rose-500'
+        : accent === 'amber'
+            ? 'before:bg-amber-500'
+            : 'before:bg-teal-500';
+
     return (
-        <div className={`rounded-lg border bg-white p-4 ${styles ? `${styles.border}` : 'border-slate-200'}`}>
+        <div className={`relative overflow-hidden rounded-xl border bg-white p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 ${accentClass} ${styles ? `${styles.border}` : 'border-slate-200'}`}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-            <p className={`mt-1 text-2xl font-bold ${styles ? styles.text : 'text-slate-900'}`}>{value}</p>
+            <p className={`mt-1 text-3xl font-bold tracking-tight ${styles ? styles.text : 'text-slate-900'}`}>{value}</p>
             {subValue ? <p className="mt-0.5 text-xs text-slate-500">{subValue}</p> : null}
+            {change ? <p className={`mt-2 text-xs font-semibold ${change.tone}`}>{change.label}</p> : null}
             {health ? (
                 <div className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.bg} ${styles.text}`}>
                     <span className={`h-1.5 w-1.5 rounded-full ${styles.dot}`} />
@@ -156,6 +183,7 @@ function TrendChart({ daily, visibleSeries }) {
         signups: d.signups,
         activations: d.activations,
         churn: d.churn,
+        net: d.signups - d.churn,
     }));
 
     if (!data.length) {
@@ -167,15 +195,29 @@ function TrendChart({ daily, visibleSeries }) {
     }
 
     return (
-        <div className="h-48 w-full">
+        <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 4, right: 12, left: -10, bottom: 0 }}>
+                <ComposedChart data={data} margin={{ top: 4, right: 12, left: -10, bottom: 0 }}>
+                    <defs>
+                        <linearGradient id="churnNetFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.2} />
+                            <stop offset="100%" stopColor="#14b8a6" stopOpacity={0.01} />
+                        </linearGradient>
+                    </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
                     <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} allowDecimals={false} />
                     <Tooltip
                         contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}
                         labelStyle={{ fontWeight: 600, color: '#334155' }}
+                    />
+                    <ReferenceLine y={0} stroke="#cbd5e1" />
+                    <Area
+                        type="monotone"
+                        dataKey="net"
+                        name="Net movement"
+                        stroke="none"
+                        fill="url(#churnNetFill)"
                     />
                     {SERIES.filter((s) => visibleSeries.has(s.key)).map((s) => (
                         <Line
@@ -188,7 +230,7 @@ function TrendChart({ daily, visibleSeries }) {
                             activeDot={{ r: 4 }}
                         />
                     ))}
-                </LineChart>
+                </ComposedChart>
             </ResponsiveContainer>
         </div>
     );
@@ -210,8 +252,14 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
     const sorted = [...(durations || [])].sort((a, b) => {
         const aVal = a[sortKey] ?? -Infinity;
         const bVal = b[sortKey] ?? -Infinity;
+
+        if (typeof aVal === 'string' && typeof bVal === 'string') {
+            return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        }
+
         return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
     });
+    const maxPaidDuration = Math.max(...sorted.map((row) => row.avg_paid_lifetime_days || 0), 1);
 
     const thClass = (key) =>
         `cursor-pointer select-none px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700 ${sortKey === key ? 'text-teal-600' : ''}`;
@@ -229,13 +277,14 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                         <th className={thClass('name')} onClick={() => handleSort('name')}>Market<SortIcon k="name" /></th>
                         <th className={thClass('avg_paid_lifetime_days')} onClick={() => handleSort('avg_paid_lifetime_days')}>Avg paid lifetime<SortIcon k="avg_paid_lifetime_days" /></th>
                         <th className={thClass('avg_total_relationship_days')} onClick={() => handleSort('avg_total_relationship_days')}>Avg total relationship<SortIcon k="avg_total_relationship_days" /></th>
+                        <th className={thClass('signup_count')} onClick={() => handleSort('signup_count')}>Signups<SortIcon k="signup_count" /></th>
                         <th className={thClass('churn_count')} onClick={() => handleSort('churn_count')}>Churned<SortIcon k="churn_count" /></th>
                         <th className={thClass('net_delta')} onClick={() => handleSort('net_delta')}>Net delta<SortIcon k="net_delta" /></th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                     {sorted.length === 0 ? (
-                        <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">No market data for this range.</td></tr>
+                        <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No market movement for this range.</td></tr>
                     ) : sorted.map((row) => {
                         const isSelected = selectedMarketId === row.platform_id;
                         const netColor = row.net_delta > 0 ? 'text-emerald-600' : row.net_delta < 0 ? 'text-rose-600' : 'text-slate-500';
@@ -243,18 +292,31 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                             <tr
                                 key={row.platform_id}
                                 onClick={() => onSelectMarket(isSelected ? null : row.platform_id)}
-                                className={`cursor-pointer transition hover:bg-slate-50 ${isSelected ? 'bg-teal-50' : ''}`}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        onSelectMarket(isSelected ? null : row.platform_id);
+                                    }
+                                }}
+                                tabIndex={0}
+                                className={`cursor-pointer transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 ${isSelected ? 'bg-teal-50' : ''}`}
                             >
                                 <td className="px-3 py-2 font-medium text-slate-800">{row.name}</td>
                                 <td className="px-3 py-2 text-slate-600">
                                     {formatDays(row.avg_paid_lifetime_days)}
-                                    <span className="ml-1 text-[10px] text-slate-400">paid</span>
+                                    <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
+                                        <div
+                                            className="h-full rounded-full bg-teal-400"
+                                            style={{ width: `${Math.max(4, ((row.avg_paid_lifetime_days || 0) / maxPaidDuration) * 100)}%` }}
+                                        />
+                                    </div>
                                 </td>
                                 <td className="px-3 py-2 text-slate-600">
                                     {formatDays(row.avg_total_relationship_days)}
                                     <span className="ml-1 text-[10px] text-slate-400">total</span>
                                 </td>
-                                <td className="px-3 py-2 text-slate-700">{row.churn_count.toLocaleString()}</td>
+                                <td className="px-3 py-2 text-slate-700">{(row.signup_count || 0).toLocaleString()}</td>
+                                <td className="px-3 py-2 font-medium text-rose-700">{row.churn_count.toLocaleString()}</td>
                                 <td className={`px-3 py-2 font-semibold ${netColor}`}>
                                     {row.net_delta > 0 ? '+' : ''}{row.net_delta}
                                 </td>
@@ -320,6 +382,8 @@ function ReasonAggregator({ reasons, onSelectReason, selectedReason }) {
 }
 
 function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCloseCase }) {
+    const [menuOpen, setMenuOpen] = useState(false);
+
     return (
         <tr className="hover:bg-slate-50">
             <td className="px-4 py-2.5">
@@ -345,35 +409,42 @@ function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCl
             </td>
             <td className="px-4 py-2.5 text-xs text-slate-600">{row.plan_label || '—'}</td>
             <td className="px-4 py-2.5">
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex items-center gap-2">
                     <button
                         type="button"
                         onClick={onWinBackSms}
-                        className="rounded-md bg-teal-700 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-teal-800"
+                        className="min-h-9 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2"
                     >
                         Win-back SMS
                     </button>
                     <button
                         type="button"
                         onClick={onReactivate}
-                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                        className="min-h-9 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                         Reactivate
                     </button>
-                    <button
-                        type="button"
-                        onClick={onMarkWonBack}
-                        className="rounded-md border border-emerald-300 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                    >
-                        Mark won-back
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onCloseCase}
-                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
-                    >
-                        Close case
-                    </button>
+                    <div className="relative">
+                        <button
+                            type="button"
+                            aria-label={`More actions for ${row.name || 'client'}`}
+                            aria-expanded={menuOpen}
+                            onClick={() => setMenuOpen((open) => !open)}
+                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-lg leading-none text-slate-600 hover:bg-slate-50"
+                        >
+                            ···
+                        </button>
+                        {menuOpen ? (
+                            <div className="absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                                <button type="button" onClick={() => { setMenuOpen(false); onMarkWonBack(); }} className="block w-full px-3 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50">
+                                    Mark won-back
+                                </button>
+                                <button type="button" onClick={() => { setMenuOpen(false); onCloseCase(); }} className="block w-full px-3 py-2 text-left text-xs font-medium text-rose-700 hover:bg-rose-50">
+                                    Close case
+                                </button>
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
             </td>
         </tr>
@@ -566,6 +637,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
 
     const summary = summaryQuery.data;
     const totals = summary?.totals || { signups: 0, activations: 0, churn: 0, net: 0 };
+    const comparison = summary?.comparison || {};
     const health = summary?.health || 'neutral';
     const rows = listQuery.data?.data || [];
     const pagination = listQuery.data;
@@ -573,34 +645,55 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const currentPreset = range.mode === 'custom' ? 'custom' : (range.preset || 'this');
 
     return (
-        <div className="space-y-5">
+        <div className="space-y-6">
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-teal-950 px-5 py-5 text-white shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-300">Retention pulse</p>
+                        <h2 className="mt-1 text-xl font-bold tracking-tight">See who left, why they left, and where to win them back.</h2>
+                        <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                            Churn follows the same paid-history and inactive-profile definition used across the Clients workspace.
+                        </p>
+                    </div>
+                    {summary?.range ? (
+                        <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Selected window</p>
+                            <p className="mt-0.5 text-sm font-semibold">{formatDate(summary.range.from)} - {formatDate(summary.range.to)}</p>
+                        </div>
+                    ) : null}
+                </div>
+            </section>
+
             {/* Range selector */}
-            <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reporting period</p>
+                    <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1">
                     {PRESETS.map((p) => (
                         <button
                             key={p.key}
                             type="button"
                             onClick={() => setPreset(p.key)}
-                            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
+                            className={`min-h-9 rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
                                 currentPreset === p.key
-                                    ? 'bg-white text-teal-700 shadow-sm'
+                                    ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
                                     : 'text-slate-600 hover:text-slate-800'
                             }`}
                         >
                             {p.label}
                         </button>
                     ))}
+                    </div>
                 </div>
                 {showCustom && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
                         <input
                             type="date"
                             value={customFrom}
                             onChange={(e) => setCustomFrom(e.target.value)}
                             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
                         />
-                        <span className="text-sm text-slate-400">→</span>
+                        <span className="pb-2 text-sm text-slate-400">to</span>
                         <input
                             type="date"
                             value={customTo}
@@ -619,6 +712,13 @@ export default function ChurnedQueueView({ platformId = '' }) {
                 )}
             </div>
 
+            {summaryQuery.isError || listQuery.isError ? (
+                <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                    <p className="text-sm font-semibold text-rose-800">Churn data could not be loaded.</p>
+                    <p className="mt-0.5 text-xs text-rose-700">Refresh the page or try a different reporting period.</p>
+                </div>
+            ) : null}
+
             {/* Metric strip */}
             <div className="grid gap-3 md:grid-cols-3">
                 <MetricCard
@@ -626,47 +726,60 @@ export default function ChurnedQueueView({ platformId = '' }) {
                     value={totals.net > 0 ? `+${totals.net.toLocaleString()}` : totals.net.toLocaleString()}
                     subValue={`${totals.signups} signups · ${totals.churn} churned`}
                     health={health}
+                    comparison={comparison.net}
                 />
                 <MetricCard
                     label="Churned in range"
                     value={totals.churn.toLocaleString()}
                     subValue={`vs ${totals.activations} activated`}
+                    comparison={comparison.churn}
+                    inverseComparison
+                    accent="rose"
                 />
-                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-amber-500">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Avg duration — all markets</p>
                     {summaryQuery.isLoading ? (
-                        <p className="mt-2 text-sm text-slate-400">Loading…</p>
-                    ) : (summary?.durations_by_market?.length > 0) ? (
-                        (() => {
-                            const allDurations = summary.durations_by_market;
-                            const avgPaid = allDurations.reduce((sum, d) => sum + (d.avg_paid_lifetime_days || 0), 0) / allDurations.length;
-                            const avgTotal = allDurations.reduce((sum, d) => sum + (d.avg_total_relationship_days || 0), 0) / allDurations.length;
-                            return (
-                                <>
-                                    <p className="mt-1 text-2xl font-bold text-slate-900">{formatDays(avgPaid)} <span className="text-sm font-medium text-slate-500">paid</span></p>
-                                    <p className="mt-0.5 text-xs text-slate-500">{formatDays(avgTotal)} total relationship</p>
-                                </>
-                            );
-                        })()
+                        <div className="mt-3 space-y-2">
+                            <div className="h-8 w-28 animate-pulse rounded bg-slate-100" />
+                            <div className="h-3 w-40 animate-pulse rounded bg-slate-100" />
+                        </div>
+                    ) : summary?.averages?.paid_lifetime_days != null ? (
+                        <>
+                            <p className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+                                {formatDays(summary.averages.paid_lifetime_days)}
+                                <span className="ml-1 text-sm font-medium text-slate-500">paid</span>
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                                {formatDays(summary.averages.total_relationship_days)} total relationship
+                            </p>
+                            <p className="mt-2 text-xs font-medium text-slate-500">Weighted by churned clients, not market count</p>
+                        </>
                     ) : (
-                        <p className="mt-2 text-sm text-slate-400">No data</p>
+                        <p className="mt-3 text-sm text-slate-500">No churned clients with duration history in this period.</p>
                     )}
                 </div>
             </div>
 
             {/* Net movement chart */}
-            <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-slate-800">Net movement over time</h3>
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Movement over time</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">The shaded area shows daily signups minus churn.</p>
+                    </div>
                     <SeriesToggle visibleSeries={visibleSeries} onToggle={toggleSeries} />
                 </div>
-                <TrendChart daily={summary?.daily} visibleSeries={visibleSeries} />
+                {summaryQuery.isLoading ? (
+                    <div className="h-64 animate-pulse rounded-xl bg-slate-100" />
+                ) : (
+                    <TrendChart daily={summary?.daily} visibleSeries={visibleSeries} />
+                )}
             </div>
 
             {/* Market duration table */}
             <div>
-                <h3 className="mb-2 text-sm font-semibold text-slate-800">Duration by market</h3>
-                <p className="mb-2 text-xs text-slate-500">Click a row to filter the client list below to that market.</p>
+                <h3 className="text-sm font-semibold text-slate-900">Market retention</h3>
+                <p className="mb-2 mt-0.5 text-xs text-slate-500">Compare acquisition, churn, and paid lifetime. Select a row to focus the full view.</p>
                 <MarketDurationTable
                     durations={summary?.durations_by_market}
                     onSelectMarket={(id) => { setSelectedMarketId(id); setPage(1); }}
@@ -703,14 +816,15 @@ export default function ChurnedQueueView({ platformId = '' }) {
             ) : null}
 
             {/* Client list */}
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-4 py-3">
                     <h3 className="text-sm font-semibold text-slate-800">
                         Churned clients
                         {listQuery.data?.total != null ? <span className="ml-2 font-normal text-slate-400">({listQuery.data.total.toLocaleString()})</span> : null}
                     </h3>
                 </div>
-                <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <div className="overflow-x-auto">
+                <table className="min-w-[1100px] divide-y divide-slate-100 text-sm">
                     <thead className="bg-slate-50">
                         <tr>
                             <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Client</th>
@@ -728,7 +842,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         ) : rows.length === 0 ? (
                             <tr>
                                 <td colSpan={7} className="px-4 py-10 text-center">
-                                    <p className="text-sm font-medium text-slate-700">No churn this week — that&rsquo;s the goal.</p>
+                                    <p className="text-sm font-medium text-slate-700">No churn in this reporting period.</p>
                                     <p className="mt-1 text-xs text-slate-500">Try broadening the range or clearing the filters above.</p>
                                 </td>
                             </tr>
@@ -747,6 +861,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         ))}
                     </tbody>
                 </table>
+                </div>
 
                 {pagination && pagination.last_page > 1 ? (
                     <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">

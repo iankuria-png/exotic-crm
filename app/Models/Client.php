@@ -2,9 +2,11 @@
 
 namespace App\Models;
 
+use App\Services\ClientChurnStamper;
 use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class Client extends Model
@@ -21,6 +23,17 @@ class Client extends Model
             }
 
             ClientRetentionInsightService::scheduleRefreshForClientId((int) $client->id);
+
+            if ($client->wasChanged(['profile_status', 'needs_payment', 'notactive'])) {
+                try {
+                    app(ClientChurnStamper::class)->syncFromProfileState($client);
+                } catch (\Throwable $exception) {
+                    Log::warning('Client churn profile-state sync failed', [
+                        'client_id' => (int) $client->id,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
         });
 
         static::deleted(function (Client $client): void {
@@ -274,6 +287,13 @@ class Client extends Model
             });
     }
 
+    public function isActiveProfile(): bool
+    {
+        return (string) $this->profile_status === 'publish'
+            && ! (bool) $this->needs_payment
+            && ! (bool) $this->notactive;
+    }
+
     public function scopeNeedsPayment($query)
     {
         return $query->where('needs_payment', true);
@@ -357,7 +377,7 @@ class Client extends Model
         }
 
         $apiUrl = $this->platform?->wp_api_url;
-        if (!$apiUrl) {
+        if (! $apiUrl) {
             return null;
         }
 
@@ -455,7 +475,7 @@ class Client extends Model
             ? $this->getRelation('activeDeal')
             : $this->activeDeal()->with('product')->first();
 
-        if (!$activeDeal) {
+        if (! $activeDeal) {
             return null;
         }
 

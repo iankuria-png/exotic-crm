@@ -6,36 +6,28 @@ use App\Models\Client;
 use App\Models\TimelineEvent;
 use App\Support\CrmClientChurnReason;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
 
 class ClientChurnStamper
 {
     /**
      * Stamp churn on a client. Idempotent:
-     * - If churned_at is already set and no newer active deal has intervened, just refreshes reason/source.
-     * - Only stamps if the "lost-paid" condition holds: no active deal AND first_activated_at is set.
+     * - If churned_at is already set, preserve the original event time and refresh reason/source.
+     * - Only stamps if the canonical "lost-paid" condition holds: paid history and inactive profile.
      *
-     * @param Client $client
-     * @param string $reasonCode  CrmClientChurnReason constant
-     * @param string $source      One of: deal_cancelled, deal_expired, deal_deactivated, case_closed
-     * @param Carbon|null $when   Timestamp of the churn event (defaults to now())
+     * @param  string  $reasonCode  CrmClientChurnReason constant
+     * @param  string  $source  One of: profile_inactive, deal_cancelled, deal_expired, case_closed
+     * @param  Carbon|null  $when  Timestamp of the churn event (defaults to now())
      */
     public function stamp(Client $client, string $reasonCode, string $source, ?Carbon $when = null): void
     {
         $client->refresh();
 
-        // Only stamp lost-paid: client must have activated at least one deal
-        if ($client->first_activated_at === null) {
+        if (! $this->hasPaidHistory($client) || $client->isActiveProfile()) {
             return;
         }
 
-        // Verify no active deal currently exists
-        $hasActiveDeal = $client->deals()->where('status', 'active')->exists();
-        if ($hasActiveDeal) {
-            return;
-        }
-
-        $churnedAt = $when ?? now();
+        $wasChurned = $client->churned_at !== null;
+        $churnedAt = $client->churned_at ?? $when ?? now();
 
         Client::withoutRetentionRefresh(function () use ($client, $reasonCode, $source, $churnedAt): void {
             $client->forceFill([
@@ -45,27 +37,66 @@ class ClientChurnStamper
             ])->save();
         });
 
-        TimelineEvent::create([
-            'platform_id' => (int) $client->platform_id,
-            'entity_type' => 'client',
-            'entity_id' => (int) $client->id,
-            'event_type' => 'client_churned',
-            'actor_id' => null,
-            'content' => [
-                'reason_code' => $reasonCode,
-                'reason_label' => CrmClientChurnReason::label($reasonCode),
-                'source' => $source,
-                'churned_at' => $churnedAt->toDateTimeString(),
-            ],
-            'created_at' => now(),
-        ]);
+        if (! $wasChurned) {
+            TimelineEvent::create([
+                'platform_id' => (int) $client->platform_id,
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'event_type' => 'client_churned',
+                'actor_id' => null,
+                'content' => [
+                    'reason_code' => $reasonCode,
+                    'reason_label' => CrmClientChurnReason::label($reasonCode),
+                    'source' => $source,
+                    'churned_at' => $churnedAt->toDateTimeString(),
+                ],
+                'created_at' => now(),
+            ]);
+        }
+    }
+
+    public function syncFromProfileState(
+        Client $client,
+        string $reasonCode = CrmClientChurnReason::EXPIRED_UNRENEWED,
+        string $source = 'profile_inactive',
+        ?Carbon $when = null,
+    ): void {
+        $client->refresh();
+        $this->refreshFirstActivatedAt($client);
+
+        if ($client->isActiveProfile()) {
+            $this->clear($client, 'profile_returned_active');
+
+            return;
+        }
+
+        if ($client->churned_at !== null) {
+            return;
+        }
+
+        $this->stamp($client, $reasonCode, $source, $when);
+    }
+
+    /**
+     * Reconcile clients updated through query-builder upserts, which bypass model events.
+     *
+     * @param  array<int>  $clientIds
+     */
+    public function syncClientIds(array $clientIds): void
+    {
+        Client::query()
+            ->whereKey(array_values(array_unique(array_map('intval', $clientIds))))
+            ->chunkById(200, function ($clients): void {
+                foreach ($clients as $client) {
+                    $this->syncFromProfileState($client);
+                }
+            });
     }
 
     /**
      * Clear churn fields when a client is won back (new active deal, or manual mark).
      *
-     * @param Client $client
-     * @param string $reason  Human-readable reason for the timeline event
+     * @param  string  $reason  Human-readable reason for the timeline event
      */
     public function clear(Client $client, string $reason = 'subscription_recovered'): void
     {
@@ -104,8 +135,6 @@ class ClientChurnStamper
     /**
      * Populate first_activated_at from the earliest deal's activated_at.
      * Idempotent — only sets if currently null.
-     *
-     * @param Client $client
      */
     public function refreshFirstActivatedAt(Client $client): void
     {
@@ -113,10 +142,7 @@ class ClientChurnStamper
             return; // Already set
         }
 
-        $earliest = $client->deals()
-            ->whereNotNull('activated_at')
-            ->orderBy('activated_at', 'asc')
-            ->value('activated_at');
+        $earliest = $this->firstActivationAt($client);
 
         if ($earliest === null) {
             return;
@@ -125,5 +151,33 @@ class ClientChurnStamper
         Client::withoutRetentionRefresh(function () use ($client, $earliest): void {
             $client->forceFill(['first_activated_at' => $earliest])->save();
         });
+    }
+
+    public function firstActivationAt(Client $client): ?Carbon
+    {
+        $dealActivation = $client->deals()
+            ->whereIn('status', ClientFunnelService::PAID_DEAL_STATUSES)
+            ->selectRaw('MIN(COALESCE(activated_at, created_at)) as first_paid_at')
+            ->value('first_paid_at');
+
+        $paymentActivation = $client->payments()
+            ->reportableSuccessful()
+            ->selectRaw('MIN(COALESCE(completed_at, created_at)) as first_paid_at')
+            ->value('first_paid_at');
+
+        $earliest = collect([$dealActivation, $paymentActivation])
+            ->filter()
+            ->map(fn ($value) => Carbon::parse($value))
+            ->sort()
+            ->first();
+
+        return $earliest instanceof Carbon ? $earliest : null;
+    }
+
+    private function hasPaidHistory(Client $client): bool
+    {
+        return ClientFunnelService::applyPaidHistory(
+            Client::query()->whereKey($client->getKey())
+        )->exists();
     }
 }

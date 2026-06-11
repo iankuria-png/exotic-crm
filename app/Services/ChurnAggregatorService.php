@@ -14,10 +14,7 @@ class ChurnAggregatorService
     /**
      * Compute the full churn summary for a date range + optional platform scope.
      *
-     * @param Carbon $from
-     * @param Carbon $to
-     * @param array<int> $platformIds  Empty = all accessible platforms
-     * @return array
+     * @param  array<int>  $platformIds  Empty = all accessible platforms
      */
     public function summary(Carbon $from, Carbon $to, array $platformIds = []): array
     {
@@ -25,6 +22,10 @@ class ChurnAggregatorService
         $totals = $this->totals($daily);
         $durations = $this->durationsByMarket($from, $to, $platformIds);
         $reasons = $this->reasonBreakdown($from, $to, $platformIds);
+        $dayCount = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
+        $previousTo = $from->copy()->subDay()->endOfDay();
+        $previousFrom = $previousTo->copy()->subDays($dayCount - 1)->startOfDay();
+        $previousTotals = $this->totals($this->dailySeries($previousFrom, $previousTo, $platformIds));
 
         $health = $this->healthLabel($totals);
 
@@ -35,7 +36,13 @@ class ChurnAggregatorService
             ],
             'daily' => $daily,
             'totals' => $totals,
+            'previous_range' => [
+                'from' => $previousFrom->toDateString(),
+                'to' => $previousTo->toDateString(),
+            ],
+            'comparison' => $this->comparison($totals, $previousTotals),
             'health' => $health,
+            'averages' => $this->weightedAverages($durations),
             'durations_by_market' => $durations,
             'reason_breakdown' => $reasons,
         ];
@@ -51,7 +58,7 @@ class ChurnAggregatorService
             ->selectRaw('DATE(created_at) as date, COUNT(*) as cnt')
             ->whereBetween('created_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
             ->groupBy(DB::raw('DATE(created_at)'));
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $signupsQuery->whereIn('platform_id', $platformIds);
         }
         $signups = $signupsQuery->pluck('cnt', 'date');
@@ -62,7 +69,7 @@ class ChurnAggregatorService
             ->whereNotNull('first_activated_at')
             ->whereBetween('first_activated_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
             ->groupBy(DB::raw('DATE(first_activated_at)'));
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $activationsQuery->whereIn('platform_id', $platformIds);
         }
         $activations = $activationsQuery->pluck('cnt', 'date');
@@ -73,7 +80,7 @@ class ChurnAggregatorService
             ->whereNotNull('churned_at')
             ->whereBetween('churned_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
             ->groupBy(DB::raw('DATE(churned_at)'));
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $churnQuery->whereIn('platform_id', $platformIds);
         }
         $churn = $churnQuery->pluck('cnt', 'date');
@@ -116,25 +123,45 @@ class ChurnAggregatorService
      */
     public function durationsByMarket(Carbon $from, Carbon $to, array $platformIds = []): array
     {
+        $fromDate = $from->copy()->startOfDay()->toDateTimeString();
+        $toDate = $to->copy()->endOfDay()->toDateTimeString();
+        $paidLifetimeExpression = $this->dayDifferenceExpression('clients.first_activated_at', 'clients.churned_at');
+        $relationshipExpression = $this->dayDifferenceExpression('clients.created_at', 'clients.churned_at');
+
         $query = Client::query()
             ->join('platforms', 'clients.platform_id', '=', 'platforms.id')
             ->select([
                 'clients.platform_id',
                 'platforms.name as platform_name',
-                DB::raw('COUNT(*) as churn_count'),
-                DB::raw('AVG(TIMESTAMPDIFF(DAY, clients.first_activated_at, clients.churned_at)) as avg_paid_lifetime_days'),
-                DB::raw('AVG(TIMESTAMPDIFF(DAY, clients.created_at, clients.churned_at)) as avg_total_relationship_days'),
-                // Net delta: signups - churn in range per market
-                DB::raw('SUM(CASE WHEN clients.churned_at BETWEEN ? AND ? THEN -1 ELSE 0 END) + SUM(CASE WHEN clients.created_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as net_delta'),
             ])
-            ->addBinding([$from->toDateTimeString(), $to->toDateTimeString(), $from->toDateTimeString(), $to->toDateTimeString()], 'select')
-            ->whereNotNull('clients.churned_at')
-            ->whereBetween('clients.churned_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
-            ->whereNotNull('clients.first_activated_at')
+            ->selectRaw(
+                'SUM(CASE WHEN clients.churned_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as churn_count',
+                [$fromDate, $toDate],
+            )
+            ->selectRaw(
+                "AVG(CASE WHEN clients.churned_at BETWEEN ? AND ? AND clients.first_activated_at IS NOT NULL THEN {$paidLifetimeExpression} END) as avg_paid_lifetime_days",
+                [$fromDate, $toDate],
+            )
+            ->selectRaw(
+                "AVG(CASE WHEN clients.churned_at BETWEEN ? AND ? THEN {$relationshipExpression} END) as avg_total_relationship_days",
+                [$fromDate, $toDate],
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN clients.created_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as signup_count',
+                [$fromDate, $toDate],
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN clients.created_at BETWEEN ? AND ? THEN 1 ELSE 0 END) - SUM(CASE WHEN clients.churned_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as net_delta',
+                [$fromDate, $toDate, $fromDate, $toDate],
+            )
+            ->where(function ($scope) use ($fromDate, $toDate) {
+                $scope->whereBetween('clients.created_at', [$fromDate, $toDate])
+                    ->orWhereBetween('clients.churned_at', [$fromDate, $toDate]);
+            })
             ->groupBy('clients.platform_id', 'platforms.name')
             ->orderBy('churn_count', 'desc');
 
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $query->whereIn('clients.platform_id', $platformIds);
         }
 
@@ -143,6 +170,7 @@ class ChurnAggregatorService
                 'platform_id' => (int) $row->platform_id,
                 'name' => $row->platform_name,
                 'churn_count' => (int) $row->churn_count,
+                'signup_count' => (int) $row->signup_count,
                 'avg_paid_lifetime_days' => $row->avg_paid_lifetime_days !== null
                     ? round((float) $row->avg_paid_lifetime_days, 1)
                     : null,
@@ -167,7 +195,7 @@ class ChurnAggregatorService
             ->groupBy('churn_reason_code', 'churn_source')
             ->orderBy('cnt', 'desc');
 
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $query->whereIn('platform_id', $platformIds);
         }
 
@@ -180,7 +208,7 @@ class ChurnAggregatorService
             $source = $row->churn_source;
             $cnt = (int) $row->cnt;
 
-            if (!isset($grouped[$code])) {
+            if (! isset($grouped[$code])) {
                 $grouped[$code] = [
                     'code' => $code,
                     'label' => CrmClientChurnReason::label($code),
@@ -196,6 +224,66 @@ class ChurnAggregatorService
         usort($grouped, fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return array_values($grouped);
+    }
+
+    private function comparison(array $totals, array $previousTotals): array
+    {
+        $comparison = [];
+
+        foreach (['signups', 'activations', 'churn', 'net'] as $key) {
+            $current = (int) ($totals[$key] ?? 0);
+            $previous = (int) ($previousTotals[$key] ?? 0);
+            $comparison[$key] = [
+                'current' => $current,
+                'previous' => $previous,
+                'delta' => $current - $previous,
+                'percent' => $previous !== 0
+                    ? round((($current - $previous) / abs($previous)) * 100, 1)
+                    : null,
+            ];
+        }
+
+        return $comparison;
+    }
+
+    private function weightedAverages(array $durations): array
+    {
+        $churnCount = array_sum(array_column($durations, 'churn_count'));
+
+        if ($churnCount === 0) {
+            return [
+                'paid_lifetime_days' => null,
+                'total_relationship_days' => null,
+            ];
+        }
+
+        $paidWeight = 0;
+        $paidTotal = 0.0;
+        $relationshipTotal = 0.0;
+
+        foreach ($durations as $duration) {
+            $count = (int) $duration['churn_count'];
+            $relationshipTotal += ((float) ($duration['avg_total_relationship_days'] ?? 0)) * $count;
+
+            if ($duration['avg_paid_lifetime_days'] !== null) {
+                $paidTotal += ((float) $duration['avg_paid_lifetime_days']) * $count;
+                $paidWeight += $count;
+            }
+        }
+
+        return [
+            'paid_lifetime_days' => $paidWeight > 0 ? round($paidTotal / $paidWeight, 1) : null,
+            'total_relationship_days' => round($relationshipTotal / $churnCount, 1),
+        ];
+    }
+
+    private function dayDifferenceExpression(string $startColumn, string $endColumn): string
+    {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return "julianday({$endColumn}) - julianday({$startColumn})";
+        }
+
+        return "TIMESTAMPDIFF(DAY, {$startColumn}, {$endColumn})";
     }
 
     /**

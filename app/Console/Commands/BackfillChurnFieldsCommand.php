@@ -3,20 +3,21 @@
 namespace App\Console\Commands;
 
 use App\Models\Client;
-use App\Models\Deal;
 use App\Services\ClientChurnStamper;
+use App\Services\ClientFunnelService;
 use App\Support\CrmClientChurnReason;
+use Carbon\Carbon;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Database\Eloquent\Builder;
 
 class BackfillChurnFieldsCommand extends Command
 {
     protected $signature = 'crm:backfill-churn-fields
-                            {--limit=2000 : Maximum number of clients to process}
+                            {--limit=2000 : Maximum number of clients to process per phase}
                             {--dry-run : Log intent without mutating}
                             {--platform= : Restrict to a single platform_id}';
 
-    protected $description = 'Backfill churned_at, churn_reason_code, churn_source, and first_activated_at from existing deal history. Idempotent.';
+    protected $description = 'Backfill churn fields from the canonical paid-history and active-profile definitions. Idempotent.';
 
     public function handle(ClientChurnStamper $stamper): int
     {
@@ -28,57 +29,47 @@ class BackfillChurnFieldsCommand extends Command
             $this->warn('[DRY-RUN] No mutations will be made.');
         }
 
-        $firstActivatedCount = $this->backfillFirstActivatedAt($limit, $dryRun, $platformId, $stamper);
+        $activationCount = $this->backfillFirstActivatedAt($limit, $dryRun, $platformId, $stamper);
         $churnCount = $this->backfillChurnedAt($limit, $dryRun, $platformId, $stamper);
-        $caseClosedCount = $this->backfillCaseClosed($limit, $dryRun, $platformId, $stamper);
 
         $this->info(sprintf(
-            'Done. first_activated_at: %d, churned_at (deal): %d, churned_at (case_closed): %d',
-            $firstActivatedCount,
+            'Done. first_activated_at: %d, churned_at (paid + inactive): %d',
+            $activationCount,
             $churnCount,
-            $caseClosedCount,
         ));
 
         return self::SUCCESS;
     }
 
-    private function backfillFirstActivatedAt(int $limit, bool $dryRun, ?int $platformId, ClientChurnStamper $stamper): int
-    {
-        $this->info('Step 1: Backfilling first_activated_at...');
+    private function backfillFirstActivatedAt(
+        int $limit,
+        bool $dryRun,
+        ?int $platformId,
+        ClientChurnStamper $stamper,
+    ): int {
+        $this->info('Step 1: Backfilling first_activated_at from paid history...');
 
-        $query = Client::query()
-            ->whereNull('first_activated_at')
-            ->whereHas('deals', fn ($q) => $q->whereNotNull('activated_at'))
-            ->limit($limit);
+        $query = ClientFunnelService::applyPaidHistory(
+            Client::query()->whereNull('first_activated_at')
+        );
+        $this->applyPlatform($query, $platformId);
 
-        if ($platformId) {
-            $query->where('platform_id', $platformId);
-        }
-
-        $clients = $query->get();
         $count = 0;
-
-        foreach ($clients as $client) {
-            $earliest = $client->deals()
-                ->whereNotNull('activated_at')
-                ->orderBy('activated_at', 'asc')
-                ->value('activated_at');
-
-            if ($earliest === null) {
+        foreach ($query->limit($limit)->get() as $client) {
+            $firstActivatedAt = $stamper->firstActivationAt($client);
+            if ($firstActivatedAt === null) {
                 continue;
             }
 
             $this->line(sprintf(
-                '  client #%d (%s) — first_activated_at = %s',
+                '  client #%d (%s) - first_activated_at=%s',
                 $client->id,
                 $client->name,
-                $earliest
+                $firstActivatedAt->toDateTimeString(),
             ));
 
-            if (!$dryRun) {
-                Client::withoutRetentionRefresh(function () use ($client, $earliest): void {
-                    $client->forceFill(['first_activated_at' => $earliest])->save();
-                });
+            if (! $dryRun) {
+                $stamper->refreshFirstActivatedAt($client);
             }
 
             $count++;
@@ -87,71 +78,36 @@ class BackfillChurnFieldsCommand extends Command
         return $count;
     }
 
-    private function backfillChurnedAt(int $limit, bool $dryRun, ?int $platformId, ClientChurnStamper $stamper): int
-    {
-        $this->info('Step 2: Backfilling churned_at from deal history...');
+    private function backfillChurnedAt(
+        int $limit,
+        bool $dryRun,
+        ?int $platformId,
+        ClientChurnStamper $stamper,
+    ): int {
+        $this->info('Step 2: Backfilling churned_at for paid clients whose profile is inactive...');
 
-        // Find clients with at least one deal and no active deal, and no churn stamp yet
-        $query = Client::query()
-            ->whereNull('churned_at')
-            ->whereNotNull('first_activated_at')
-            ->whereDoesntHave('deals', fn ($q) => $q->where('status', 'active'))
-            ->whereHas('deals', fn ($q) => $q->whereIn('status', ['cancelled', 'expired', 'deactivated']))
-            ->limit($limit);
+        $query = ClientFunnelService::applyPaidHistory(
+            Client::query()
+                ->whereNull('churned_at')
+                ->whereNot(fn (Builder $builder) => $builder->active())
+        );
+        $this->applyPlatform($query, $platformId);
 
-        if ($platformId) {
-            $query->where('platform_id', $platformId);
-        }
-
-        $clients = $query->get();
         $count = 0;
-
-        foreach ($clients as $client) {
-            // Get the latest terminal deal
-            $latestDeal = $client->deals()
-                ->whereIn('status', ['cancelled', 'expired', 'deactivated'])
-                ->orderBy('updated_at', 'desc')
-                ->first();
-
-            if ($latestDeal === null) {
-                continue;
-            }
-
-            [$reasonCode, $source] = match ((string) $latestDeal->status) {
-                'cancelled' => [
-                    CrmClientChurnReason::fromDealCancellation($latestDeal->cancellation_reason_code),
-                    'deal_cancelled',
-                ],
-                'expired' => [
-                    CrmClientChurnReason::fromDealExpiry(),
-                    'deal_expired',
-                ],
-                'deactivated' => [
-                    CrmClientChurnReason::fromAdminDeactivation($latestDeal->cancellation_reason_code),
-                    'deal_deactivated',
-                ],
-                default => [CrmClientChurnReason::OTHER, 'deal_cancelled'],
-            };
-
-            $churnedAt = $latestDeal->updated_at ?? now();
+        foreach ($query->limit($limit)->get() as $client) {
+            [$reasonCode, $source, $churnedAt] = $this->churnMetadata($client);
 
             $this->line(sprintf(
-                '  client #%d (%s) — churned_at=%s reason=%s source=%s',
+                '  client #%d (%s) - churned_at=%s reason=%s source=%s',
                 $client->id,
                 $client->name,
-                $churnedAt,
+                $churnedAt->toDateTimeString(),
                 $reasonCode,
-                $source
+                $source,
             ));
 
-            if (!$dryRun) {
-                Client::withoutRetentionRefresh(function () use ($client, $reasonCode, $source, $churnedAt): void {
-                    $client->forceFill([
-                        'churned_at' => $churnedAt,
-                        'churn_reason_code' => $reasonCode,
-                        'churn_source' => $source,
-                    ])->save();
-                });
+            if (! $dryRun) {
+                $stamper->stamp($client, $reasonCode, $source, $churnedAt);
             }
 
             $count++;
@@ -160,50 +116,60 @@ class BackfillChurnFieldsCommand extends Command
         return $count;
     }
 
-    private function backfillCaseClosed(int $limit, bool $dryRun, ?int $platformId, ClientChurnStamper $stamper): int
+    /**
+     * @return array{0:string,1:string,2:Carbon}
+     */
+    private function churnMetadata(Client $client): array
     {
-        $this->info('Step 3: Backfilling churned_at from case-closed paid clients...');
+        if ($client->closed_at !== null && $client->close_reason_code !== null) {
+            return [
+                CrmClientChurnReason::fromCloseCase((string) $client->close_reason_code),
+                'case_closed',
+                $client->closed_at,
+            ];
+        }
 
-        // Clients who were case-closed AND had paid at least once (first_activated_at set)
-        // and don't yet have a churn stamp
-        $query = Client::query()
-            ->whereNull('churned_at')
-            ->whereNotNull('closed_at')
-            ->whereNotNull('first_activated_at')
-            ->whereNotNull('close_reason_code')
-            ->limit($limit);
+        $terminalDeal = $client->deals()
+            ->whereIn('status', ['cancelled', 'expired'])
+            ->latest('updated_at')
+            ->first();
 
-        if ($platformId) {
+        if ($terminalDeal !== null) {
+            return match ((string) $terminalDeal->status) {
+                'cancelled' => [
+                    CrmClientChurnReason::fromDealCancellation($terminalDeal->cancellation_reason_code),
+                    'deal_cancelled',
+                    Carbon::parse($terminalDeal->updated_at),
+                ],
+                default => [
+                    CrmClientChurnReason::EXPIRED_UNRENEWED,
+                    'deal_expired',
+                    Carbon::parse($terminalDeal->updated_at),
+                ],
+            };
+        }
+
+        $when = $client->wp_modified_at
+            ?? $client->last_synced_at
+            ?? $client->updated_at
+            ?? now();
+        $when = Carbon::parse($when)->min(now());
+
+        if ($client->first_activated_at !== null) {
+            $when = $when->max($client->first_activated_at);
+        }
+
+        return [
+            CrmClientChurnReason::EXPIRED_UNRENEWED,
+            'profile_inactive',
+            $when,
+        ];
+    }
+
+    private function applyPlatform(Builder $query, ?int $platformId): void
+    {
+        if ($platformId !== null) {
             $query->where('platform_id', $platformId);
         }
-
-        $clients = $query->get();
-        $count = 0;
-
-        foreach ($clients as $client) {
-            $churnReasonCode = CrmClientChurnReason::fromCloseCase((string) $client->close_reason_code);
-
-            $this->line(sprintf(
-                '  client #%d (%s) — case_closed churned_at=%s reason=%s',
-                $client->id,
-                $client->name,
-                $client->closed_at,
-                $churnReasonCode
-            ));
-
-            if (!$dryRun) {
-                Client::withoutRetentionRefresh(function () use ($client, $churnReasonCode): void {
-                    $client->forceFill([
-                        'churned_at' => $client->closed_at,
-                        'churn_reason_code' => $churnReasonCode,
-                        'churn_source' => 'case_closed',
-                    ])->save();
-                });
-            }
-
-            $count++;
-        }
-
-        return $count;
     }
 }

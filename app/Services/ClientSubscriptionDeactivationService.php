@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
+use App\Support\CrmClientChurnReason;
 use App\Support\DeactivationRequest;
 use InvalidArgumentException;
 
@@ -29,6 +30,12 @@ class ClientSubscriptionDeactivationService
 
         $syncService = new ClientSyncService($platform);
         $syncedClient = $syncService->syncOne($wpPostId);
+        app(ClientChurnStamper::class)->stamp(
+            $syncedClient,
+            CrmClientChurnReason::ADMIN_DEACTIVATED,
+            'profile_inactive',
+            now(),
+        );
         $this->applyClientRiskState($syncedClient, $request, $actorId);
 
         TimelineEvent::create([
@@ -52,7 +59,7 @@ class ClientSubscriptionDeactivationService
 
     private function applyClientRiskState(Client $client, DeactivationRequest $request, ?int $actorId): void
     {
-        if (!$request->shouldFlagClientHighRisk()) {
+        if (! $request->shouldFlagClientHighRisk()) {
             return;
         }
 

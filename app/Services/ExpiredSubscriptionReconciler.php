@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
+use App\Support\CrmClientChurnReason;
 use App\Support\MarketTimezone;
 use App\Support\SubscriptionExpiry;
 use Illuminate\Support\Collection;
@@ -139,7 +140,7 @@ class ExpiredSubscriptionReconciler
             'action' => 'skipped',
         ];
 
-        if (!$this->isStuck($client)) {
+        if (! $this->isStuck($client)) {
             $row['action'] = 'not_expired';
 
             return $row;
@@ -169,6 +170,13 @@ class ExpiredSubscriptionReconciler
             ->where('client_id', (int) $client->id)
             ->where('status', 'active')
             ->update(['status' => 'expired']);
+
+        app(ClientChurnStamper::class)->stamp(
+            $syncedClient,
+            CrmClientChurnReason::EXPIRED_UNRENEWED,
+            'profile_inactive',
+            now(),
+        );
 
         // 4. Audit trail parity with the manual deactivation flow.
         TimelineEvent::create([

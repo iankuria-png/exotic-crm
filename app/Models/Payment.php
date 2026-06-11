@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Jobs\SendPaymentFailureAlertsJob;
+use App\Services\ClientChurnStamper;
 use App\Services\ClientRetentionInsightService;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -29,6 +30,23 @@ class Payment extends Model
         };
 
         static::saved($refresh);
+        static::saved(static function (Payment $payment): void {
+            if (
+                ! in_array((string) $payment->status, self::SUCCESSFUL_STATUSES, true)
+                || (! $payment->wasRecentlyCreated && ! $payment->wasChanged(['status', 'client_id', 'completed_at']))
+            ) {
+                return;
+            }
+
+            $clientId = $payment->client_id
+                ? (int) $payment->client_id
+                : (int) (Deal::query()->whereKey($payment->deal_id)->value('client_id') ?: 0);
+
+            $client = $clientId > 0 ? Client::query()->find($clientId) : null;
+            if ($client !== null) {
+                app(ClientChurnStamper::class)->syncFromProfileState($client);
+            }
+        });
         static::saved(static function (Payment $payment): void {
             if (!$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
                 return;

@@ -42,14 +42,14 @@ class Deal extends Model
 
     protected static function handleChurnHooks(Deal $deal): void
     {
-        if (!$deal->client_id) {
+        if (! $deal->client_id) {
             return;
         }
 
         try {
             /** @var \App\Models\Client $client */
             $client = $deal->client()->first();
-            if (!$client) {
+            if (! $client) {
                 return;
             }
 
@@ -61,14 +61,14 @@ class Deal extends Model
                 $stamper->refreshFirstActivatedAt($client);
             }
 
-            // New active deal → clear any existing churn stamp
-            if ($status === 'active' && $client->churned_at !== null) {
-                $stamper->clear($client, 'new_subscription_activated');
+            if (in_array($status, ['active', 'paid', 'renewed'], true)) {
+                $stamper->syncFromProfileState($client);
+
                 return;
             }
 
             // Churn-triggering status transitions
-            if (in_array($status, ['cancelled', 'expired', 'deactivated'], true)) {
+            if (in_array($status, ['cancelled', 'expired'], true)) {
                 [$reasonCode, $source] = match ($status) {
                     'cancelled' => [
                         CrmClientChurnReason::fromDealCancellation($deal->cancellation_reason_code),
@@ -77,10 +77,6 @@ class Deal extends Model
                     'expired' => [
                         CrmClientChurnReason::fromDealExpiry(),
                         'deal_expired',
-                    ],
-                    'deactivated' => [
-                        CrmClientChurnReason::fromAdminDeactivation($deal->cancellation_reason_code),
-                        'deal_deactivated',
                     ],
                 };
                 $stamper->stamp($client, $reasonCode, $source, now());
