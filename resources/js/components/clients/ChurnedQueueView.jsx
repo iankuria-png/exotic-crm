@@ -633,7 +633,7 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
 
     return (
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-            <table className="min-w-full divide-y divide-slate-100 text-sm">
+            <table className="min-w-[1280px] divide-y divide-slate-100 text-sm">
                 <thead className="bg-slate-50">
                     <tr>
                         <th className={thClass('name')} onClick={() => handleSort('name')}>Market<SortIcon k="name" /></th>
@@ -653,6 +653,22 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                             />
                             <SortIcon k="avg_total_relationship_days" />
                         </th>
+                        <th className={thClass('active_count')} onClick={() => handleSort('active_count')}>
+                            Active now
+                            <InfoHint
+                                label="active clients now"
+                                text="Clients currently published and not marked as payment-required or inactive in this market."
+                            />
+                            <SortIcon k="active_count" />
+                        </th>
+                        <th className={thClass('active_movement')} onClick={() => handleSort('active_movement')}>
+                            Active movement
+                            <InfoHint
+                                label="active client movement"
+                                text="First activations minus churn during the selected period. Positive means the active base is growing; negative means churn exceeded activations. This is movement, not a reconstructed historical snapshot."
+                            />
+                            <SortIcon k="active_movement" />
+                        </th>
                         <th className={thClass('signup_count')} onClick={() => handleSort('signup_count')}>Signups<SortIcon k="signup_count" /></th>
                         <th className={thClass('churn_count')} onClick={() => handleSort('churn_count')}>Churned<SortIcon k="churn_count" /></th>
                         <th className={thClass('net_delta')} onClick={() => handleSort('net_delta')}>Net delta<SortIcon k="net_delta" /></th>
@@ -660,10 +676,20 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                     {sorted.length === 0 ? (
-                        <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No market movement for this range.</td></tr>
+                        <tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-slate-500">No market movement for this range.</td></tr>
                     ) : sorted.map((row) => {
                         const isSelected = selectedMarketId === row.platform_id;
                         const netColor = row.net_delta > 0 ? 'text-emerald-600' : row.net_delta < 0 ? 'text-rose-600' : 'text-slate-500';
+                        const activeMovementColor = row.active_movement > 0
+                            ? 'text-emerald-700'
+                            : row.active_movement < 0
+                                ? 'text-rose-700'
+                                : 'text-slate-500';
+                        const activeMovementDot = row.active_movement > 0
+                            ? 'bg-emerald-500'
+                            : row.active_movement < 0
+                                ? 'bg-rose-500'
+                                : 'bg-slate-400';
                         return (
                             <tr
                                 key={row.platform_id}
@@ -690,6 +716,16 @@ function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
                                 <td className="px-3 py-2 text-slate-600">
                                     {formatDays(row.avg_total_relationship_days)}
                                     <span className="ml-1 text-[10px] text-slate-400">total</span>
+                                </td>
+                                <td className="px-3 py-2 font-semibold text-slate-800">{(row.active_count || 0).toLocaleString()}</td>
+                                <td className={`px-3 py-2 font-semibold ${activeMovementColor}`}>
+                                    <span className="inline-flex items-center gap-1.5">
+                                        <span className={`h-2 w-2 rounded-full ${activeMovementDot}`} />
+                                        {row.active_movement > 0 ? '+' : ''}{(row.active_movement || 0).toLocaleString()}
+                                        <span className="text-[10px] font-medium uppercase tracking-wide">
+                                            {row.active_direction || 'steady'}
+                                        </span>
+                                    </span>
                                 </td>
                                 <td className="px-3 py-2 text-slate-700">{(row.signup_count || 0).toLocaleString()}</td>
                                 <td className="px-3 py-2 font-medium text-rose-700">{row.churn_count.toLocaleString()}</td>
@@ -1206,7 +1242,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Estimated revenue at risk</p>
                         <InfoHint
                             label="estimated revenue at risk"
-                            text="For each day: successful non-wallet revenue divided by successful payments, multiplied by customers who churned that day. This is an operating estimate, not booked accounting loss."
+                            text="Estimated revenue at risk = the churn-weighted average USD ticket for the selected period × clients churned in that period. This is an operating estimate, not booked accounting loss."
                         />
                     </div>
                     {summaryQuery.isLoading ? (
@@ -1276,7 +1312,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
             {/* Market duration table */}
             <div>
                 <h3 className="text-sm font-semibold text-slate-900">Market retention patterns</h3>
-                <p className="mb-2 mt-0.5 text-xs text-slate-500">Compare acquisition, churn, paid tenure, and the full customer relationship. Select a row to focus the full view.</p>
+                <p className="mb-2 mt-0.5 text-xs text-slate-500">Compare the current active base, period movement, acquisition, churn, and paid tenure. Select a row to focus the full view.</p>
                 <MarketDurationTable
                     durations={summary?.durations_by_market}
                     onSelectMarket={(id) => { setSelectedMarketId(id); setPage(1); }}

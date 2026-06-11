@@ -143,6 +143,66 @@ class ClientChurnTrackingTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_market_analytics_report_current_active_clients_and_selected_period_direction(): void
+    {
+        $growingMarket = Platform::factory()->create(['name' => 'Growing Market']);
+        $steadyMarket = Platform::factory()->create(['name' => 'Steady Market']);
+        $shrinkingMarket = Platform::factory()->create(['name' => 'Shrinking Market']);
+
+        Client::factory()->count(2)->create([
+            'platform_id' => $growingMarket->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'first_activated_at' => '2026-06-09 12:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $growingMarket->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'first_activated_at' => '2026-05-01 12:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $growingMarket->id,
+            'profile_status' => 'private',
+            'first_activated_at' => '2026-05-01 12:00:00',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $steadyMarket->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'first_activated_at' => '2026-05-01 12:00:00',
+            'created_at' => '2026-05-01 12:00:00',
+            'updated_at' => '2026-05-01 12:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $shrinkingMarket->id,
+            'profile_status' => 'private',
+            'first_activated_at' => '2026-05-01 12:00:00',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+
+        $rows = collect(app(ChurnAggregatorService::class)->durationsByMarket(
+            Carbon::parse('2026-06-08'),
+            Carbon::parse('2026-06-11'),
+            [$growingMarket->id, $steadyMarket->id, $shrinkingMarket->id],
+        ))->keyBy('platform_id');
+
+        $this->assertSame(3, $rows[$growingMarket->id]['active_count']);
+        $this->assertSame(2, $rows[$growingMarket->id]['activation_count']);
+        $this->assertSame(1, $rows[$growingMarket->id]['active_movement']);
+        $this->assertSame('increasing', $rows[$growingMarket->id]['active_direction']);
+        $this->assertSame(1, $rows[$steadyMarket->id]['active_count']);
+        $this->assertSame(0, $rows[$steadyMarket->id]['active_movement']);
+        $this->assertSame('steady', $rows[$steadyMarket->id]['active_direction']);
+        $this->assertSame(0, $rows[$shrinkingMarket->id]['active_count']);
+        $this->assertSame(-1, $rows[$shrinkingMarket->id]['active_movement']);
+        $this->assertSame('decreasing', $rows[$shrinkingMarket->id]['active_direction']);
+    }
+
     public function test_churn_summary_estimates_daily_revenue_at_risk_from_average_ticket(): void
     {
         $platform = Platform::factory()->create(['currency_code' => 'USD']);

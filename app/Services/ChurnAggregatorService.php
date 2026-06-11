@@ -172,12 +172,28 @@ class ChurnAggregatorService
                 [$fromDate, $toDate],
             )
             ->selectRaw(
+                'SUM(CASE WHEN clients.first_activated_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as activation_count',
+                [$fromDate, $toDate],
+            )
+            ->selectRaw(
+                "SUM(CASE WHEN clients.profile_status = 'publish' AND COALESCE(clients.needs_payment, 0) = 0 AND COALESCE(clients.notactive, 0) = 0 THEN 1 ELSE 0 END) as active_count",
+            )
+            ->selectRaw(
                 'SUM(CASE WHEN clients.created_at BETWEEN ? AND ? THEN 1 ELSE 0 END) - SUM(CASE WHEN clients.churned_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as net_delta',
                 [$fromDate, $toDate, $fromDate, $toDate],
             )
-            ->where(function ($scope) use ($fromDate, $toDate) {
-                $scope->whereBetween('clients.created_at', [$fromDate, $toDate])
-                    ->orWhereBetween('clients.churned_at', [$fromDate, $toDate]);
+            ->where(function ($eligible) use ($fromDate, $toDate) {
+                $eligible
+                    ->where(function ($events) use ($fromDate, $toDate) {
+                        $events->whereBetween('clients.created_at', [$fromDate, $toDate])
+                            ->orWhereBetween('clients.first_activated_at', [$fromDate, $toDate])
+                            ->orWhereBetween('clients.churned_at', [$fromDate, $toDate]);
+                    })
+                    ->orWhere(function ($active) {
+                        $active->where('clients.profile_status', 'publish')
+                            ->whereRaw('COALESCE(clients.needs_payment, 0) = 0')
+                            ->whereRaw('COALESCE(clients.notactive, 0) = 0');
+                    });
             })
             ->groupBy('clients.platform_id', 'platforms.name')
             ->orderBy('churn_count', 'desc');
@@ -187,11 +203,21 @@ class ChurnAggregatorService
         }
 
         return $query->get()->map(function ($row) {
+            $activeMovement = (int) $row->activation_count - (int) $row->churn_count;
+
             return [
                 'platform_id' => (int) $row->platform_id,
                 'name' => $row->platform_name,
                 'churn_count' => (int) $row->churn_count,
                 'signup_count' => (int) $row->signup_count,
+                'activation_count' => (int) $row->activation_count,
+                'active_count' => (int) $row->active_count,
+                'active_movement' => $activeMovement,
+                'active_direction' => match (true) {
+                    $activeMovement > 0 => 'increasing',
+                    $activeMovement < 0 => 'decreasing',
+                    default => 'steady',
+                },
                 'avg_paid_lifetime_days' => $row->avg_paid_lifetime_days !== null
                     ? round((float) $row->avg_paid_lifetime_days, 1)
                     : null,
