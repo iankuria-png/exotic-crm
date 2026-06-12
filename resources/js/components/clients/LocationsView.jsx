@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
+import { useToast } from '../ToastProvider';
 import { InsightEmptyState } from '../shared/InsightStates';
 import ClientMap from './locations/ClientMap';
 import CitySpotlight from './locations/CitySpotlight';
@@ -57,6 +58,8 @@ function LocationsSkeleton() {
 
 export default function LocationsView({ platformId, marketName }) {
     const normalizedPlatformId = platformId ? Number(platformId) : null;
+    const queryClient = useQueryClient();
+    const toast = useToast();
     const [period, setPeriod] = useState('30d');
     const [selectedCity, setSelectedCity] = useState(null);
     const [sort, setSort] = useState({ key: 'client_count', direction: 'desc' });
@@ -90,7 +93,24 @@ export default function LocationsView({ platformId, marketName }) {
         placeholderData: keepPreviousData,
     });
 
+    const geocodeMutation = useMutation({
+        mutationFn: () => api.post('/crm/clients/locations/geocode', {
+            platform_id: normalizedPlatformId,
+        }).then((response) => response.data),
+        onSuccess: (result) => {
+            toast?.success?.(result?.message || 'Mapping started. Cities will appear shortly.');
+            // Give the first batch a head start, then refetch so new pins show up.
+            window.setTimeout(() => {
+                queryClient.invalidateQueries({ queryKey: ['client-locations', normalizedPlatformId] });
+            }, 8000);
+        },
+        onError: (mutationError) => {
+            toast?.error?.(mutationError?.response?.data?.message || 'Could not start mapping.');
+        },
+    });
+
     const locations = data?.locations || [];
+    const geocodeSummary = data?.geocode || null;
 
     useEffect(() => {
         if (!selectedCity || locations.some((location) => location.canonical_key === selectedCity)) {
@@ -248,6 +268,36 @@ export default function LocationsView({ platformId, marketName }) {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
+                        {geocodeSummary && geocodeSummary.pending > 0 ? (
+                            <div className="inline-flex items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800">
+                                <span className="h-2 w-2 animate-pulse rounded-full bg-teal-600" aria-hidden="true" />
+                                Mapping {geocodeSummary.pending.toLocaleString()} {geocodeSummary.pending === 1 ? 'city' : 'cities'}…
+                                <button
+                                    type="button"
+                                    onClick={() => queryClient.invalidateQueries({ queryKey: ['client-locations', normalizedPlatformId] })}
+                                    className="ml-1 rounded-full px-2 py-0.5 text-teal-700 underline-offset-2 hover:underline"
+                                >
+                                    Refresh
+                                </button>
+                            </div>
+                        ) : geocodeSummary && geocodeSummary.unmapped_cities > 0 ? (
+                            <button
+                                type="button"
+                                onClick={() => geocodeMutation.mutate()}
+                                disabled={geocodeMutation.isPending}
+                                title="Resolve this market's city names to map coordinates so they appear as pins"
+                                className="inline-flex items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z" />
+                                    <circle cx="12" cy="10" r="3" />
+                                </svg>
+                                {geocodeMutation.isPending
+                                    ? 'Starting…'
+                                    : `Map ${geocodeSummary.unmapped_cities.toLocaleString()} ${geocodeSummary.unmapped_cities === 1 ? 'city' : 'cities'}`}
+                            </button>
+                        ) : null}
+
                         <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 p-1">
                             {PERIOD_OPTIONS.map((option) => (
                                 <button

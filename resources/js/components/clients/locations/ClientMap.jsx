@@ -58,7 +58,25 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
         map.setView([0, 20], 4);
         mapRef.current = map;
 
+        // Leaflet computes pane sizes from the container's measured box. If the map
+        // was created while the host had a stale/zero size (e.g. hidden behind the
+        // mobile Map/List toggle, or before layout settled), tiles render blank or
+        // misaligned. Recompute once the layer is painted, and whenever the host
+        // resizes (toggle show/hide, viewport changes).
+        const invalidate = () => map.invalidateSize();
+        const raf = window.requestAnimationFrame(invalidate);
+
+        let resizeObserver = null;
+        if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(invalidate);
+            resizeObserver.observe(mapElementRef.current);
+        }
+
         return () => {
+            window.cancelAnimationFrame(raf);
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            }
             map.remove();
             mapRef.current = null;
             layerGroupRef.current = null;
@@ -157,7 +175,7 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
                 </div>
             </div>
 
-            <div ref={mapElementRef} className="h-[520px] w-full bg-slate-100" />
+            <div ref={mapElementRef} className="crm-leaflet-host h-[520px] w-full bg-slate-100" />
         </section>
     );
 }

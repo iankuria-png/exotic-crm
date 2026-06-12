@@ -302,6 +302,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/locations', [ClientLocationController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::post('/clients/locations/geocode', [ClientLocationController::class, 'geocode'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');

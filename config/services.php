@@ -175,6 +175,9 @@ return [
         'rate_per_minute' => (int) env('NOMINATIM_RATE_PER_MINUTE', 60),
         'scheduled_rate_per_minute' => (int) env('NOMINATIM_SCHEDULED_RATE_PER_MINUTE', 4),
         'batch_limit' => (int) env('NOMINATIM_BATCH_LIMIT', 50),
+        // Cities resolved per self-chained batch of the on-demand "Map cities" button.
+        // Kept small so each batch finishes within the job timeout at the bulk rate.
+        'geocode_batch' => (int) env('NOMINATIM_GEOCODE_BATCH', 10),
     ],
 
 ];

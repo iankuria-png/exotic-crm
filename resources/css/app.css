@@ -161,3 +161,17 @@
     0% { transform: translateX(-120%); }
     100% { transform: translateX(420%); }
 }
+
+/*
+ * Leaflet host (Client locations map).
+ * The map lives inside the scrollable <main> container. Leaflet renders tiles in
+ * GPU-composited, transformed panes; scrolling that inside an overflow-y-auto
+ * ancestor leaves ghost/overlap repaint artifacts. Promoting the host to its own
+ * isolated compositor layer (own stacking + paint containment) gives the browser a
+ * clean layer to repaint and stops the tiles bleeding over sibling content.
+ */
+.crm-leaflet-host {
+    contain: paint;
+    isolation: isolate;
+    transform: translateZ(0);
+}

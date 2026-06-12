@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\GeocodeMarketCitiesJob;
 use App\Models\CityGeocode;
 use App\Models\Client;
 use App\Services\CityPerformanceService;
@@ -92,6 +93,7 @@ class ClientLocationController extends Controller
         $locations = [];
         $ungeocoded = [];
         $mappedClientCount = 0;
+        $mappedCityCount = 0;
         $totalViews = $analyticsStatus === 'unavailable' ? null : 0;
         $totalContactActions = $analyticsStatus === 'ok' ? 0 : null;
 
@@ -110,6 +112,7 @@ class ClientLocationController extends Controller
                 $ungeocoded[] = $city['display_city'];
             } else {
                 $mappedClientCount += $city['client_count'];
+                $mappedCityCount++;
             }
 
             if ($totalViews !== null && $aggregate['engagement'] !== null) {
@@ -172,6 +175,11 @@ class ClientLocationController extends Controller
             ];
         }
 
+        $pendingGeocodes = CityGeocode::query()
+            ->where('platform_id', (int) $selectedPlatformId)
+            ->whereIn('status', ['pending', 'failed'])
+            ->count();
+
         return response()->json([
             'period' => [
                 'from' => $validated['from'] ?? null,
@@ -187,7 +195,49 @@ class ClientLocationController extends Controller
                 'views' => $totalViews,
                 'contact_actions' => $totalContactActions,
             ],
+            'geocode' => [
+                'total_cities' => $grouped->count(),
+                'mapped_cities' => $mappedCityCount,
+                'unmapped_cities' => $grouped->count() - $mappedCityCount,
+                'pending' => $pendingGeocodes,
+            ],
             'market_average' => $marketAveragePayload,
+        ]);
+    }
+
+    public function geocode(Request $request): JsonResponse
+    {
+        $request->validate([
+            'platform_id' => 'required|exists:platforms,id',
+        ]);
+
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this client market.'
+        );
+
+        if (!$selectedPlatformId) {
+            return response()->json([
+                'message' => 'Select a market to map.',
+            ], 422);
+        }
+
+        if ((string) config('queue.default', 'sync') === 'sync') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Background geocoding is unavailable on this environment (no queue worker).',
+            ], 503);
+        }
+
+        $rate = max(1, (int) config('services.nominatim.scheduled_rate_per_minute', 4));
+        $batch = max(1, (int) config('services.nominatim.geocode_batch', 10));
+
+        GeocodeMarketCitiesJob::dispatch((int) $selectedPlatformId, $batch, $rate)->onQueue('default');
+
+        return response()->json([
+            'status' => 'queued',
+            'message' => 'Mapping started. Cities will appear on the map within a few minutes — refresh to see progress.',
         ]);
     }
 
