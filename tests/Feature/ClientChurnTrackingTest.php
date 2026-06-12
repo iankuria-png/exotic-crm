@@ -326,6 +326,42 @@ class ClientChurnTrackingTest extends TestCase
         $this->assertSame(0.0, $tiers[1]['early_churn_percent']);
     }
 
+    public function test_signup_source_breakdown_groups_tagged_and_existing_clients(): void
+    {
+        $platform = Platform::factory()->create();
+
+        Client::factory()->count(2)->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'fast_signup',
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'crm_provisioned',
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => null,
+            'profile_status' => 'private',
+            'churned_at' => '2026-06-10 18:00:00',
+        ]);
+
+        $sources = app(ChurnAggregatorService::class)->signupSourceBreakdown(
+            Carbon::parse('2026-06-01'),
+            Carbon::parse('2026-06-11'),
+            [$platform->id],
+        );
+
+        $this->assertSame('fast_signup', $sources[0]['key']);
+        $this->assertSame(2, $sources[0]['churn_count']);
+        $this->assertSame(50.0, $sources[0]['share_of_churn_percent']);
+        $this->assertSame(1, collect($sources)->firstWhere('key', 'crm_provisioned')['churn_count']);
+        $this->assertSame(1, collect($sources)->firstWhere('key', 'existing')['churn_count']);
+    }
+
     public function test_churned_queue_uses_last_paid_plan_and_supports_filtering_sorting_and_pagination(): void
     {
         Carbon::setTestNow('2026-06-11 12:00:00');
@@ -364,6 +400,7 @@ class ClientChurnTrackingTest extends TestCase
                 'churned_at' => '2026-06-10 18:00:00',
                 'churn_reason_code' => 'expired_unrenewed',
                 'churn_source' => 'deal_expired',
+                'signup_source' => 'crm_provisioned',
             ]);
             $basicClient = Client::factory()->create([
                 'platform_id' => $platform->id,
@@ -373,6 +410,7 @@ class ClientChurnTrackingTest extends TestCase
                 'churned_at' => '2026-06-09 18:00:00',
                 'churn_reason_code' => 'customer_request',
                 'churn_source' => 'deal_cancelled',
+                'signup_source' => 'fast_signup',
             ]);
             $vvipClient = Client::factory()->create([
                 'platform_id' => $platform->id,
@@ -458,6 +496,11 @@ class ClientChurnTrackingTest extends TestCase
                 ->assertJsonPath('data.0.id', $vipClient->id)
                 ->assertJsonPath('data.0.last_plan_key', 'vip')
                 ->assertJsonPath('data.0.last_plan_label', 'VIP');
+
+            $signupSourceResponse = $this->getJson('/api/crm/clients/churned?week=month&signup_source=fast_signup');
+            $signupSourceResponse->assertOk()
+                ->assertJsonPath('total', 1)
+                ->assertJsonPath('data.0.id', $basicClient->id);
 
             $vvipResponse = $this->getJson('/api/crm/clients/churned?week=month&plan=vvip');
             $vvipResponse->assertOk()

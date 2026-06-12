@@ -48,6 +48,24 @@ const CHURN_SOURCE_LABELS = {
     profile_inactive: 'Profile Inactive',
 };
 
+const SIGNUP_SOURCE_LABELS = {
+    fast_signup: 'Fast signup',
+    full_registration: 'Full registration',
+    crm_manual: 'CRM manual',
+    crm_provisioned: 'Provisioned',
+    field: 'Field sales',
+    existing: 'Existing / legacy',
+};
+
+const SIGNUP_SOURCE_COLORS = {
+    fast_signup: '#3b82f6',
+    full_registration: '#64748b',
+    crm_manual: '#8b5cf6',
+    crm_provisioned: '#10b981',
+    field: '#14b8a6',
+    existing: '#f59e0b',
+};
+
 const CLOSE_CASE_REASON_CODES = new Set([
     'not_serious', 'no_response', 'declined', 'invalid_contact',
     'inappropriate', 'payment_issue', 'duplicate', 'other',
@@ -598,6 +616,79 @@ function TierBreakdown({ tiers }) {
     );
 }
 
+function SignupSourceBreakdown({ sources, selectedSource, onSelectSource }) {
+    if (!sources?.length) {
+        return (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                No signup-source data is available for churned clients in this period.
+            </div>
+        );
+    }
+
+    const leader = sources[0];
+
+    return (
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div>
+                    <div className="flex items-center">
+                        <h3 className="text-sm font-semibold text-slate-900">Churn by signup source</h3>
+                        <InfoHint
+                            label="signup source churn"
+                            text="Groups churned clients by how they originally entered the platform. Existing / legacy contains older clients without a recorded signup-source tag."
+                        />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">See which acquisition paths contributed the most churn. Select a source to filter the queue.</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 px-3 py-2 text-right ring-1 ring-slate-200">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Largest source</p>
+                    <p className="text-sm font-bold text-slate-900">{leader.label} · {leader.share_of_churn_percent}%</p>
+                </div>
+            </div>
+            <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">
+                {sources.map((source) => {
+                    const isSelected = selectedSource === source.key;
+
+                    return (
+                        <button
+                            key={source.key}
+                            type="button"
+                            aria-pressed={isSelected}
+                            onClick={() => onSelectSource(isSelected ? '' : source.key)}
+                            className={`rounded-xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                                isSelected
+                                    ? 'border-teal-300 bg-teal-50 shadow-sm'
+                                    : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800">
+                                    <span
+                                        className="h-2.5 w-2.5 rounded-full"
+                                        style={{ backgroundColor: SIGNUP_SOURCE_COLORS[source.key] || '#94a3b8' }}
+                                    />
+                                    {source.label}
+                                </span>
+                                <span className="text-lg font-bold text-slate-950">{source.churn_count.toLocaleString()}</span>
+                            </div>
+                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                        width: `${Math.max(2, source.share_of_churn_percent)}%`,
+                                        backgroundColor: SIGNUP_SOURCE_COLORS[source.key] || '#94a3b8',
+                                    }}
+                                />
+                            </div>
+                            <p className="mt-2 text-[11px] font-medium text-slate-500">{source.share_of_churn_percent}% of churn in this period</p>
+                        </button>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
 function MarketDurationTable({ durations, onSelectMarket, selectedMarketId }) {
     const [sortKey, setSortKey] = useState('churn_count');
     const [sortDir, setSortDir] = useState('desc');
@@ -954,6 +1045,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const [search, setSearch] = useState('');
     const [planFilter, setPlanFilter] = useState('');
     const [sourceFilter, setSourceFilter] = useState('');
+    const [signupSourceFilter, setSignupSourceFilter] = useState('');
     const [sortBy, setSortBy] = useState('churned_at');
     const [sortDirection, setSortDirection] = useState('desc');
     const [perPage, setPerPage] = useState(25);
@@ -988,6 +1080,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
         ...(search ? { search } : {}),
         ...(planFilter ? { plan: planFilter } : {}),
         ...(sourceFilter ? { source: sourceFilter } : {}),
+        ...(signupSourceFilter ? { signup_source: signupSourceFilter } : {}),
         sort_by: sortBy,
         sort_direction: sortDirection,
         page,
@@ -1055,6 +1148,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
         setSearch('');
         setPlanFilter('');
         setSourceFilter('');
+        setSignupSourceFilter('');
         setSelectedReason(null);
         setPage(1);
     };
@@ -1113,7 +1207,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const pagination = listQuery.data;
 
     const currentPreset = range.mode === 'custom' ? 'custom' : (range.preset || 'this');
-    const tableFilterCount = [search, planFilter, sourceFilter, selectedReason].filter(Boolean).length;
+    const tableFilterCount = [search, planFilter, sourceFilter, signupSourceFilter, selectedReason].filter(Boolean).length;
 
     return (
         <div className="space-y-6">
@@ -1322,6 +1416,12 @@ export default function ChurnedQueueView({ platformId = '' }) {
 
             <TierBreakdown tiers={summary?.tier_breakdown} />
 
+            <SignupSourceBreakdown
+                sources={summary?.signup_source_breakdown}
+                selectedSource={signupSourceFilter}
+                onSelectSource={(source) => { setSignupSourceFilter(source); setPage(1); }}
+            />
+
             {/* Reason aggregator */}
             <div>
                 <ReasonAggregator
@@ -1332,7 +1432,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
             </div>
 
             {/* Active filters */}
-            {(selectedMarketId || selectedReason) ? (
+            {(selectedMarketId || selectedReason || signupSourceFilter) ? (
                 <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-slate-500">Filtering by:</span>
                     {selectedMarketId ? (
@@ -1345,6 +1445,12 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700">
                             Reason: {CHURN_REASON_LABELS[selectedReason] || selectedReason}
                             <button type="button" onClick={() => { setSelectedReason(null); setPage(1); }} className="ml-1 hover:text-rose-900">×</button>
+                        </span>
+                    ) : null}
+                    {signupSourceFilter ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                            Signup source: {SIGNUP_SOURCE_LABELS[signupSourceFilter] || signupSourceFilter}
+                            <button type="button" onClick={() => { setSignupSourceFilter(''); setPage(1); }} className="ml-1 hover:text-blue-900">×</button>
                         </span>
                     ) : null}
                 </div>
@@ -1376,7 +1482,7 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         ) : null}
                     </div>
 
-                    <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(280px,1.4fr)_repeat(2,minmax(160px,0.7fr))_auto]">
+                    <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(150px,0.7fr))_auto]">
                         <form onSubmit={applyTableSearch}>
                             <label htmlFor="churn-client-search" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                                 Search clients
@@ -1408,6 +1514,20 @@ export default function ChurnedQueueView({ platformId = '' }) {
                             >
                                 {PLAN_OPTIONS.map((option) => (
                                     <option key={option.key || 'all'} value={option.key}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Signup source</span>
+                            <select
+                                value={signupSourceFilter}
+                                onChange={(event) => { setSignupSourceFilter(event.target.value); setPage(1); }}
+                                className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                            >
+                                <option value="">All signup sources</option>
+                                {Object.entries(SIGNUP_SOURCE_LABELS).map(([key, label]) => (
+                                    <option key={key} value={key}>{label}</option>
                                 ))}
                             </select>
                         </label>

@@ -4765,6 +4765,7 @@ class ClientController extends Controller
             'plan' => 'nullable|string|in:basic,featured,premium,vip,vvip,unknown',
             'reason_code' => 'nullable|string|max:80',
             'source' => 'nullable|string|max:80',
+            'signup_source' => 'nullable|string|in:fast_signup,full_registration,crm_manual,crm_provisioned,field,existing',
             'sort_by' => 'nullable|string|in:name,market,first_activated_at,churned_at,reason,last_plan',
             'sort_direction' => 'nullable|string|in:asc,desc',
             'per_page' => 'nullable|integer|in:10,25,50,100',
@@ -4799,6 +4800,17 @@ class ClientController extends Controller
 
         if (! empty($validated['source'])) {
             $query->where('churn_source', $validated['source']);
+        }
+
+        if (! empty($validated['signup_source'])) {
+            if ($validated['signup_source'] === 'existing') {
+                $query->where(function ($sourceQuery) {
+                    $sourceQuery->whereNull('signup_source')
+                        ->orWhere('signup_source', '');
+                });
+            } else {
+                $query->where('signup_source', $validated['signup_source']);
+            }
         }
 
         if (! empty($validated['plan'])) {

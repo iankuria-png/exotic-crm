@@ -13,6 +13,15 @@ use Illuminate\Support\Facades\DB;
 
 class ChurnAggregatorService
 {
+    private const SIGNUP_SOURCE_LABELS = [
+        'fast_signup' => 'Fast signup',
+        'full_registration' => 'Full registration',
+        'crm_manual' => 'CRM manual',
+        'crm_provisioned' => 'Provisioned',
+        'field' => 'Field sales',
+        'existing' => 'Existing / legacy',
+    ];
+
     public function __construct(
         private readonly ReportingCurrencyService $reportingCurrencyService,
     ) {}
@@ -29,6 +38,7 @@ class ChurnAggregatorService
         $durations = $this->durationsByMarket($from, $to, $platformIds);
         $reasons = $this->reasonBreakdown($from, $to, $platformIds);
         $tierBreakdown = $this->tierBreakdown($from, $to, $platformIds);
+        $signupSourceBreakdown = $this->signupSourceBreakdown($from, $to, $platformIds);
         $dayCount = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
         $previousTo = $from->copy()->subDay()->endOfDay();
         $previousFrom = $previousTo->copy()->subDays($dayCount - 1)->startOfDay();
@@ -54,6 +64,7 @@ class ChurnAggregatorService
             'durations_by_market' => $durations,
             'reason_breakdown' => $reasons,
             'tier_breakdown' => $tierBreakdown,
+            'signup_source_breakdown' => $signupSourceBreakdown,
         ];
     }
 
@@ -365,6 +376,48 @@ class ChurnAggregatorService
             ->sortByDesc('churn_count')
             ->values()
             ->all();
+    }
+
+    public function signupSourceBreakdown(Carbon $from, Carbon $to, array $platformIds = []): array
+    {
+        $query = Client::query()
+            ->selectRaw('signup_source, COUNT(*) as cnt')
+            ->whereNotNull('churned_at')
+            ->whereBetween('churned_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
+            ->groupBy('signup_source');
+
+        if (! empty($platformIds)) {
+            $query->whereIn('platform_id', $platformIds);
+        }
+
+        $grouped = $query->get()
+            ->groupBy(fn ($row) => $this->normalizeSignupSource($row->signup_source))
+            ->map(fn ($rows, string $key) => [
+                'key' => $key,
+                'label' => self::SIGNUP_SOURCE_LABELS[$key] ?? ucwords(str_replace('_', ' ', $key)),
+                'churn_count' => (int) $rows->sum('cnt'),
+            ]);
+
+        $total = (int) $grouped->sum('churn_count');
+
+        return $grouped
+            ->map(function (array $row) use ($total): array {
+                $row['share_of_churn_percent'] = $total > 0
+                    ? round(($row['churn_count'] / $total) * 100, 1)
+                    : 0.0;
+
+                return $row;
+            })
+            ->sortByDesc('churn_count')
+            ->values()
+            ->all();
+    }
+
+    private function normalizeSignupSource(?string $source): string
+    {
+        $source = strtolower(trim((string) $source));
+
+        return $source === '' ? 'existing' : $source;
     }
 
     private function dailyAverageTickets(Carbon $from, Carbon $to, array $platformIds): array
