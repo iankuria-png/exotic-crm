@@ -41,6 +41,7 @@ use App\Services\SupportBoardService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
+use App\Support\CityNormalizer;
 use App\Support\CrmAuditAction;
 use App\Support\CrmClientChurnReason;
 use App\Support\CrmClientCloseReason;
@@ -91,6 +92,7 @@ class ClientController extends Controller
     {
         $validated = $request->validate([
             'segment' => 'nullable|string|in:' . implode(',', ClientSegmentService::keys()),
+            'city_key' => 'nullable|string|max:120',
         ]);
 
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -237,6 +239,18 @@ class ClientController extends Controller
 
         if ($request->filled('city')) {
             $query->where('city', (string) $request->city);
+        }
+
+        if ($request->filled('city_key')) {
+            $cityKey = (string) $request->input('city_key');
+            $matchingCities = (clone $query)
+                ->whereNotNull('city')
+                ->distinct()
+                ->pluck('city')
+                ->filter(fn ($city) => CityNormalizer::canonicalKey($city) === $cityKey)
+                ->values();
+
+            $query->whereIn('city', $matchingCities->all() ?: ["\0__none__"]);
         }
 
         if ($request->filled('created_from')) {

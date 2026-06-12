@@ -169,4 +169,12 @@ return [
         'stale_days' => (int) env('REPORTING_FX_STALE_DAYS', 7),
     ],
 
+    'nominatim' => [
+        'base_url' => env('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org/search'),
+        'user_agent' => env('NOMINATIM_USER_AGENT', trim(env('APP_NAME', 'Exotic CRM')) . '/1.0'),
+        'rate_per_minute' => (int) env('NOMINATIM_RATE_PER_MINUTE', 60),
+        'scheduled_rate_per_minute' => (int) env('NOMINATIM_SCHEDULED_RATE_PER_MINUTE', 4),
+        'batch_limit' => (int) env('NOMINATIM_BATCH_LIMIT', 50),
+    ],
+
 ];

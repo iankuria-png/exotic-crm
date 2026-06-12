@@ -21,6 +21,7 @@ use App\Http\Controllers\CRM\AutoPushPlanController;
 use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
+use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
@@ -300,6 +301,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     // Clients (marketing role has read-only access)
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/locations', [ClientLocationController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');

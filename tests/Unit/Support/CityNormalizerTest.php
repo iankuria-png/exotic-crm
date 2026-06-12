@@ -35,4 +35,16 @@ class CityNormalizerTest extends TestCase
 
         $this->assertNull(CityNormalizer::fromWpPayload($payload));
     }
+
+    public function test_it_builds_a_canonical_key_for_grouping(): void
+    {
+        $this->assertSame('nairobi', CityNormalizer::canonicalKey('  Nairobi '));
+        $this->assertSame('kisumu town', CityNormalizer::canonicalKey('Kisumu  Town'));
+        $this->assertSame(
+            CityNormalizer::canonicalKey('nairobi'),
+            CityNormalizer::canonicalKey('Nairobi')
+        );
+        $this->assertNull(CityNormalizer::canonicalKey('12345'));
+        $this->assertNull(CityNormalizer::canonicalKey('   '));
+    }
 }

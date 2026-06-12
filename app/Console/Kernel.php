@@ -191,6 +191,17 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_run_auto_optimize.log'));
 
+        $schedule->command(sprintf(
+            'crm:geocode-cities --rate=%d --limit=%d',
+            (int) config('services.nominatim.scheduled_rate_per_minute', 4),
+            (int) config('services.nominatim.batch_limit', 50)
+        ))
+            ->name('crm_geocode_cities')
+            ->daily()
+            ->withoutOverlapping(1440)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_geocode_cities.log'));
+
         $schedule->command('crm:maintain-auto-optimize')
             ->name('crm_maintain_auto_optimize')
             ->everySixHours()

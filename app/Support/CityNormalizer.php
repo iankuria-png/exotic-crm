@@ -43,4 +43,19 @@ class CityNormalizer
 
         return mb_substr($normalized, 0, $maxLength);
     }
+
+    public static function canonicalKey(mixed $value, int $maxLength = 120): ?string
+    {
+        $normalized = self::normalizeLabel($value, $maxLength);
+        if ($normalized === null) {
+            return null;
+        }
+
+        $collapsed = preg_replace('/\s+/u', ' ', trim($normalized));
+        if (!is_string($collapsed) || $collapsed === '') {
+            return null;
+        }
+
+        return mb_strtolower($collapsed);
+    }
 }

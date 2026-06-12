@@ -14,6 +14,7 @@ import ConversionQueueView from '../components/clients/ConversionQueueView';
 import ClosedCasesView from '../components/clients/ClosedCasesView';
 import ChurnedQueueView from '../components/clients/ChurnedQueueView';
 import AutoOptimizeView from '../components/clients/AutoOptimizeView';
+import LocationsView from '../components/clients/LocationsView';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
@@ -381,7 +382,7 @@ export default function Clients() {
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
-    const allowedTabs = new Set(['all', 'conversion', 'closed', 'churned', 'optimizer']);
+    const allowedTabs = new Set(['all', 'conversion', 'closed', 'churned', 'optimizer', 'locations']);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
     const setTab = (next) => {
@@ -460,6 +461,7 @@ export default function Clients() {
     const [createdTo, setCreatedTo] = useState(() => normalizeDateInputValue(searchParams.get('created_to')));
     const [sortOption, setSortOption] = useState(() => resolveInitialSortOption(searchParams));
     const [cityFilter, setCityFilter] = useState(() => (searchParams.get('city') || '').trim());
+    const [cityKeyFilter, setCityKeyFilter] = useState(() => (searchParams.get('city_key') || '').trim());
     const [segmentFilter, setSegmentFilter] = useState(() => {
         const requested = (searchParams.get('segment') || '').trim();
         return allowedClientSegments.has(requested) ? requested : '';
@@ -506,7 +508,16 @@ export default function Clients() {
 
     useEffect(() => {
         setCityFilter('');
+        setCityKeyFilter('');
     }, [platformFilter]);
+
+    useEffect(() => {
+        const nextCity = (searchParams.get('city') || '').trim();
+        const nextCityKey = (searchParams.get('city_key') || '').trim();
+
+        setCityFilter((current) => (current === nextCity ? current : nextCity));
+        setCityKeyFilter((current) => (current === nextCityKey ? current : nextCityKey));
+    }, [searchParams]);
 
     const { data, isLoading } = useQuery({
         queryKey: [
@@ -522,6 +533,7 @@ export default function Clients() {
             onlineFilter,
             platformFilter,
             cityFilter,
+            cityKeyFilter,
             signupSourceFilter,
             retentionBandFilter,
             behaviorTagFilter,
@@ -545,6 +557,7 @@ export default function Clients() {
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(cityFilter && { city: cityFilter }),
+                    ...(cityKeyFilter && { city_key: cityKeyFilter }),
                     ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
@@ -562,6 +575,9 @@ export default function Clients() {
     });
 
     const platformOptions = integrationData?.platforms || [];
+    const activeMarketName = platformOptions.find(
+        (platform) => String(platform.platform_id) === String(platformFilter),
+    )?.platform_name || '';
     const preferredPlatformId = platformFilter
         && platformOptions.some((platform) => String(platform.platform_id) === String(platformFilter))
         ? String(platformFilter)
@@ -1248,6 +1264,7 @@ export default function Clients() {
             setNewUsersFilter('');
             setCreatedFrom('');
             setCreatedTo('');
+            setCityKeyFilter('');
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
@@ -1264,6 +1281,7 @@ export default function Clients() {
             setCreatedFrom('');
             setCreatedTo('');
             setSegmentFilter('');
+            setCityKeyFilter('');
         } else if (metricKey === 'new_users') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1272,6 +1290,7 @@ export default function Clients() {
             setCreatedFrom('');
             setCreatedTo('');
             setSegmentFilter('');
+            setCityKeyFilter('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1279,6 +1298,7 @@ export default function Clients() {
             setNewUsersFilter('');
             setCreatedFrom('');
             setCreatedTo('');
+            setCityKeyFilter('');
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
@@ -1290,6 +1310,7 @@ export default function Clients() {
             setNewUsersFilter('');
             setCreatedFrom('');
             setCreatedTo('');
+            setCityKeyFilter('');
             setSignupSourceFilter('');
             setRetentionBandFilter('watch');
             setBehaviorTagFilter('');
@@ -1315,6 +1336,7 @@ export default function Clients() {
         || onlineFilter
         || platformFilter
         || cityFilter
+        || cityKeyFilter
         || signupSourceFilter
         || retentionBandFilter
         || behaviorTagFilter
@@ -1603,6 +1625,9 @@ export default function Clients() {
                 Closed cases
                 {conversionCount ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {conversionCount.toLocaleString()}</span> : null}
             </button>
+            <button type="button" role="tab" aria-selected={tab === 'locations'} className={`${tabClass('locations')} rounded-md`} onClick={() => setTab('locations')}>
+                Locations
+            </button>
             <button type="button" role="tab" aria-selected={tab === 'optimizer'} className={`${tabClass('optimizer')} rounded-md`} onClick={() => setTab('optimizer')}>
                 ✦ Optimizer
             </button>
@@ -1657,6 +1682,19 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <AutoOptimizeView platformId={platformFilter ? Number(platformFilter) : undefined} />
+            </div>
+        );
+    }
+
+    if (tab === 'locations') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Map where clients cluster and compare how each city is performing."
+                />
+                {tabStrip}
+                <LocationsView platformId={platformFilter} marketName={activeMarketName} />
             </div>
         );
     }
@@ -1803,7 +1841,11 @@ export default function Clients() {
                     <FilterSelect
                         label="City"
                         value={cityFilter}
-                        onChange={(event) => { setCityFilter(event.target.value); setPage(1); }}
+                        onChange={(event) => {
+                            setCityFilter(event.target.value);
+                            setCityKeyFilter('');
+                            setPage(1);
+                        }}
                         options={[
                             { value: '', label: 'All locations' },
                             ...availableCities.map((city) => ({ value: city, label: city })),
@@ -1992,6 +2034,7 @@ export default function Clients() {
                                 setOnlineFilter('');
                                 setPlatformFilter('');
                                 setCityFilter('');
+                                setCityKeyFilter('');
                                 setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
