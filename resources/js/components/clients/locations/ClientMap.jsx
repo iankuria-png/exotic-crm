@@ -93,7 +93,9 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
             layerGroupRef.current.removeFrom(mapRef.current);
         }
 
-        const group = L.layerGroup();
+        // featureGroup (not layerGroup) — only featureGroup implements getBounds(),
+        // which fitBounds() below relies on once cities are geocoded.
+        const group = L.featureGroup();
         const markerMap = new Map();
 
         mappableLocations.forEach((location) => {
@@ -117,8 +119,9 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
         layerGroupRef.current = group;
         markerMapRef.current = markerMap;
 
-        if (mappableLocations.length > 0) {
-            mapRef.current.fitBounds(group.getBounds(), { padding: [30, 30] });
+        const bounds = mappableLocations.length > 0 ? group.getBounds() : null;
+        if (bounds && bounds.isValid()) {
+            mapRef.current.fitBounds(bounds, { padding: [30, 30] });
         } else {
             mapRef.current.setView([0, 20], 4);
         }
