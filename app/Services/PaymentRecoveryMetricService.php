@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\BillingProviderTransaction;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -10,6 +12,11 @@ use Illuminate\Database\Eloquent\Builder;
 class PaymentRecoveryMetricService
 {
     private const CHUNK_SIZE = 1000;
+
+    public function __construct(
+        private readonly PaymentFailureReasonClassifier $failureReasonClassifier
+    ) {
+    }
 
     public function compute(?array $platformIds, Carbon $from, Carbon $to): array
     {
@@ -29,10 +36,11 @@ class PaymentRecoveryMetricService
             return [
                 'metrics' => $this->emptyResult($from, $to),
                 'recovered_pairs' => [],
+                'failure_reasons' => $this->emptyFailureReasons(),
             ];
         }
 
-        $data = $this->collectWindowData($platformIds, $from, $to, true);
+        $data = $this->collectWindowData($platformIds, $from, $to, true, true);
         $result = $this->summarize($data['union_find'], $data['failures'], $data['successes'], $from, $to);
         $successesByRoot = [];
 
@@ -83,10 +91,21 @@ class PaymentRecoveryMetricService
         return [
             'metrics' => $result['metrics'],
             'recovered_pairs' => $pairs,
+            'failure_reasons' => $this->summarizeFailureReasons(
+                $data['union_find'],
+                $data['failures'],
+                $result['latest_success_by_root']
+            ),
         ];
     }
 
-    private function collectWindowData(?array $platformIds, Carbon $from, Carbon $to, bool $withRelations = false): array
+    private function collectWindowData(
+        ?array $platformIds,
+        Carbon $from,
+        Carbon $to,
+        bool $withRelations = false,
+        bool $withFailureReasons = false
+    ): array
     {
         $unionFind = new PaymentRecoveryUnionFind();
         $failures = [];
@@ -101,15 +120,25 @@ class PaymentRecoveryMetricService
         }
 
         $failureQuery
-            ->chunkById(self::CHUNK_SIZE, function ($payments) use (&$failures, $unionFind) {
+            ->chunkById(self::CHUNK_SIZE, function ($payments) use (&$failures, $unionFind, $withFailureReasons) {
+                $failureSignals = $withFailureReasons
+                    ? $this->failureSignalsForPayments($payments->pluck('id')->map(fn ($id) => (int) $id)->all())
+                    : [];
+
                 foreach ($payments as $payment) {
                     $tokens = $this->identityTokens($payment);
                     $this->registerTokens($unionFind, $tokens);
+                    $signals = $failureSignals[(int) $payment->id] ?? [];
+                    $signals['messages'][] = $payment->failure_reason;
+                    $classification = $withFailureReasons
+                        ? $this->failureReasonClassifier->classify($signals)
+                        : null;
 
                     $failures[] = [
                         'tokens' => $tokens,
                         'created_at' => $payment->created_at,
                         'payment' => $payment,
+                        'failure_reason' => $classification,
                     ];
                 }
             });
@@ -209,6 +238,7 @@ class PaymentRecoveryMetricService
                     'to' => $to->toDateString(),
                 ],
             ],
+            'latest_success_by_root' => $latestSuccessByRoot,
         ];
     }
 
@@ -220,7 +250,7 @@ class PaymentRecoveryMetricService
             ->where('status', 'failed')
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
-            ->select(['id', 'platform_id', 'product_id', 'phone', 'client_id', 'amount', 'currency', 'status', 'transaction_reference', 'reference_number', 'created_at']);
+            ->select(['id', 'platform_id', 'product_id', 'phone', 'client_id', 'amount', 'currency', 'status', 'failure_reason', 'transaction_reference', 'reference_number', 'created_at']);
     }
 
     private function successQuery(?array $platformIds, Carbon $from, Carbon $to): Builder
@@ -314,6 +344,125 @@ class PaymentRecoveryMetricService
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
             ],
+        ];
+    }
+
+    private function failureSignalsForPayments(array $paymentIds): array
+    {
+        if (empty($paymentIds)) {
+            return [];
+        }
+
+        $signals = [];
+        $latestAttempts = PaymentAttempt::query()
+            ->whereIn('payment_id', $paymentIds)
+            ->where('status', 'failed')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get(['id', 'payment_id', 'error_code', 'error_message'])
+            ->unique('payment_id');
+
+        foreach ($latestAttempts as $attempt) {
+            $paymentId = (int) $attempt->payment_id;
+            $signals[$paymentId]['codes'][] = $attempt->error_code;
+            $signals[$paymentId]['messages'][] = $attempt->error_message;
+        }
+
+        $latestProviderTransactions = BillingProviderTransaction::query()
+            ->whereIn('payment_id', $paymentIds)
+            ->where(function (Builder $query) {
+                $query->whereNotNull('provider_failure_code')
+                    ->orWhereNotNull('provider_failure_message');
+            })
+            ->orderByRaw('COALESCE(last_status_at, created_at) DESC')
+            ->orderByDesc('id')
+            ->get(['id', 'payment_id', 'provider_failure_code', 'provider_failure_message'])
+            ->unique('payment_id');
+
+        foreach ($latestProviderTransactions as $transaction) {
+            $paymentId = (int) $transaction->payment_id;
+            $signals[$paymentId]['codes'][] = $transaction->provider_failure_code;
+            $signals[$paymentId]['messages'][] = $transaction->provider_failure_message;
+        }
+
+        return $signals;
+    }
+
+    private function summarizeFailureReasons(
+        PaymentRecoveryUnionFind $unionFind,
+        array $failures,
+        array $latestSuccessByRoot
+    ): array {
+        $items = [];
+
+        foreach ($failures as $failure) {
+            $reason = is_array($failure['failure_reason'] ?? null)
+                ? $failure['failure_reason']
+                : [
+                    'code' => PaymentFailureReasonClassifier::UNCLASSIFIED,
+                    'label' => 'Unclassified',
+                    'classified' => false,
+                ];
+            $code = (string) $reason['code'];
+            $failedAt = $failure['created_at'];
+            $root = $unionFind->find($failure['tokens'][0]);
+            $recovered = $failedAt instanceof CarbonInterface
+                && isset($latestSuccessByRoot[$root])
+                && $latestSuccessByRoot[$root]->greaterThan($failedAt);
+
+            if (!isset($items[$code])) {
+                $items[$code] = [
+                    'code' => $code,
+                    'label' => (string) $reason['label'],
+                    'failed_count' => 0,
+                    'recovered_count' => 0,
+                    'unresolved_count' => 0,
+                    'failed_amount_breakdown' => [],
+                    'failed_amount_rows' => [],
+                ];
+            }
+
+            $items[$code]['failed_count']++;
+            $items[$code][$recovered ? 'recovered_count' : 'unresolved_count']++;
+            $this->addAmount($items[$code]['failed_amount_breakdown'], $failure['payment']);
+            $this->addAmountRow($items[$code]['failed_amount_rows'], $failure['payment'], $failedAt);
+        }
+
+        $total = count($failures);
+        $unclassified = (int) ($items[PaymentFailureReasonClassifier::UNCLASSIFIED]['failed_count'] ?? 0);
+
+        $items = array_values(array_map(function (array $item) use ($total) {
+            $item['percentage'] = $this->rate($item['failed_count'], $total);
+            $item['recovery_rate'] = $this->rate($item['recovered_count'], $item['failed_count']);
+
+            return $item;
+        }, $items));
+
+        usort($items, function (array $left, array $right) {
+            $countComparison = $right['failed_count'] <=> $left['failed_count'];
+
+            return $countComparison !== 0
+                ? $countComparison
+                : strcmp($left['label'], $right['label']);
+        });
+
+        return [
+            'total' => $total,
+            'classified' => max(0, $total - $unclassified),
+            'unclassified' => $unclassified,
+            'coverage_pct' => $this->rate(max(0, $total - $unclassified), $total),
+            'items' => $items,
+        ];
+    }
+
+    private function emptyFailureReasons(): array
+    {
+        return [
+            'total' => 0,
+            'classified' => 0,
+            'unclassified' => 0,
+            'coverage_pct' => 0.0,
+            'items' => [],
         ];
     }
 

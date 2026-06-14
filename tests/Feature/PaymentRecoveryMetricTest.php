@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingProviderTransaction;
 use App\Models\Client;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\PaymentRecoveryMetricService;
@@ -187,6 +189,171 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('metrics.recovered_normalized_amount', 100)
             ->assertJsonPath('metrics.recovered_normalization_meta.partial', false)
             ->assertJsonPath('metrics.recovered_normalization_meta.currency_aliases.0.canonical_currency', 'XOF');
+    }
+
+    public function test_recovery_report_ranks_failure_reasons_and_splits_recovery_outcomes(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'KES']);
+
+        $recoveredTimeout = $this->payment($platform, [
+            'phone' => '254700000101',
+            'status' => 'failed',
+            'amount' => 1000,
+            'failure_reason' => 'Fallback wording should not override structured data.',
+            'created_at' => '2026-06-01 09:00:00',
+        ]);
+        PaymentAttempt::query()->create([
+            'payment_id' => $recoveredTimeout->id,
+            'attempt_type' => 'stk_initiate',
+            'provider' => 'pawapay',
+            'status' => 'failed',
+            'error_code' => 'callback_processing',
+            'error_message' => 'Customer declined the request.',
+            'created_at' => '2026-06-01 09:01:00',
+            'updated_at' => '2026-06-01 09:01:00',
+        ]);
+        $this->payment($platform, [
+            'phone' => '254700000101',
+            'status' => 'completed',
+            'amount' => 1000,
+            'created_at' => '2026-06-01 09:05:00',
+            'completed_at' => '2026-06-01 09:10:00',
+        ]);
+
+        $unresolvedTimeout = $this->payment($platform, [
+            'phone' => '254700000102',
+            'status' => 'failed',
+            'amount' => 500,
+            'failure_reason' => 'The customer did not authorize the payment in time.',
+            'created_at' => '2026-06-02 09:00:00',
+        ]);
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $unresolvedTimeout->id,
+            'provider_type_key' => 'pawapay',
+            'normalized_status' => 'failed',
+            'provider_transaction_id' => (string) Str::uuid(),
+            'provider_failure_code' => 'user_timeout',
+            'provider_failure_message' => 'Provider-specific timeout.',
+            'last_status_at' => '2026-06-02 09:01:00',
+        ]);
+
+        $this->payment($platform, [
+            'phone' => '254700000103',
+            'status' => 'failed',
+            'amount' => 250,
+            'failure_reason' => 'Insufficient funds in customer account.',
+            'created_at' => '2026-06-03 09:00:00',
+        ]);
+        $this->payment($platform, [
+            'phone' => '254700000104',
+            'status' => 'failed',
+            'amount' => 125,
+            'failure_reason' => 'Unexpected terminal state alpha.',
+            'created_at' => '2026-06-04 09:00:00',
+        ]);
+
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson(
+            "/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10&currency_mode=flat&reporting_currency=KES"
+        );
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('failure_reasons.total', 4)
+            ->assertJsonPath('failure_reasons.classified', 3)
+            ->assertJsonPath('failure_reasons.unclassified', 1)
+            ->assertJsonPath('failure_reasons.coverage_pct', 75)
+            ->assertJsonPath('failure_reasons.items.0.code', 'authorization_timeout')
+            ->assertJsonPath('failure_reasons.items.0.failed_count', 2)
+            ->assertJsonPath('failure_reasons.items.0.recovered_count', 1)
+            ->assertJsonPath('failure_reasons.items.0.unresolved_count', 1)
+            ->assertJsonPath('failure_reasons.items.0.recovery_rate', 50)
+            ->assertJsonPath('failure_reasons.items.0.failed_normalized_amount', 1500)
+            ->assertJsonPath('failure_reasons.items.0.normalized_currency', 'KES')
+            ->assertJsonMissingPath('failure_reasons.items.0.failed_amount_rows');
+    }
+
+    public function test_failure_reason_aggregation_preserves_business_visibility_and_market_scope(): void
+    {
+        $visiblePlatform = Platform::factory()->create(['currency_code' => 'KES']);
+        $otherPlatform = Platform::factory()->create(['currency_code' => 'UGX']);
+
+        $this->payment($visiblePlatform, [
+            'status' => 'failed',
+            'failure_reason' => 'Customer declined the request.',
+            'created_at' => '2026-06-01 09:00:00',
+        ]);
+        $this->payment($visiblePlatform, [
+            'status' => 'failed',
+            'failure_reason' => 'Insufficient funds.',
+            'purpose' => 'wallet_topup',
+            'created_at' => '2026-06-02 09:00:00',
+        ]);
+        $this->payment($visiblePlatform, [
+            'status' => 'failed',
+            'failure_reason' => 'Insufficient funds.',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'created_at' => '2026-06-03 09:00:00',
+        ]);
+        $this->payment($visiblePlatform, [
+            'status' => 'failed',
+            'failure_reason' => 'Insufficient funds.',
+            'provider_environment' => 'sandbox',
+            'created_at' => '2026-06-04 09:00:00',
+        ]);
+        $this->payment($otherPlatform, [
+            'status' => 'failed',
+            'failure_reason' => 'Insufficient funds.',
+            'created_at' => '2026-06-05 09:00:00',
+        ]);
+
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        Sanctum::actingAs($admin);
+
+        $this->getJson(
+            "/api/crm/payments/recovery-report?platform_id={$visiblePlatform->id}&from=2026-06-01&to=2026-06-10"
+        )
+            ->assertOk()
+            ->assertJsonPath('failure_reasons.total', 1)
+            ->assertJsonCount(1, 'failure_reasons.items')
+            ->assertJsonPath('failure_reasons.items.0.code', 'customer_declined');
+    }
+
+    public function test_empty_recovery_report_has_empty_failure_reason_contract(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'KES']);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        Sanctum::actingAs($admin);
+
+        $this->getJson(
+            "/api/crm/payments/recovery-report?platform_id={$platform->id}&from=2026-06-01&to=2026-06-10"
+        )
+            ->assertOk()
+            ->assertJsonPath('failure_reasons.total', 0)
+            ->assertJsonPath('failure_reasons.classified', 0)
+            ->assertJsonPath('failure_reasons.unclassified', 0)
+            ->assertJsonPath('failure_reasons.coverage_pct', 0)
+            ->assertJsonCount(0, 'failure_reasons.items');
+    }
+
+    public function test_recovery_report_rejects_a_market_outside_the_users_scope(): void
+    {
+        $allowedPlatform = Platform::factory()->create(['currency_code' => 'KES']);
+        $blockedPlatform = Platform::factory()->create(['currency_code' => 'UGX']);
+        $salesUser = User::factory()->create([
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$allowedPlatform->id],
+        ]);
+        Sanctum::actingAs($salesUser);
+
+        $this->getJson(
+            "/api/crm/payments/recovery-report?platform_id={$blockedPlatform->id}&from=2026-06-01&to=2026-06-10"
+        )
+            ->assertForbidden()
+            ->assertJsonPath('message', 'You do not have access to this payment market.');
     }
 
     private function payment(Platform $platform, array $overrides = []): Payment

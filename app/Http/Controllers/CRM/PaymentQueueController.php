@@ -386,6 +386,11 @@ class PaymentQueueController extends Controller
             $targetCurrency,
             $currencyMode === ReportingCurrencyService::MODE_FLAT
         );
+        $report['failure_reasons'] = $this->appendFailureReasonAmountNormalization(
+            $report['failure_reasons'] ?? [],
+            $targetCurrency,
+            $currencyMode === ReportingCurrencyService::MODE_FLAT
+        );
 
         return response()->json([
             'filters' => [
@@ -426,6 +431,33 @@ class PaymentQueueController extends Controller
         );
 
         return $metrics;
+    }
+
+    private function appendFailureReasonAmountNormalization(
+        array $failureReasons,
+        string $targetCurrency,
+        bool $shouldNormalize
+    ): array {
+        $failureReasons['items'] = array_map(function (array $item) use ($targetCurrency, $shouldNormalize) {
+            if ($shouldNormalize) {
+                $normalized = $this->reportingCurrencyService->normalizeEventRows(
+                    $item['failed_amount_rows'] ?? [],
+                    $targetCurrency
+                );
+                $item['failed_normalized_amount'] = $normalized['normalized_total'];
+                $item['failed_normalization_meta'] = $normalized['normalization_meta'];
+            } else {
+                $item['failed_normalized_amount'] = null;
+                $item['failed_normalization_meta'] = null;
+            }
+
+            $item['normalized_currency'] = $targetCurrency;
+            unset($item['failed_amount_rows']);
+
+            return $item;
+        }, $failureReasons['items'] ?? []);
+
+        return $failureReasons;
     }
 
     public function markTest(Request $request, Payment $payment)

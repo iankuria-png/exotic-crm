@@ -172,6 +172,27 @@ function recoveryAmountDisplay(metrics, bucket, reportingCurrency, fallbackCurre
     };
 }
 
+function failureReasonAmountDisplay(item, reportingCurrency, fallbackCurrency) {
+    if (
+        reportingCurrency?.isFlat
+        && item?.failed_normalized_amount !== null
+        && item?.failed_normalized_amount !== undefined
+    ) {
+        return {
+            value: formatCurrency(
+                item.failed_normalized_amount,
+                item.normalized_currency || reportingCurrency.targetCurrency || fallbackCurrency
+            ),
+            meta: item.failed_normalization_meta,
+        };
+    }
+
+    return {
+        value: formatAmountBreakdown(item?.failed_amount_breakdown, fallbackCurrency),
+        meta: reportingCurrency?.isFlat ? item?.failed_normalization_meta : null,
+    };
+}
+
 function formatRecoveryDuration(minutes) {
     const total = Number(minutes || 0);
     if (!Number.isFinite(total) || total <= 0) return 'same minute';
@@ -866,6 +887,153 @@ function RecoveryMetricTile({ label, value, hint, meta, tone = 'slate' }) {
     );
 }
 
+function FailureReasonsAggregator({
+    failureReasons,
+    reportingCurrency,
+    fallbackCurrency,
+}) {
+    const [showAll, setShowAll] = useState(false);
+    const items = Array.isArray(failureReasons?.items) ? failureReasons.items : [];
+    const visibleItems = showAll ? items : items.slice(0, 5);
+    const total = Number(failureReasons?.total || 0);
+    const coverage = Number(failureReasons?.coverage_pct || 0);
+    const unclassified = Number(failureReasons?.unclassified || 0);
+    const maxCount = Math.max(1, ...items.map((item) => Number(item.failed_count || 0)));
+
+    return (
+        <section
+            className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+            aria-labelledby="payment-failure-reasons-title"
+        >
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+                <div>
+                    <h2 id="payment-failure-reasons-title" className="text-sm font-semibold text-slate-900">
+                        Why payments fail
+                    </h2>
+                    <p className="mt-1 text-xs text-slate-500">
+                        Ranked by failed attempts. Outcome segments show what recovered later and what remains unresolved.
+                    </p>
+                </div>
+                <div className="min-w-[190px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="font-medium text-slate-600">Classification coverage</span>
+                        <span className="font-semibold text-slate-900">{coverage.toFixed(1)}%</span>
+                    </div>
+                    <div
+                        className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
+                        role="progressbar"
+                        aria-label="Payment failure classification coverage"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={coverage}
+                    >
+                        <div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.min(100, coverage)}%` }} />
+                    </div>
+                </div>
+            </div>
+
+            {total === 0 ? (
+                <div className="px-4 py-12 text-center">
+                    <p className="text-sm font-semibold text-slate-800">No payment failures in this window</p>
+                    <p className="mt-1 text-xs text-slate-500">Reason rankings will appear when failed attempts are recorded.</p>
+                </div>
+            ) : (
+                <>
+                    <div className="space-y-3 px-4 py-4">
+                        {visibleItems.map((item, index) => {
+                            const failedCount = Number(item.failed_count || 0);
+                            const recoveredCount = Number(item.recovered_count || 0);
+                            const unresolvedCount = Number(item.unresolved_count || 0);
+                            const recoveredWidth = failedCount > 0 ? (recoveredCount / failedCount) * 100 : 0;
+                            const unresolvedWidth = failedCount > 0 ? (unresolvedCount / failedCount) * 100 : 0;
+                            const volumeWidth = Math.max(4, (failedCount / maxCount) * 100);
+                            const amount = failureReasonAmountDisplay(item, reportingCurrency, fallbackCurrency);
+
+                            return (
+                                <article
+                                    key={item.code || index}
+                                    className="rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-3 sm:px-4"
+                                >
+                                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                                        <div className="min-w-0">
+                                            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                                                <p className="font-semibold text-slate-900">
+                                                    <span className="mr-2 text-xs tabular-nums text-slate-400">#{index + 1}</span>
+                                                    {item.label}
+                                                </p>
+                                                <p className="text-xs font-medium tabular-nums text-slate-600">
+                                                    {failedCount.toLocaleString()} failures · {Number(item.percentage || 0).toFixed(1)}%
+                                                </p>
+                                            </div>
+
+                                            <div
+                                                className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200"
+                                                aria-label={`${item.label}: ${recoveredCount} recovered and ${unresolvedCount} unresolved`}
+                                            >
+                                                <div
+                                                    className="flex h-full overflow-hidden rounded-full"
+                                                    style={{ width: `${volumeWidth}%` }}
+                                                >
+                                                    {recoveredWidth > 0 ? (
+                                                        <span className="h-full bg-emerald-500" style={{ width: `${recoveredWidth}%` }} />
+                                                    ) : null}
+                                                    {unresolvedWidth > 0 ? (
+                                                        <span className="h-full bg-rose-400" style={{ width: `${unresolvedWidth}%` }} />
+                                                    ) : null}
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                                                <span><span className="font-semibold text-emerald-700">{recoveredCount.toLocaleString()}</span> recovered</span>
+                                                <span><span className="font-semibold text-rose-700">{unresolvedCount.toLocaleString()}</span> unresolved</span>
+                                                <span><span className="font-semibold text-slate-800">{Number(item.recovery_rate || 0).toFixed(1)}%</span> recovery rate</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="lg:min-w-[180px] lg:text-right">
+                                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Affected value</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{amount.value}</p>
+                                            {amount.meta ? <FxNormalizationNotice meta={amount.meta} className="mt-1 lg:justify-end" /> : null}
+                                        </div>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                            <span className="inline-flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                                Recovered
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-rose-400" aria-hidden="true" />
+                                Unresolved
+                            </span>
+                            {unclassified > 0 ? (
+                                <span>
+                                    {unclassified.toLocaleString()} unclassified failure{unclassified === 1 ? '' : 's'} retained without guessing.
+                                </span>
+                            ) : null}
+                        </div>
+                        {items.length > 5 ? (
+                            <button
+                                type="button"
+                                onClick={() => setShowAll((current) => !current)}
+                                aria-expanded={showAll}
+                                className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                {showAll ? 'Show top 5' : `Show all ${items.length}`}
+                            </button>
+                        ) : null}
+                    </div>
+                </>
+            )}
+        </section>
+    );
+}
+
 function RecoveryScopeBar({
     platformOptions,
     platformFilter,
@@ -992,6 +1160,9 @@ function RecoveryPaymentMiniCard({ title, payment, tone = 'slate' }) {
 function RecoveryLedger({
     report,
     isLoading,
+    isError,
+    error,
+    onRetry,
     selectedPair,
     onSelectPair,
     fallbackCurrency,
@@ -1043,7 +1214,46 @@ function RecoveryLedger({
                             <div key={index} className="h-24 rounded-lg bg-slate-100" />
                         ))}
                     </div>
+                    <div data-testid="payment-failure-reasons-loading" className="h-80 rounded-xl bg-slate-100" />
                     <div className="h-64 rounded-lg bg-slate-100" />
+                </div>
+            </section>
+        );
+    }
+
+    if (isError) {
+        return (
+            <section className="space-y-4">
+                <RecoveryScopeBar
+                    platformOptions={platformOptions}
+                    platformFilter={platformFilter}
+                    onPlatformChange={onPlatformChange}
+                    fromDate={fromDate}
+                    toDate={toDate}
+                    onFromDateChange={onFromDateChange}
+                    onToDateChange={onToDateChange}
+                    isRangeInvalid={isRangeInvalid}
+                    preset={preset}
+                    onPresetChange={onPresetChange}
+                    reportingCurrency={reportingCurrency}
+                />
+                <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-5 shadow-sm">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <h2 className="text-sm font-semibold text-rose-900">Recovery analysis is temporarily unavailable</h2>
+                            <p className="mt-1 text-sm text-rose-700">
+                                {error?.response?.data?.message || 'The latest failed-payment report could not be loaded.'}
+                            </p>
+                            <p className="mt-1 text-xs text-rose-600">Your selected market and date range have been preserved.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onRetry}
+                            className="min-h-11 rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                        >
+                            Try again
+                        </button>
+                    </div>
                 </div>
             </section>
         );
@@ -1086,6 +1296,12 @@ function RecoveryLedger({
                     <RecoveryMetricTile label="Failed value" value={failedAmount.value} hint="Total attempted value" meta={failedAmount.meta} tone="sky" />
                 </div>
             </div>
+
+            <FailureReasonsAggregator
+                failureReasons={report?.failure_reasons}
+                reportingCurrency={reportingCurrency}
+                fallbackCurrency={fallbackCurrency}
+            />
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1426,6 +1642,9 @@ export default function Payments() {
     const {
         data: recoveryReportData,
         isLoading: recoveryReportLoading,
+        isError: recoveryReportError,
+        error: recoveryReportErrorDetail,
+        refetch: refetchRecoveryReport,
     } = useQuery({
         queryKey: ['payments-recovery-report', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () => api.get('/crm/payments/recovery-report', {
@@ -3070,6 +3289,9 @@ export default function Payments() {
                 <RecoveryLedger
                     report={recoveryReportData}
                     isLoading={recoveryReportLoading}
+                    isError={recoveryReportError}
+                    error={recoveryReportErrorDetail}
+                    onRetry={refetchRecoveryReport}
                     selectedPair={selectedRecoveryPair}
                     onSelectPair={setSelectedRecoveryPair}
                     fallbackCurrency={resolveCurrency(null)}
