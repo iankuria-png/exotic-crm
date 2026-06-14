@@ -4,7 +4,7 @@ import { missingRoleMessage, roleCredentialsAvailable } from './support/env.js';
 
 function recoveryPayload(items = failureReasonItems()) {
     const total = items.reduce((sum, item) => sum + item.failed_count, 0);
-    const unclassified = items.find((item) => item.code === 'unclassified')?.failed_count || 0;
+    const unclassified = items.find((item) => item.code === 'other_provider_response')?.failed_count || 0;
     const recovered = Math.min(4, total);
 
     return {
@@ -38,8 +38,23 @@ function recoveryPayload(items = failureReasonItems()) {
             total,
             classified: total - unclassified,
             unclassified,
+            recorded: total,
+            reason_unavailable: 0,
             coverage_pct: total > 0 ? ((total - unclassified) / total) * 100 : 0,
+            recorded_pct: total > 0 ? 100 : 0,
             items,
+        },
+        friction_breakdowns: {
+            markets: breakdown([
+                frictionItem('Kenya', 7, 3, 4, 700, { platform_id: 1, country: 'Kenya' }),
+                frictionItem('Zambia', 4, 1, 3, 300, { platform_id: 2, country: 'Zambia' }),
+                frictionItem('DRC', 2, 0, 2, 200, { platform_id: 3, country: 'DRC' }),
+            ], total),
+            packages: breakdown([
+                frictionItem('VIP', 8, 3, 5, 800, { product_id: 10, tier: 'vip' }),
+                frictionItem('Premium', 4, 1, 3, 350, { product_id: 11, tier: 'premium' }),
+                frictionItem('Basic', 1, 0, 1, 50, { product_id: 12, tier: 'basic' }),
+            ], total),
         },
         recovered_pairs: [],
     };
@@ -53,7 +68,7 @@ function failureReasonItems() {
         reason('invalid_phone_account', 'Invalid phone or account', 1, 0, 1, 10),
         reason('provider_network_unavailable', 'Provider or network unavailable', 1, 0, 1, 10),
         reason('limits_compliance', 'Limits or compliance restriction', 1, 0, 1, 10),
-        reason('unclassified', 'Unclassified', 1, 0, 1, 10),
+        reason('other_provider_response', 'Other provider response', 1, 0, 1, 10),
     ];
 }
 
@@ -70,6 +85,32 @@ function reason(code, label, failed, recovered, unresolved, amount) {
         failed_normalized_amount: amount,
         failed_normalization_meta: null,
         normalized_currency: 'USD',
+    };
+}
+
+function frictionItem(label, failed, recovered, unresolved, amount, extra) {
+    return {
+        ...extra,
+        label,
+        failed_count: failed,
+        percentage: 10,
+        recovered_count: recovered,
+        unresolved_count: unresolved,
+        recovery_rate: failed > 0 ? (recovered / failed) * 100 : 0,
+        failed_amount_breakdown: { USD: amount },
+        failed_normalized_amount: amount,
+        failed_normalization_meta: null,
+        normalized_currency: 'USD',
+    };
+}
+
+function breakdown(items, total) {
+    return {
+        total,
+        attributed: total,
+        unattributed: 0,
+        coverage_pct: total > 0 ? 100 : 0,
+        items,
     };
 }
 
@@ -97,7 +138,12 @@ test.describe('payment failure reasons aggregator', () => {
 
         await openRecovery(page, request);
 
-        await expect(page.getByRole('heading', { name: 'Why payments fail' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Payment friction intelligence' })).toBeVisible();
+        await expect(page.getByText('Primary cause')).toBeVisible();
+        await expect(page.getByText('Most affected market')).toBeVisible();
+        await expect(page.getByText('Most affected package')).toBeVisible();
+        await expect(page.getByText('Kenya')).toBeVisible();
+        await expect(page.getByText('VIP')).toBeVisible();
         await expect(page.getByText('Authorization timed out')).toBeVisible();
         await expect(page.getByText('Limits or compliance restriction')).toHaveCount(0);
 
@@ -107,7 +153,16 @@ test.describe('payment failure reasons aggregator', () => {
         await page.keyboard.press('Enter');
 
         await expect(page.getByText('Limits or compliance restriction')).toBeVisible();
-        await expect(page.getByText(/unclassified failure retained without guessing/i)).toBeVisible();
+        await expect(page.getByText(/provider detail recorded/i)).toBeVisible();
+
+        const causesTab = page.getByRole('tab', { name: 'Causes' });
+        await causesTab.focus();
+        await page.keyboard.press('ArrowRight');
+        await expect(page.getByRole('tab', { name: 'Markets' })).toBeFocused();
+        await expect(page.getByRole('tabpanel')).toContainText('Zambia');
+
+        await page.getByRole('tab', { name: 'Packages' }).click();
+        await expect(page.getByRole('tabpanel')).toContainText('Premium');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     });
 
@@ -158,6 +213,6 @@ test.describe('payment failure reasons aggregator', () => {
         await openRecovery(page, request);
 
         await expect(page.getByTestId('payment-failure-reasons-loading')).toBeVisible();
-        await expect(page.getByRole('heading', { name: 'Why payments fail' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Payment friction intelligence' })).toBeVisible();
     });
 });

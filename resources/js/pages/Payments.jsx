@@ -887,59 +887,157 @@ function RecoveryMetricTile({ label, value, hint, meta, tone = 'slate' }) {
     );
 }
 
-function FailureReasonsAggregator({
+function PaymentFrictionIntelligence({
     failureReasons,
+    frictionBreakdowns,
     reportingCurrency,
     fallbackCurrency,
 }) {
+    const [activeView, setActiveView] = useState('causes');
     const [showAll, setShowAll] = useState(false);
-    const items = Array.isArray(failureReasons?.items) ? failureReasons.items : [];
+    const views = {
+        causes: {
+            label: 'Causes',
+            items: Array.isArray(failureReasons?.items) ? failureReasons.items : [],
+            coverage: Number(failureReasons?.coverage_pct || 0),
+            coverageLabel: 'causes mapped',
+        },
+        markets: {
+            label: 'Markets',
+            items: Array.isArray(frictionBreakdowns?.markets?.items) ? frictionBreakdowns.markets.items : [],
+            coverage: Number(frictionBreakdowns?.markets?.coverage_pct || 0),
+            coverageLabel: 'market attribution',
+        },
+        packages: {
+            label: 'Packages',
+            items: Array.isArray(frictionBreakdowns?.packages?.items) ? frictionBreakdowns.packages.items : [],
+            coverage: Number(frictionBreakdowns?.packages?.coverage_pct || 0),
+            coverageLabel: 'package attribution',
+        },
+    };
+    const currentView = views[activeView];
+    const items = currentView.items;
     const visibleItems = showAll ? items : items.slice(0, 5);
     const total = Number(failureReasons?.total || 0);
-    const coverage = Number(failureReasons?.coverage_pct || 0);
-    const unclassified = Number(failureReasons?.unclassified || 0);
+    const recordedCoverage = Number(failureReasons?.recorded_pct || 0);
     const maxCount = Math.max(1, ...items.map((item) => Number(item.failed_count || 0)));
+    const primaryCause = views.causes.items[0];
+    const primaryMarket = views.markets.items.find((item) => item.platform_id !== null) || views.markets.items[0];
+    const primaryPackage = views.packages.items.find((item) => item.product_id !== null) || views.packages.items[0];
+    const insights = [
+        {
+            eyebrow: 'Primary cause',
+            item: primaryCause,
+            fallback: 'No cause data',
+            detail: primaryCause ? `${Number(primaryCause.unresolved_count || 0).toLocaleString()} still unresolved` : 'No failures recorded',
+        },
+        {
+            eyebrow: 'Most affected market',
+            item: primaryMarket,
+            fallback: 'No market data',
+            detail: primaryMarket?.country || (primaryMarket ? `${Number(primaryMarket.unresolved_count || 0).toLocaleString()} still unresolved` : 'No failures recorded'),
+        },
+        {
+            eyebrow: 'Most affected package',
+            item: primaryPackage,
+            fallback: 'No package data',
+            detail: primaryPackage?.tier
+                ? `${String(primaryPackage.tier).replaceAll('_', ' ')} tier`
+                : (primaryPackage ? `${Number(primaryPackage.unresolved_count || 0).toLocaleString()} still unresolved` : 'No failures recorded'),
+        },
+    ];
+
+    const selectView = (key) => {
+        setActiveView(key);
+        setShowAll(false);
+    };
 
     return (
         <section
             className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-            aria-labelledby="payment-failure-reasons-title"
+            aria-labelledby="payment-friction-title"
         >
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+            <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
                 <div>
-                    <h2 id="payment-failure-reasons-title" className="text-sm font-semibold text-slate-900">
-                        Why payments fail
+                    <h2 id="payment-friction-title" className="text-sm font-semibold text-slate-900">
+                        Payment friction intelligence
                     </h2>
                     <p className="mt-1 text-xs text-slate-500">
-                        Ranked by failed attempts. Outcome segments show what recovered later and what remains unresolved.
+                        See what blocks payment, where it happens, and which packages customers were trying to buy.
                     </p>
-                </div>
-                <div className="min-w-[190px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="flex items-center justify-between gap-3 text-xs">
-                        <span className="font-medium text-slate-600">Classification coverage</span>
-                        <span className="font-semibold text-slate-900">{coverage.toFixed(1)}%</span>
-                    </div>
-                    <div
-                        className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
-                        role="progressbar"
-                        aria-label="Payment failure classification coverage"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={coverage}
-                    >
-                        <div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.min(100, coverage)}%` }} />
-                    </div>
                 </div>
             </div>
 
             {total === 0 ? (
                 <div className="px-4 py-12 text-center">
                     <p className="text-sm font-semibold text-slate-800">No payment failures in this window</p>
-                    <p className="mt-1 text-xs text-slate-500">Reason rankings will appear when failed attempts are recorded.</p>
+                    <p className="mt-1 text-xs text-slate-500">Friction insights will appear when failed attempts are recorded.</p>
                 </div>
             ) : (
                 <>
-                    <div className="space-y-3 px-4 py-4">
+                    <div className="grid gap-3 px-4 pt-4 sm:grid-cols-3 sm:px-5">
+                        {insights.map(({ eyebrow, item, fallback, detail }) => (
+                            <div key={eyebrow} className="rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{eyebrow}</p>
+                                <p className="mt-2 truncate text-base font-semibold text-slate-950" title={item?.label || fallback}>
+                                    {item?.label || fallback}
+                                </p>
+                                {item ? (
+                                    <p className="mt-1 text-xs text-slate-600">
+                                        <span className="font-semibold tabular-nums text-slate-900">
+                                            {Number(item.failed_count || 0).toLocaleString()}
+                                        </span>
+                                        {' '}failures · {Number(item.percentage || 0).toFixed(1)}% of total
+                                    </p>
+                                ) : null}
+                                <p className="mt-2 text-xs font-medium capitalize text-slate-500">{detail}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="px-4 pt-4 sm:px-5">
+                        <div
+                            role="tablist"
+                            aria-label="Payment friction breakdown"
+                            className="flex w-full gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-slate-100 p-1 sm:w-fit"
+                        >
+                            {Object.entries(views).map(([key, view]) => (
+                                <button
+                                    key={key}
+                                    id={`payment-friction-tab-${key}`}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeView === key}
+                                    aria-controls={`payment-friction-panel-${key}`}
+                                    tabIndex={activeView === key ? 0 : -1}
+                                    onClick={() => selectView(key)}
+                                    onKeyDown={(event) => {
+                                        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+                                        event.preventDefault();
+                                        const keys = Object.keys(views);
+                                        const offset = event.key === 'ArrowRight' ? 1 : -1;
+                                        const nextKey = keys[(keys.indexOf(activeView) + offset + keys.length) % keys.length];
+                                        selectView(nextKey);
+                                        requestAnimationFrame(() => document.getElementById(`payment-friction-tab-${nextKey}`)?.focus());
+                                    }}
+                                    className={`min-h-10 whitespace-nowrap rounded-md px-4 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                        activeView === key
+                                            ? 'bg-white text-teal-800 shadow-sm'
+                                            : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                                    }`}
+                                >
+                                    {view.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div
+                        id={`payment-friction-panel-${activeView}`}
+                        role="tabpanel"
+                        aria-labelledby={`payment-friction-tab-${activeView}`}
+                        className="space-y-3 px-4 py-4 sm:px-5"
+                    >
                         {visibleItems.map((item, index) => {
                             const failedCount = Number(item.failed_count || 0);
                             const recoveredCount = Number(item.recovered_count || 0);
@@ -948,11 +1046,14 @@ function FailureReasonsAggregator({
                             const unresolvedWidth = failedCount > 0 ? (unresolvedCount / failedCount) * 100 : 0;
                             const volumeWidth = Math.max(4, (failedCount / maxCount) * 100);
                             const amount = failureReasonAmountDisplay(item, reportingCurrency, fallbackCurrency);
+                            const descriptor = activeView === 'markets'
+                                ? item.country
+                                : (activeView === 'packages' && item.tier ? `${String(item.tier).replaceAll('_', ' ')} tier` : null);
 
                             return (
                                 <article
-                                    key={item.code || index}
-                                    className="rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-3 sm:px-4"
+                                    key={item.code || item.platform_id || item.product_id || `${activeView}-${index}`}
+                                    className="rounded-lg border border-slate-200 bg-white px-3 py-3 transition hover:border-slate-300 sm:px-4"
                                 >
                                     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                                         <div className="min-w-0">
@@ -965,6 +1066,7 @@ function FailureReasonsAggregator({
                                                     {failedCount.toLocaleString()} failures · {Number(item.percentage || 0).toFixed(1)}%
                                                 </p>
                                             </div>
+                                            {descriptor ? <p className="mt-0.5 text-xs capitalize text-slate-500">{descriptor}</p> : null}
 
                                             <div
                                                 className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200"
@@ -1011,11 +1113,8 @@ function FailureReasonsAggregator({
                                 <span className="h-2 w-2 rounded-full bg-rose-400" aria-hidden="true" />
                                 Unresolved
                             </span>
-                            {unclassified > 0 ? (
-                                <span>
-                                    {unclassified.toLocaleString()} unclassified failure{unclassified === 1 ? '' : 's'} retained without guessing.
-                                </span>
-                            ) : null}
+                            <span>{currentView.coverage.toFixed(1)}% {currentView.coverageLabel}</span>
+                            {activeView === 'causes' ? <span>{recordedCoverage.toFixed(1)}% provider detail recorded</span> : null}
                         </div>
                         {items.length > 5 ? (
                             <button
@@ -1297,8 +1396,9 @@ function RecoveryLedger({
                 </div>
             </div>
 
-            <FailureReasonsAggregator
+            <PaymentFrictionIntelligence
                 failureReasons={report?.failure_reasons}
+                frictionBreakdowns={report?.friction_breakdowns}
                 reportingCurrency={reportingCurrency}
                 fallbackCurrency={fallbackCurrency}
             />

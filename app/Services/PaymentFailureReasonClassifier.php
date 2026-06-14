@@ -11,19 +11,23 @@ class PaymentFailureReasonClassifier
     private const LABELS = [
         'authorization_timeout' => 'Authorization timed out',
         'customer_declined' => 'Customer declined',
+        'payment_not_approved' => 'PIN or approval failed',
+        'subscriber_unavailable' => 'SIM or subscriber unavailable',
         'insufficient_funds' => 'Insufficient funds',
         'invalid_phone_account' => 'Invalid phone or account',
+        'provider_rejected' => 'Provider rejected payment',
         'provider_network_unavailable' => 'Provider or network unavailable',
         'limits_compliance' => 'Limits or compliance restriction',
         'configuration_routing' => 'Configuration or routing issue',
-        self::UNCLASSIFIED => 'Unclassified',
+        'other_provider_response' => 'Other provider response',
+        'reason_unavailable' => 'Reason unavailable',
+        self::UNCLASSIFIED => 'Other provider response',
     ];
 
     private const CODE_PATTERNS = [
         'authorization_timeout' => [
             'authorization_timeout',
             'authorisation_timeout',
-            'callback_processing',
             'customer_timeout',
             'request_timeout',
             'stk_timeout',
@@ -41,6 +45,19 @@ class PaymentFailureReasonClassifier
             'user_declined',
             'user_rejected',
         ],
+        'payment_not_approved' => [
+            'incorrect_pin',
+            'invalid_pin',
+            'payment_not_approved',
+            'pin_failed',
+            'wrong_pin',
+        ],
+        'subscriber_unavailable' => [
+            'sim_card_offline',
+            'subscriber_offline',
+            'subscriber_unavailable',
+            'unsupported_sim',
+        ],
         'insufficient_funds' => [
             'balance_too_low',
             'insufficient_balance',
@@ -56,6 +73,13 @@ class PaymentFailureReasonClassifier
             'invalid_subscriber',
             'payer_not_found',
             'subscriber_not_found',
+        ],
+        'provider_rejected' => [
+            'payment_failed',
+            'payment_rejected',
+            'provider_declined',
+            'provider_rejected',
+            'verified_failed',
         ],
         'provider_network_unavailable' => [
             'connection_error',
@@ -90,6 +114,13 @@ class PaymentFailureReasonClassifier
         ],
     ];
 
+    private const IGNORED_STAGE_CODES = [
+        'callback_processing',
+        'callback_update',
+        'provider_verification',
+        'reconciliation_check',
+    ];
+
     private const MESSAGE_PATTERNS = [
         'authorization_timeout' => [
             'customer did not authorize',
@@ -101,6 +132,15 @@ class PaymentFailureReasonClassifier
             'approval timed out',
             'prompt timed out',
             'transaction timed out at the mobile network operator',
+        ],
+        'subscriber_unavailable' => [
+            'mobile money is not supported',
+            'not registered for mobile money',
+            'sim card is offline',
+            'sim card is too old',
+            'subscriber is offline',
+            'subscriber is unavailable',
+            'too old to support mobile money',
         ],
         'customer_declined' => [
             'cancelled by customer',
@@ -117,6 +157,16 @@ class PaymentFailureReasonClassifier
             'user canceled',
             'user declined',
             'user rejected',
+        ],
+        'payment_not_approved' => [
+            'customer did not approve',
+            'did not approve the payment',
+            'did not enter their pin',
+            'did not enter the pin',
+            'incorrect pin',
+            'pin was not entered',
+            'pin was entered incorrectly',
+            'wrong pin',
         ],
         'insufficient_funds' => [
             'balance is too low',
@@ -136,6 +186,12 @@ class PaymentFailureReasonClassifier
             'payer not found',
             'subscriber not found',
             'unknown subscriber',
+        ],
+        'provider_rejected' => [
+            'payment was rejected by the provider',
+            'provider declined the payment',
+            'provider rejected the payment',
+            'provider verified the payment as failed',
         ],
         'provider_network_unavailable' => [
             'connection refused',
@@ -180,21 +236,47 @@ class PaymentFailureReasonClassifier
 
     public function classify(array $signals): array
     {
-        foreach ($signals['codes'] ?? [] as $code) {
+        $codes = $this->nonEmptyValues($signals['codes'] ?? []);
+        $messages = $this->nonEmptyValues($signals['messages'] ?? []);
+        $meaningfulCodes = array_values(array_filter($codes, function ($code) {
+            return !in_array($this->normalizeCode($code), self::IGNORED_STAGE_CODES, true);
+        }));
+        $recorded = $messages !== [] || $meaningfulCodes !== [];
+
+        // PawaPay's PAYMENT_NOT_APPROVED code covers several distinct customer
+        // conditions, so its message is the more precise signal.
+        foreach ($meaningfulCodes as $code) {
+            if ($this->normalizeCode($code) !== 'payment_not_approved') {
+                continue;
+            }
+
+            foreach ($messages as $message) {
+                $category = $this->matchMessage($message);
+                if ($category !== null) {
+                    return $this->result($category, true);
+                }
+            }
+
+            return $this->result('payment_not_approved', true);
+        }
+
+        foreach ($meaningfulCodes as $code) {
             $category = $this->matchCode($code);
             if ($category !== null) {
-                return $this->result($category);
+                return $this->result($category, true);
             }
         }
 
-        foreach ($signals['messages'] ?? [] as $message) {
+        foreach ($messages as $message) {
             $category = $this->matchMessage($message);
             if ($category !== null) {
-                return $this->result($category);
+                return $this->result($category, true);
             }
         }
 
-        return $this->result(self::UNCLASSIFIED);
+        return $recorded
+            ? $this->result('other_provider_response', true, false)
+            : $this->result('reason_unavailable', false, false);
     }
 
     private function matchCode(mixed $value): ?string
@@ -247,12 +329,21 @@ class PaymentFailureReasonClassifier
         return trim((string) preg_replace('/\s+/', ' ', $value));
     }
 
-    private function result(string $code): array
+    private function nonEmptyValues(mixed $values): array
+    {
+        return array_values(array_filter(
+            is_array($values) ? $values : [$values],
+            static fn ($value) => trim((string) $value) !== ''
+        ));
+    }
+
+    private function result(string $code, bool $recorded, bool $classified = true): array
     {
         return [
             'code' => $code,
             'label' => self::LABELS[$code] ?? self::LABELS[self::UNCLASSIFIED],
-            'classified' => $code !== self::UNCLASSIFIED,
+            'classified' => $classified,
+            'recorded' => $recorded,
         ];
     }
 }

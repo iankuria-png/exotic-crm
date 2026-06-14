@@ -12,6 +12,15 @@ use Illuminate\Database\Eloquent\Builder;
 class PaymentRecoveryMetricService
 {
     private const CHUNK_SIZE = 1000;
+    private const FAILURE_ATTEMPT_TYPES = [
+        'callback_update',
+        'hosted_checkout_init',
+        'provider_status_check',
+        'reconciliation_check',
+        'retry_stk',
+        'sandbox_reconcile',
+        'stk_initiate',
+    ];
 
     public function __construct(
         private readonly PaymentFailureReasonClassifier $failureReasonClassifier
@@ -37,6 +46,7 @@ class PaymentRecoveryMetricService
                 'metrics' => $this->emptyResult($from, $to),
                 'recovered_pairs' => [],
                 'failure_reasons' => $this->emptyFailureReasons(),
+                'friction_breakdowns' => $this->emptyFrictionBreakdowns(),
             ];
         }
 
@@ -96,6 +106,11 @@ class PaymentRecoveryMetricService
                 $data['failures'],
                 $result['latest_success_by_root']
             ),
+            'friction_breakdowns' => $this->summarizeFrictionBreakdowns(
+                $data['union_find'],
+                $data['failures'],
+                $result['latest_success_by_root']
+            ),
         ];
     }
 
@@ -115,8 +130,18 @@ class PaymentRecoveryMetricService
         $successQuery = $this->successQuery($platformIds, $from, $to);
 
         if ($withRelations) {
-            $failureQuery->with(['platform:id,name,country,currency_code', 'client:id,name,phone_normalized', 'product:id,name']);
-            $successQuery->with(['platform:id,name,country,currency_code', 'client:id,name,phone_normalized', 'product:id,name']);
+            $failureQuery->with([
+                'platform:id,name,country,currency_code',
+                'client:id,name,phone_normalized',
+                'product:id,name,display_name,tier',
+                'deal:id,product_id',
+                'deal.product:id,name,display_name,tier',
+            ]);
+            $successQuery->with([
+                'platform:id,name,country,currency_code',
+                'client:id,name,phone_normalized',
+                'product:id,name,display_name,tier',
+            ]);
         }
 
         $failureQuery
@@ -129,7 +154,7 @@ class PaymentRecoveryMetricService
                     $tokens = $this->identityTokens($payment);
                     $this->registerTokens($unionFind, $tokens);
                     $signals = $failureSignals[(int) $payment->id] ?? [];
-                    $signals['messages'][] = $payment->failure_reason;
+                    $signals = $this->appendPaymentFailureSignals($signals, $payment);
                     $classification = $withFailureReasons
                         ? $this->failureReasonClassifier->classify($signals)
                         : null;
@@ -250,7 +275,23 @@ class PaymentRecoveryMetricService
             ->where('status', 'failed')
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
-            ->select(['id', 'platform_id', 'product_id', 'phone', 'client_id', 'amount', 'currency', 'status', 'failure_reason', 'transaction_reference', 'reference_number', 'created_at']);
+            ->select([
+                'id',
+                'platform_id',
+                'product_id',
+                'deal_id',
+                'phone',
+                'client_id',
+                'amount',
+                'currency',
+                'status',
+                'failure_reason',
+                'raw_payload',
+                'payment_data',
+                'transaction_reference',
+                'reference_number',
+                'created_at',
+            ]);
     }
 
     private function successQuery(?array $platformIds, Carbon $from, Carbon $to): Builder
@@ -354,21 +395,41 @@ class PaymentRecoveryMetricService
         }
 
         $signals = [];
-        $latestAttempts = PaymentAttempt::query()
+        $attempts = PaymentAttempt::query()
             ->whereIn('payment_id', $paymentIds)
             ->where('status', 'failed')
+            ->whereIn('attempt_type', self::FAILURE_ATTEMPT_TYPES)
             ->orderByDesc('created_at')
             ->orderByDesc('id')
-            ->get(['id', 'payment_id', 'error_code', 'error_message'])
-            ->unique('payment_id');
+            ->get(['id', 'payment_id', 'error_code', 'error_message', 'response_meta']);
 
-        foreach ($latestAttempts as $attempt) {
+        foreach ($attempts as $attempt) {
             $paymentId = (int) $attempt->payment_id;
             $signals[$paymentId]['codes'][] = $attempt->error_code;
             $signals[$paymentId]['messages'][] = $attempt->error_message;
+
+            foreach ([
+                'provider_failure_code',
+                'failure_code',
+                'failureReason.failureCode',
+                'provider_payload.failureReason.failureCode',
+            ] as $path) {
+                $signals[$paymentId]['codes'][] = data_get($attempt->response_meta, $path);
+            }
+
+            foreach ([
+                'provider_failure_reason',
+                'provider_message',
+                'failure_reason',
+                'failure_message',
+                'failureReason.failureMessage',
+                'provider_payload.failureReason.failureMessage',
+            ] as $path) {
+                $signals[$paymentId]['messages'][] = data_get($attempt->response_meta, $path);
+            }
         }
 
-        $latestProviderTransactions = BillingProviderTransaction::query()
+        $providerTransactions = BillingProviderTransaction::query()
             ->whereIn('payment_id', $paymentIds)
             ->where(function (Builder $query) {
                 $query->whereNotNull('provider_failure_code')
@@ -376,10 +437,9 @@ class PaymentRecoveryMetricService
             })
             ->orderByRaw('COALESCE(last_status_at, created_at) DESC')
             ->orderByDesc('id')
-            ->get(['id', 'payment_id', 'provider_failure_code', 'provider_failure_message'])
-            ->unique('payment_id');
+            ->get(['id', 'payment_id', 'provider_failure_code', 'provider_failure_message']);
 
-        foreach ($latestProviderTransactions as $transaction) {
+        foreach ($providerTransactions as $transaction) {
             $paymentId = (int) $transaction->payment_id;
             $signals[$paymentId]['codes'][] = $transaction->provider_failure_code;
             $signals[$paymentId]['messages'][] = $transaction->provider_failure_message;
@@ -399,9 +459,10 @@ class PaymentRecoveryMetricService
             $reason = is_array($failure['failure_reason'] ?? null)
                 ? $failure['failure_reason']
                 : [
-                    'code' => PaymentFailureReasonClassifier::UNCLASSIFIED,
-                    'label' => 'Unclassified',
+                    'code' => 'reason_unavailable',
+                    'label' => 'Reason unavailable',
                     'classified' => false,
+                    'recorded' => false,
                 ];
             $code = (string) $reason['code'];
             $failedAt = $failure['created_at'];
@@ -429,7 +490,13 @@ class PaymentRecoveryMetricService
         }
 
         $total = count($failures);
-        $unclassified = (int) ($items[PaymentFailureReasonClassifier::UNCLASSIFIED]['failed_count'] ?? 0);
+        $classified = 0;
+        $recorded = 0;
+
+        foreach ($failures as $failure) {
+            $classified += (bool) data_get($failure, 'failure_reason.classified', false) ? 1 : 0;
+            $recorded += (bool) data_get($failure, 'failure_reason.recorded', false) ? 1 : 0;
+        }
 
         $items = array_values(array_map(function (array $item) use ($total) {
             $item['percentage'] = $this->rate($item['failed_count'], $total);
@@ -448,9 +515,12 @@ class PaymentRecoveryMetricService
 
         return [
             'total' => $total,
-            'classified' => max(0, $total - $unclassified),
-            'unclassified' => $unclassified,
-            'coverage_pct' => $this->rate(max(0, $total - $unclassified), $total),
+            'classified' => $classified,
+            'unclassified' => max(0, $total - $classified),
+            'recorded' => $recorded,
+            'reason_unavailable' => max(0, $total - $recorded),
+            'coverage_pct' => $this->rate($classified, $total),
+            'recorded_pct' => $this->rate($recorded, $total),
             'items' => $items,
         ];
     }
@@ -461,8 +531,170 @@ class PaymentRecoveryMetricService
             'total' => 0,
             'classified' => 0,
             'unclassified' => 0,
+            'recorded' => 0,
+            'reason_unavailable' => 0,
+            'coverage_pct' => 0.0,
+            'recorded_pct' => 0.0,
+            'items' => [],
+        ];
+    }
+
+    private function appendPaymentFailureSignals(array $signals, Payment $payment): array
+    {
+        $signals['messages'][] = $payment->failure_reason;
+
+        foreach ([
+            'failure_data.code',
+            'failure_data.error_code',
+            'failureReason.failureCode',
+            'provider_failure.code',
+        ] as $path) {
+            $signals['codes'][] = data_get($payment->raw_payload, $path);
+        }
+
+        foreach ([
+            'failure_data.message',
+            'failure_data.reason',
+            'failureReason.failureMessage',
+            'provider_failure.message',
+        ] as $path) {
+            $signals['messages'][] = data_get($payment->raw_payload, $path);
+        }
+
+        foreach ([
+            'failure_code',
+            'failure.error_code',
+            'failureReason.failureCode',
+        ] as $path) {
+            $signals['codes'][] = data_get($payment->payment_data, $path);
+        }
+
+        foreach ([
+            'failure_reason',
+            'failure.message',
+            'failureReason.failureMessage',
+        ] as $path) {
+            $signals['messages'][] = data_get($payment->payment_data, $path);
+        }
+
+        return $signals;
+    }
+
+    private function summarizeFrictionBreakdowns(
+        PaymentRecoveryUnionFind $unionFind,
+        array $failures,
+        array $latestSuccessByRoot
+    ): array {
+        $markets = [];
+        $packages = [];
+
+        foreach ($failures as $failure) {
+            $payment = $failure['payment'];
+            $failedAt = $failure['created_at'];
+            $root = $unionFind->find($failure['tokens'][0]);
+            $recovered = $failedAt instanceof CarbonInterface
+                && isset($latestSuccessByRoot[$root])
+                && $latestSuccessByRoot[$root]->greaterThan($failedAt);
+            $platform = $payment->relationLoaded('platform') ? $payment->platform : null;
+            $product = $payment->relationLoaded('product') ? $payment->product : null;
+
+            if (!$product && $payment->relationLoaded('deal') && $payment->deal?->relationLoaded('product')) {
+                $product = $payment->deal->product;
+            }
+
+            $marketKey = $platform ? 'market:' . (int) $platform->id : 'market:unattributed';
+            $packageKey = $product ? 'package:' . (int) $product->id : 'package:unattributed';
+
+            $this->addFrictionItem($markets, $marketKey, [
+                'platform_id' => $platform ? (int) $platform->id : null,
+                'label' => $platform?->name ?: 'Unattributed market',
+                'country' => $platform?->country,
+                'attributed' => (bool) $platform,
+            ], $payment, $failedAt, $recovered);
+
+            $this->addFrictionItem($packages, $packageKey, [
+                'product_id' => $product ? (int) $product->id : null,
+                'label' => $product?->display_name ?: ($product?->name ?: 'Unattributed package'),
+                'tier' => $product?->tier,
+                'attributed' => (bool) $product,
+            ], $payment, $failedAt, $recovered);
+        }
+
+        return [
+            'markets' => $this->finalizeFrictionDimension($markets, count($failures)),
+            'packages' => $this->finalizeFrictionDimension($packages, count($failures)),
+        ];
+    }
+
+    private function addFrictionItem(
+        array &$items,
+        string $key,
+        array $identity,
+        Payment $payment,
+        mixed $failedAt,
+        bool $recovered
+    ): void {
+        if (!isset($items[$key])) {
+            $items[$key] = [
+                ...$identity,
+                'failed_count' => 0,
+                'recovered_count' => 0,
+                'unresolved_count' => 0,
+                'failed_amount_breakdown' => [],
+                'failed_amount_rows' => [],
+            ];
+        }
+
+        $items[$key]['failed_count']++;
+        $items[$key][$recovered ? 'recovered_count' : 'unresolved_count']++;
+        $this->addAmount($items[$key]['failed_amount_breakdown'], $payment);
+        $this->addAmountRow($items[$key]['failed_amount_rows'], $payment, $failedAt);
+    }
+
+    private function finalizeFrictionDimension(array $items, int $total): array
+    {
+        $attributed = array_sum(array_map(
+            static fn (array $item) => ($item['attributed'] ?? false) ? (int) $item['failed_count'] : 0,
+            $items
+        ));
+        $items = array_values(array_map(function (array $item) use ($total) {
+            $item['percentage'] = $this->rate((int) $item['failed_count'], $total);
+            $item['recovery_rate'] = $this->rate((int) $item['recovered_count'], (int) $item['failed_count']);
+            unset($item['attributed']);
+
+            return $item;
+        }, $items));
+
+        usort($items, function (array $left, array $right) {
+            $countComparison = $right['failed_count'] <=> $left['failed_count'];
+
+            return $countComparison !== 0
+                ? $countComparison
+                : strcmp((string) $left['label'], (string) $right['label']);
+        });
+
+        return [
+            'total' => $total,
+            'attributed' => $attributed,
+            'unattributed' => max(0, $total - $attributed),
+            'coverage_pct' => $this->rate($attributed, $total),
+            'items' => $items,
+        ];
+    }
+
+    private function emptyFrictionBreakdowns(): array
+    {
+        $empty = [
+            'total' => 0,
+            'attributed' => 0,
+            'unattributed' => 0,
             'coverage_pct' => 0.0,
             'items' => [],
+        ];
+
+        return [
+            'markets' => $empty,
+            'packages' => $empty,
         ];
     }
 

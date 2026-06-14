@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Models\User;
 use App\Services\PaymentRecoveryMetricService;
 use Carbon\Carbon;
@@ -208,7 +209,7 @@ class PaymentRecoveryMetricTest extends TestCase
             'provider' => 'pawapay',
             'status' => 'failed',
             'error_code' => 'callback_processing',
-            'error_message' => 'Customer declined the request.',
+            'error_message' => 'The customer did not authorize the payment in time.',
             'created_at' => '2026-06-01 09:01:00',
             'updated_at' => '2026-06-01 09:01:00',
         ]);
@@ -264,7 +265,10 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('failure_reasons.total', 4)
             ->assertJsonPath('failure_reasons.classified', 3)
             ->assertJsonPath('failure_reasons.unclassified', 1)
+            ->assertJsonPath('failure_reasons.recorded', 4)
+            ->assertJsonPath('failure_reasons.reason_unavailable', 0)
             ->assertJsonPath('failure_reasons.coverage_pct', 75)
+            ->assertJsonPath('failure_reasons.recorded_pct', 100)
             ->assertJsonPath('failure_reasons.items.0.code', 'authorization_timeout')
             ->assertJsonPath('failure_reasons.items.0.failed_count', 2)
             ->assertJsonPath('failure_reasons.items.0.recovered_count', 1)
@@ -273,6 +277,81 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('failure_reasons.items.0.failed_normalized_amount', 1500)
             ->assertJsonPath('failure_reasons.items.0.normalized_currency', 'KES')
             ->assertJsonMissingPath('failure_reasons.items.0.failed_amount_rows');
+    }
+
+    public function test_recovery_report_ranks_market_and_package_friction(): void
+    {
+        $kenya = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+        ]);
+        $zambia = Platform::factory()->create([
+            'name' => 'Zambia',
+            'country' => 'Zambia',
+            'currency_code' => 'ZMW',
+        ]);
+        $premium = Product::factory()->create([
+            'platform_id' => $kenya->id,
+            'name' => 'Premium',
+            'display_name' => 'Premium',
+            'tier' => 'premium',
+            'currency' => 'KES',
+        ]);
+        $vip = Product::factory()->create([
+            'platform_id' => $zambia->id,
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'tier' => 'vip',
+            'currency' => 'ZMW',
+        ]);
+
+        foreach ([
+            [$kenya, $premium, '254700000201', 4000, '2026-06-01 09:00:00'],
+            [$kenya, $premium, '254700000202', 4000, '2026-06-02 09:00:00'],
+            [$zambia, $vip, '260970000203', 250, '2026-06-03 09:00:00'],
+        ] as [$platform, $product, $phone, $amount, $createdAt]) {
+            $this->payment($platform, [
+                'product_id' => $product->id,
+                'phone' => $phone,
+                'status' => 'failed',
+                'amount' => $amount,
+                'currency' => $platform->currency_code,
+                'failure_reason' => 'Insufficient funds.',
+                'created_at' => $createdAt,
+            ]);
+        }
+
+        $this->payment($kenya, [
+            'product_id' => $premium->id,
+            'phone' => '254700000201',
+            'status' => 'completed',
+            'amount' => 4000,
+            'currency' => 'KES',
+            'created_at' => '2026-06-01 09:05:00',
+            'completed_at' => '2026-06-01 09:10:00',
+        ]);
+
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        Sanctum::actingAs($admin);
+
+        $this->getJson(
+            '/api/crm/payments/recovery-report?from=2026-06-01&to=2026-06-10&currency_mode=flat&reporting_currency=KES'
+        )
+            ->assertOk()
+            ->assertJsonPath('friction_breakdowns.markets.total', 3)
+            ->assertJsonPath('friction_breakdowns.markets.coverage_pct', 100)
+            ->assertJsonPath('friction_breakdowns.markets.items.0.label', 'Kenya')
+            ->assertJsonPath('friction_breakdowns.markets.items.0.failed_count', 2)
+            ->assertJsonPath('friction_breakdowns.markets.items.0.recovered_count', 1)
+            ->assertJsonPath('friction_breakdowns.markets.items.0.unresolved_count', 1)
+            ->assertJsonPath('friction_breakdowns.markets.items.0.failed_normalized_amount', 8000)
+            ->assertJsonMissingPath('friction_breakdowns.markets.items.0.failed_amount_rows')
+            ->assertJsonPath('friction_breakdowns.packages.coverage_pct', 100)
+            ->assertJsonPath('friction_breakdowns.packages.items.0.label', 'Premium')
+            ->assertJsonPath('friction_breakdowns.packages.items.0.tier', 'premium')
+            ->assertJsonPath('friction_breakdowns.packages.items.0.failed_count', 2)
+            ->assertJsonMissingPath('friction_breakdowns.packages.items.0.failed_amount_rows');
     }
 
     public function test_failure_reason_aggregation_preserves_business_visibility_and_market_scope(): void
@@ -335,7 +414,11 @@ class PaymentRecoveryMetricTest extends TestCase
             ->assertJsonPath('failure_reasons.classified', 0)
             ->assertJsonPath('failure_reasons.unclassified', 0)
             ->assertJsonPath('failure_reasons.coverage_pct', 0)
-            ->assertJsonCount(0, 'failure_reasons.items');
+            ->assertJsonCount(0, 'failure_reasons.items')
+            ->assertJsonPath('friction_breakdowns.markets.total', 0)
+            ->assertJsonCount(0, 'friction_breakdowns.markets.items')
+            ->assertJsonPath('friction_breakdowns.packages.total', 0)
+            ->assertJsonCount(0, 'friction_breakdowns.packages.items');
     }
 
     public function test_recovery_report_rejects_a_market_outside_the_users_scope(): void

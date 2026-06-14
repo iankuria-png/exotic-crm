@@ -391,6 +391,11 @@ class PaymentQueueController extends Controller
             $targetCurrency,
             $currencyMode === ReportingCurrencyService::MODE_FLAT
         );
+        $report['friction_breakdowns'] = $this->appendFrictionBreakdownAmountNormalization(
+            $report['friction_breakdowns'] ?? [],
+            $targetCurrency,
+            $currencyMode === ReportingCurrencyService::MODE_FLAT
+        );
 
         return response()->json([
             'filters' => [
@@ -438,7 +443,37 @@ class PaymentQueueController extends Controller
         string $targetCurrency,
         bool $shouldNormalize
     ): array {
-        $failureReasons['items'] = array_map(function (array $item) use ($targetCurrency, $shouldNormalize) {
+        $failureReasons['items'] = $this->appendFailedAmountNormalization(
+            $failureReasons['items'] ?? [],
+            $targetCurrency,
+            $shouldNormalize
+        );
+
+        return $failureReasons;
+    }
+
+    private function appendFrictionBreakdownAmountNormalization(
+        array $breakdowns,
+        string $targetCurrency,
+        bool $shouldNormalize
+    ): array {
+        foreach (['markets', 'packages'] as $dimension) {
+            $breakdowns[$dimension]['items'] = $this->appendFailedAmountNormalization(
+                $breakdowns[$dimension]['items'] ?? [],
+                $targetCurrency,
+                $shouldNormalize
+            );
+        }
+
+        return $breakdowns;
+    }
+
+    private function appendFailedAmountNormalization(
+        array $items,
+        string $targetCurrency,
+        bool $shouldNormalize
+    ): array {
+        return array_map(function (array $item) use ($targetCurrency, $shouldNormalize) {
             if ($shouldNormalize) {
                 $normalized = $this->reportingCurrencyService->normalizeEventRows(
                     $item['failed_amount_rows'] ?? [],
@@ -455,9 +490,7 @@ class PaymentQueueController extends Controller
             unset($item['failed_amount_rows']);
 
             return $item;
-        }, $failureReasons['items'] ?? []);
-
-        return $failureReasons;
+        }, $items);
     }
 
     public function markTest(Request $request, Payment $payment)
