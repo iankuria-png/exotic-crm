@@ -3,9 +3,12 @@
 namespace App\Services;
 
 use App\Models\Platform;
+use App\Support\WpProfileFieldCatalog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class WpDirectProvisioningService
 {
@@ -39,6 +42,8 @@ class WpDirectProvisioningService
      */
     public function provisionEscort(array $payload): array
     {
+        $requestId = $this->normalizeRequestId($payload['provision_request_id'] ?? null);
+        $payloadHash = $this->computePayloadHash($payload);
         $name = trim((string) ($payload['name'] ?? ''));
         if ($name === '') {
             throw new \InvalidArgumentException('Name is required for WordPress provisioning.');
@@ -48,13 +53,8 @@ class WpDirectProvisioningService
         $phone = trim((string) ($payload['phone'] ?? ''));
         $whatsappPayload = trim((string) ($payload['whatsapp'] ?? ''));
         $whatsapp = $whatsappPayload !== '' ? $whatsappPayload : $phone;
-        $city = trim((string) ($payload['city'] ?? ''));
-        $birthday = trim((string) ($payload['birthday'] ?? ''));
-        $height = trim((string) ($payload['height'] ?? ''));
-        $weight = trim((string) ($payload['weight'] ?? ''));
         $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
         $website = trim((string) ($payload['website'] ?? ''));
-        $personalPhone = trim((string) ($payload['personal_phone'] ?? ''));
         $signupSource = trim((string) ($payload['signup_source'] ?? 'crm_provisioned'));
         if (!in_array($signupSource, ['crm_provisioned', 'field'], true)) {
             $signupSource = 'crm_provisioned';
@@ -70,22 +70,33 @@ class WpDirectProvisioningService
         }
 
         return DB::connection($this->connectionName)->transaction(function () use (
+            $requestId,
+            $payloadHash,
             $name,
             $email,
             $phone,
-            $city,
             $website,
-            $personalPhone,
             $requestedUsername,
             $password,
             $postStatus,
             $whatsapp,
-            $birthday,
-            $height,
-            $weight,
             $bio,
-            $signupSource
+            $signupSource,
+            $payload
         ): array {
+            $profilePayload = $payload;
+            if (($profilePayload['whatsapp'] ?? null) === null || trim((string) $profilePayload['whatsapp']) === '') {
+                $profilePayload['whatsapp'] = $whatsapp;
+            }
+
+            $existing = $this->claimProvisionRequest($requestId, $payloadHash);
+            if ($existing !== null) {
+                return $this->hydrateExistingProvisionResult(
+                    (int) ($existing['wp_post_id'] ?? 0),
+                    (int) ($existing['wp_user_id'] ?? 0)
+                );
+            }
+
             $postType = $this->resolveProfilePostType();
 
             [
@@ -112,22 +123,19 @@ class WpDirectProvisioningService
 
             $this->storeProfileMeta(
                 postId: $postId,
-                name: $name,
-                phone: $phone,
-                whatsapp: $whatsapp,
-                city: $city,
-                birthday: $birthday,
-                height: $height,
-                weight: $weight,
-                website: $website,
-                personalPhone: $personalPhone,
+                payload: $profilePayload,
                 postStatus: $postStatus,
                 signupSource: $signupSource
             );
-            $this->assignCityTaxonomy($postId, $city);
+            $this->assignLocationTaxonomy(
+                $postId,
+                isset($profilePayload['region_id']) ? (int) $profilePayload['region_id'] : null,
+                isset($profilePayload['city_id']) ? (int) $profilePayload['city_id'] : null
+            );
 
             $this->upsertOption('escortid' . $userId, $postType);
             $this->upsertOption('escortpostid' . $userId, (string) $postId);
+            $this->completeProvisionRequest($requestId, $payloadHash, $postId, $userId);
 
             return [
                 'wp_user_id' => $userId,
@@ -283,41 +291,16 @@ class WpDirectProvisioningService
 
     private function storeProfileMeta(
         int $postId,
-        string $name,
-        string $phone,
-        string $whatsapp,
-        string $city,
-        string $birthday,
-        string $height,
-        string $weight,
-        string $website,
-        string $personalPhone,
+        array $payload,
         string $postStatus,
         string $signupSource = 'crm_provisioned'
     ): void {
-        if ($phone !== '') {
-            $this->upsertPostMeta($postId, 'phone', $phone);
-        }
-        if ($whatsapp !== '') {
-            $this->upsertPostMeta($postId, 'whatsapp', $whatsapp);
-        }
-        if ($city !== '') {
-            $this->upsertPostMeta($postId, 'city', $city);
-        }
-        if ($birthday !== '') {
-            $this->upsertPostMeta($postId, 'birthday', $birthday);
-        }
-        if ($height !== '') {
-            $this->upsertPostMeta($postId, 'height', $height);
-        }
-        if ($weight !== '') {
-            $this->upsertPostMeta($postId, 'weight', $weight);
-        }
-        if ($website !== '') {
-            $this->upsertPostMeta($postId, 'website', $website);
-        }
-        if ($personalPhone !== '') {
-            $this->upsertPostMeta($postId, 'personal_phone', $personalPhone);
+        foreach ($this->profileMetaPayload($payload) as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $this->upsertPostMeta($postId, $key, $value);
         }
 
         $this->upsertPostMeta($postId, 'premium', '0');
@@ -328,7 +311,7 @@ class WpDirectProvisioningService
         $this->upsertPostMeta(
             $postId,
             'secret',
-            hash('sha256', $name . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20))
+            hash('sha256', trim((string) ($payload['name'] ?? '')) . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20))
         );
 
         $this->upsertPostMeta($postId, 'signup_source', $signupSource);
@@ -338,11 +321,11 @@ class WpDirectProvisioningService
         }
     }
 
-    private function upsertPostMeta(int $postId, string $key, string $value): void
+    private function upsertPostMeta(int $postId, string $key, mixed $value): void
     {
         DB::connection($this->connectionName)->table('postmeta')->updateOrInsert(
             ['post_id' => $postId, 'meta_key' => $key],
-            ['meta_value' => $value]
+            ['meta_value' => $this->serializeMetaValue($value)]
         );
     }
 
@@ -354,49 +337,30 @@ class WpDirectProvisioningService
         );
     }
 
-    private function assignCityTaxonomy(int $postId, string $city): void
+    private function assignLocationTaxonomy(int $postId, ?int $regionId, ?int $cityId): void
     {
-        $cityName = trim($city);
-        if ($cityName === '') {
+        if ($regionId === null || $cityId === null) {
             return;
         }
 
         $connection = DB::connection($this->connectionName);
-        $slug = Str::slug($cityName);
-        if ($slug === '') {
-            return;
+        $taxonomy = $this->resolveLocationTaxonomy();
+        $regionTaxonomy = $this->findLocationTermTaxonomy($regionId, $taxonomy);
+        $cityTaxonomy = $this->findLocationTermTaxonomy($cityId, $taxonomy);
+
+        if ($regionTaxonomy === null) {
+            throw new \InvalidArgumentException('Selected region term does not exist in WordPress.');
         }
 
-        $term = $connection->table('terms')
-            ->where('slug', $slug)
-            ->orWhere('name', $cityName)
-            ->orderByRaw('CASE WHEN slug = ? THEN 0 ELSE 1 END', [$slug])
-            ->first();
-
-        $termId = $term ? (int) $term->term_id : 0;
-        if ($termId <= 0) {
-            $termId = (int) $connection->table('terms')->insertGetId([
-                'name' => $cityName,
-                'slug' => $this->nextAvailableTermSlug($slug),
-                'term_group' => 0,
-            ]);
+        if ($cityTaxonomy === null) {
+            throw new \InvalidArgumentException('Selected city term does not exist in WordPress.');
         }
 
-        $taxonomy = $connection->table('term_taxonomy')
-            ->where('term_id', $termId)
-            ->where('taxonomy', 'city')
-            ->first();
-
-        $termTaxonomyId = $taxonomy ? (int) $taxonomy->term_taxonomy_id : 0;
-        if ($termTaxonomyId <= 0) {
-            $termTaxonomyId = (int) $connection->table('term_taxonomy')->insertGetId([
-                'term_id' => $termId,
-                'taxonomy' => 'city',
-                'description' => '',
-                'parent' => 0,
-                'count' => 0,
-            ]);
+        if ((int) $cityTaxonomy->parent !== $regionId) {
+            throw new \InvalidArgumentException('Selected city is not a child of the selected region.');
         }
+
+        $termTaxonomyId = (int) $cityTaxonomy->term_taxonomy_id;
 
         $connection->table('term_relationships')->updateOrInsert(
             [
@@ -413,29 +377,9 @@ class WpDirectProvisioningService
         $connection->table('term_taxonomy')
             ->where('term_taxonomy_id', $termTaxonomyId)
             ->update(['count' => $count]);
-    }
 
-    private function nextAvailableTermSlug(string $base): string
-    {
-        $base = Str::limit($base, 190, '');
-        if ($base === '') {
-            $base = 'city';
-        }
-
-        $candidate = $base;
-        $suffix = 1;
-
-        while (
-            DB::connection($this->connectionName)->table('terms')
-                ->where('slug', $candidate)
-                ->exists()
-        ) {
-            $suffix++;
-            $tail = '-' . $suffix;
-            $candidate = Str::limit($base, max(1, 190 - strlen($tail)), '') . $tail;
-        }
-
-        return $candidate;
+        $this->upsertPostMeta($postId, 'country', $regionId);
+        $this->upsertPostMeta($postId, 'city', $cityId);
     }
 
     private function resolveProfilePostType(): string
@@ -450,6 +394,250 @@ class WpDirectProvisioningService
         }
 
         return preg_match('/^[A-Za-z0-9_-]+$/', $raw) === 1 ? strtolower($raw) : 'escort';
+    }
+
+    private function resolveLocationTaxonomy(): string
+    {
+        $raw = (string) DB::connection($this->connectionName)->table('options')
+            ->where('option_name', 'taxonomy_location_url')
+            ->value('option_value');
+
+        $raw = trim($raw);
+
+        return $raw !== '' ? $raw : 'escorts-from';
+    }
+
+    private function normalizeRequestId(mixed $value): string
+    {
+        $requestId = trim((string) $value);
+        if ($requestId === '') {
+            $requestId = (string) Str::uuid();
+        }
+
+        return substr($requestId, 0, 64);
+    }
+
+    private function computePayloadHash(array $payload): string
+    {
+        $allowedKeys = array_unique(array_merge(
+            [
+                'name',
+                'email',
+                'phone',
+                'whatsapp',
+                'city',
+                'post_status',
+                'username',
+                'password',
+                'website',
+            ],
+            WpProfileFieldCatalog::createProvisioningFields()
+        ));
+
+        $canonical = [];
+        foreach ($allowedKeys as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $canonical[$key] = $this->canonicalizeValue($payload[$key]);
+        }
+
+        ksort($canonical);
+
+        return hash('sha256', json_encode($canonical, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function canonicalizeValue(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $key => $item) {
+                $normalized[$key] = $this->canonicalizeValue($item);
+            }
+
+            ksort($normalized);
+
+            return $normalized;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if ($value === null) {
+            return null;
+        }
+
+        return is_numeric($value) ? (string) $value : trim((string) $value);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function claimProvisionRequest(string $requestId, string $payloadHash): ?array
+    {
+        $connection = DB::connection($this->connectionName);
+
+        try {
+            $connection->table('exotic_crm_provisions')->insert([
+                'request_id' => $requestId,
+                'payload_hash' => $payloadHash,
+                'status' => 'pending',
+                'wp_post_id' => null,
+                'wp_user_id' => null,
+                'created_at' => now()->format('Y-m-d H:i:s'),
+                'completed_at' => null,
+            ]);
+
+            return null;
+        } catch (QueryException $exception) {
+            if (!$this->isUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+        }
+
+        $existing = $this->waitForProvisionRequest($requestId);
+        if ($existing === null) {
+            throw new \RuntimeException('Provision request is already in progress. Please retry.');
+        }
+
+        if ((string) ($existing['payload_hash'] ?? '') !== $payloadHash) {
+            throw new ConflictHttpException('This provisioning request ID was already used with a different payload.');
+        }
+
+        return $existing;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function waitForProvisionRequest(string $requestId): ?array
+    {
+        $connection = DB::connection($this->connectionName);
+
+        for ($attempt = 0; $attempt < 8; $attempt++) {
+            $row = (array) ($connection->table('exotic_crm_provisions')
+                ->where('request_id', $requestId)
+                ->first() ?? []);
+
+            if ($row !== [] && ($row['status'] ?? null) === 'completed' && (int) ($row['wp_post_id'] ?? 0) > 0) {
+                return $row;
+            }
+
+            usleep(($attempt + 1) * 100_000);
+        }
+
+        return null;
+    }
+
+    private function completeProvisionRequest(string $requestId, string $payloadHash, int $postId, int $userId): void
+    {
+        DB::connection($this->connectionName)->table('exotic_crm_provisions')
+            ->where('request_id', $requestId)
+            ->where('payload_hash', $payloadHash)
+            ->update([
+                'status' => 'completed',
+                'wp_post_id' => $postId,
+                'wp_user_id' => $userId,
+                'completed_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+    }
+
+    private function isUniqueConstraintViolation(QueryException $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'unique')
+            || str_contains($message, 'duplicate')
+            || str_contains($message, 'constraint');
+    }
+
+    /**
+     * @return array{
+     *   wp_user_id:int,
+     *   wp_post_id:int,
+     *   wp_username:string,
+     *   wp_email:string,
+     *   wp_post_status:string,
+     *   wp_post_type:string,
+     *   linked_existing_user:bool,
+     *   placeholder_email_used:bool
+     * }
+     */
+    private function hydrateExistingProvisionResult(int $postId, int $userId): array
+    {
+        $post = DB::connection($this->connectionName)->table('posts')->where('ID', $postId)->first();
+        $user = DB::connection($this->connectionName)->table('users')->where('ID', $userId)->first();
+
+        if (!$post || !$user) {
+            throw new \RuntimeException('Provision request exists but the linked WordPress profile could not be recovered.');
+        }
+
+        return [
+            'wp_user_id' => (int) $user->ID,
+            'wp_post_id' => (int) $post->ID,
+            'wp_username' => (string) $user->user_login,
+            'wp_email' => (string) $user->user_email,
+            'wp_post_status' => (string) $post->post_status,
+            'wp_post_type' => (string) $post->post_type,
+            'linked_existing_user' => false,
+            'placeholder_email_used' => false,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function profileMetaPayload(array $payload): array
+    {
+        $meta = [];
+        $excluded = array_flip(['name', 'email', 'bio', 'content', 'region_id', 'city_id', 'city', 'username', 'password', 'post_status', 'signup_source', 'provision_request_id']);
+
+        foreach (array_merge(WpProfileFieldCatalog::editableFields(), ['phone', 'whatsapp', 'website', 'personal_phone']) as $key) {
+            if (isset($excluded[$key]) || !array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $meta[$key] = $payload[$key];
+        }
+
+        if (!empty($payload['whatsapp'])) {
+            $meta['phone_available_on'] = ['1'];
+        }
+
+        return $meta;
+    }
+
+    private function serializeMetaValue(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_array($value)) {
+            $items = array_values(array_map(static function ($item): string {
+                return (string) $item;
+            }, $value));
+
+            return serialize($items);
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        return (string) $value;
+    }
+
+    private function findLocationTermTaxonomy(int $termId, string $taxonomy): ?object
+    {
+        $row = DB::connection($this->connectionName)->table('term_taxonomy')
+            ->where('term_id', $termId)
+            ->where('taxonomy', $taxonomy)
+            ->first();
+
+        return $row ?: null;
     }
 
     private function usernameFromNameOrEmail(string $name, string $email): string

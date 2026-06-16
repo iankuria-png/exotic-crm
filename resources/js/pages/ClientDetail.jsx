@@ -23,6 +23,19 @@ import KycPanel from '../components/kyc/KycPanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 import { getMediaUploadPreflight, useMediaUploads } from '../components/MediaUploadProvider';
+import {
+    PROFILE_ENUM_OPTIONS,
+    RATE_DURATION_OPTIONS,
+    isKnownProfileEnumCode,
+    normalizeBirthdayForEditor,
+    normalizeBirthdayForSave,
+    normalizeHeightForEditor,
+    normalizeHeightForSave,
+    parseProfileServices,
+    resolveProfileEnumValue,
+} from '../components/clients/profile-fields/profileFieldCatalog';
+import RegionCitySelect from '../components/clients/profile-fields/RegionCitySelect';
+import CurrencySelect from '../components/clients/profile-fields/CurrencySelect';
 
 const mediaProxyAvailabilityCache = new Map();
 
@@ -399,289 +412,6 @@ function toDateString(date) {
 
 const FOREVER_PLAN_TOOLTIP = 'Reference: This profile is intentionally kept active to avoid zero-escort locations, which protects search ranking.';
 
-const PROFILE_ENUM_CHOICES = {
-    gender: [
-        { code: '1', label: 'Female' },
-        { code: '2', label: 'Male' },
-        { code: '3', label: 'Couple' },
-        { code: '4', label: 'Gay' },
-        { code: '5', label: 'Transsexual' },
-    ],
-    ethnicity: [
-        { code: '1', label: 'Latin' },
-        { code: '2', label: 'Caucasian' },
-        { code: '3', label: 'Black' },
-        { code: '4', label: 'White' },
-        { code: '5', label: 'MiddleEast' },
-        { code: '6', label: 'Asian' },
-        { code: '7', label: 'Indian' },
-        { code: '8', label: 'Aborigine' },
-        { code: '9', label: 'Native American' },
-        { code: '10', label: 'Other' },
-    ],
-    build: [
-        { code: '1', label: 'Skinny' },
-        { code: '2', label: 'Slim' },
-        { code: '3', label: 'Regular' },
-        { code: '4', label: 'Curvy' },
-        { code: '5', label: 'Fat' },
-    ],
-    services: [
-        { code: '1', label: 'BDSM' },
-        { code: '2', label: 'Couples' },
-        { code: '3', label: 'Domination' },
-        { code: '4', label: 'Escort' },
-        { code: '5', label: 'Massage' },
-        { code: '6', label: 'Fetish' },
-        { code: '7', label: 'Mature' },
-        { code: '8', label: 'GFE' },
-    ],
-    haircolor: [
-        { code: '1', label: 'Black' }, { code: '2', label: 'Blonde' },
-        { code: '3', label: 'Brown' }, { code: '4', label: 'Brunette' },
-        { code: '5', label: 'Chestnut' }, { code: '6', label: 'Auburn' },
-        { code: '7', label: 'Dark-blonde' }, { code: '8', label: 'Golden' },
-        { code: '9', label: 'Red' }, { code: '10', label: 'Grey' },
-        { code: '11', label: 'Silver' }, { code: '12', label: 'White' },
-        { code: '13', label: 'Other' },
-    ],
-    hairlength: [
-        { code: '1', label: 'Bald' }, { code: '2', label: 'Short' },
-        { code: '3', label: 'Shoulder' }, { code: '4', label: 'Long' },
-        { code: '5', label: 'Very Long' },
-    ],
-    bustsize: [
-        { code: '1', label: 'Very small' }, { code: '2', label: 'Small (A)' },
-        { code: '3', label: 'Medium (B)' }, { code: '4', label: 'Large (C)' },
-        { code: '5', label: 'Very Large (D)' }, { code: '6', label: 'Enormous (E+)' },
-    ],
-    looks: [
-        { code: '1', label: 'Nothing Special' }, { code: '2', label: 'Average' },
-        { code: '3', label: 'Sexy' }, { code: '4', label: 'Ultra Sexy' },
-    ],
-    smoker: [
-        { code: '1', label: 'Yes' }, { code: '2', label: 'No' },
-    ],
-    availability: [
-        { code: '1', label: 'Incall' }, { code: '2', label: 'Outcall' },
-    ],
-    languagelevel: [
-        { code: '1', label: 'Minimal' }, { code: '2', label: 'Conversational' },
-        { code: '3', label: 'Fluent' },
-    ],
-};
-
-const LEGACY_HEIGHT_CODE_TO_CM = {
-    1: '128',
-    2: '134',
-    3: '140',
-    4: '146',
-    5: '152',
-    6: '155',
-    7: '158',
-    8: '162',
-    9: '165',
-    10: '168',
-    11: '171',
-    12: '174',
-    13: '177',
-    14: '180',
-    15: '183',
-    16: '189',
-    17: '195',
-    18: '201',
-    19: '207',
-    20: '213',
-};
-
-const PROFILE_ENUM_OPTIONS = Object.fromEntries(
-    Object.entries(PROFILE_ENUM_CHOICES).map(([field, options]) => [
-        field,
-        options.map((option) => ({
-            value: option.code,
-            plainLabel: option.label,
-            label: `${option.label} (${option.code})`,
-        })),
-    ]),
-);
-
-const PROFILE_ENUM_LOOKUP = Object.fromEntries(
-    Object.entries(PROFILE_ENUM_OPTIONS).map(([field, options]) => {
-        const byCode = new Map();
-        const byLabel = new Map();
-
-        options.forEach((option) => {
-            byCode.set(option.value, option.value);
-            byLabel.set(normalizeLookupToken(option.plainLabel), option.value);
-            byLabel.set(normalizeLookupToken(option.label), option.value);
-            byLabel.set(normalizeLookupToken(`${option.value}`), option.value);
-            byLabel.set(normalizeLookupToken(`${option.plainLabel} ${option.value}`), option.value);
-            byLabel.set(normalizeLookupToken(`${option.value} ${option.plainLabel}`), option.value);
-        });
-
-        return [field, { byCode, byLabel }];
-    }),
-);
-
-function normalizeLookupToken(value) {
-    const normalized = String(value || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim();
-
-    return normalized;
-}
-
-function resolveProfileEnumValue(field, value) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-
-    const lookup = PROFILE_ENUM_LOOKUP[field];
-    if (!lookup) return raw;
-
-    if (lookup.byCode.has(raw)) {
-        return lookup.byCode.get(raw);
-    }
-
-    const numericCode = raw.replace(/[^0-9]/g, '');
-    if (numericCode) {
-        const normalizedCode = String(Number.parseInt(numericCode, 10));
-        if (lookup.byCode.has(normalizedCode)) {
-            return normalizedCode;
-        }
-    }
-
-    const token = normalizeLookupToken(raw);
-    if (lookup.byLabel.has(token)) {
-        return lookup.byLabel.get(token);
-    }
-
-    return raw;
-}
-
-function isKnownProfileEnumCode(field, value) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return true;
-
-    const lookup = PROFILE_ENUM_LOOKUP[field];
-    if (!lookup) return true;
-
-    return lookup.byCode.has(raw);
-}
-
-function parseProfileServices(value) {
-    const tokens = Array.isArray(value)
-        ? value
-        : String(value ?? '')
-            .split(',')
-            .map((item) => item.trim());
-
-    const normalized = [];
-    tokens.forEach((token) => {
-        const raw = String(token ?? '').trim();
-        if (!raw) return;
-
-        const resolved = resolveProfileEnumValue('services', raw);
-        if (!normalized.includes(resolved)) {
-            normalized.push(resolved);
-        }
-    });
-
-    return normalized;
-}
-
-function toDateInputValue(year, month, day) {
-    const y = Number.parseInt(year, 10);
-    const m = Number.parseInt(month, 10);
-    const d = Number.parseInt(day, 10);
-    if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return '';
-    if (m < 1 || m > 12 || d < 1 || d > 31) return '';
-
-    const paddedMonth = String(m).padStart(2, '0');
-    const paddedDay = String(d).padStart(2, '0');
-    return `${y}-${paddedMonth}-${paddedDay}`;
-}
-
-function normalizeBirthdayForEditor(value) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-
-    const ymdMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
-    if (ymdMatch) {
-        return toDateInputValue(ymdMatch[1], ymdMatch[2], ymdMatch[3]);
-    }
-
-    const dmyMatch = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-    if (dmyMatch) {
-        // Stored legacy format may be dd/mm/yyyy or mm/dd/yyyy; date parser resolves valid local date.
-        const parsed = new Date(raw);
-        if (!Number.isNaN(parsed.getTime())) {
-            return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
-        }
-
-        return toDateInputValue(dmyMatch[3], dmyMatch[2], dmyMatch[1]);
-    }
-
-    if (/^\d{10,13}$/.test(raw)) {
-        const numeric = Number.parseInt(raw, 10);
-        const millis = raw.length === 13 ? numeric : numeric * 1000;
-        const parsed = new Date(millis);
-        if (!Number.isNaN(parsed.getTime())) {
-            return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
-        }
-    }
-
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) {
-        return '';
-    }
-
-    return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
-}
-
-function normalizeBirthdayForSave(value) {
-    const normalized = normalizeBirthdayForEditor(value);
-    return normalized || null;
-}
-
-function normalizeHeightForEditor(value) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-    if (LEGACY_HEIGHT_CODE_TO_CM[raw]) return LEGACY_HEIGHT_CODE_TO_CM[raw];
-
-    const cmInParens = raw.match(/\((\d+(?:\.\d+)?)\)/);
-    if (cmInParens) {
-        return String(Math.round(Number.parseFloat(cmInParens[1])));
-    }
-
-    const explicitCm = raw.match(/(\d+(?:\.\d+)?)\s*cm/i);
-    if (explicitCm) {
-        return String(Math.round(Number.parseFloat(explicitCm[1])));
-    }
-
-    const feetInches = raw.match(/(\d+)\s*(?:ft|')\s*(\d+)?/i);
-    if (feetInches) {
-        const feet = Number.parseInt(feetInches[1], 10);
-        const inches = Number.parseInt(feetInches[2] || '0', 10);
-        if (Number.isFinite(feet) && Number.isFinite(inches)) {
-            return String(Math.round((feet * 12 + inches) * 2.54));
-        }
-    }
-
-    const numeric = raw.match(/^\d+(?:\.\d+)?$/);
-    if (numeric) {
-        return String(Math.round(Number.parseFloat(raw)));
-    }
-
-    return raw;
-}
-
-function normalizeHeightForSave(value) {
-    const normalized = normalizeHeightForEditor(value);
-    if (!normalized) return null;
-    return normalized;
-}
-
 function ProfileInfoCard({ title, children }) {
     return (
         <section className="crm-surface p-5">
@@ -932,16 +662,6 @@ export default function ClientDetail() {
         queryFn: () => api.get(`/crm/clients/${id}/health`).then((r) => r.data),
         enabled: activeTab === 'profile_health',
     });
-
-    const { data: citiesData } = useQuery({
-        queryKey: ['cities', clientPlatformId],
-        queryFn: () =>
-            api.get('/crm/clients/cities', {
-                params: clientPlatformId ? { platform_id: clientPlatformId } : {},
-            }).then((r) => r.data),
-        enabled: activeTab === 'edit_profile' && profileSection === 'contact',
-    });
-    const availableCities = citiesData?.cities || [];
 
     const {
         data: walletData,
@@ -1793,12 +1513,19 @@ export default function ClientDetail() {
         const profile = wpProfileData.wp_profile;
         const meta = profile.meta || {};
         const cityName = profile?.taxonomies?.city?.name || profile.city || '';
+        const regionId = profile?.taxonomies?.region?.id || null;
+        const cityId = profile?.taxonomies?.city?.id || null;
+        const unresolvedLegacyLocation = !regionId && Boolean(cityId);
 
         setProfileForm({
             name: profile.name || profile?.post?.title || '',
             phone: meta.phone || profile.phone || client?.phone_normalized || '',
             email: profile.email || client?.email || '',
             city: cityName || client?.city || '',
+            region_id: regionId,
+            city_id: cityId,
+            locationTouched: false,
+            legacyLocationUnresolved: unresolvedLegacyLocation,
             birthday: normalizeBirthdayForEditor(meta.birthday),
             gender: resolveProfileEnumValue('gender', meta.gender),
             ethnicity: resolveProfileEnumValue('ethnicity', meta.ethnicity),
@@ -1815,6 +1542,7 @@ export default function ClientDetail() {
             extraservices: meta.extraservices || '',
             rates_incall: meta.incall || meta.rate_incall || '',
             rates_outcall: meta.outcall || meta.rate_outcall || '',
+            currency: meta.currency || '',
             rate30min_incall: meta.rate30min_incall || '', rate30min_outcall: meta.rate30min_outcall || '',
             rate1h_incall: meta.rate1h_incall || '', rate1h_outcall: meta.rate1h_outcall || '',
             rate2h_incall: meta.rate2h_incall || '', rate2h_outcall: meta.rate2h_outcall || '',
@@ -1868,6 +1596,7 @@ export default function ClientDetail() {
     const selectedServiceCodes = Array.isArray(profileForm?.services)
         ? profileForm.services.map((value) => String(value || '').trim()).filter(Boolean)
         : [];
+    const rateCurrencyLabel = profileForm?.currency ? `#${profileForm.currency}` : (client?.platform?.currency_code || 'KES');
 
     if (isLoading) {
         return (
@@ -2405,7 +2134,6 @@ export default function ClientDetail() {
             name: profileForm.name?.trim() || '',
             phone: profileForm.phone?.trim() || null,
             email: profileForm.email?.trim() || null,
-            city: profileForm.city?.trim() || null,
             birthday: normalizeBirthdayForSave(profileForm.birthday),
             gender: normalizedGender || null,
             ethnicity: normalizedEthnicity || null,
@@ -2422,6 +2150,7 @@ export default function ClientDetail() {
             extraservices: profileForm.extraservices?.trim() || null,
             incall: profileForm.rates_incall?.trim() || null,
             outcall: profileForm.rates_outcall?.trim() || null,
+            currency: profileForm.currency ? Number(profileForm.currency) : null,
             rate30min_incall: profileForm.rate30min_incall?.trim() || null,
             rate30min_outcall: profileForm.rate30min_outcall?.trim() || null,
             rate1h_incall: profileForm.rate1h_incall?.trim() || null,
@@ -2457,6 +2186,14 @@ export default function ClientDetail() {
             language3: profileForm.language3?.trim() || null,
             language3level: profileForm.language3level || null,
         };
+
+        if (profileForm.locationTouched) {
+            fields.region_id = profileForm.region_id ?? null;
+            fields.city_id = profileForm.city_id ?? null;
+        } else if (profileForm.region_id && profileForm.city_id) {
+            fields.region_id = Number(profileForm.region_id);
+            fields.city_id = Number(profileForm.city_id);
+        }
 
         updateProfileMutation.mutate({ fields, force: profileForce });
     };
@@ -4273,23 +4010,30 @@ export default function ClientDetail() {
                                             </div>
                                             <p className="text-xs text-slate-500">Click a service chip to add or remove it. Selected: {selectedServiceCodes.length}</p>
                                         </label>
+                                        <div className="md:col-span-2">
+                                            <CurrencySelect
+                                                platformId={clientPlatformId}
+                                                value={profileForm?.currency || ''}
+                                                onChange={(currency) => setProfileForm((current) => ({ ...current, currency }))}
+                                            />
+                                        </div>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate (default)</span>
                                             <div className="flex items-center gap-1.5">
-                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{client?.platform?.currency_code || 'KES'}</span>
+                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{rateCurrencyLabel}</span>
                                                 <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="e.g. 1500" />
                                             </div>
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Outcall Rate (default)</span>
                                             <div className="flex items-center gap-1.5">
-                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{client?.platform?.currency_code || 'KES'}</span>
+                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{rateCurrencyLabel}</span>
                                                 <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="e.g. 2000" />
                                             </div>
                                         </label>
 
                                         <div className="md:col-span-2">
-                                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rates by Duration <span className="ml-1 font-normal normal-case text-slate-400">({client?.platform?.currency_code || 'KES'})</span></p>
+                                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rates by Duration <span className="ml-1 font-normal normal-case text-slate-400">({rateCurrencyLabel})</span></p>
                                             <div className="overflow-auto rounded-md border border-slate-200">
                                                 <table className="w-full text-xs">
                                                     <thead>
@@ -4300,7 +4044,7 @@ export default function ClientDetail() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {[['30min', '30 min'], ['1h', '1 hour'], ['2h', '2 hours'], ['3h', '3 hours'], ['6h', '6 hours'], ['12h', '12 hours'], ['24h', '24 hours']].map(([key, label]) => (
+                                                        {RATE_DURATION_OPTIONS.map(([key, label]) => (
                                                             <tr key={key} className="border-t border-slate-100">
                                                                 <td className="px-2 py-1 text-slate-700">{label}</td>
                                                                 <td className="px-1 py-1">
@@ -4345,12 +4089,21 @@ export default function ClientDetail() {
                                 <div className="grid gap-3 md:grid-cols-2">
                                     <input value={profileForm?.phone || ''} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} className="crm-input" placeholder="Phone" />
                                     <input value={profileForm?.email || ''} onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))} className="crm-input" placeholder="Email" />
-                                    <select value={profileForm?.city || ''} onChange={(event) => setProfileForm((current) => ({ ...current, city: event.target.value }))} className="crm-input">
-                                        <option value="">City</option>
-                                        {availableCities.map((city) => (
-                                            <option key={city} value={city}>{city}</option>
-                                        ))}
-                                    </select>
+                                    <div className="md:col-span-2">
+                                        <RegionCitySelect
+                                            platformId={clientPlatformId}
+                                            regionId={profileForm?.region_id || null}
+                                            cityId={profileForm?.city_id || null}
+                                            legacyCityHint={profileForm?.legacyLocationUnresolved ? 'Confirm this profile’s region before changing location.' : null}
+                                            onChange={({ region_id, city_id }) => setProfileForm((current) => ({
+                                                ...current,
+                                                region_id,
+                                                city_id,
+                                                locationTouched: true,
+                                                legacyLocationUnresolved: false,
+                                            }))}
+                                        />
+                                    </div>
                                     <input value={profileForm?.whatsapp || ''} onChange={(event) => setProfileForm((current) => ({ ...current, whatsapp: event.target.value }))} className="crm-input" placeholder="WhatsApp" />
                                     <input value={profileForm?.instagram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, instagram: event.target.value }))} className="crm-input" placeholder="Instagram URL" />
                                     <input value={profileForm?.twitter || ''} onChange={(event) => setProfileForm((current) => ({ ...current, twitter: event.target.value }))} className="crm-input" placeholder="Twitter URL" />

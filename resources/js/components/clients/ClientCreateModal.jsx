@@ -4,11 +4,26 @@ import api from '../../services/api';
 import { normalizePhone } from '../../utils/phone';
 import GenerateBioButton from '../seo/GenerateBioButton';
 import { useToast } from '../ToastProvider';
+import RegionCitySelect from './profile-fields/RegionCitySelect';
+import CurrencySelect from './profile-fields/CurrencySelect';
+import {
+    PROFILE_ENUM_OPTIONS,
+    RATE_DURATION_OPTIONS,
+    parseProfileServices,
+} from './profile-fields/profileFieldCatalog';
 
 const PROFILE_IMAGE_LIMIT = 6;
 const PROFILE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const PROFILE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const PROFILE_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+
+function generateProvisionRequestId() {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+
+    return `crm-provision-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
 
 function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
     return {
@@ -16,16 +31,59 @@ function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
         name: '',
         phone_normalized: '',
         email: '',
-        city: '',
+        region_id: null,
+        city_id: null,
         profile_status: 'private',
         assigned_to: '',
         onboarding_mode: onboardingMode,
+        full_profile: false,
+        provision_request_id: generateProvisionRequestId(),
         wp_username: '',
         wp_password: '',
         birthday: '',
-        height_cm: '',
-        weight_kg: '',
+        gender: '',
+        ethnicity: '',
+        height: '',
+        build: '',
+        haircolor: '',
+        hairlength: '',
+        bustsize: '',
+        weight: '',
+        looks: '',
+        smoker: '',
+        availability: [],
+        services: [],
+        extraservices: '',
+        incall: '',
+        outcall: '',
+        currency: null,
+        rate30min_incall: '', rate30min_outcall: '',
+        rate1h_incall: '', rate1h_outcall: '',
+        rate2h_incall: '', rate2h_outcall: '',
+        rate3h_incall: '', rate3h_outcall: '',
+        rate6h_incall: '', rate6h_outcall: '',
+        rate12h_incall: '', rate12h_outcall: '',
+        rate24h_incall: '', rate24h_outcall: '',
+        whatsapp: '',
+        instagram: '',
+        twitter: '',
+        telegram: '',
+        website: '',
+        facebook: '',
+        snapchat: '',
         bio: '',
+        education: '',
+        occupation: '',
+        sports: '',
+        hobbies: '',
+        zodiacsign: '',
+        sexualorientation: '',
+        language1: '',
+        language1level: '',
+        language2: '',
+        language2level: '',
+        language3: '',
+        language3level: '',
         profile_images: [],
     };
 }
@@ -97,16 +155,7 @@ export default function ClientCreateModal({
         enabled: open && Boolean(form.platform_id),
     });
 
-    const citiesQuery = useQuery({
-        queryKey: ['client-cities', form.platform_id],
-        queryFn: () => api.get('/crm/clients/cities', {
-            params: form.platform_id ? { platform_id: Number(form.platform_id) } : {},
-        }).then((response) => response.data),
-        enabled: open && Boolean(form.platform_id),
-    });
-
     const owners = ownersQuery.data?.owners || [];
-    const cities = citiesQuery.data?.cities || [];
     const isWpProvision = form.onboarding_mode === 'wp_provision';
     const requiresProvisionContact = isWpProvision && !form.email.trim() && !form.phone_normalized.trim();
     const canSubmit = Boolean(form.platform_id)
@@ -232,6 +281,9 @@ export default function ClientCreateModal({
             </div>
         );
     }, [signupSource]);
+    const selectedServiceCodes = Array.isArray(form.services)
+        ? form.services.map((value) => String(value || '').trim()).filter(Boolean)
+        : [];
 
     if (!open) {
         return null;
@@ -281,8 +333,8 @@ export default function ClientCreateModal({
                                             wp_username: '',
                                             wp_password: '',
                                             birthday: '',
-                                            height_cm: '',
-                                            weight_kg: '',
+                                            height: '',
+                                            weight: '',
                                             bio: '',
                                             profile_images: [],
                                         }))}
@@ -338,21 +390,6 @@ export default function ClientCreateModal({
                         </div>
 
                         <div>
-                            <label htmlFor="client-create-city" className="mb-1 block text-sm font-medium text-slate-700">City</label>
-                            <select
-                                id="client-create-city"
-                                value={form.city}
-                                onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))}
-                                className="crm-input"
-                            >
-                                <option value="">Select city</option>
-                                {cities.map((city) => (
-                                    <option key={city} value={city}>{city}</option>
-                                ))}
-                            </select>
-                        </div>
-
-                        <div>
                             <label htmlFor="client-create-status" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
                             <select
                                 id="client-create-status"
@@ -366,6 +403,21 @@ export default function ClientCreateModal({
                                 <option value="pending">Pending</option>
                             </select>
                         </div>
+
+                        {isWpProvision ? (
+                            <div className="md:col-span-2">
+                                <RegionCitySelect
+                                    platformId={form.platform_id ? Number(form.platform_id) : null}
+                                    regionId={form.region_id}
+                                    cityId={form.city_id}
+                                    onChange={({ region_id, city_id }) => setForm((current) => ({
+                                        ...current,
+                                        region_id,
+                                        city_id,
+                                    }))}
+                                />
+                            </div>
+                        ) : null}
 
                         <div>
                             <label htmlFor="client-create-owner" className="mb-1 block text-sm font-medium text-slate-700">Owner</label>
@@ -384,6 +436,23 @@ export default function ClientCreateModal({
                                 ))}
                             </select>
                         </div>
+
+                        {isWpProvision ? (
+                            <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                                <label className="flex items-center justify-between gap-3">
+                                    <span>
+                                        <span className="block text-sm font-semibold text-slate-800">Full profile mode</span>
+                                        <span className="block text-xs text-slate-500">Reveal the complete WordPress profile fields for one-pass provisioning.</span>
+                                    </span>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(form.full_profile)}
+                                        onChange={(event) => setForm((current) => ({ ...current, full_profile: event.target.checked }))}
+                                        className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
+                                    />
+                                </label>
+                            </div>
+                        ) : null}
 
                         {isWpProvision ? (
                             <>
@@ -429,8 +498,8 @@ export default function ClientCreateModal({
                                                 id="client-create-height"
                                                 type="text"
                                                 inputMode="numeric"
-                                                value={form.height_cm}
-                                                onChange={(event) => setForm((current) => ({ ...current, height_cm: event.target.value }))}
+                                                value={form.height}
+                                                onChange={(event) => setForm((current) => ({ ...current, height: event.target.value }))}
                                                 className="crm-input"
                                                 placeholder="e.g. 167"
                                             />
@@ -441,8 +510,8 @@ export default function ClientCreateModal({
                                                 id="client-create-weight"
                                                 type="text"
                                                 inputMode="numeric"
-                                                value={form.weight_kg}
-                                                onChange={(event) => setForm((current) => ({ ...current, weight_kg: event.target.value }))}
+                                                value={form.weight}
+                                                onChange={(event) => setForm((current) => ({ ...current, weight: event.target.value }))}
                                                 className="crm-input"
                                                 placeholder="e.g. 55"
                                             />
@@ -500,6 +569,128 @@ export default function ClientCreateModal({
                                             </div>
                                         ) : null}
                                     </div>
+
+                                    {form.full_profile ? (
+                                        <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                {['gender', 'ethnicity', 'build', 'haircolor', 'hairlength', 'bustsize', 'looks', 'smoker'].map((field) => (
+                                                    <label key={field} className="space-y-1">
+                                                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                                            {field === 'haircolor' ? 'Hair Color' : field === 'hairlength' ? 'Hair Length' : field === 'bustsize' ? 'Bust Size' : field === 'looks' ? 'Looks' : field.charAt(0).toUpperCase() + field.slice(1)}
+                                                        </span>
+                                                        <select
+                                                            value={form[field] || ''}
+                                                            onChange={(event) => setForm((current) => ({ ...current, [field]: event.target.value }))}
+                                                            className="crm-input"
+                                                        >
+                                                            <option value="">Select</option>
+                                                            {PROFILE_ENUM_OPTIONS[field]?.map((option) => (
+                                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </label>
+                                                ))}
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services</span>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {PROFILE_ENUM_OPTIONS.services.map((option) => {
+                                                        const selected = selectedServiceCodes.includes(option.value);
+                                                        return (
+                                                            <button
+                                                                key={option.value}
+                                                                type="button"
+                                                                onClick={() => setForm((current) => {
+                                                                    const currentValues = parseProfileServices(current.services);
+                                                                    const nextValues = currentValues.includes(option.value)
+                                                                        ? currentValues.filter((value) => value !== option.value)
+                                                                        : [...currentValues, option.value];
+
+                                                                    return { ...current, services: nextValues };
+                                                                })}
+                                                                className={`rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
+                                                            >
+                                                                {option.label}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Availability</span>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {PROFILE_ENUM_OPTIONS.availability.map((option) => {
+                                                        const selected = (form.availability || []).includes(option.value);
+                                                        return (
+                                                            <button
+                                                                key={option.value}
+                                                                type="button"
+                                                                onClick={() => setForm((current) => {
+                                                                    const currentValues = Array.isArray(current.availability) ? [...current.availability] : [];
+                                                                    return {
+                                                                        ...current,
+                                                                        availability: selected
+                                                                            ? currentValues.filter((value) => value !== option.value)
+                                                                            : [...currentValues, option.value],
+                                                                    };
+                                                                })}
+                                                                className={`rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
+                                                            >
+                                                                {option.plainLabel}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <CurrencySelect
+                                                    platformId={form.platform_id ? Number(form.platform_id) : null}
+                                                    value={form.currency}
+                                                    onChange={(currency) => setForm((current) => ({ ...current, currency }))}
+                                                    className="md:col-span-2"
+                                                />
+                                                <input value={form.incall} onChange={(event) => setForm((current) => ({ ...current, incall: event.target.value }))} className="crm-input" placeholder="Default incall rate" />
+                                                <input value={form.outcall} onChange={(event) => setForm((current) => ({ ...current, outcall: event.target.value }))} className="crm-input" placeholder="Default outcall rate" />
+                                                {RATE_DURATION_OPTIONS.map(([key, label]) => (
+                                                    <React.Fragment key={key}>
+                                                        <input value={form[`rate${key}_incall`]} onChange={(event) => setForm((current) => ({ ...current, [`rate${key}_incall`]: event.target.value }))} className="crm-input" placeholder={`${label} incall`} />
+                                                        <input value={form[`rate${key}_outcall`]} onChange={(event) => setForm((current) => ({ ...current, [`rate${key}_outcall`]: event.target.value }))} className="crm-input" placeholder={`${label} outcall`} />
+                                                    </React.Fragment>
+                                                ))}
+                                            </div>
+
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                {['whatsapp', 'instagram', 'twitter', 'telegram', 'website', 'facebook', 'snapchat', 'education', 'occupation', 'sports', 'hobbies', 'zodiacsign', 'sexualorientation', 'language1', 'language2', 'language3'].map((field) => (
+                                                    <input
+                                                        key={field}
+                                                        value={form[field] || ''}
+                                                        onChange={(event) => setForm((current) => ({ ...current, [field]: event.target.value }))}
+                                                        className="crm-input"
+                                                        placeholder={field.replace(/[0-9]/g, ' $&').replace(/_/g, ' ')}
+                                                    />
+                                                ))}
+                                                {[1, 2, 3].map((index) => (
+                                                    <label key={`language${index}level`} className="space-y-1">
+                                                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Language {index} level</span>
+                                                        <select
+                                                            value={form[`language${index}level`] || ''}
+                                                            onChange={(event) => setForm((current) => ({ ...current, [`language${index}level`]: event.target.value }))}
+                                                            className="crm-input"
+                                                        >
+                                                            <option value="">Select</option>
+                                                            {PROFILE_ENUM_OPTIONS.languagelevel.map((option) => (
+                                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </label>
+                                                ))}
+                                                <textarea value={form.extraservices} onChange={(event) => setForm((current) => ({ ...current, extraservices: event.target.value }))} className="crm-input md:col-span-2" rows={2} placeholder="Additional services" />
+                                            </div>
+                                        </div>
+                                    ) : null}
                                 </div>
                             </>
                         ) : null}
@@ -531,24 +722,81 @@ export default function ClientCreateModal({
                         type="button"
                         disabled={!canSubmit || createMutation.isPending}
                         onClick={() => {
-                            createMutation.mutate({
+                            const basePayload = {
                                 platform_id: Number(form.platform_id),
                                 name: form.name.trim(),
                                 phone_normalized: normalizePhone(form.phone_normalized.trim(), phonePrefix),
                                 email: form.email.trim() || null,
-                                city: form.city.trim() || null,
                                 profile_status: form.profile_status,
                                 assigned_to: form.assigned_to ? Number(form.assigned_to) : null,
                                 onboarding_mode: form.onboarding_mode,
                                 signup_source: signupSource || undefined,
+                                provision_request_id: isWpProvision ? form.provision_request_id : undefined,
                                 wp_username: isWpProvision ? (form.wp_username.trim() || null) : null,
                                 wp_password: isWpProvision ? (form.wp_password.trim() || null) : null,
                                 birthday: isWpProvision ? (form.birthday || null) : null,
-                                height: isWpProvision ? (form.height_cm.trim() || null) : null,
-                                weight: isWpProvision ? (form.weight_kg.trim() || null) : null,
+                                height: isWpProvision ? (form.height.trim() || null) : null,
+                                weight: isWpProvision ? (form.weight.trim() || null) : null,
                                 bio: isWpProvision ? (form.bio.trim() || null) : null,
+                                region_id: isWpProvision && form.region_id ? Number(form.region_id) : undefined,
+                                city_id: isWpProvision && form.city_id ? Number(form.city_id) : undefined,
                                 profile_images: isWpProvision ? [...form.profile_images] : [],
                                 reason,
+                            };
+
+                            const fullProfilePayload = form.full_profile ? {
+                                gender: form.gender || null,
+                                ethnicity: form.ethnicity || null,
+                                build: form.build || null,
+                                haircolor: form.haircolor || null,
+                                hairlength: form.hairlength || null,
+                                bustsize: form.bustsize || null,
+                                looks: form.looks || null,
+                                smoker: form.smoker || null,
+                                availability: form.availability?.length ? form.availability : null,
+                                services: form.services?.length ? form.services : null,
+                                extraservices: form.extraservices.trim() || null,
+                                incall: form.incall.trim() || null,
+                                outcall: form.outcall.trim() || null,
+                                currency: form.currency ? Number(form.currency) : null,
+                                rate30min_incall: form.rate30min_incall.trim() || null,
+                                rate30min_outcall: form.rate30min_outcall.trim() || null,
+                                rate1h_incall: form.rate1h_incall.trim() || null,
+                                rate1h_outcall: form.rate1h_outcall.trim() || null,
+                                rate2h_incall: form.rate2h_incall.trim() || null,
+                                rate2h_outcall: form.rate2h_outcall.trim() || null,
+                                rate3h_incall: form.rate3h_incall.trim() || null,
+                                rate3h_outcall: form.rate3h_outcall.trim() || null,
+                                rate6h_incall: form.rate6h_incall.trim() || null,
+                                rate6h_outcall: form.rate6h_outcall.trim() || null,
+                                rate12h_incall: form.rate12h_incall.trim() || null,
+                                rate12h_outcall: form.rate12h_outcall.trim() || null,
+                                rate24h_incall: form.rate24h_incall.trim() || null,
+                                rate24h_outcall: form.rate24h_outcall.trim() || null,
+                                whatsapp: form.whatsapp.trim() || null,
+                                instagram: form.instagram.trim() || null,
+                                twitter: form.twitter.trim() || null,
+                                telegram: form.telegram.trim() || null,
+                                website: form.website.trim() || null,
+                                facebook: form.facebook.trim() || null,
+                                snapchat: form.snapchat.trim() || null,
+                                education: form.education.trim() || null,
+                                occupation: form.occupation.trim() || null,
+                                sports: form.sports.trim() || null,
+                                hobbies: form.hobbies.trim() || null,
+                                zodiacsign: form.zodiacsign.trim() || null,
+                                sexualorientation: form.sexualorientation.trim() || null,
+                                language1: form.language1.trim() || null,
+                                language1level: form.language1level || null,
+                                language2: form.language2.trim() || null,
+                                language2level: form.language2level || null,
+                                language3: form.language3.trim() || null,
+                                language3level: form.language3level || null,
+                            } : {};
+
+                            createMutation.mutate({
+                                ...basePayload,
+                                ...fullProfilePayload,
                             });
                         }}
                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Models\Platform;
 use Illuminate\Http\Client\ConnectionException;
@@ -203,6 +204,24 @@ class WpSyncService
     public function getLinkCatalog(): array
     {
         return $this->get('/seo/link-catalog');
+    }
+
+    public function getLocations(): array
+    {
+        return Cache::remember(
+            "wp-sync:{$this->platformId}:locations",
+            now()->addMinutes(15),
+            fn (): array => $this->get('/locations')
+        );
+    }
+
+    public function getCurrencies(): array
+    {
+        return Cache::remember(
+            "wp-sync:{$this->platformId}:currencies",
+            now()->addMinutes(15),
+            fn (): array => $this->get('/currencies')
+        );
     }
 
     public function pushKycSubjectStatus(int $postId, array $payload): array

@@ -4905,6 +4905,7 @@ class SettingsController extends Controller
             'country' => $platform->country,
             'is_active' => (bool) $platform->is_active,
             'currency' => $platform->currency_code ?: 'KES',
+            'wp_currency_id' => $platform->wp_currency_id,
             'supported_currencies' => $platform->supportedCurrencies(),
             'effective_currencies' => $platform->effectiveCurrencies(),
             'multi_currency_wallet_enabled' => (bool) $platform->multi_currency_wallet_enabled,

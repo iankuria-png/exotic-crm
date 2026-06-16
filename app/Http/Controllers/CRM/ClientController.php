@@ -48,13 +48,17 @@ use App\Support\CrmClientCloseReason;
 use App\Support\DealDeactivationReason;
 use App\Support\DeactivationRequest;
 use App\Support\PhoneNormalizer;
+use App\Support\WpProfileFieldCatalog;
+use App\Support\WpProfileFieldValidator;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ClientController extends Controller
 {
@@ -443,6 +447,8 @@ class ClientController extends Controller
 
     public function store(Request $request)
     {
+        $this->guardStorePayloadKeys($request);
+
         $validated = $request->validate([
             'platform_id' => 'required|exists:platforms,id',
             'name' => 'required|string|max:255',
@@ -459,6 +465,7 @@ class ClientController extends Controller
             'height' => 'nullable|string|max:50',
             'weight' => 'nullable|string|max:50',
             'bio' => 'nullable|string|max:5000',
+            'provision_request_id' => 'nullable|string|max:64',
             'signup_source' => 'nullable|in:crm_manual,crm_provisioned,field',
             'reason' => 'nullable|string|max:500',
         ]);
@@ -493,6 +500,14 @@ class ClientController extends Controller
             ], 422);
         }
 
+        if ($onboardingMode === 'wp_provision') {
+            $platform = Platform::query()->findOrFail((int) $validated['platform_id']);
+            $validated = array_merge(
+                $validated,
+                $this->prepareProvisioningProfilePayload($request, $platform)
+            );
+        }
+
         try {
             if ($onboardingMode === 'wp_provision') {
                 $client = $this->createProvisionedClient(
@@ -511,6 +526,10 @@ class ClientController extends Controller
             return response()->json([
                 'message' => $exception->getMessage(),
             ], 422);
+        } catch (ConflictHttpException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 409);
         } catch (\Throwable $exception) {
             Log::error('Client create failed', [
                 'onboarding_mode' => $onboardingMode,
@@ -1959,8 +1978,6 @@ class ClientController extends Controller
             'force' => 'nullable|boolean',
             'reason' => 'required|string|max:500',
         ]);
-
-        $fields = $this->normalizeWpProfileFields($validated['fields']);
         $blockedFields = [
             'premium',
             'premium_expire',
@@ -1983,6 +2000,8 @@ class ClientController extends Controller
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             $currentProfile = $wpSync->getClientProfile((int) $client->wp_post_id);
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+            $fields = $this->prepareWpProfileFields($platform, $validated['fields'], $currentProfile);
 
             $wpModifiedAt = $this->extractWpModifiedAt($currentProfile);
             $crmLastSyncedAt = $client->last_synced_at ? Carbon::parse($client->last_synced_at) : null;
@@ -2005,7 +2024,6 @@ class ClientController extends Controller
 
             $updatedProfile = $wpSync->updateClientProfile((int) $client->wp_post_id, $fields);
 
-            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
             $syncService = new \App\Services\ClientSyncService($platform);
             $syncService->syncOne((int) $client->wp_post_id);
             $client->refresh();
@@ -3161,14 +3179,14 @@ class ClientController extends Controller
             'phone' => $normalizedPhone,
             'whatsapp' => $normalizedPhone,
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
-            'birthday' => !empty($payload['birthday']) ? trim((string) $payload['birthday']) : '',
-            'height' => !empty($payload['height']) ? trim((string) $payload['height']) : '',
-            'weight' => !empty($payload['weight']) ? trim((string) $payload['weight']) : '',
-            'bio' => !empty($payload['bio']) ? trim((string) $payload['bio']) : '',
             'post_status' => $profileStatus,
             'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
             'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
             'signup_source' => $signupSource,
+            'provision_request_id' => !empty($payload['provision_request_id'])
+                ? trim((string) $payload['provision_request_id'])
+                : (string) \Illuminate\Support\Str::uuid(),
+            ...$this->extractProvisioningFields($payload),
         ]);
 
         $wpPostId = (int) ($provisioningResult['wp_post_id'] ?? 0);
@@ -3191,6 +3209,7 @@ class ClientController extends Controller
                 'phone_normalized' => $normalizedPhone !== '' ? $normalizedPhone : null,
                 'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
                 'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
+                'region' => null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
                 'assigned_to' => $assignedTo,
                 'created_by' => (int) $request->user()->id,
@@ -3278,46 +3297,7 @@ class ClientController extends Controller
 
     private function finalizeProvisionedWpProfile(Platform $platform, int $wpPostId, array $payload): string
     {
-        $fields = [];
-        $city = !empty($payload['city']) ? trim((string) $payload['city']) : '';
-        $bio = !empty($payload['bio']) ? trim((string) $payload['bio']) : '';
-
-        if ($city !== '') {
-            $fields['city'] = $city;
-        }
-
-        if ($bio !== '') {
-            $fields['content'] = $bio;
-        }
-
-        if (empty($fields)) {
-            return 'skipped';
-        }
-
-        if (!$this->platformHasWpApiCredentials($platform)) {
-            Log::warning('Provisioned client profile finalization skipped because WordPress API credentials are incomplete', [
-                'platform_id' => $platform->id,
-                'wp_post_id' => $wpPostId,
-                'fields' => array_keys($fields),
-            ]);
-
-            return 'skipped_missing_api_credentials';
-        }
-
-        try {
-            (new WpSyncService($platform))->updateClientProfile($wpPostId, $fields);
-
-            return 'success';
-        } catch (\Throwable $exception) {
-            Log::warning('Provisioned client profile finalization failed', [
-                'platform_id' => $platform->id,
-                'wp_post_id' => $wpPostId,
-                'fields' => array_keys($fields),
-                'error' => $exception->getMessage(),
-            ]);
-
-            return 'failed';
-        }
+        return 'owned_by_direct_writer';
     }
 
     private function createManualClient(Request $request, array $payload, string $reason): Client
@@ -3686,6 +3666,105 @@ class ClientController extends Controller
         return $normalized;
     }
 
+    private function guardStorePayloadKeys(Request $request): void
+    {
+        $allowed = array_flip(array_merge([
+            'platform_id',
+            'name',
+            'phone_normalized',
+            'email',
+            'city',
+            'profile_status',
+            'assigned_to',
+            'wp_user_id',
+            'onboarding_mode',
+            'wp_username',
+            'wp_password',
+            'birthday',
+            'height',
+            'weight',
+            'bio',
+            'provision_request_id',
+            'signup_source',
+            'reason',
+        ], WpProfileFieldCatalog::editableFields()));
+
+        $unknown = array_diff_key($request->all(), $allowed);
+
+        if ($unknown === []) {
+            return;
+        }
+
+        $messages = [];
+        foreach (array_keys($unknown) as $key) {
+            $messages[$key] = 'This field is not supported by the CRM create contract.';
+        }
+
+        throw ValidationException::withMessages($messages);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function prepareProvisioningProfilePayload(Request $request, Platform $platform): array
+    {
+        $input = array_intersect_key(
+            $request->all(),
+            array_flip(array_merge(WpProfileFieldCatalog::editableFields(), ['bio']))
+        );
+
+        if ($input === []) {
+            return [];
+        }
+
+        $fields = $this->normalizeWpProfileFields($input);
+        if (array_key_exists('bio', $fields) && !array_key_exists('content', $fields)) {
+            $fields['content'] = $fields['bio'];
+        }
+
+        $catalogs = $this->fetchWpProfileCatalogs($platform);
+        $validated = WpProfileFieldValidator::validate($fields, [
+            'currency_catalog_ids' => $this->extractCurrencyIds($catalogs['currencies']),
+        ]);
+
+        return $this->validateLocationHierarchy($validated, $catalogs['locations']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function extractProvisioningFields(array $payload): array
+    {
+        $fields = [];
+        foreach (array_merge(WpProfileFieldCatalog::editableFields(), ['bio', 'content']) as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $fields[$key] = $payload[$key];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     * @param  array<string, mixed>  $currentProfile
+     * @return array<string, mixed>
+     */
+    private function prepareWpProfileFields(Platform $platform, array $fields, array $currentProfile): array
+    {
+        $normalized = $this->normalizeWpProfileFields($fields);
+        $catalogs = $this->fetchWpProfileCatalogs($platform);
+        $validated = WpProfileFieldValidator::validate($normalized, [
+            'currency_catalog_ids' => $this->extractCurrencyIds($catalogs['currencies']),
+            'current_currency_id' => data_get($currentProfile, 'meta.currency'),
+        ]);
+
+        return $this->validateLocationHierarchy($validated, $catalogs['locations']);
+    }
+
     private function normalizeWpProfileEnumCode(string $field, mixed $value): mixed
     {
         if ($value === null) {
@@ -3824,45 +3903,81 @@ class ClientController extends Controller
 
     private function wpProfileEnumMaps(): array
     {
-        // Child-theme canonical maps used by operators in production.
+        return WpProfileFieldCatalog::enumMaps();
+    }
+
+    /**
+     * @return array{locations: array<int, array<string, mixed>>, currencies: array<int, array<string, mixed>>}
+     */
+    private function fetchWpProfileCatalogs(Platform $platform): array
+    {
+        $wpSync = WpSyncService::forPlatform((int) $platform->id);
+        $locations = $wpSync->getLocations();
+        $currencies = $wpSync->getCurrencies();
+
         return [
-            'gender' => [
-                '1' => 'Female',
-                '2' => 'Male',
-                '3' => 'Couple',
-                '4' => 'Gay',
-                '5' => 'Transsexual',
-            ],
-            'ethnicity' => [
-                '1' => 'Latin',
-                '2' => 'Caucasian',
-                '3' => 'Black',
-                '4' => 'White',
-                '5' => 'MiddleEast',
-                '6' => 'Asian',
-                '7' => 'Indian',
-                '8' => 'Aborigine',
-                '9' => 'Native American',
-                '10' => 'Other',
-            ],
-            'build' => [
-                '1' => 'Skinny',
-                '2' => 'Slim',
-                '3' => 'Regular',
-                '4' => 'Curvy',
-                '5' => 'Fat',
-            ],
-            'services' => [
-                '1' => 'BDSM',
-                '2' => 'Couples',
-                '3' => 'Domination',
-                '4' => 'Escort',
-                '5' => 'Massage',
-                '6' => 'Fetish',
-                '7' => 'Mature',
-                '8' => 'GFE',
-            ],
+            'locations' => is_array($locations['locations'] ?? null) ? $locations['locations'] : $locations,
+            'currencies' => is_array($currencies['currencies'] ?? null) ? $currencies['currencies'] : $currencies,
         ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $currencies
+     * @return array<int, int>
+     */
+    private function extractCurrencyIds(array $currencies): array
+    {
+        return array_values(array_filter(array_map(
+            static fn (array $currency): int => (int) ($currency['id'] ?? 0),
+            $currencies
+        ), static fn (int $value): bool => $value > 0));
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     * @param  array<int, array<string, mixed>>  $locations
+     * @return array<string, mixed>
+     */
+    private function validateLocationHierarchy(array $fields, array $locations): array
+    {
+        if (!array_key_exists('region_id', $fields) && !array_key_exists('city_id', $fields)) {
+            return $fields;
+        }
+
+        if (($fields['region_id'] ?? null) === null && ($fields['city_id'] ?? null) === null) {
+            return $fields;
+        }
+
+        $regionsById = [];
+        foreach ($locations as $region) {
+            $regionId = (int) ($region['id'] ?? 0);
+            if ($regionId <= 0) {
+                continue;
+            }
+
+            $regionsById[$regionId] = $region;
+        }
+
+        $regionId = (int) ($fields['region_id'] ?? 0);
+        $cityId = (int) ($fields['city_id'] ?? 0);
+        $region = $regionsById[$regionId] ?? null;
+
+        if (!$region) {
+            throw ValidationException::withMessages([
+                'region_id' => 'Selected region does not exist in the configured WordPress location catalog.',
+            ]);
+        }
+
+        $city = collect($region['cities'] ?? [])
+            ->first(fn ($item): bool => (int) ($item['id'] ?? 0) === $cityId);
+
+        if (!$city) {
+            throw ValidationException::withMessages([
+                'city_id' => 'That city is not in the selected region.',
+            ]);
+        }
+
+        return $fields;
     }
 
     /**
@@ -4162,6 +4277,37 @@ class ClientController extends Controller
         $cities = $query->distinct()->orderBy('city')->pluck('city');
 
         return response()->json(['cities' => $cities]);
+    }
+
+    public function platformLocations(Request $request, Platform $platform): \Illuminate\Http\JsonResponse
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this client market.'
+        );
+
+        $locations = WpSyncService::forPlatform((int) $platform->id)->getLocations();
+
+        return response()->json([
+            'locations' => $locations['locations'] ?? $locations,
+        ]);
+    }
+
+    public function platformCurrencies(Request $request, Platform $platform): \Illuminate\Http\JsonResponse
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this client market.'
+        );
+
+        $currencies = WpSyncService::forPlatform((int) $platform->id)->getCurrencies();
+
+        return response()->json([
+            'currencies' => $currencies['currencies'] ?? $currencies,
+            'default_currency_id' => $platform->wp_currency_id,
+        ]);
     }
 
     private function isProfileMediaVideoUpload(UploadedFile $file): bool

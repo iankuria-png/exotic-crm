@@ -55,6 +55,7 @@ class Client extends Model
         'sb_user_id',
         'sb_matched_by',
         'city',
+        'region',
         'profile_status',
         'needs_payment',
         'notactive',

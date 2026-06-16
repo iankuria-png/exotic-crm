@@ -301,6 +301,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     // Clients (marketing role has read-only access)
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/platforms/{platform}/locations', [ClientController::class, 'platformLocations'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/platforms/{platform}/currencies', [ClientController::class, 'platformCurrencies'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/locations', [ClientLocationController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/locations/geocode', [ClientLocationController::class, 'geocode'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');

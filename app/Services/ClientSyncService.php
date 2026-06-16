@@ -145,6 +145,7 @@ class ClientSyncService
         $name = mb_substr($wpClient['name'] ?? '', 0, 255);
         $email = mb_substr($wpClient['email'] ?? '', 0, 255);
         $city = CityNormalizer::fromWpPayload($wpClient);
+        $region = $this->resolveRegionName($wpClient);
         $imageUrl = mb_substr($wpClient['main_image_url'] ?? '', 0, 500);
         $profilePermalink = mb_substr((string) ($wpClient['wp_profile_permalink'] ?? ''), 0, 500);
         $profileSlug = mb_substr((string) ($wpClient['wp_profile_slug'] ?? ''), 0, 255);
@@ -172,6 +173,7 @@ class ClientSyncService
             'phone_normalized'=> $phone ?: null,
             'email'           => $email ?: null,
             'city'            => $city ?? $client->city,
+            'region'          => $region ?? $client->region,
             'profile_status'  => $wpClient['post_status'] ?? 'private',
             'premium'         => (bool) ($wpClient['premium'] ?? false),
             'premium_expire'  => $premiumExpire,
@@ -272,6 +274,23 @@ class ClientSyncService
                 'wp_user_id' => (int) ($client->wp_user_id ?? 0) ?: null,
             ]
         );
+    }
+
+    private function resolveRegionName(array $wpClient): ?string
+    {
+        $candidates = [
+            data_get($wpClient, 'taxonomies.region.name'),
+            $wpClient['region'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return mb_substr($value, 0, 255);
+            }
+        }
+
+        return null;
     }
 
     private function runLegacyBulkSync(ClientSyncRun $run, int $perPage, array $capability): array

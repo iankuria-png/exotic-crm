@@ -10,9 +10,9 @@ use App\Services\WpDirectProvisioningService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use ReflectionClass;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Tests\TestCase;
 
 class ClientProvisioningWorkflowTest extends TestCase
@@ -35,13 +35,15 @@ class ClientProvisioningWorkflowTest extends TestCase
     public function test_direct_provisioning_writes_sales_intake_profile_meta(): void
     {
         [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
 
         $result = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
             'name' => 'Nairobi Demo',
             'email' => 'nairobi.demo@example.test',
             'phone' => '254712345678',
             'whatsapp' => '254712345678',
-            'city' => 'Nairobi',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
             'birthday' => '1998-06-15',
             'height' => '167',
             'weight' => '55',
@@ -49,6 +51,11 @@ class ClientProvisioningWorkflowTest extends TestCase
             'post_status' => 'private',
             'username' => 'nairobi.demo',
             'password' => 'password123',
+            'services' => ['2', '8'],
+            'availability' => ['1', '2'],
+            'currency' => 50,
+            'incall' => '1500',
+            'provision_request_id' => 'req-direct-meta-1',
         ]);
 
         $meta = DB::connection($connectionName)
@@ -62,7 +69,14 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame('1998-06-15', $meta['birthday'] ?? null);
         $this->assertSame('167', $meta['height'] ?? null);
         $this->assertSame('55', $meta['weight'] ?? null);
+        $this->assertSame('50', $meta['currency'] ?? null);
+        $this->assertSame('1500', $meta['incall'] ?? null);
+        $this->assertSame((string) $regionId, $meta['country'] ?? null);
+        $this->assertSame((string) $cityId, $meta['city'] ?? null);
         $this->assertSame('crm_provisioned', $meta['signup_source'] ?? null);
+        $this->assertSame(['2', '8'], unserialize($meta['services'] ?? '', ['allowed_classes' => false]));
+        $this->assertSame(['1', '2'], unserialize($meta['availability'] ?? '', ['allowed_classes' => false]));
+        $this->assertSame(['1'], unserialize($meta['phone_available_on'] ?? '', ['allowed_classes' => false]));
 
         $post = DB::connection($connectionName)
             ->table('posts')
@@ -76,7 +90,7 @@ class ClientProvisioningWorkflowTest extends TestCase
             ->join('term_taxonomy', 'term_relationships.term_taxonomy_id', '=', 'term_taxonomy.term_taxonomy_id')
             ->join('terms', 'term_taxonomy.term_id', '=', 'terms.term_id')
             ->where('term_relationships.object_id', $result['wp_post_id'])
-            ->where('term_taxonomy.taxonomy', 'city')
+            ->where('term_taxonomy.taxonomy', 'escorts-from')
             ->select('terms.name', 'terms.slug', 'term_taxonomy.count')
             ->first();
 
@@ -84,6 +98,58 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame('Nairobi', $taxonomy->name);
         $this->assertSame('nairobi', $taxonomy->slug);
         $this->assertSame(1, (int) $taxonomy->count);
+    }
+
+    public function test_direct_provisioning_reuses_the_same_wordpress_profile_for_retries_with_matching_request_id(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $service = new WpDirectProvisioningService($platform, $connectionConfig);
+        $payload = [
+            'name' => 'Retry Demo',
+            'email' => 'retry.demo@example.test',
+            'phone' => '254711111111',
+            'whatsapp' => '254711111111',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'currency' => 50,
+            'provision_request_id' => 'req-retry-1',
+        ];
+
+        $first = $service->provisionEscort($payload);
+        $second = $service->provisionEscort($payload);
+
+        $this->assertSame($first['wp_post_id'], $second['wp_post_id']);
+        $this->assertSame(1, DB::connection($connectionName)->table('posts')->count());
+        $this->assertSame(1, DB::connection($connectionName)->table('exotic_crm_provisions')->count());
+    }
+
+    public function test_direct_provisioning_rejects_changed_payload_for_the_same_request_id(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $service = new WpDirectProvisioningService($platform, $connectionConfig);
+        $service->provisionEscort([
+            'name' => 'Conflict Demo',
+            'email' => 'conflict.demo@example.test',
+            'phone' => '254722222222',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'provision_request_id' => 'req-conflict-1',
+        ]);
+
+        $this->expectException(ConflictHttpException::class);
+
+        $service->provisionEscort([
+            'name' => 'Conflict Demo Changed',
+            'email' => 'conflict.demo@example.test',
+            'phone' => '254722222222',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'provision_request_id' => 'req-conflict-1',
+        ]);
     }
 
     public function test_direct_provisioning_allows_profile_basics_to_be_omitted(): void
@@ -147,19 +213,10 @@ class ClientProvisioningWorkflowTest extends TestCase
             ->assertJsonPath('message', 'Email or phone is required when provisioning a WordPress profile.');
     }
 
-    public function test_provisioned_profile_finalization_reuses_wordpress_update_endpoint_for_city(): void
+    public function test_provisioned_profile_finalization_is_owned_by_the_direct_writer(): void
     {
-        $platform = Platform::factory()->create([
-            'wp_api_url' => 'https://ghana.example.test/wp-json/exotic-crm-sync/v1',
-            'wp_api_user' => 'crm-user',
-            'wp_api_password' => 'secret',
-        ]);
-        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+        $platform = Platform::factory()->create();
         $wpPostId = 258859;
-
-        Http::fake([
-            "{$baseUrl}/clients/{$wpPostId}/update" => Http::response(['success' => true], 200),
-        ]);
 
         $controller = (new ReflectionClass(ClientController::class))->newInstanceWithoutConstructor();
         $method = new \ReflectionMethod(ClientController::class, 'finalizeProvisionedWpProfile');
@@ -169,13 +226,7 @@ class ClientProvisioningWorkflowTest extends TestCase
             'bio' => 'A concise first profile bio.',
         ]);
 
-        $this->assertSame('success', $status);
-        Http::assertSent(function ($request) use ($baseUrl, $wpPostId) {
-            return $request->url() === "{$baseUrl}/clients/{$wpPostId}/update"
-                && $request->method() === 'POST'
-                && data_get($request->data(), 'fields.city') === 'Accra City'
-                && data_get($request->data(), 'fields.content') === 'A concise first profile bio.';
-        });
+        $this->assertSame('owned_by_direct_writer', $status);
     }
 
     private function createWordPressProvisioningFixture(): array
@@ -289,10 +340,61 @@ class ClientProvisioningWorkflowTest extends TestCase
             $table->primary(['object_id', 'term_taxonomy_id']);
         });
 
+        $schema->create('exotic_crm_provisions', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('request_id', 64)->unique();
+            $table->string('payload_hash', 64);
+            $table->string('status', 16);
+            $table->unsignedInteger('wp_post_id')->nullable();
+            $table->unsignedInteger('wp_user_id')->nullable();
+            $table->dateTime('created_at')->nullable();
+            $table->dateTime('completed_at')->nullable();
+        });
+
         DB::connection($connectionName)->table('options')->insert([
-            'option_name' => 'taxonomy_profile_url',
-            'option_value' => 'escort',
-            'autoload' => 'yes',
+            [
+                'option_name' => 'taxonomy_profile_url',
+                'option_value' => 'escort',
+                'autoload' => 'yes',
+            ],
+            [
+                'option_name' => 'taxonomy_location_url',
+                'option_value' => 'escorts-from',
+                'autoload' => 'yes',
+            ],
         ]);
+    }
+
+    private function seedLocationTerms(string $connectionName): array
+    {
+        $regionId = (int) DB::connection($connectionName)->table('terms')->insertGetId([
+            'name' => 'Nairobi Region',
+            'slug' => 'nairobi-region',
+            'term_group' => 0,
+        ]);
+
+        DB::connection($connectionName)->table('term_taxonomy')->insert([
+            'term_id' => $regionId,
+            'taxonomy' => 'escorts-from',
+            'description' => '',
+            'parent' => 0,
+            'count' => 0,
+        ]);
+
+        $cityId = (int) DB::connection($connectionName)->table('terms')->insertGetId([
+            'name' => 'Nairobi',
+            'slug' => 'nairobi',
+            'term_group' => 0,
+        ]);
+
+        DB::connection($connectionName)->table('term_taxonomy')->insert([
+            'term_id' => $cityId,
+            'taxonomy' => 'escorts-from',
+            'description' => '',
+            'parent' => $regionId,
+            'count' => 0,
+        ]);
+
+        return [$regionId, $cityId];
     }
 }
