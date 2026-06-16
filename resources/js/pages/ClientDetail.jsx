@@ -35,7 +35,7 @@ import {
     resolveProfileEnumValue,
 } from '../components/clients/profile-fields/profileFieldCatalog';
 import RegionCitySelect from '../components/clients/profile-fields/RegionCitySelect';
-import CurrencySelect from '../components/clients/profile-fields/CurrencySelect';
+import CurrencySelect, { formatCurrencyBadge } from '../components/clients/profile-fields/CurrencySelect';
 
 const mediaProxyAvailabilityCache = new Map();
 
@@ -621,6 +621,13 @@ export default function ClientDetail() {
         enabled: activeTab === 'edit_profile' && Number(client?.wp_post_id || 0) > 0,
         retry: false,
         refetchOnWindowFocus: false,
+    });
+
+    const { data: wpProfileCurrenciesData } = useQuery({
+        queryKey: ['client-wp-profile-currencies', clientPlatformId],
+        queryFn: () => api.get(`/crm/platforms/${clientPlatformId}/currencies`).then((response) => response.data),
+        enabled: activeTab === 'edit_profile' && clientPlatformId > 0,
+        staleTime: 15 * 60 * 1000,
     });
 
     useEffect(() => {
@@ -1596,7 +1603,19 @@ export default function ClientDetail() {
     const selectedServiceCodes = Array.isArray(profileForm?.services)
         ? profileForm.services.map((value) => String(value || '').trim()).filter(Boolean)
         : [];
-    const rateCurrencyLabel = profileForm?.currency ? `#${profileForm.currency}` : (client?.platform?.currency_code || 'KES');
+    const selectedProfileCurrency = useMemo(() => {
+        const currencyId = Number(profileForm?.currency || 0);
+        if (!currencyId) {
+            return null;
+        }
+
+        return (wpProfileCurrenciesData?.currencies || []).find((currency) => Number(currency.id) === currencyId) || null;
+    }, [profileForm?.currency, wpProfileCurrenciesData?.currencies]);
+    const rateCurrencyLabel = selectedProfileCurrency
+        ? [formatCurrencyBadge(selectedProfileCurrency), selectedProfileCurrency.code]
+            .filter((value, index, values) => value && values.indexOf(value) === index)
+            .join(' ')
+        : (client?.platform?.currency_code || 'KES');
 
     if (isLoading) {
         return (

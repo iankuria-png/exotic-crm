@@ -1,12 +1,34 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 
+function decodeHtmlEntities(value) {
+    const raw = String(value ?? '');
+    if (!raw || typeof document === 'undefined') {
+        return raw;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = raw;
+    return textarea.value;
+}
+
+function normalizeOption(option = {}) {
+    return {
+        ...option,
+        label: decodeHtmlEntities(option.label),
+        inputLabel: decodeHtmlEntities(option.inputLabel ?? option.label),
+        secondaryLabel: decodeHtmlEntities(option.secondaryLabel ?? ''),
+        badge: decodeHtmlEntities(option.badge ?? ''),
+        searchText: decodeHtmlEntities(option.searchText ?? ''),
+    };
+}
+
 function flattenOptions(groups) {
     const items = [];
     groups.forEach((group) => {
         const options = Array.isArray(group?.options) ? group.options : [];
         options.forEach((option) => {
             items.push({
-                ...option,
+                ...normalizeOption(option),
                 groupLabel: group.label || '',
             });
         });
@@ -37,25 +59,32 @@ export default function Combobox({
     const [query, setQuery] = useState('');
     const [activeIndex, setActiveIndex] = useState(0);
 
-    const flatOptions = useMemo(() => flattenOptions(groups), [groups]);
+    const normalizedGroups = useMemo(() => {
+        return groups.map((group) => ({
+            ...group,
+            options: (group.options || []).map((option) => normalizeOption(option)),
+        }));
+    }, [groups]);
+
+    const flatOptions = useMemo(() => flattenOptions(normalizedGroups), [normalizedGroups]);
     const selectedOption = flatOptions.find((option) => String(option.value) === String(value)) || null;
 
     const filteredGroups = useMemo(() => {
         const needle = query.trim().toLowerCase();
         if (!needle) {
-            return groups;
+            return normalizedGroups;
         }
 
-        return groups
+        return normalizedGroups
             .map((group) => ({
                 ...group,
                 options: (group.options || []).filter((option) => {
-                    const haystack = `${option.label || ''} ${option.searchText || ''}`.toLowerCase();
+                    const haystack = `${option.label || ''} ${option.secondaryLabel || ''} ${option.searchText || ''}`.toLowerCase();
                     return haystack.includes(needle);
                 }),
             }))
             .filter((group) => (group.options || []).length > 0);
-    }, [groups, query]);
+    }, [normalizedGroups, query]);
 
     const filteredOptions = useMemo(() => flattenOptions(filteredGroups), [filteredGroups]);
 
@@ -89,7 +118,10 @@ export default function Combobox({
         setQuery('');
     };
 
-    const displayValue = open ? query : (selectedOption?.label || '');
+    const selectedLabel = selectedOption?.inputLabel || selectedOption?.label || '';
+    const displayValue = open
+        ? (query !== '' ? query : selectedLabel)
+        : selectedLabel;
 
     return (
         <div ref={rootRef} className={`space-y-1 ${className}`}>
@@ -107,6 +139,9 @@ export default function Combobox({
                         onFocus={() => {
                             if (!disabled) {
                                 setOpen(true);
+                                if (selectedLabel && query === '') {
+                                    requestAnimationFrame(() => inputRef.current?.select());
+                                }
                             }
                         }}
                         onChange={(event) => {
@@ -133,10 +168,11 @@ export default function Combobox({
                                 setQuery('');
                             }
                         }}
-                        placeholder={selectedOption ? selectedOption.label : placeholder}
+                        placeholder={selectedOption ? selectedLabel : placeholder}
                         className="crm-input min-h-[46px] flex-1 border-0 bg-transparent pr-10 shadow-none focus:ring-0"
                         aria-autocomplete="list"
                         aria-controls={listboxId}
+                        aria-activedescendant={open && filteredOptions[activeIndex] ? `${listboxId}-${filteredOptions[activeIndex].value}` : undefined}
                         aria-expanded={open}
                         aria-labelledby={label ? labelId : undefined}
                         disabled={disabled}
@@ -173,22 +209,37 @@ export default function Combobox({
                                         </div>
                                     ) : null}
                                     {(group.options || []).map((option) => {
-                                        const index = filteredOptions.findIndex((candidate) => candidate.value === option.value);
+                                        const index = filteredOptions.findIndex((candidate) => String(candidate.value) === String(option.value));
                                         const active = index === activeIndex;
                                         const selected = String(option.value) === String(value);
 
                                         return (
                                             <button
                                                 key={option.value}
+                                                id={`${listboxId}-${option.value}`}
                                                 type="button"
                                                 role="option"
                                                 aria-selected={selected}
                                                 onMouseEnter={() => setActiveIndex(index)}
                                                 onClick={() => commit(option)}
-                                                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${active ? 'bg-teal-50 text-teal-800' : 'text-slate-700 hover:bg-slate-50'} ${selected ? 'font-semibold' : ''}`}
+                                                className={`flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${active ? 'bg-teal-50 text-teal-800' : 'text-slate-700 hover:bg-slate-50'} ${selected ? 'font-semibold' : ''}`}
                                             >
-                                                <span>{option.label}</span>
-                                                {selected ? <span className="text-[11px] uppercase tracking-[0.12em] text-teal-600">Selected</span> : null}
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="block truncate">{option.label}</span>
+                                                    {option.secondaryLabel ? (
+                                                        <span className={`mt-0.5 block truncate text-xs ${active ? 'text-teal-700/80' : 'text-slate-500'}`}>
+                                                            {option.secondaryLabel}
+                                                        </span>
+                                                    ) : null}
+                                                </span>
+                                                <span className="flex shrink-0 items-center gap-2">
+                                                    {option.badge ? (
+                                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${active ? 'bg-white/80 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                            {option.badge}
+                                                        </span>
+                                                    ) : null}
+                                                    {selected ? <span className="text-[11px] uppercase tracking-[0.12em] text-teal-600">Selected</span> : null}
+                                                </span>
                                             </button>
                                         );
                                     })}

@@ -158,9 +158,11 @@ export default function ClientCreateModal({
     const owners = ownersQuery.data?.owners || [];
     const isWpProvision = form.onboarding_mode === 'wp_provision';
     const requiresProvisionContact = isWpProvision && !form.email.trim() && !form.phone_normalized.trim();
+    const requiresProvisionLocation = isWpProvision && (!form.region_id || !form.city_id);
     const canSubmit = Boolean(form.platform_id)
         && form.name.trim().length >= 2
-        && !requiresProvisionContact;
+        && !requiresProvisionContact
+        && !requiresProvisionLocation;
 
     const uploadProfileImages = async (client, files) => {
         if (!client?.id || files.length === 0) {
@@ -416,6 +418,11 @@ export default function ClientCreateModal({
                                         city_id,
                                     }))}
                                 />
+                                {requiresProvisionLocation ? (
+                                    <p className="mt-2 text-xs font-medium text-amber-700">
+                                        Choose both a region and a city before provisioning this WordPress profile.
+                                    </p>
+                                ) : null}
                             </div>
                         ) : null}
 
@@ -442,7 +449,7 @@ export default function ClientCreateModal({
                                 <label className="flex items-center justify-between gap-3">
                                     <span>
                                         <span className="block text-sm font-semibold text-slate-800">Full profile mode</span>
-                                        <span className="block text-xs text-slate-500">Reveal the complete WordPress profile fields for one-pass provisioning.</span>
+                                        <span className="block text-xs text-slate-500">Quick provision keeps this short. Turn this on only when you want to capture appearance, services, rates, socials, bio, and media now.</span>
                                     </span>
                                     <input
                                         type="checkbox"
@@ -451,6 +458,11 @@ export default function ClientCreateModal({
                                         className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
                                     />
                                 </label>
+                                {!form.full_profile ? (
+                                    <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                        Quick provision will create the client with market, contact, location, status, and owner first. You can complete the full WordPress profile right after from the Edit Profile tab.
+                                    </div>
+                                ) : null}
                             </div>
                         ) : null}
 
@@ -480,7 +492,7 @@ export default function ClientCreateModal({
                                     />
                                 </div>
 
-                                <div className="border-t border-slate-100 pt-3 md:col-span-2">
+                                <div className={`border-t border-slate-100 pt-3 md:col-span-2 ${form.full_profile ? '' : 'hidden'}`}>
                                     <div className="grid gap-3 md:grid-cols-3">
                                         <div>
                                             <label htmlFor="client-create-birthday" className="mb-1 block text-sm font-medium text-slate-700">Birthday</label>
@@ -701,9 +713,13 @@ export default function ClientCreateModal({
                             <p className="text-xs font-medium text-amber-700">
                                 Add at least one contact channel to continue with WordPress provisioning.
                             </p>
+                        ) : requiresProvisionLocation ? (
+                            <p className="text-xs font-medium text-amber-700">
+                                Choose both a region and a city to finish WordPress provisioning.
+                            </p>
                         ) : (
                             <p className="text-xs text-slate-500">
-                                WordPress provisioning creates a real user/profile now. Credentials can be handled from the next step.
+                                WordPress provisioning creates a real user/profile now. Quick provision keeps this short; Full profile mode captures rates, currency, media, and socials in one pass.
                             </p>
                         )}
                         {duplicateMatches.length > 0 ? (
