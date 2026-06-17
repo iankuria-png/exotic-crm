@@ -15,6 +15,7 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
+use App\Services\AutoPush\AutoPushBoostService;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientChurnStamper;
@@ -89,6 +90,7 @@ class ClientController extends Controller
         private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
         private readonly ChurnAggregatorService $churnAggregatorService,
         private readonly ClientChurnStamper $clientChurnStamper,
+        private readonly AutoPushBoostService $autoPushBoostService,
     ) {
     }
 
@@ -1544,6 +1546,23 @@ class ClientController extends Controller
             'boosted_by' => (int) $request->user()->id,
         ]);
 
+        try {
+            $boostDispatch = $this->autoPushBoostService->dispatchNow($client->fresh('platform'), (int) $request->user()->id);
+        } catch (\Throwable $exception) {
+            Log::warning('auto_push.boost_dispatch_failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+            $boostDispatch = [
+                'status' => 'failed',
+                'campaign_id' => null,
+                'campaign_item_id' => null,
+                'reshuffled_items' => 0,
+                'message' => 'Boost was saved, but the immediate push could not be queued.',
+            ];
+        }
+
         $this->auditService->fromRequest(
             $request,
             (int) $client->platform_id,
@@ -1566,6 +1585,7 @@ class ClientController extends Controller
             'content' => [
                 'hours' => $hours,
                 'boosted_until' => $client->boosted_until?->toIso8601String(),
+                'boost_dispatch' => $boostDispatch,
             ],
             'created_at' => now(),
         ]);
@@ -1575,6 +1595,7 @@ class ClientController extends Controller
             'is_boosted' => true,
             'boosted_until' => $client->boosted_until?->toIso8601String(),
             'boost_remaining_hours' => $client->boost_remaining_hours,
+            'boost_dispatch' => $boostDispatch,
         ]);
     }
 

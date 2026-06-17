@@ -21,6 +21,15 @@ const BUCKET_TYPE_OPTIONS = [
     { value: 'new_subscriptions', label: 'New subscriptions' },
     { value: 'subscription_tier', label: 'Subscription tier' },
     { value: 'bottom_engagement', label: 'Bottom engagement' },
+    { value: 'signup_source', label: 'Signup source' },
+];
+
+const SIGNUP_SOURCE_OPTIONS = [
+    { value: 'field', label: 'Field' },
+    { value: 'fast_signup', label: 'Fast' },
+    { value: 'full_registration', label: 'Full' },
+    { value: 'crm_manual', label: 'Manual' },
+    { value: 'crm_provisioned', label: 'Provisioned' },
 ];
 
 const MESSAGE_MODE_OPTIONS = [
@@ -257,6 +266,12 @@ function bucketDescription(bucket) {
         return segment;
     }
 
+    if (type === 'signup_source') {
+        const sources = Array.isArray(params.sources) && params.sources.length > 0 ? params.sources : ['field'];
+        const labels = sources.map((source) => SIGNUP_SOURCE_OPTIONS.find((option) => option.value === source)?.label || source);
+        return `Sources: ${labels.join(', ')}`;
+    }
+
     return 'Configured bucket';
 }
 
@@ -311,6 +326,42 @@ function renderBucketParams(bucket, onChange) {
                     placeholder="Dormant"
                 />
             </label>
+        );
+    }
+
+    if (bucket.type === 'signup_source') {
+        const selectedSources = Array.isArray(bucket.params?.sources) && bucket.params.sources.length > 0
+            ? bucket.params.sources
+            : ['field'];
+
+        return (
+            <div className="space-y-2">
+                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Sources</span>
+                <div className="flex flex-wrap gap-2">
+                    {SIGNUP_SOURCE_OPTIONS.map((option) => {
+                        const checked = selectedSources.includes(option.value);
+                        return (
+                            <label key={option.value} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(event) => {
+                                        const nextSources = event.target.checked
+                                            ? [...selectedSources, option.value]
+                                            : selectedSources.filter((source) => source !== option.value);
+                                        onChange({
+                                            ...bucket,
+                                            params: { ...(bucket.params || {}), sources: [...new Set(nextSources)] },
+                                        });
+                                    }}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                <span>{option.label}</span>
+                            </label>
+                        );
+                    })}
+                </div>
+            </div>
         );
     }
 

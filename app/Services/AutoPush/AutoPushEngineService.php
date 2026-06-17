@@ -47,7 +47,12 @@ class AutoPushEngineService
         $coverage = $this->coverageCount($plan);
         $threshold = (int) ($schedule['runway_threshold'] ?? 0);
         if ($threshold <= 0) {
-            $threshold = AutoPushSlotAllocator::slotCountForLookahead($plan, $nowMarketLocal->copy()->startOfDay());
+            $threshold = AutoPushSlotAllocator::futureSlots(
+                $plan,
+                max(1, (int) ($schedule['max_items_per_day'] ?? 1)),
+                14,
+                $nowMarketLocal->copy()->utc()
+            )->count();
         }
 
         return $coverage < max(1, $threshold);

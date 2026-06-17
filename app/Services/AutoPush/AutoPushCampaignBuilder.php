@@ -233,11 +233,9 @@ class AutoPushCampaignBuilder
      */
     private function slotGrid(AutoPushPlan $plan, string $timezone): Collection
     {
-        $lookaheadDays = max(1, (int) data_get($plan->schedule, 'lookahead_days', 1));
+        $needed = max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1));
 
-        return AutoPushSlotAllocator::slotGrid($plan, now($timezone)->startOfDay(), $lookaheadDays)
-            ->filter(fn (Carbon $slot) => $slot->greaterThan(now()->utc()->subMinutes(5)))
-            ->values();
+        return AutoPushSlotAllocator::futureSlots($plan, $needed, 14, now($timezone)->utc());
     }
 
     private function resolveDraftScheduledAt(array $draftItem): ?Carbon

@@ -282,7 +282,7 @@ class AutoPushPlanController extends Controller
             'enabled' => 'nullable|boolean',
             'autopilot' => 'nullable|boolean',
             'buckets' => 'required|array|min:1',
-            'buckets.*.type' => ['required', 'string', Rule::in(['new_subscriptions', 'subscription_tier', 'bottom_engagement'])],
+            'buckets.*.type' => ['required', 'string', Rule::in(['new_subscriptions', 'subscription_tier', 'bottom_engagement', 'signup_source'])],
             'buckets.*.enabled' => 'nullable|boolean',
             'buckets.*.limit' => 'required|integer|min:1|max:500',
             'buckets.*.params' => 'nullable|array',
@@ -363,7 +363,12 @@ class AutoPushPlanController extends Controller
         $lastRun = $plan->runs->sortByDesc('created_at')->first();
         $timezone = MarketTimezone::resolve($plan->platform?->timezone, config('app.timezone', 'UTC'));
         $nowMarket = now($timezone);
-        $runwayThreshold = (int) (data_get($plan->schedule, 'runway_threshold') ?: AutoPushSlotAllocator::slotCountForLookahead($plan, $nowMarket->copy()->startOfDay()));
+        $runwayThreshold = (int) (data_get($plan->schedule, 'runway_threshold') ?: AutoPushSlotAllocator::futureSlots(
+            $plan,
+            max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1)),
+            14,
+            $nowMarket->copy()->utc()
+        )->count());
 
         return [
             'id' => (int) $plan->id,

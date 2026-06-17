@@ -253,6 +253,11 @@ export default function PushCampaigns() {
                                 auto
                             </span>
                         ) : null}
+                        {row.source_filename === 'auto_push_boost' ? (
+                            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                                auto boost
+                            </span>
+                        ) : null}
                     </div>
                     <p className="text-xs text-slate-500">{row.source_filename || 'Manual campaign'}</p>
                 </div>

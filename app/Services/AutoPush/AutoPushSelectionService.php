@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\ClientRetentionInsight;
 use App\Models\Deal;
 use App\Models\PushCampaignItem;
+use App\Services\MarketAuthorizationService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -33,6 +34,7 @@ class AutoPushSelectionService
                 'new_subscriptions' => $this->selectNewSubscriptions($plan),
                 'subscription_tier' => $this->selectByTier($plan),
                 'bottom_engagement' => $this->selectBottomEngagement($plan),
+                'signup_source' => $this->selectBySignupSource($plan),
                 default => collect(),
             };
 
@@ -165,6 +167,50 @@ class AutoPushSelectionService
             ->orderByRaw('MAX(client_retention_insights.score) DESC')
             ->limit($limit)
             ->pluck('clients.id');
+
+        return $this->loadClientsInOrder($rows);
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int, \App\Models\Client>
+     */
+    public function selectBySignupSource(AutoPushPlan $plan): Collection
+    {
+        $bucket = $this->bucketByType($plan, 'signup_source');
+        $sources = collect((array) data_get($bucket, 'params.sources', ['field']))
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->values();
+        $limit = $this->bucketLimit($bucket);
+
+        if ($sources->isEmpty()) {
+            return collect();
+        }
+
+        $includesField = $sources->contains('field');
+        $directSources = $sources->reject(fn (string $source) => $source === 'field')->values()->all();
+
+        $rows = Client::query()
+            ->where('platform_id', (int) $plan->platform_id)
+            ->where('client_type', 'escort')
+            ->active()
+            ->where(function (Builder $query) use ($includesField, $directSources) {
+                if ($directSources !== []) {
+                    $query->whereIn('signup_source', $directSources);
+                }
+
+                if ($includesField) {
+                    $method = $directSources === [] ? 'where' : 'orWhere';
+                    $query->{$method}(function (Builder $fieldQuery) {
+                        $fieldQuery->where('signup_source', 'field')
+                            ->orWhereHas('creator', fn ($creatorQuery) => $creatorQuery->where('role', MarketAuthorizationService::ROLE_FIELD_SALES));
+                    });
+                }
+            })
+            ->orderByDesc('created_at')
+            ->limit($limit)
+            ->pluck('id');
 
         return $this->loadClientsInOrder($rows);
     }

@@ -59,6 +59,34 @@ final class AutoPushSlotAllocator
     }
 
     /**
+     * @return \Illuminate\Support\Collection<int, \Carbon\Carbon>
+     */
+    public static function futureSlots(AutoPushPlan $plan, int $needed, int $maxHorizonDays = 14, ?Carbon $fromUtc = null): Collection
+    {
+        $needed = max(1, $needed);
+        $maxHorizonDays = max(1, $maxHorizonDays);
+        $timezone = self::timezone($plan);
+        $reference = ($fromUtc?->copy() ?? now()->utc())->utc();
+        $cutoff = $reference->copy()->subMinutes(5);
+        $fromMarketDate = $reference->copy()->setTimezone($timezone)->startOfDay();
+        $slots = collect();
+
+        for ($offset = 0; $offset < $maxHorizonDays && $slots->count() < $needed; $offset++) {
+            $daySlots = self::slotGrid($plan, $fromMarketDate->copy()->addDays($offset), 1)
+                ->filter(fn (Carbon $slot) => $slot->greaterThan($cutoff));
+
+            foreach ($daySlots as $slot) {
+                $slots->push($slot);
+                if ($slots->count() >= $needed) {
+                    break;
+                }
+            }
+        }
+
+        return $slots->sortBy(fn (Carbon $slot) => $slot->getTimestamp())->values();
+    }
+
+    /**
      * @param  array<int, string|\Carbon\Carbon>  $occupiedSlots
      */
     public static function nextFreeSlot(AutoPushPlan $plan, PushCampaign $campaign, ?Carbon $afterUtc, array $occupiedSlots = []): ?Carbon

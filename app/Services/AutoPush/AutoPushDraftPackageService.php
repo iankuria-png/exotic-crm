@@ -178,11 +178,13 @@ class AutoPushDraftPackageService
         $plan->loadMissing('platform');
         $timezone = MarketTimezone::resolve($plan->platform?->timezone, config('app.timezone', 'UTC'));
         $nowMarket = now($timezone);
-        $slots = AutoPushSlotAllocator::slotGrid($plan, $nowMarket->copy()->startOfDay(), max(1, (int) data_get($plan->schedule, 'lookahead_days', 1)))
-            ->filter(fn (Carbon $slot) => $slot->greaterThan(now()->utc()->subMinutes(5)))
-            ->values();
 
         $selection = $this->selectionService->selectForPlan($plan);
+        $slotCount = max(1, min(
+            max(1, (int) data_get($plan->schedule, 'max_items_per_day', 1)),
+            max(1, $selection['primary']->count())
+        ));
+        $slots = AutoPushSlotAllocator::futureSlots($plan, $slotCount, 14, $nowMarket->copy()->utc());
         $candidateSet = $candidates ?? $selection['primary'];
         $previewClients = $candidateSet
             ->take($slots->count() > 0 ? min($selection['primary']->count(), $slots->count()) : $selection['primary']->count())
@@ -342,22 +344,10 @@ class AutoPushDraftPackageService
     private function futureSlotsForExecution(AutoPushPlan $plan, int $requiredCount): Collection
     {
         $plan->loadMissing('platform');
-        $timezone = MarketTimezone::resolve($plan->platform?->timezone, config('app.timezone', 'UTC'));
-        $startOfDay = now($timezone)->copy()->startOfDay();
         $lookaheadDays = max(1, (int) data_get($plan->schedule, 'lookahead_days', 1));
         $maxLookaheadDays = max($lookaheadDays, min(14, $lookaheadDays + max(2, $requiredCount)));
 
-        for ($days = $lookaheadDays; $days <= $maxLookaheadDays; $days++) {
-            $slots = AutoPushSlotAllocator::slotGrid($plan, $startOfDay, $days)
-                ->filter(fn (Carbon $slot) => $slot->greaterThan(now()->utc()->subMinutes(5)))
-                ->values();
-
-            if ($slots->count() >= $requiredCount || $days === $maxLookaheadDays) {
-                return $slots;
-            }
-        }
-
-        return collect();
+        return AutoPushSlotAllocator::futureSlots($plan, $requiredCount, $maxLookaheadDays);
     }
 
     /**

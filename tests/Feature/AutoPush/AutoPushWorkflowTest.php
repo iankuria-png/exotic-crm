@@ -174,8 +174,114 @@ class AutoPushWorkflowTest extends TestCase
         $this->assertTrue($selection['primary']->contains(fn ($c) => (int) $c->id === (int) $bucketClient->id));
     }
 
+    public function test_signup_source_bucket_selects_field_profiles_with_durable_creator_fallback(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $fieldUser = $this->createUser('field_sales', [$platform->id]);
+        $taggedFieldClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'signup_source' => 'field',
+        ]);
+        $createdByFieldClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'signup_source' => 'crm_provisioned',
+            'created_by' => $fieldUser->id,
+        ]);
+        $fastSignupClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'signup_source' => 'fast_signup',
+        ]);
+
+        $plan = $this->makePlan($platform, [
+            'buckets' => [[
+                'type' => 'signup_source',
+                'enabled' => true,
+                'limit' => 5,
+                'params' => ['sources' => ['field']],
+            ]],
+        ]);
+
+        $selection = app(AutoPushSelectionService::class)->selectBySignupSource($plan);
+        $ids = $selection->pluck('id')->all();
+
+        $this->assertContains($taggedFieldClient->id, $ids);
+        $this->assertContains($createdByFieldClient->id, $ids);
+        $this->assertNotContains($fastSignupClient->id, $ids);
+    }
+
+    public function test_sales_boost_queues_immediate_boost_campaign_and_reshuffles_pending_collision(): void
+    {
+        Carbon::setTestNow('2026-06-05 08:00:00');
+        Queue::fake();
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('sales', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+            'name' => 'Boosted Profile',
+            'city' => 'Nairobi',
+        ]);
+        $plan = $this->makePlan($platform, [
+            'enabled' => true,
+            'schedule' => array_merge($this->defaultSchedule(), [
+                'window_start' => '10:00',
+                'window_end' => '16:00',
+                'interval_hours' => 2,
+            ]),
+        ]);
+        $scheduledCampaign = PushCampaign::query()->create([
+            'name' => 'Scheduled Auto Push',
+            'platform_id' => $platform->id,
+            'status' => 'scheduled',
+            'auto_push_plan_id' => $plan->id,
+            'source_filename' => 'auto_push_engine',
+        ]);
+        $collidingItem = PushCampaignItem::query()->create([
+            'campaign_id' => $scheduledCampaign->id,
+            'profile_url' => 'https://kenya.example/?p=999',
+            'custom_message' => 'Scheduled profile',
+            'scheduled_at' => now()->utc()->addMinutes(10),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 48])
+            ->assertOk()
+            ->assertJsonPath('boost_dispatch.status', 'queued')
+            ->assertJsonPath('boost_dispatch.reshuffled_items', 1);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 1);
+
+        $boostCampaign = PushCampaign::query()
+            ->where('source_filename', 'auto_push_boost')
+            ->firstOrFail();
+        $boostItem = PushCampaignItem::query()
+            ->where('campaign_id', $boostCampaign->id)
+            ->firstOrFail();
+
+        $this->assertNull($boostCampaign->auto_push_plan_id);
+        $this->assertSame('running', $boostCampaign->status);
+        $this->assertSame('scheduled', $boostItem->status);
+        $this->assertNull($boostItem->scheduled_at);
+        $this->assertSame($client->id, $boostItem->client_id);
+
+        $collidingItem->refresh();
+        $this->assertTrue($collidingItem->scheduled_at->greaterThan(now()->utc()->addMinutes(30)));
+    }
+
     public function test_sales_user_can_boost_and_unboost_client(): void
     {
+        Queue::fake();
+
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
         $user = $this->createUser('sales', [$platform->id]);
         $client = Client::factory()->create([
@@ -712,6 +818,39 @@ class AutoPushWorkflowTest extends TestCase
         $this->assertDatabaseHas('auto_push_plans', [
             'id' => $duePlan->id,
         ]);
+    }
+
+    public function test_run_plan_rolls_slots_forward_after_market_window_has_passed(): void
+    {
+        Carbon::setTestNow('2026-06-05 19:44:00');
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+        \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'subscription_lifecycle' => 'new',
+            'activated_at' => now()->subHour(),
+            'status' => 'active',
+        ]);
+        $plan = $this->makePlan($platform, [
+            'schedule' => array_merge($this->defaultSchedule(), [
+                'window_start' => '10:00',
+                'window_end' => '16:00',
+                'max_items_per_day' => 1,
+                'lookahead_days' => 1,
+            ]),
+        ]);
+
+        $run = app(AutoPushEngineService::class)->runPlan($plan);
+
+        $this->assertSame('completed', $run->status);
+        $item = PushCampaignItem::query()->where('campaign_id', $run->campaign_id)->firstOrFail();
+        $this->assertSame('2026-06-06 10:00:00', $item->scheduled_at->copy()->setTimezone('Africa/Nairobi')->toDateTimeString());
     }
 
     protected function tearDown(): void
