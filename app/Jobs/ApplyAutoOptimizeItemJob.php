@@ -12,7 +12,6 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
@@ -41,19 +40,9 @@ class ApplyAutoOptimizeItemJob implements ShouldQueue
         return [30, 60, 120];
     }
 
-    public function middleware(): array
-    {
-        $item = AutoOptimizeItem::find($this->itemId);
-        $platformId = $item?->platform_id ?? 0;
-
-        // Same shared platform lock as OptimizeProfileJob
-        return [
-            (new WithoutOverlapping("auto_optimize:platform:{$platformId}"))
-                ->shared()
-                ->releaseAfter(60)
-                ->expireAfter(120),
-        ];
-    }
+    // Shared WithoutOverlapping lock removed — see OptimizeProfileJob for why
+    // (file-cache lock lingered on cPanel and release-looped, stalling the worker).
+    // WP-write rate stays bounded by AutoOptimizeWriteLedger::max_writes_per_hour.
 
     public function handle(AutoOptimizeApplyService $applyService): void
     {

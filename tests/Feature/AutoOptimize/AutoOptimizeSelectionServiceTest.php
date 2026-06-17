@@ -134,6 +134,39 @@ class AutoOptimizeSelectionServiceTest extends TestCase
         $this->assertCount(0, $results);
     }
 
+    public function test_excludes_recently_skipped_clients(): void
+    {
+        $client = Client::factory()->create(['platform_id' => $this->platform->id, 'wp_post_id' => 101, 'seo_score' => 30, 'profile_status' => 'publish']);
+
+        $run = AutoOptimizeRun::query()->create([
+            'auto_optimize_plan_id' => $this->plan->id,
+            'platform_id' => $this->platform->id,
+            'status' => 'completed',
+        ]);
+
+        // Skipped 2 days ago — within the 7-day skip cooldown → must NOT be re-selected.
+        $item = AutoOptimizeItem::query()->create([
+            'auto_optimize_plan_id' => $this->plan->id,
+            'auto_optimize_run_id' => $run->id,
+            'platform_id' => $this->platform->id,
+            'client_id' => $client->id,
+            'status' => 'skipped',
+            'reason' => 'bio_too_similar_to_existing',
+        ]);
+        // Force updated_at into the cooldown window
+        $item->forceFill(['updated_at' => now()->subDays(2)])->saveQuietly();
+
+        $stats = $this->makeStats(
+            [101 => ['views' => 10, 'contact_rate' => 1, 'engagement' => 1]],
+            ['views' => 100, 'contact_rate' => 15, 'engagement' => 8]
+        );
+
+        $service = new AutoOptimizeSelectionService($stats);
+        $results = $service->selectForPlan($this->plan);
+
+        $this->assertCount(0, $results);
+    }
+
     public function test_respects_daily_limit(): void
     {
         // Create 5 eligible clients, daily_limit = 3

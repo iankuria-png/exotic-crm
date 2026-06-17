@@ -48,6 +48,24 @@ function RunResultBanner({ run, onDismiss }) {
     );
 }
 
+// ─── Worker health: warns when jobs are queued but nothing is processing ───
+
+function WorkerHealthBanner({ worker }) {
+    if (!worker || worker.status !== 'stalled') return null;
+    return (
+        <div className="flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3" role="alert">
+            <span className="mt-0.5 text-rose-500" aria-hidden="true">⚠</span>
+            <div className="min-w-0">
+                <p className="text-sm font-semibold text-rose-800">Queue worker stalled — optimizations are not being processed</p>
+                <p className="mt-0.5 text-xs text-rose-700">
+                    <strong>{worker.pending}</strong> job{worker.pending === 1 ? '' : 's'} are queued but nothing is draining them. Start the background worker in
+                    {' '}<strong>Settings → System Health → Queue Worker</strong> (or run <code className="font-mono">php artisan queue:work --queue=auto_optimize</code>). Queued profiles auto-recover after a timeout.
+                </p>
+            </div>
+        </div>
+    );
+}
+
 // ─── Alerts strip: surfaces the "why" (no_candidates, run_failed, …) ───────
 
 function AlertsStrip({ alerts, onResolve }) {
@@ -447,6 +465,20 @@ export default function AutoOptimizeView({ platformId }) {
     const pendingCount = metrics.pending ?? 0;
     const pctImproved = metrics.pct_improved != null ? `${metrics.pct_improved}%` : '—';
 
+    // Humanize the dominant skip reason for the Skipped card.
+    const SKIP_LABELS = {
+        bio_too_similar_to_existing: 'Generated bios too similar',
+        english_fallback_blocked: 'LLM failed → English blocked',
+        bio_generation_returned_empty: 'Bio generation returned empty',
+        nothing_to_optimize: 'Nothing to change',
+        source_changed: 'Profile changed since build',
+        no_staged_changes: 'No staged changes',
+    };
+    const topSkip = Object.entries(metrics.skip_reasons ?? {}).sort((a, b) => b[1] - a[1])[0];
+    const topSkipLabel = topSkip
+        ? (SKIP_LABELS[topSkip[0]] || (String(topSkip[0]).startsWith('score_gain') ? 'Score gain below threshold' : topSkip[0]))
+        : 'Below gain threshold or similar';
+
     // In-flight work (queued/building/applying) — what's "being processed"
     const processingCount = items.filter((i) => ['queued', 'building', 'applying'].includes(i.status)).length;
 
@@ -503,9 +535,10 @@ export default function AutoOptimizeView({ platformId }) {
                 />
                 <MetricCard
                     label="Skipped"
+                    subHint={topSkip ? `Top: ${topSkipLabel} (${topSkip[1].toLocaleString()})` : undefined}
                     value={(metrics.skipped ?? 0).toLocaleString()}
                     tone="neutral"
-                    hint="Below gain threshold or similar"
+                    hint={topSkip ? topSkipLabel : 'Below gain threshold or similar'}
                     isLoading={metricsQuery.isLoading}
                 />
             </section>
@@ -557,6 +590,9 @@ export default function AutoOptimizeView({ platformId }) {
                     </button>
                 )}
             </div>
+
+            {/* Worker health — the #1 reason nothing drains */}
+            <WorkerHealthBanner worker={metrics.worker} />
 
             {/* Run result — surfaced so "Run now" is not a black box */}
             <RunResultBanner run={lastRun} onDismiss={() => setLastRun(null)} />

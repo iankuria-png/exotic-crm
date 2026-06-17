@@ -11,7 +11,6 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
@@ -32,20 +31,13 @@ class OptimizeProfileJob implements ShouldQueue
         return [30, 60, 120]; // exponential-ish back-off
     }
 
-    public function middleware(): array
-    {
-        $item = AutoOptimizeItem::find($this->itemId);
-        $platformId = $item?->platform_id ?? 0;
-
-        // Shared per-platform lock so OptimizeProfileJob and ApplyAutoOptimizeItemJob
-        // serialize against each other (->shared() is required — default key includes job class)
-        return [
-            (new WithoutOverlapping("auto_optimize:platform:{$platformId}"))
-                ->shared()
-                ->releaseAfter(30)
-                ->expireAfter(120),
-        ];
-    }
+    // NOTE: previously used WithoutOverlapping()->shared() per platform. On a
+    // single-worker / file-cache (cPanel) setup that lock LINGERS when a
+    // lock-holder is killed (worker --max-time restart, deploy), and every
+    // queued job release-loops back onto the same queue — monopolizing the
+    // worker and starving other queues (the "stalled" symptom). A single worker
+    // already serializes jobs, and WP-write rate is bounded by the write ledger,
+    // so the lock buys nothing here. Removed to stop the stall.
 
     public function handle(AutoOptimizeBuilder $builder, AutoOptimizeAlertService $alertService): void
     {

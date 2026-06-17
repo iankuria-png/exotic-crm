@@ -156,6 +156,7 @@ class AutoOptimizeConfig
     {
         return [
             'exclude_optimized_within_days' => 14,
+            'exclude_skipped_within_days' => 7,
             'impact_recheck_days' => 7,
             'min_score_gain' => 3,
             'min_image_gain' => 0.10,

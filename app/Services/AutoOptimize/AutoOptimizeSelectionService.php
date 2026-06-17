@@ -65,6 +65,17 @@ class AutoOptimizeSelectionService
             ->pluck('client_id')
             ->flip();
 
+        // Clients skipped recently — without this, skip-prone profiles (bio gain
+        // below threshold, too-similar, etc.) get re-selected, re-built and
+        // re-skipped on EVERY run, churning the worker and LLM cost for nothing.
+        $excludeSkippedDays = (int) ($reliability['exclude_skipped_within_days'] ?? 7);
+        $recentlySkippedIds = AutoOptimizeItem::query()
+            ->where('platform_id', $plan->platform_id)
+            ->where('status', 'skipped')
+            ->where('updated_at', '>=', now()->subDays($excludeSkippedDays))
+            ->pluck('client_id')
+            ->flip();
+
         $maxScore = (int) ($criteria['max_score'] ?? 60);
         $viewsPct = (float) ($criteria['views_below_market_pct'] ?? 80) / 100;
         $contactPct = (float) ($criteria['contact_rate_below_market_pct'] ?? 80) / 100;
@@ -92,7 +103,7 @@ class AutoOptimizeSelectionService
 
             $query->chunkById(100, function ($clients) use (
                 $perProfile, $averages,
-                $activeClientIds, $recentlyOptimizedIds,
+                $activeClientIds, $recentlyOptimizedIds, $recentlySkippedIds,
                 $maxScore, $viewsPct, $contactPct, $engagementPct,
                 $requireBelow, &$candidates, $dailyLimit
             ) {
@@ -105,6 +116,9 @@ class AutoOptimizeSelectionService
                         continue;
                     }
                     if (isset($recentlyOptimizedIds[$client->id])) {
+                        continue;
+                    }
+                    if (isset($recentlySkippedIds[$client->id])) {
                         continue;
                     }
 

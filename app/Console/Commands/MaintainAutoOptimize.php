@@ -41,21 +41,36 @@ class MaintainAutoOptimize extends Command
 
     private function sweepStuckItems(): int
     {
-        // Items stuck in 'applying' beyond a reasonable timeout (20 min)
-        $stuck = AutoOptimizeItem::query()
-            ->where('status', 'applying')
-            ->where('updated_at', '<', now()->subMinutes(20))
-            ->get();
+        // Reap items stuck in ANY non-terminal state beyond a TTL. Critically this
+        // includes queued/building: if the worker stalls, those items pin
+        // coverageCount at daily_limit forever and dueForRun never fires again, so
+        // the engine only ever processes the first batch. Reaping frees coverage
+        // AND active_client_key so selection can move on.
+        //   - applying  : a real write was in flight → 20 min grace
+        //   - building  : LLM/WP work → 30 min grace
+        //   - queued    : never picked up (worker down) → 60 min grace
+        $rules = [
+            'applying' => 20,
+            'building' => 30,
+            'queued' => 60,
+        ];
 
         $swept = 0;
-        foreach ($stuck as $item) {
-            Log::warning('auto_optimize.sweep_stuck_item', ['item_id' => $item->id]);
-            // Must use model save so active_client_key hook fires
-            $item->forceFill([
-                'status' => 'failed',
-                'error_message' => 'Swept by maintenance: stuck in applying status',
-            ])->save();
-            $swept++;
+        foreach ($rules as $status => $minutes) {
+            $stuck = AutoOptimizeItem::query()
+                ->where('status', $status)
+                ->where('updated_at', '<', now()->subMinutes($minutes))
+                ->get();
+
+            foreach ($stuck as $item) {
+                Log::warning('auto_optimize.sweep_stuck_item', ['item_id' => $item->id, 'status' => $status]);
+                // Model save so the active_client_key hook clears it (frees coverage + re-selection).
+                $item->forceFill([
+                    'status' => 'failed',
+                    'error_message' => "Swept by maintenance: stuck in {$status} for >{$minutes}m (worker stalled?)",
+                ])->save();
+                $swept++;
+            }
         }
 
         return $swept;

@@ -364,15 +364,71 @@ class AutoOptimizeController extends Controller
             ->when(!empty($validated['platform_id']), fn ($q) => $q->where('platform_id', (int) $validated['platform_id']))
             ->count();
 
+        // Skip-reason breakdown — explains WHY profiles aren't being optimized.
+        $skipReasons = AutoOptimizeItem::query()
+            ->where('status', 'skipped')
+            ->when(!empty($validated['platform_id']), fn ($q) => $q->where('platform_id', (int) $validated['platform_id']))
+            ->when(empty($validated['platform_id']) && is_array($platformIds), fn ($q) => $q->whereIn('platform_id', $platformIds))
+            ->selectRaw('reason, count(*) as cnt')
+            ->groupBy('reason')
+            ->orderByDesc('cnt')
+            ->limit(8)
+            ->pluck('cnt', 'reason');
+
+        $processing = ($counts['queued'] ?? 0) + ($counts['building'] ?? 0) + ($counts['applying'] ?? 0);
+
         return response()->json([
             'optimized' => $counts['applied'] ?? 0,
             'pending' => $counts['pending'] ?? 0,
+            'processing' => $processing,
             'skipped' => $counts['skipped'] ?? 0,
             'reverted' => $counts['reverted'] ?? 0,
             'failed' => $counts['failed'] ?? 0,
             'cost_usd' => round((float) $totalCost, 4),
             'pct_improved' => $withImpact > 0 ? round(($improved / $withImpact) * 100, 1) : null,
+            'skip_reasons' => $skipReasons,
+            'worker' => $this->workerHealth(),
         ]);
+    }
+
+    /**
+     * Health of the queue that processes optimize jobs, scoped to the
+     * `auto_optimize` queue so the Optimizer tab can warn when the worker is
+     * stalled (jobs queued but nothing draining them).
+     */
+    private function workerHealth(): array
+    {
+        $queue = 'auto_optimize';
+
+        $pending = DB::table('jobs')->where('queue', $queue)->whereNull('reserved_at')->count();
+        $processing = DB::table('jobs')->where('queue', $queue)->whereNotNull('reserved_at')->count();
+
+        $recentActivity = DB::table('jobs')->where('queue', $queue)
+            ->whereNotNull('reserved_at')
+            ->where('reserved_at', '>=', now()->subMinutes(5)->timestamp)
+            ->exists();
+
+        $oldestUnreserved = DB::table('jobs')->where('queue', $queue)
+            ->whereNull('reserved_at')
+            ->where('available_at', '<=', now()->subMinutes(2)->timestamp)
+            ->exists();
+
+        $status = 'idle';
+        if ($pending > 0 || $processing > 0) {
+            if ($recentActivity || $processing > 0) {
+                $status = 'processing';
+            } elseif ($oldestUnreserved) {
+                $status = 'stalled';
+            } else {
+                $status = 'pending';
+            }
+        }
+
+        return [
+            'status' => $status,           // idle | processing | pending | stalled
+            'pending' => $pending,
+            'processing' => $processing,
+        ];
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -464,6 +520,7 @@ class AutoOptimizeController extends Controller
             'schedule.runway_threshold' => 'nullable|integer|min:0|max:500',
             'reliability' => 'nullable|array',
             'reliability.exclude_optimized_within_days' => 'nullable|integer|min:0|max:90',
+            'reliability.exclude_skipped_within_days' => 'nullable|integer|min:0|max:90',
             'reliability.impact_recheck_days' => 'nullable|integer|min:1|max:30',
             'reliability.min_score_gain' => 'nullable|integer|min:0|max:50',
             'reliability.max_writes_per_hour' => 'nullable|integer|min:1|max:500',
