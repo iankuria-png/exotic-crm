@@ -1978,6 +1978,7 @@ class ClientController extends Controller
             'force' => 'nullable|boolean',
             'reason' => 'required|string|max:500',
         ]);
+        $requestedFields = $validated['fields'];
         $blockedFields = [
             'premium',
             'premium_expire',
@@ -1989,7 +1990,7 @@ class ClientController extends Controller
             'notactive',
         ];
 
-        $attemptedBlocked = array_values(array_intersect(array_keys($fields), $blockedFields));
+        $attemptedBlocked = array_values(array_intersect(array_keys($requestedFields), $blockedFields));
         if (!empty($attemptedBlocked)) {
             return response()->json([
                 'message' => 'Subscription and activation fields are not editable from profile management.',
@@ -2001,7 +2002,7 @@ class ClientController extends Controller
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             $currentProfile = $wpSync->getClientProfile((int) $client->wp_post_id);
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
-            $fields = $this->prepareWpProfileFields($platform, $validated['fields'], $currentProfile);
+            $fields = $this->prepareWpProfileFields($platform, $requestedFields, $currentProfile);
 
             $wpModifiedAt = $this->extractWpModifiedAt($currentProfile);
             $crmLastSyncedAt = $client->last_synced_at ? Carbon::parse($client->last_synced_at) : null;
@@ -3756,13 +3757,24 @@ class ClientController extends Controller
     private function prepareWpProfileFields(Platform $platform, array $fields, array $currentProfile): array
     {
         $normalized = $this->normalizeWpProfileFields($fields);
-        $catalogs = $this->fetchWpProfileCatalogs($platform);
-        $validated = WpProfileFieldValidator::validate($normalized, [
-            'currency_catalog_ids' => $this->extractCurrencyIds($catalogs['currencies']),
+        $context = [
             'current_currency_id' => data_get($currentProfile, 'meta.currency'),
+        ];
+
+        if (array_key_exists('currency', $normalized)) {
+            $currencies = $this->fetchWpProfileCurrencies($platform);
+            $context['currency_catalog_ids'] = $this->extractCurrencyIds($currencies);
+        }
+
+        $validated = WpProfileFieldValidator::validate($normalized, [
+            ...$context,
         ]);
 
-        return $this->validateLocationHierarchy($validated, $catalogs['locations']);
+        if (!$this->profileFieldsIncludeLocation($validated)) {
+            return $validated;
+        }
+
+        return $this->validateLocationHierarchy($validated, $this->fetchWpProfileLocations($platform));
     }
 
     private function normalizeWpProfileEnumCode(string $field, mixed $value): mixed
@@ -3911,14 +3923,38 @@ class ClientController extends Controller
      */
     private function fetchWpProfileCatalogs(Platform $platform): array
     {
-        $wpSync = WpSyncService::forPlatform((int) $platform->id);
-        $locations = $wpSync->getLocations();
-        $currencies = $wpSync->getCurrencies();
-
         return [
-            'locations' => is_array($locations['locations'] ?? null) ? $locations['locations'] : $locations,
-            'currencies' => is_array($currencies['currencies'] ?? null) ? $currencies['currencies'] : $currencies,
+            'locations' => $this->fetchWpProfileLocations($platform),
+            'currencies' => $this->fetchWpProfileCurrencies($platform),
         ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchWpProfileLocations(Platform $platform): array
+    {
+        $locations = WpSyncService::forPlatform((int) $platform->id)->getLocations();
+
+        return is_array($locations['locations'] ?? null) ? $locations['locations'] : $locations;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchWpProfileCurrencies(Platform $platform): array
+    {
+        $currencies = WpSyncService::forPlatform((int) $platform->id)->getCurrencies();
+
+        return is_array($currencies['currencies'] ?? null) ? $currencies['currencies'] : $currencies;
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     */
+    private function profileFieldsIncludeLocation(array $fields): bool
+    {
+        return array_key_exists('region_id', $fields) || array_key_exists('city_id', $fields);
     }
 
     /**

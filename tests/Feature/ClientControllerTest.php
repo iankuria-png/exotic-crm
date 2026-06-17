@@ -8,13 +8,139 @@ use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class ClientControllerTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_wp_profile_update_skips_catalog_fetches_when_saving_unrelated_fields(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+        $updateWasSent = false;
+
+        Http::fake(function (ClientRequest $request) use ($client, &$updateWasSent) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}/update")) {
+                $updateWasSent = true;
+                $this->assertSame('POST', $request->method());
+                $this->assertSame(['content' => 'Updated public profile bio.'], $request->data()['fields'] ?? null);
+
+                return Http::response([
+                    'wp_post_id' => $client->wp_post_id,
+                    'meta' => ['currency' => 50],
+                ]);
+            }
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client, [
+                    'content' => 'Updated public profile bio.',
+                ]));
+            }
+
+            if (str_ends_with($url, '/locations') || str_ends_with($url, '/currencies')) {
+                return Http::response([
+                    'code' => 'rest_no_route',
+                    'message' => 'No route was found matching the URL and request method.',
+                    'data' => ['status' => 404],
+                ], 404);
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => ['content' => 'Updated public profile bio.'],
+            'force' => true,
+            'reason' => 'Regression test profile bio update',
+        ])->assertOk();
+
+        $this->assertTrue($updateWasSent);
+        Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), '/locations'));
+        Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), '/currencies'));
+    }
+
+    public function test_wp_profile_location_update_still_requires_location_catalog(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+
+        Http::fake(function (ClientRequest $request) use ($client) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client));
+            }
+
+            if (str_ends_with($url, '/locations')) {
+                return Http::response([
+                    'code' => 'rest_no_route',
+                    'message' => 'No route was found matching the URL and request method.',
+                    'data' => ['status' => 404],
+                ], 404);
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => ['region_id' => 10, 'city_id' => 11],
+            'force' => true,
+            'reason' => 'Regression test location update',
+        ])
+            ->assertStatus(404)
+            ->assertJsonPath('code', 'rest_no_route');
+
+        Http::assertSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), '/locations'));
+        Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), "/clients/{$client->wp_post_id}/update"));
+    }
+
+    public function test_wp_profile_currency_update_still_requires_currency_catalog_only(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+
+        Http::fake(function (ClientRequest $request) use ($client) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client, [
+                    'meta' => ['currency' => 50],
+                ]));
+            }
+
+            if (str_ends_with($url, '/currencies')) {
+                return Http::response([
+                    'code' => 'rest_no_route',
+                    'message' => 'No route was found matching the URL and request method.',
+                    'data' => ['status' => 404],
+                ], 404);
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => ['currency' => 76],
+            'force' => true,
+            'reason' => 'Regression test currency update',
+        ])
+            ->assertStatus(404)
+            ->assertJsonPath('code', 'rest_no_route');
+
+        Http::assertSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), '/currencies'));
+        Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), '/locations'));
+        Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), "/clients/{$client->wp_post_id}/update"));
+    }
 
     public function test_show_payload_contains_short_url_permalink_slug_and_canonical_expiry_context(): void
     {
@@ -73,5 +199,67 @@ class ClientControllerTest extends TestCase
         } finally {
             Carbon::setTestNow();
         }
+    }
+
+    private function createLinkedClientFixture(): array
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Rwanda',
+            'domain' => 'rwanda.example.test',
+            'country' => 'Rwanda',
+            'phone_prefix' => '250',
+            'currency_code' => 'RWF',
+            'timezone' => 'Africa/Kigali',
+            'wp_api_url' => 'https://rwanda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'crm-password',
+        ]);
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 24694,
+            'wp_user_id' => 34747,
+            'name' => 'Rwanda Client',
+            'phone_normalized' => '250788123456',
+            'email' => 'client@example.test',
+            'profile_status' => 'publish',
+            'last_synced_at' => now(),
+        ]);
+
+        return [$platform, $client];
+    }
+
+    private function wordpressClientPayload(Client $client, array $overrides = []): array
+    {
+        return array_replace_recursive([
+            'wp_post_id' => (int) $client->wp_post_id,
+            'wp_user_id' => (int) $client->wp_user_id,
+            'name' => $client->name,
+            'phone' => $client->phone_normalized,
+            'email' => $client->email,
+            'post_status' => $client->profile_status,
+            'modified_at' => now()->subMinute()->toIso8601String(),
+            'wp_profile_permalink' => 'https://rwanda.example.test/escort/rwanda-client/',
+            'wp_profile_slug' => 'rwanda-client',
+            'main_image_url' => null,
+            'taxonomies' => [
+                'region' => null,
+                'city' => null,
+            ],
+            'meta' => [
+                'currency' => 50,
+                'city' => null,
+                'country' => null,
+            ],
+        ], $overrides);
+    }
+
+    private function adminUser(): User
+    {
+        return User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+            'assigned_market_ids' => [],
+        ]);
     }
 }
