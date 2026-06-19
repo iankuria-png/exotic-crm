@@ -229,9 +229,16 @@ class ClientChurnTrackingTest extends TestCase
         );
 
         $this->assertSame(15.0, $summary['daily'][0]['average_ticket_usd']);
+        $this->assertSame(30.0, $summary['daily'][0]['collected_revenue_usd']);
+        $this->assertFalse($summary['daily'][0]['collected_partial']);
         $this->assertSame(45.0, $summary['daily'][0]['estimated_revenue_at_risk_usd']);
         $this->assertSame(45.0, $summary['revenue_at_risk']['estimated_total']);
         $this->assertSame(100.0, $summary['revenue_at_risk']['coverage_percent']);
+        $this->assertSame(30.0, $summary['revenue_comparison']['collected_total']);
+        $this->assertSame(45.0, $summary['revenue_comparison']['lost_total']);
+        $this->assertSame(-15.0, $summary['revenue_comparison']['net_total']);
+        $this->assertSame(0, $summary['revenue_comparison']['partial_days']);
+        $this->assertSame('all_reportable_successful_payments', $summary['revenue_comparison']['collected_coverage_note']);
     }
 
     public function test_churn_revenue_estimate_is_unavailable_when_fx_data_is_missing(): void
@@ -260,9 +267,13 @@ class ClientChurnTrackingTest extends TestCase
         );
 
         $this->assertNull($summary['daily'][0]['average_ticket_usd']);
+        $this->assertNull($summary['daily'][0]['collected_revenue_usd']);
+        $this->assertTrue($summary['daily'][0]['collected_partial']);
         $this->assertNull($summary['daily'][0]['estimated_revenue_at_risk_usd']);
         $this->assertSame(0, $summary['revenue_at_risk']['covered_churn_count']);
         $this->assertSame(0.0, $summary['revenue_at_risk']['coverage_percent']);
+        $this->assertSame(1, $summary['revenue_comparison']['partial_days']);
+        $this->assertNull($summary['revenue_comparison']['net_total']);
     }
 
     public function test_tier_breakdown_uses_last_paid_tier_before_churn(): void
@@ -513,6 +524,87 @@ class ClientChurnTrackingTest extends TestCase
                 ->assertJsonPath('data.0.id', $vvipClient->id)
                 ->assertJsonPath('data.1.id', $vipClient->id)
                 ->assertJsonPath('data.2.id', $basicClient->id);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_churned_queue_sorts_by_lifetime_value_across_pages(): void
+    {
+        Carbon::setTestNow('2026-06-11 12:00:00');
+
+        try {
+            $admin = User::factory()->create([
+                'role' => 'admin',
+                'status' => 'active',
+                'assigned_market_ids' => [],
+            ]);
+            $platform = Platform::factory()->create(['currency_code' => 'USD']);
+            $highValue = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'High Value',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-10 18:00:00',
+            ]);
+            $midValue = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Mid Value',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-09 18:00:00',
+            ]);
+            $noValue = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'No Value',
+                'profile_status' => 'private',
+                'churned_at' => '2026-06-08 18:00:00',
+            ]);
+            Client::factory()->count(8)->sequence(
+                fn ($sequence) => [
+                    'platform_id' => $platform->id,
+                    'name' => sprintf('No Value Filler %02d', $sequence->index + 1),
+                    'profile_status' => 'private',
+                    'churned_at' => '2026-06-07 18:00:00',
+                ],
+            )->create();
+
+            Payment::factory()->create([
+                'platform_id' => $platform->id,
+                'product_id' => null,
+                'client_id' => $midValue->id,
+                'amount' => 20,
+                'currency' => 'USD',
+                'completed_at' => '2026-06-01 10:00:00',
+                'created_at' => '2026-06-01 09:00:00',
+            ]);
+            Payment::factory()->create([
+                'platform_id' => $platform->id,
+                'product_id' => null,
+                'client_id' => $highValue->id,
+                'amount' => 75,
+                'currency' => 'USD',
+                'completed_at' => '2026-06-01 10:00:00',
+                'created_at' => '2026-06-01 09:00:00',
+            ]);
+
+            Sanctum::actingAs($admin);
+
+            $pageOne = $this->getJson('/api/crm/clients/churned?week=month&sort_by=value&sort_direction=desc&per_page=10');
+            $pageOne->assertOk()
+                ->assertJsonPath('total', 11)
+                ->assertJsonPath('per_page', 10)
+                ->assertJsonPath('last_page', 2)
+                ->assertJsonPath('meta.effective_sort_by', 'value')
+                ->assertJsonPath('meta.value_ranking_unavailable', false)
+                ->assertJsonPath('data.0.id', $highValue->id)
+                ->assertJsonPath('data.1.id', $midValue->id);
+            $this->assertEqualsWithDelta(75.0, (float) $pageOne->json('data.0.lifetime_value_usd'), 0.001);
+            $this->assertEqualsWithDelta(20.0, (float) $pageOne->json('data.1.lifetime_value_usd'), 0.001);
+
+            $pageTwo = $this->getJson('/api/crm/clients/churned?week=month&sort_by=value&sort_direction=desc&per_page=10&page=2');
+            $pageTwo->assertOk()
+                ->assertJsonPath('current_page', 2)
+                ->assertJsonPath('data.0.lifetime_payment_count', 0);
+            $this->assertEqualsWithDelta(0.0, (float) $pageTwo->json('data.0.lifetime_value_usd'), 0.001);
         } finally {
             Carbon::setTestNow();
         }

@@ -28,6 +28,7 @@ import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { CLIENT_SEGMENTS, CLIENT_SEGMENT_KEYS } from '../utils/clientSegments';
+import { formatCurrency } from '../utils/currency';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -297,6 +298,53 @@ function resolveCreatedRange(newUsersFilter, createdFrom, createdTo) {
     }
 
     return { createdFrom: '', createdTo: '' };
+}
+
+function formatSourceBreakdown(breakdown = {}) {
+    return Object.entries(breakdown || {})
+        .map(([currency, amount]) => formatCurrency(amount, currency))
+        .join(' · ');
+}
+
+function pluralizePayment(count) {
+    return `${Number(count || 0).toLocaleString()} payment${Number(count || 0) === 1 ? '' : 's'}`;
+}
+
+function ClientValueCell({ row }) {
+    const paymentCount = Number(row.lifetime_payment_count || 0);
+
+    if (paymentCount === 0) {
+        return (
+            <div className="text-right" title="No payments yet">
+                <span className="text-sm font-medium text-slate-400">—</span>
+            </div>
+        );
+    }
+
+    if (row.lifetime_value_partial) {
+        const source = formatSourceBreakdown(row.lifetime_source_breakdown);
+
+        return (
+            <div className="max-w-[140px] text-right" title={source || 'FX unavailable'}>
+                <p className="truncate text-xs font-semibold text-amber-700">FX unavailable</p>
+                <p className="truncate text-[10px] text-amber-600">{source || pluralizePayment(paymentCount)}</p>
+            </div>
+        );
+    }
+
+    const value = Number(row.lifetime_value_usd || 0);
+    const valueClass = value >= 100
+        ? 'text-emerald-700'
+        : value >= 25
+            ? 'text-teal-700'
+            : 'text-slate-800';
+
+    return (
+        <div className="text-right">
+            <p className={`text-sm font-semibold ${valueClass}`}>{formatCurrency(value, 'USD')}</p>
+            <p className="text-[10px] text-slate-400">{pluralizePayment(paymentCount)}</p>
+        </div>
+    );
 }
 
 function formatRelativeFromUnix(unixTs) {
@@ -1510,6 +1558,14 @@ export default function Clients() {
                     ) : null}
                 </div>
             ),
+        },
+        {
+            key: 'value',
+            label: 'Value',
+            width: '140px',
+            headerClassName: 'text-right',
+            cellClassName: 'w-[140px] max-w-[140px]',
+            render: (row) => <ClientValueCell row={row} />,
         },
         {
             key: 'online',

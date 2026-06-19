@@ -21,6 +21,7 @@ use App\Services\ClientCaseClosureService;
 use App\Services\ClientChurnStamper;
 use App\Services\ClientDeletionService;
 use App\Services\ClientFunnelService;
+use App\Services\ClientLifetimeValueService;
 use App\Services\ClientOutreachService;
 use App\Services\ClientSegmentService;
 use App\Services\ClientSubscriptionActionResolver;
@@ -54,6 +55,7 @@ use App\Support\WpProfileFieldValidator;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -90,6 +92,7 @@ class ClientController extends Controller
         private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
         private readonly ChurnAggregatorService $churnAggregatorService,
         private readonly ClientChurnStamper $clientChurnStamper,
+        private readonly ClientLifetimeValueService $clientLifetimeValueService,
         private readonly AutoPushBoostService $autoPushBoostService,
     ) {
     }
@@ -99,6 +102,7 @@ class ClientController extends Controller
         $validated = $request->validate([
             'segment' => 'nullable|string|in:' . implode(',', ClientSegmentService::keys()),
             'city_key' => 'nullable|string|max:120',
+            'per_page' => 'nullable|integer|in:25,50,100,150',
         ]);
 
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -329,8 +333,9 @@ class ClientController extends Controller
             (string) $request->input('sort_direction', 'desc')
         );
 
-        $clients = $query->paginate($request->get('per_page', 25));
+        $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
         $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
+        $this->decorateLifetimeValue($clients->getCollection());
 
         $payload = $clients->toArray();
         $payload['stats'] = $stats;
@@ -672,6 +677,39 @@ class ClientController extends Controller
             'expiry_state',
             $this->expiredSubscriptionReconciler->isStuck($client) ? 'expired_public' : null
         );
+    }
+
+    private function decorateLifetimeValue($clients): void
+    {
+        $ids = collect($clients)
+            ->pluck('id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        $values = $this->clientLifetimeValueService->forClientIds($ids);
+
+        collect($clients)->each(function (Client $client) use ($values): void {
+            $entry = $values[(int) $client->id] ?? null;
+
+            $client->setAttribute('lifetime_value_currency', 'USD');
+
+            if ($entry === null) {
+                $client->setAttribute('lifetime_value_usd', 0.0);
+                $client->setAttribute('lifetime_value_partial', false);
+                $client->setAttribute('lifetime_payment_count', 0);
+                $client->setAttribute('lifetime_last_payment_at', null);
+                $client->setAttribute('lifetime_source_breakdown', []);
+
+                return;
+            }
+
+            $client->setAttribute('lifetime_value_usd', $entry['value_usd']);
+            $client->setAttribute('lifetime_value_partial', $entry['partial']);
+            $client->setAttribute('lifetime_payment_count', $entry['payment_count']);
+            $client->setAttribute('lifetime_last_payment_at', $entry['last_payment_at']);
+            $client->setAttribute('lifetime_source_breakdown', $entry['source_breakdown']);
+        });
     }
 
     public function quickReplies(Request $request, Client $client)
@@ -4983,7 +5021,7 @@ class ClientController extends Controller
             'reason_code' => 'nullable|string|max:80',
             'source' => 'nullable|string|max:80',
             'signup_source' => 'nullable|string|in:fast_signup,full_registration,crm_manual,crm_provisioned,field,existing',
-            'sort_by' => 'nullable|string|in:name,market,first_activated_at,churned_at,reason,last_plan',
+            'sort_by' => 'nullable|string|in:name,market,first_activated_at,churned_at,reason,last_plan,value',
             'sort_direction' => 'nullable|string|in:asc,desc',
             'per_page' => 'nullable|integer|in:10,25,50,100',
         ]);
@@ -5034,17 +5072,128 @@ class ClientController extends Controller
             $this->applyChurnLastPlanFilter($query, $validated['plan'], $latestPaidDealIdSql);
         }
 
+        $sortBy = $validated['sort_by'] ?? 'churned_at';
+        $sortDirection = $validated['sort_direction'] ?? 'desc';
+        $perPage = (int) ($validated['per_page'] ?? 25);
+
+        if ($sortBy === 'value') {
+            return response()->json($this->paginateChurnedByLifetimeValue(
+                $request,
+                $query,
+                $latestPaidDealIdSql,
+                $sortDirection,
+                $perPage,
+            ));
+        }
+
         $this->applyChurnListSort(
             $query,
-            $validated['sort_by'] ?? 'churned_at',
-            $validated['sort_direction'] ?? 'desc',
+            $sortBy,
+            $sortDirection,
             $latestPaidDealIdSql,
         );
 
-        $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
+        $clients = $query->paginate($perPage);
         $this->decorateChurnLastPlans($clients->getCollection());
+        $this->decorateLifetimeValue($clients->getCollection());
 
         return response()->json($clients);
+    }
+
+    private function paginateChurnedByLifetimeValue(
+        Request $request,
+        $baseQuery,
+        string $latestPaidDealIdSql,
+        string $sortDirection,
+        int $perPage,
+    ): array {
+        $valueSortCap = 5000;
+        $matchingIds = (clone $baseQuery)
+            ->reorder()
+            ->limit($valueSortCap + 1)
+            ->pluck('clients.id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if ($matchingIds->count() > $valueSortCap) {
+            $fallbackQuery = clone $baseQuery;
+            $this->applyChurnListSort($fallbackQuery, 'churned_at', 'desc', $latestPaidDealIdSql);
+            $clients = $fallbackQuery->paginate($perPage);
+            $this->decorateChurnLastPlans($clients->getCollection());
+            $this->decorateLifetimeValue($clients->getCollection());
+
+            $payload = $clients->toArray();
+            $payload['meta'] = array_merge($payload['meta'] ?? [], [
+                'value_ranking_unavailable' => true,
+                'effective_sort_by' => 'churned_at',
+                'message' => 'Value ranking is unavailable for this many rows. Narrow the filter to rank churned clients by lifetime value.',
+            ]);
+
+            return $payload;
+        }
+
+        $lifetimeValues = $this->clientLifetimeValueService->forClientIds($matchingIds);
+        $sortedIds = $matchingIds->all();
+        $direction = strtolower($sortDirection) === 'asc' ? 'asc' : 'desc';
+
+        usort($sortedIds, function (int $left, int $right) use ($lifetimeValues, $direction): int {
+            $leftValue = $lifetimeValues[$left]['value_usd'] ?? null;
+            $rightValue = $lifetimeValues[$right]['value_usd'] ?? null;
+            $leftRank = $leftValue !== null && (float) $leftValue > 0 ? 0 : 1;
+            $rightRank = $rightValue !== null && (float) $rightValue > 0 ? 0 : 1;
+
+            if ($leftRank !== $rightRank) {
+                return $leftRank <=> $rightRank;
+            }
+
+            if ($leftRank > 0) {
+                return $left <=> $right;
+            }
+
+            $comparison = (float) $leftValue <=> (float) $rightValue;
+            if ($direction === 'desc') {
+                $comparison *= -1;
+            }
+
+            return $comparison !== 0 ? $comparison : $left <=> $right;
+        });
+
+        $page = max(1, (int) $request->input('page', 1));
+        $total = count($sortedIds);
+        $pageIds = array_slice($sortedIds, ($page - 1) * $perPage, $perPage);
+        $order = array_flip($pageIds);
+
+        $clients = Client::query()
+            ->select('clients.*')
+            ->with([
+                'platform:id,name',
+                'assignedAgent:id,name',
+                'retentionInsight:client_id,band,primary_tag',
+            ])
+            ->selectRaw("({$latestPaidDealIdSql}) as last_paid_deal_id")
+            ->whereIn('clients.id', $pageIds ?: [0])
+            ->get()
+            ->sortBy(fn (Client $client) => $order[(int) $client->id] ?? PHP_INT_MAX)
+            ->values();
+
+        $this->decorateChurnLastPlans($clients);
+        $this->decorateLifetimeValue($clients);
+
+        $paginator = new LengthAwarePaginator(
+            $clients,
+            $total,
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
+
+        $payload = $paginator->toArray();
+        $payload['meta'] = array_merge($payload['meta'] ?? [], [
+            'value_ranking_unavailable' => false,
+            'effective_sort_by' => 'value',
+        ]);
+
+        return $payload;
     }
 
     private function latestPaidDealIdSql(): string

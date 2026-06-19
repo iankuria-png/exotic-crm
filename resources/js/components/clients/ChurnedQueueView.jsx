@@ -145,6 +145,56 @@ function formatDate(iso) {
     return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function formatSourceBreakdown(breakdown = {}) {
+    return Object.entries(breakdown || {})
+        .map(([currency, amount]) => formatCurrency(amount, currency))
+        .join(' · ');
+}
+
+function pluralizePayment(count) {
+    return `${Number(count || 0).toLocaleString()} payment${Number(count || 0) === 1 ? '' : 's'}`;
+}
+
+function LifetimeValueCell({ row, includeLastPayment = false }) {
+    const paymentCount = Number(row.lifetime_payment_count || 0);
+
+    if (paymentCount === 0) {
+        return (
+            <div title="No payments yet">
+                <span className="text-sm font-medium text-slate-400">—</span>
+            </div>
+        );
+    }
+
+    if (row.lifetime_value_partial) {
+        const source = formatSourceBreakdown(row.lifetime_source_breakdown);
+
+        return (
+            <div className="max-w-[150px]" title={source || 'FX unavailable'}>
+                <p className="truncate text-xs font-semibold text-amber-700">FX unavailable</p>
+                <p className="truncate text-[10px] text-amber-600">{source || pluralizePayment(paymentCount)}</p>
+            </div>
+        );
+    }
+
+    const value = Number(row.lifetime_value_usd || 0);
+    const valueClass = value >= 100
+        ? 'text-emerald-700'
+        : value >= 25
+            ? 'text-teal-700'
+            : 'text-slate-800';
+    const meta = includeLastPayment && row.lifetime_last_payment_at
+        ? `${pluralizePayment(paymentCount)} · last ${formatDate(row.lifetime_last_payment_at)}`
+        : pluralizePayment(paymentCount);
+
+    return (
+        <div>
+            <p className={`text-sm font-semibold ${valueClass}`}>{formatCurrency(value, 'USD')}</p>
+            <p className="text-[10px] text-slate-400">{meta}</p>
+        </div>
+    );
+}
+
 function paginationItems(currentPage, lastPage) {
     if (lastPage <= 7) return Array.from({ length: lastPage }, (_, index) => index + 1);
 
@@ -458,14 +508,20 @@ function TrendChart({ daily, visibleSeries }) {
 function RevenueRiskTooltip({ active, payload, label }) {
     if (!active || !payload?.length) return null;
     const point = payload[0]?.payload || {};
+    const collected = point.collected_revenue_usd == null
+        ? 'Brought in unavailable'
+        : `${formatCurrency(point.collected_revenue_usd, 'USD')} brought in`;
+    const lost = point.estimated_revenue_at_risk_usd == null
+        ? 'Lost estimate unavailable'
+        : `${formatCurrency(point.estimated_revenue_at_risk_usd, 'USD')} lost to churn`;
 
     return (
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
             <p className="text-xs font-semibold text-slate-500">{label}</p>
-            <p className="mt-1 text-sm font-semibold text-rose-700">
-                {point.estimated_revenue_at_risk_usd == null
-                    ? 'Revenue estimate unavailable'
-                    : `${formatCurrency(point.estimated_revenue_at_risk_usd, 'USD')} at risk`}
+            <p className="mt-1 text-sm font-semibold text-slate-800">
+                <span className="text-teal-700">{collected}</span>
+                <span className="text-slate-300"> · </span>
+                <span className="text-rose-700">{lost}</span>
             </p>
             <p className="mt-1 text-xs text-slate-600">
                 {Number(point.churn || 0).toLocaleString()} churned · {point.average_ticket_usd == null
@@ -473,6 +529,7 @@ function RevenueRiskTooltip({ active, payload, label }) {
                     : `${formatCurrency(point.average_ticket_usd, 'USD')} average ticket`}
             </p>
             <p className="text-xs text-slate-400">{Number(point.successful_payments || 0).toLocaleString()} successful payments sampled</p>
+            {point.collected_partial ? <p className="mt-1 text-xs font-medium text-amber-600">FX partial for collected revenue</p> : null}
         </div>
     );
 }
@@ -483,11 +540,12 @@ function RevenueRiskChart({ daily }) {
         date: point.date?.slice(5) ?? point.date,
     }));
     const hasEstimate = data.some((point) => point.estimated_revenue_at_risk_usd != null && point.churn > 0);
+    const hasCollected = data.some((point) => point.collected_revenue_usd != null);
 
-    if (!hasEstimate) {
+    if (!hasEstimate && !hasCollected) {
         return (
             <div className="flex h-56 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 text-center text-sm text-slate-500">
-                No daily revenue estimate is available for this period. Successful payment and FX data are required.
+                No daily revenue comparison is available for this period. Successful payment and FX data are required.
             </div>
         );
     }
@@ -509,6 +567,14 @@ function RevenueRiskChart({ daily }) {
                     <Tooltip content={<RevenueRiskTooltip />} />
                     <Bar
                         yAxisId="risk"
+                        dataKey="collected_revenue_usd"
+                        name="Brought in"
+                        fill="#14b8a6"
+                        radius={[4, 4, 0, 0]}
+                        maxBarSize={28}
+                    />
+                    <Bar
+                        yAxisId="risk"
                         dataKey="estimated_revenue_at_risk_usd"
                         name="Estimated revenue at risk"
                         fill="#fb7185"
@@ -517,6 +583,40 @@ function RevenueRiskChart({ daily }) {
                     />
                 </ComposedChart>
             </ResponsiveContainer>
+        </div>
+    );
+}
+
+function RevenueComparisonStrip({ comparison }) {
+    if (!comparison) return null;
+
+    const currency = comparison.currency || 'USD';
+    const net = comparison.net_total;
+    const netTone = net == null
+        ? 'text-amber-700'
+        : Number(net) >= 0
+            ? 'text-emerald-700'
+            : 'text-rose-700';
+
+    return (
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-teal-100 bg-teal-50 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-teal-700">Brought in</p>
+                <p className="mt-1 text-lg font-bold text-teal-800">{formatCurrency(comparison.collected_total || 0, currency)}</p>
+            </div>
+            <div className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">Lost to churn</p>
+                <p className="mt-1 text-lg font-bold text-rose-800">{formatCurrency(comparison.lost_total || 0, currency)}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Net</p>
+                <p className={`mt-1 text-lg font-bold ${netTone}`}>
+                    {net == null ? 'FX partial' : formatCurrency(net, currency)}
+                </p>
+                {Number(comparison.partial_days || 0) > 0 ? (
+                    <p className="mt-0.5 text-[10px] font-medium text-amber-600">{comparison.partial_days} days est. (FX)</p>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -929,6 +1029,9 @@ function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCl
                 ) : null}
             </td>
             <td className="px-4 py-3">
+                <LifetimeValueCell row={row} includeLastPayment />
+            </td>
+            <td className="px-4 py-3">
                 <div className="flex items-center justify-end gap-2">
                     <button
                         type="button"
@@ -1094,6 +1197,14 @@ export default function ChurnedQueueView({ platformId = '' }) {
         staleTime: 30_000,
     });
 
+    useEffect(() => {
+        if (listQuery.data?.meta?.value_ranking_unavailable && sortBy === 'value') {
+            setSortBy(listQuery.data.meta.effective_sort_by || 'churned_at');
+            setSortDirection('desc');
+            toast?.warning?.(listQuery.data.meta.message || 'Value ranking is unavailable for this many rows. Narrow the filter and try again.');
+        }
+    }, [listQuery.data?.meta?.value_ranking_unavailable, sortBy, toast]);
+
     const setPreset = (preset) => {
         const params = new URLSearchParams(searchParams);
         params.delete('from');
@@ -1199,12 +1310,14 @@ export default function ChurnedQueueView({ platformId = '' }) {
     const totals = summary?.totals || { signups: 0, activations: 0, churn: 0, net: 0 };
     const comparison = summary?.comparison || {};
     const revenueAtRisk = summary?.revenue_at_risk || {};
+    const revenueComparison = summary?.revenue_comparison || null;
     const hasRevenueEstimate =
         Number(revenueAtRisk.covered_churn_count || 0) > 0 ||
         Number(revenueAtRisk.total_churn_count || 0) === 0;
     const health = summary?.health || 'neutral';
     const rows = listQuery.data?.data || [];
     const pagination = listQuery.data;
+    const valueRankingUnavailable = Boolean(listQuery.data?.meta?.value_ranking_unavailable);
 
     const currentPreset = range.mode === 'custom' ? 'custom' : (range.preset || 'this');
     const tableFilterCount = [search, planFilter, sourceFilter, signupSourceFilter, selectedReason].filter(Boolean).length;
@@ -1380,28 +1493,32 @@ export default function ChurnedQueueView({ platformId = '' }) {
                 )}
             </div>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <div className="flex items-center">
-                            <h3 className="text-sm font-semibold text-slate-900">Daily churn revenue estimate</h3>
-                            <InfoHint
-                                label="daily churn revenue estimate"
-                                text="Rose bars estimate daily revenue at risk from churn. Each bar uses that day's successful average ticket in USD. Missing daily ticket data creates a gap rather than inventing a value."
-                            />
-                        </div>
-                        <p className="mt-0.5 text-xs text-slate-500">Daily average ticket × customers churned that day.</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500">
-                        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" /> Revenue at risk</span>
-                    </div>
-                </div>
-                {summaryQuery.isLoading ? (
-                    <div className="h-64 animate-pulse rounded-xl bg-slate-100" />
-                ) : (
-                    <RevenueRiskChart daily={summary?.daily} />
-                )}
-            </section>
+	            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+	                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+	                    <div>
+	                        <div className="flex items-center">
+	                            <h3 className="text-sm font-semibold text-slate-900">Daily churn revenue estimate</h3>
+	                            <InfoHint
+	                                label="daily churn revenue estimate"
+	                                text="Teal bars show reportable revenue brought in each day. Rose bars estimate revenue lost to churn from that day's successful average ticket in USD."
+	                            />
+	                        </div>
+	                        <p className="mt-0.5 text-xs text-slate-500">Daily brought-in revenue compared with average ticket × churned customers.</p>
+	                    </div>
+	                    <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500">
+	                        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-teal-500" /> Brought in</span>
+	                        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" /> Revenue at risk</span>
+	                    </div>
+	                </div>
+	                {summaryQuery.isLoading ? (
+	                    <div className="h-64 animate-pulse rounded-xl bg-slate-100" />
+	                ) : (
+	                    <>
+	                        <RevenueComparisonStrip comparison={revenueComparison} />
+	                        <RevenueRiskChart daily={summary?.daily} />
+	                    </>
+	                )}
+	            </section>
 
             {/* Market duration table */}
             <div>
@@ -1558,31 +1675,37 @@ export default function ChurnedQueueView({ platformId = '' }) {
                         </label>
                     </div>
 
-                    {search ? (
-                        <p className="mt-3 text-xs text-slate-500">
-                            Results matching <span className="font-semibold text-slate-800">“{search}”</span>
-                        </p>
-                    ) : null}
-                </div>
+	                    {search ? (
+	                        <p className="mt-3 text-xs text-slate-500">
+	                            Results matching <span className="font-semibold text-slate-800">“{search}”</span>
+	                        </p>
+	                    ) : null}
+	                    {valueRankingUnavailable ? (
+	                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+	                            Value ranking is unavailable for this many rows. Narrow the filter to sort by lifetime value.
+	                        </p>
+	                    ) : null}
+	                </div>
                 <div className="overflow-x-auto">
-                <table className="min-w-[1180px] divide-y divide-slate-100 text-sm">
+                <table className="min-w-[1320px] divide-y divide-slate-100 text-sm">
                     <thead className="bg-white">
                         <tr>
                             <SortableHeader label="Client" sortKey="name" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
                             <SortableHeader label="Market" sortKey="market" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
                             <SortableHeader label="First activated" sortKey="first_activated_at" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
                             <SortableHeader label="Churned" sortKey="churned_at" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
-                            <SortableHeader label="Reason" sortKey="reason" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
-                            <SortableHeader label="Last paid plan" sortKey="last_plan" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
-                            <th scope="col" className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                        {listQuery.isLoading ? (
-                            <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">Loading churned clients…</td></tr>
-                        ) : rows.length === 0 ? (
-                            <tr>
-                                <td colSpan={7} className="px-4 py-10 text-center">
+	                            <SortableHeader label="Reason" sortKey="reason" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+	                            <SortableHeader label="Last paid plan" sortKey="last_plan" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+	                            <SortableHeader label="Lifetime value" sortKey="value" activeSort={sortBy} direction={sortDirection} onSort={handleTableSort} />
+	                            <th scope="col" className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+	                        </tr>
+	                    </thead>
+	                    <tbody className="divide-y divide-slate-100">
+	                        {listQuery.isLoading ? (
+	                            <tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-slate-500">Loading churned clients…</td></tr>
+	                        ) : rows.length === 0 ? (
+	                            <tr>
+	                                <td colSpan={8} className="px-4 py-10 text-center">
                                     <p className="text-sm font-medium text-slate-700">No churn in this reporting period.</p>
                                     <p className="mt-1 text-xs text-slate-500">Try broadening the range or clearing the filters above.</p>
                                 </td>

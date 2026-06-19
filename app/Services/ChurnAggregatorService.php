@@ -45,6 +45,7 @@ class ChurnAggregatorService
         $previousTotals = $this->totals($this->dailySeries($previousFrom, $previousTo, $platformIds, false));
 
         $health = $this->healthLabel($totals);
+        $revenueAtRisk = $this->revenueAtRiskSummary($daily);
 
         return [
             'range' => [
@@ -60,7 +61,8 @@ class ChurnAggregatorService
             'comparison' => $this->comparison($totals, $previousTotals),
             'health' => $health,
             'averages' => $this->weightedAverages($durations),
-            'revenue_at_risk' => $this->revenueAtRiskSummary($daily),
+            'revenue_at_risk' => $revenueAtRisk,
+            'revenue_comparison' => $this->revenueComparisonSummary($daily, $revenueAtRisk),
             'durations_by_market' => $durations,
             'reason_breakdown' => $reasons,
             'tier_breakdown' => $tierBreakdown,
@@ -124,6 +126,8 @@ class ChurnAggregatorService
                 'churn' => (int) ($churn[$dateStr] ?? 0),
                 'average_ticket_usd' => $tickets[$dateStr]['average_ticket_usd'] ?? null,
                 'successful_payments' => (int) ($tickets[$dateStr]['payments_count'] ?? 0),
+                'collected_revenue_usd' => $tickets[$dateStr]['collected_revenue_usd'] ?? null,
+                'collected_partial' => (bool) ($tickets[$dateStr]['collected_partial'] ?? false),
                 'estimated_revenue_at_risk_usd' => isset($tickets[$dateStr]['average_ticket_usd'])
                     ? round((float) $tickets[$dateStr]['average_ticket_usd'] * (int) ($churn[$dateStr] ?? 0), 2)
                     : null,
@@ -457,6 +461,8 @@ class ChurnAggregatorService
                         ? round((float) $normalizedTotal / $paymentsCount, 2)
                         : null,
                     'payments_count' => $paymentsCount,
+                    'collected_revenue_usd' => $normalizedTotal !== null ? round((float) $normalizedTotal, 2) : null,
+                    'collected_partial' => (bool) data_get($normalized, 'normalization_meta.partial', false),
                     'normalization_partial' => (bool) data_get($normalized, 'normalization_meta.partial', false),
                     'date' => $date,
                 ];
@@ -484,6 +490,29 @@ class ChurnAggregatorService
                 ? round(($churnWithTicket / $totalChurn) * 100, 1)
                 : 100.0,
             'method' => 'daily_average_ticket_times_churn',
+        ];
+    }
+
+    private function revenueComparisonSummary(array $daily, array $revenueAtRisk): array
+    {
+        $rows = collect($daily);
+        $partialDays = $rows->filter(
+            fn (array $row) => (int) ($row['successful_payments'] ?? 0) > 0
+                && (
+                    ($row['collected_revenue_usd'] ?? null) === null
+                    || (bool) ($row['collected_partial'] ?? false)
+                )
+        )->count();
+        $collectedTotal = round((float) $rows->sum(fn (array $row) => (float) ($row['collected_revenue_usd'] ?? 0)), 2);
+        $lostTotal = round((float) ($revenueAtRisk['estimated_total'] ?? 0), 2);
+
+        return [
+            'currency' => 'USD',
+            'collected_total' => $collectedTotal,
+            'lost_total' => $lostTotal,
+            'net_total' => $partialDays > 0 ? null : round($collectedTotal - $lostTotal, 2),
+            'partial_days' => $partialDays,
+            'collected_coverage_note' => 'all_reportable_successful_payments',
         ];
     }
 
