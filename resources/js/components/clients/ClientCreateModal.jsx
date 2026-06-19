@@ -175,6 +175,10 @@ function compactSummary(values) {
     return values.filter(Boolean).join(' · ');
 }
 
+function resolveInitialPlatformId(lockedPlatformId, initialPlatformId) {
+    return String(lockedPlatformId || initialPlatformId || '');
+}
+
 export default function ClientCreateModal({
     open,
     onClose,
@@ -191,7 +195,7 @@ export default function ClientCreateModal({
     const toast = useToast();
     const queryClient = useQueryClient();
     const initialMode = lockedOnboardingMode || 'wp_provision';
-    const basePlatformId = String(lockedPlatformId || initialPlatformId || '');
+    const [basePlatformId, setBasePlatformId] = useState(() => resolveInitialPlatformId(lockedPlatformId, initialPlatformId));
     const [form, setForm] = useState(() => defaultForm(basePlatformId, initialMode));
     const [imagePreviews, setImagePreviews] = useState([]);
     const [duplicateMatches, setDuplicateMatches] = useState([]);
@@ -199,6 +203,7 @@ export default function ClientCreateModal({
     const [stepErrors, setStepErrors] = useState([]);
     const dialogRef = useRef(null);
     const primaryFocusRef = useRef(null);
+    const wasOpenRef = useRef(open);
     const titleId = useId();
 
     const createFreshForm = (modeOverride = initialMode) => defaultForm(basePlatformId, modeOverride);
@@ -206,6 +211,15 @@ export default function ClientCreateModal({
         () => buildDraftStorageKey(basePlatformId, initialMode, signupSource),
         [basePlatformId, initialMode, signupSource],
     );
+
+    useEffect(() => {
+        const wasOpen = wasOpenRef.current;
+        wasOpenRef.current = open;
+
+        if (open && !wasOpen) {
+            setBasePlatformId(resolveInitialPlatformId(lockedPlatformId, initialPlatformId));
+        }
+    }, [initialPlatformId, lockedPlatformId, open]);
 
     useEffect(() => {
         if (!open) {
@@ -242,7 +256,7 @@ export default function ClientCreateModal({
         setDuplicateMatches([]);
         setWizardStep(STEP_SETUP);
         setStepErrors([]);
-    }, [open, draftStorageKey, lockedPlatformId, lockedOnboardingMode]);
+    }, [open, draftStorageKey, lockedPlatformId, lockedOnboardingMode, basePlatformId, initialMode]);
 
     useEffect(() => {
         if (!open) {
@@ -796,7 +810,14 @@ export default function ClientCreateModal({
                         id="client-create-market"
                         ref={primaryFocusRef}
                         value={form.platform_id}
-                        onChange={(event) => setForm((current) => ({ ...current, platform_id: event.target.value, assigned_to: '' }))}
+                        onChange={(event) => setForm((current) => ({
+                            ...current,
+                            platform_id: event.target.value,
+                            assigned_to: '',
+                            region_id: null,
+                            city_id: null,
+                            currency: null,
+                        }))}
                         className="crm-select w-full"
                         disabled={Boolean(lockedPlatformId)}
                     >
@@ -845,13 +866,13 @@ export default function ClientCreateModal({
                 ) : null}
 
                 {isWpProvision ? (
-                    <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                    <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
                                 <p className="text-sm font-semibold text-slate-900">Full profile mode</p>
                                 <p className="mt-1 text-xs text-slate-500">Quick provision keeps this short. Turn this on only when you want to capture appearance, services, rates, socials, bio, and media now.</p>
                             </div>
-                            <label className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                            <label className="inline-flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
                                 <input
                                     type="checkbox"
                                     checked={Boolean(form.full_profile)}
@@ -862,7 +883,7 @@ export default function ClientCreateModal({
                             </label>
                         </div>
                         {!form.full_profile ? (
-                            <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                            <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
                                 Quick provision will create the client with market, contact, location, status, owner, and WordPress credentials first. You can complete the rest immediately after from the Edit Profile tab.
                             </div>
                         ) : null}

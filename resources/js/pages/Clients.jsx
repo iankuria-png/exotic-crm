@@ -469,6 +469,7 @@ export default function Clients() {
     });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [createModalInitialPlatformId, setCreateModalInitialPlatformId] = useState('');
     const [showCsvModal, setShowCsvModal] = useState(false);
     const [showBulkBioModal, setShowBulkBioModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
@@ -1736,7 +1737,10 @@ export default function Clients() {
                         </button>
                         <button
                             type="button"
-                            onClick={() => setShowCreateModal(true)}
+                            onClick={() => {
+                                setCreateModalInitialPlatformId(preferredPlatformId);
+                                setShowCreateModal(true);
+                            }}
                             className="crm-btn-primary"
                         >
                             Add client
@@ -2292,7 +2296,7 @@ export default function Clients() {
             <ClientCreateModal
                 open={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
-                initialPlatformId={preferredPlatformId}
+                initialPlatformId={createModalInitialPlatformId || preferredPlatformId}
                 reason="Client create from clients page"
                 onCreated={(createdClient, meta) => {
                     setShowCreateModal(false);
