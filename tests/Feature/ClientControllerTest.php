@@ -195,7 +195,7 @@ class ClientControllerTest extends TestCase
         $this->assertTrue($updateWasSent);
     }
 
-    public function test_wp_profile_update_returns_validation_errors_as_422_with_specific_message(): void
+    public function test_wp_profile_update_returns_location_hierarchy_errors_as_422_with_specific_message(): void
     {
         [$platform, $client] = $this->createLinkedClientFixture();
 
@@ -204,6 +204,21 @@ class ClientControllerTest extends TestCase
 
             if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
                 return Http::response($this->wordpressClientPayload($client));
+            }
+
+            if (str_ends_with($url, '/locations')) {
+                return Http::response([
+                    'locations' => [
+                        [
+                            'id' => 10,
+                            'name' => 'Nairobi',
+                            'slug' => 'nairobi',
+                            'cities' => [
+                                ['id' => 11, 'name' => 'CBD', 'slug' => 'cbd'],
+                            ],
+                        ],
+                    ],
+                ]);
             }
 
             return Http::response(['message' => 'Unexpected request: ' . $url], 500);
@@ -220,8 +235,63 @@ class ClientControllerTest extends TestCase
             'reason' => 'Regression test validation surfacing',
         ])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Region and city must be valid identifiers or both null.')
-            ->assertJsonPath('errors.location.0', 'Region and city must be valid identifiers or both null.');
+            ->assertJsonPath('message', 'Select a city within the selected region.')
+            ->assertJsonPath('errors.city_id.0', 'Select a city within the selected region.');
+    }
+
+    public function test_wp_profile_location_update_allows_region_only_when_region_has_no_child_cities(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+        $updateWasSent = false;
+
+        Http::fake(function (ClientRequest $request) use ($client, &$updateWasSent) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client));
+            }
+
+            if (str_ends_with($url, '/locations')) {
+                return Http::response([
+                    'locations' => [
+                        [
+                            'id' => 10,
+                            'name' => 'Kisumu',
+                            'slug' => 'kisumu',
+                            'cities' => [],
+                        ],
+                    ],
+                ]);
+            }
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}/update")) {
+                $updateWasSent = true;
+                $this->assertSame([
+                    'region_id' => 10,
+                    'city_id' => null,
+                ], $request->data()['fields'] ?? null);
+
+                return Http::response([
+                    'wp_post_id' => $client->wp_post_id,
+                    'meta' => ['city' => 10],
+                ]);
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => [
+                'region_id' => 10,
+                'city_id' => null,
+            ],
+            'force' => true,
+            'reason' => 'Regression test region-only location update',
+        ])->assertOk();
+
+        $this->assertTrue($updateWasSent);
     }
 
     public function test_show_payload_contains_short_url_permalink_slug_and_canonical_expiry_context(): void

@@ -213,12 +213,7 @@ class WpProfileFieldValidator
             return;
         }
 
-        if (
-            !is_numeric($region)
-            || !is_numeric($city)
-            || (int) $region <= 0
-            || (int) $city <= 0
-        ) {
+        if (!is_numeric($region) || (int) $region <= 0) {
             $errors['location'] = 'Region and city must be valid identifiers or both null.';
             unset($fields['region_id'], $fields['city_id']);
 
@@ -226,6 +221,20 @@ class WpProfileFieldValidator
         }
 
         $fields['region_id'] = (int) $region;
+
+        if ($city === null || $city === '') {
+            $fields['city_id'] = null;
+
+            return;
+        }
+
+        if (!is_numeric($city) || (int) $city <= 0) {
+            $errors['location'] = 'Region and city must be valid identifiers or both null.';
+            unset($fields['region_id'], $fields['city_id']);
+
+            return;
+        }
+
         $fields['city_id'] = (int) $city;
     }
 

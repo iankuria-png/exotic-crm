@@ -1666,6 +1666,7 @@ export default function ClientDetail() {
             region_id: regionId,
             city_id: cityId,
             locationTouched: false,
+            locationAllowsRegionOnly: false,
             legacyLocationUnresolved: unresolvedLegacyLocation,
             birthday: normalizeBirthdayForEditor(meta.birthday),
             gender: resolveProfileEnumValue('gender', meta.gender),
@@ -2303,8 +2304,14 @@ export default function ClientDetail() {
         if (profileForm.locationTouched) {
             const hasRegion = profileForm.region_id !== null && profileForm.region_id !== undefined && profileForm.region_id !== '';
             const hasCity = profileForm.city_id !== null && profileForm.city_id !== undefined && profileForm.city_id !== '';
+            const allowsRegionOnly = Boolean(profileForm.locationAllowsRegionOnly);
 
-            if (hasRegion !== hasCity) {
+            if (hasRegion && !hasCity && !allowsRegionOnly) {
+                toast.error('Choose both region and city before saving location changes, or clear both.');
+                return;
+            }
+
+            if (!hasRegion && hasCity) {
                 toast.error('Choose both region and city before saving location changes, or clear both.');
                 return;
             }
@@ -4226,10 +4233,11 @@ export default function ClientDetail() {
                                             regionId={profileForm?.region_id || null}
                                             cityId={profileForm?.city_id || null}
                                             legacyCityHint={profileForm?.legacyLocationUnresolved ? 'Confirm this profile’s region before changing location.' : null}
-                                            onChange={({ region_id, city_id }) => setProfileForm((current) => ({
+                                            onChange={({ region_id, city_id, location_allows_region_only = false }) => setProfileForm((current) => ({
                                                 ...current,
                                                 region_id,
                                                 city_id,
+                                                locationAllowsRegionOnly: location_allows_region_only,
                                                 locationTouched: true,
                                                 legacyLocationUnresolved: false,
                                             }))}

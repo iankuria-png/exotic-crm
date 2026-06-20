@@ -26,6 +26,7 @@ export default function RegionCitySelect({
     const locations = useMemo(() => sortByName(locationsQuery.data?.locations || []), [locationsQuery.data?.locations]);
     const selectedRegion = locations.find((region) => String(region.id) === String(regionId)) || null;
     const cityOptions = useMemo(() => sortByName(selectedRegion?.cities || []), [selectedRegion?.cities]);
+    const regionAllowsDirectSave = Boolean(selectedRegion) && cityOptions.length === 0;
 
     const regionGroups = useMemo(() => [
         {
@@ -60,10 +61,16 @@ export default function RegionCitySelect({
             <Combobox
                 label="Region"
                 value={regionId || ''}
-                onChange={(value) => onChange?.({
-                    region_id: value ? Number(value) : null,
-                    city_id: null,
-                })}
+                onChange={(value) => {
+                    const nextRegion = locations.find((region) => String(region.id) === String(value)) || null;
+                    const nextAllowsRegionOnly = Boolean(nextRegion) && ((nextRegion.cities || []).length === 0);
+
+                    onChange?.({
+                        region_id: value ? Number(value) : null,
+                        city_id: null,
+                        location_allows_region_only: nextAllowsRegionOnly,
+                    });
+                }}
                 groups={regionGroups}
                 placeholder="Choose region"
                 searchPlaceholder="Search regions"
@@ -78,14 +85,27 @@ export default function RegionCitySelect({
                 onChange={(value) => onChange?.({
                     region_id: regionId ? Number(regionId) : null,
                     city_id: value ? Number(value) : null,
+                    location_allows_region_only: regionAllowsDirectSave,
                 })}
                 groups={cityGroups}
-                placeholder={selectedRegion ? 'Choose city' : 'Select region first'}
+                placeholder={
+                    !selectedRegion
+                        ? 'Select region first'
+                        : regionAllowsDirectSave
+                            ? 'No city required'
+                            : 'Choose city'
+                }
                 searchPlaceholder="Search cities"
                 loading={locationsQuery.isLoading}
-                disabled={disabled || !platformId || !selectedRegion}
-                emptyMessage={selectedRegion ? 'No cities found in this region.' : 'Select a region to see cities.'}
-                hint={cityHint}
+                disabled={disabled || !platformId || !selectedRegion || regionAllowsDirectSave}
+                emptyMessage={
+                    !selectedRegion
+                        ? 'Select a region to see cities.'
+                        : regionAllowsDirectSave
+                            ? 'This region does not use child cities.'
+                            : 'No cities found in this region.'
+                }
+                hint={regionAllowsDirectSave ? 'This region saves directly without a child city.' : cityHint}
             />
         </div>
     );

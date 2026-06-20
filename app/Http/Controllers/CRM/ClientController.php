@@ -4078,7 +4078,19 @@ class ClientController extends Controller
             ]);
         }
 
-        $city = collect($region['cities'] ?? [])
+        $cities = collect($region['cities'] ?? []);
+
+        if ($cityId <= 0) {
+            if ($cities->isEmpty()) {
+                return $fields;
+            }
+
+            throw ValidationException::withMessages([
+                'city_id' => 'Select a city within the selected region.',
+            ]);
+        }
+
+        $city = $cities
             ->first(fn ($item): bool => (int) ($item['id'] ?? 0) === $cityId);
 
         if (!$city) {

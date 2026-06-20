@@ -86,4 +86,17 @@ class WpProfileFieldValidatorTest extends TestCase
             'currency_catalog_ids' => [50],
         ]);
     }
+
+    public function test_it_accepts_region_only_location_pairs_for_follow_up_hierarchy_validation(): void
+    {
+        $validated = WpProfileFieldValidator::validate([
+            'region_id' => 10,
+            'city_id' => null,
+        ], [
+            'currency_catalog_ids' => [50],
+        ]);
+
+        $this->assertSame(10, $validated['region_id']);
+        $this->assertNull($validated['city_id']);
+    }
 }
