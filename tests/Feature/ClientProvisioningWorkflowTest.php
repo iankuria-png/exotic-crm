@@ -187,6 +187,66 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame(0, DB::connection($connectionName)->table('term_relationships')->count());
     }
 
+    public function test_direct_provisioning_assigns_region_without_city_when_region_has_no_children(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        $regionId = $this->seedStandaloneRegionTerm($connectionName);
+
+        $result = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
+            'name' => 'Region Only Demo',
+            'email' => 'region.only@example.test',
+            'phone' => '254700000002',
+            'region_id' => $regionId,
+            'city_id' => null,
+            'post_status' => 'private',
+            'password' => 'password123',
+            'provision_request_id' => 'req-region-only-1',
+        ]);
+
+        $meta = DB::connection($connectionName)
+            ->table('postmeta')
+            ->where('post_id', $result['wp_post_id'])
+            ->pluck('meta_value', 'meta_key')
+            ->all();
+
+        $this->assertSame((string) $regionId, $meta['country'] ?? null);
+        $this->assertArrayNotHasKey('city', $meta);
+
+        $taxonomy = DB::connection($connectionName)
+            ->table('term_relationships')
+            ->join('term_taxonomy', 'term_relationships.term_taxonomy_id', '=', 'term_taxonomy.term_taxonomy_id')
+            ->join('terms', 'term_taxonomy.term_id', '=', 'terms.term_id')
+            ->where('term_relationships.object_id', $result['wp_post_id'])
+            ->where('term_taxonomy.taxonomy', 'escorts-from')
+            ->select('terms.name', 'terms.slug', 'term_taxonomy.count')
+            ->first();
+
+        $this->assertNotNull($taxonomy);
+        $this->assertSame('Region Only', $taxonomy->name);
+        $this->assertSame('region-only', $taxonomy->slug);
+        $this->assertSame(1, (int) $taxonomy->count);
+    }
+
+    public function test_direct_provisioning_rejects_region_without_city_when_region_has_children(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId] = $this->seedLocationTerms($connectionName);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Selected region requires a child city.');
+
+        (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
+            'name' => 'Missing City Demo',
+            'email' => 'missing.city@example.test',
+            'phone' => '254700000003',
+            'region_id' => $regionId,
+            'city_id' => null,
+            'post_status' => 'private',
+            'password' => 'password123',
+            'provision_request_id' => 'req-missing-city-1',
+        ]);
+    }
+
     public function test_wordpress_provisioning_requires_email_or_phone_before_database_work(): void
     {
         $platform = Platform::factory()->create();
@@ -396,5 +456,24 @@ class ClientProvisioningWorkflowTest extends TestCase
         ]);
 
         return [$regionId, $cityId];
+    }
+
+    private function seedStandaloneRegionTerm(string $connectionName): int
+    {
+        $regionId = (int) DB::connection($connectionName)->table('terms')->insertGetId([
+            'name' => 'Region Only',
+            'slug' => 'region-only',
+            'term_group' => 0,
+        ]);
+
+        DB::connection($connectionName)->table('term_taxonomy')->insert([
+            'term_id' => $regionId,
+            'taxonomy' => 'escorts-from',
+            'description' => '',
+            'parent' => 0,
+            'count' => 0,
+        ]);
+
+        return $regionId;
     }
 }

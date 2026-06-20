@@ -44,6 +44,7 @@ function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
         email: '',
         region_id: null,
         city_id: null,
+        location_allows_region_only: false,
         profile_status: 'private',
         assigned_to: '',
         onboarding_mode: onboardingMode,
@@ -203,6 +204,7 @@ export default function ClientCreateModal({
     const [stepErrors, setStepErrors] = useState([]);
     const dialogRef = useRef(null);
     const primaryFocusRef = useRef(null);
+    const clientNameRef = useRef(null);
     const wasOpenRef = useRef(open);
     const titleId = useId();
 
@@ -247,6 +249,8 @@ export default function ClientCreateModal({
 
         if (lockedPlatformId) {
             nextForm.platform_id = String(lockedPlatformId);
+        } else if (basePlatformId) {
+            nextForm.platform_id = String(basePlatformId);
         }
         if (lockedOnboardingMode) {
             nextForm.onboarding_mode = lockedOnboardingMode;
@@ -306,7 +310,14 @@ export default function ClientCreateModal({
     const owners = ownersQuery.data?.owners || [];
     const isWpProvision = form.onboarding_mode === 'wp_provision';
     const requiresProvisionContact = isWpProvision && !form.email.trim() && !form.phone_normalized.trim();
-    const requiresProvisionLocation = isWpProvision && (!form.region_id || !form.city_id);
+    const requiresProvisionLocation = isWpProvision && (
+        !form.region_id || (!form.city_id && !form.location_allows_region_only)
+    );
+    const locationRequirementMessage = !form.region_id
+        ? 'Choose a region before provisioning this WordPress profile.'
+        : form.location_allows_region_only
+            ? 'This region does not require a child city.'
+            : 'Choose a city within the selected region before provisioning this WordPress profile.';
     const selectedServiceCodes = Array.isArray(form.services)
         ? form.services.map((value) => String(value || '').trim()).filter(Boolean)
         : [];
@@ -565,7 +576,7 @@ export default function ClientCreateModal({
             errors.push('Add at least one contact channel for WordPress provisioning.');
         }
         if (isWpProvision && requiresProvisionLocation) {
-            errors.push('Choose both a region and a city before provisioning this WordPress profile.');
+            errors.push(locationRequirementMessage);
         }
         return errors;
     };
@@ -603,6 +614,23 @@ export default function ClientCreateModal({
     const goToStep = (nextStep) => {
         setWizardStep(nextStep);
         setStepErrors([]);
+    };
+
+    const handleMarketChange = (event) => {
+        const nextPlatformId = event.target.value;
+        setForm((current) => ({
+            ...current,
+            platform_id: nextPlatformId,
+            assigned_to: '',
+            region_id: null,
+            city_id: null,
+            location_allows_region_only: false,
+            currency: null,
+        }));
+
+        if (nextPlatformId) {
+            window.setTimeout(() => clientNameRef.current?.focus(), 0);
+        }
     };
 
     const handleNext = () => {
@@ -747,7 +775,14 @@ export default function ClientCreateModal({
                     ['Mode', isWpProvision ? (form.full_profile ? 'WordPress provisioning · full profile' : 'WordPress provisioning · quick provision') : 'CRM only'],
                     ['Client', form.name.trim() || 'Not provided'],
                     ['Contact', compactSummary([form.phone_normalized.trim(), form.email.trim()]) || 'No contact captured yet'],
-                    ['Location', compactSummary([form.region_id ? 'Region selected' : '', form.city_id ? 'City selected' : '']) || 'Not selected'],
+                    ['Location', compactSummary([
+                        form.region_id ? 'Region selected' : '',
+                        form.city_id
+                            ? 'City selected'
+                            : form.location_allows_region_only
+                                ? 'No city required'
+                                : '',
+                    ]) || 'Not selected'],
                     ['Owner', owners.find((owner) => String(owner.id) === String(form.assigned_to))?.name || 'Auto-assign owner'],
                 ],
             },
@@ -810,14 +845,8 @@ export default function ClientCreateModal({
                         id="client-create-market"
                         ref={primaryFocusRef}
                         value={form.platform_id}
-                        onChange={(event) => setForm((current) => ({
-                            ...current,
-                            platform_id: event.target.value,
-                            assigned_to: '',
-                            region_id: null,
-                            city_id: null,
-                            currency: null,
-                        }))}
+                        autoComplete="off"
+                        onChange={handleMarketChange}
                         className="crm-select w-full"
                         disabled={Boolean(lockedPlatformId)}
                     >
@@ -842,6 +871,7 @@ export default function ClientCreateModal({
                                     full_profile: false,
                                     region_id: null,
                                     city_id: null,
+                                    location_allows_region_only: false,
                                     wp_username: '',
                                     wp_password: '',
                                     birthday: '',
@@ -894,8 +924,10 @@ export default function ClientCreateModal({
                     <label htmlFor="client-create-name" className="mb-1 block text-sm font-medium text-slate-700">Client name</label>
                     <input
                         id="client-create-name"
+                        ref={clientNameRef}
                         type="text"
                         value={form.name}
+                        autoComplete="off"
                         onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                         className="crm-input"
                         placeholder="Enter client name"
@@ -908,6 +940,7 @@ export default function ClientCreateModal({
                         id="client-create-phone"
                         type="text"
                         value={form.phone_normalized}
+                        autoComplete="tel"
                         onChange={(event) => setForm((current) => ({ ...current, phone_normalized: event.target.value }))}
                         className="crm-input"
                         placeholder={`e.g. ${phonePrefix}712345678`}
@@ -920,6 +953,7 @@ export default function ClientCreateModal({
                         id="client-create-email"
                         type="email"
                         value={form.email}
+                        autoComplete="email"
                         onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
                         className="crm-input"
                         placeholder="name@example.com"
@@ -931,6 +965,7 @@ export default function ClientCreateModal({
                     <select
                         id="client-create-status"
                         value={form.profile_status}
+                        autoComplete="off"
                         onChange={(event) => setForm((current) => ({ ...current, profile_status: event.target.value }))}
                         className="crm-select w-full"
                     >
@@ -946,7 +981,9 @@ export default function ClientCreateModal({
                         <div className="mb-3 flex items-center justify-between gap-3">
                             <div>
                                 <p className="text-sm font-semibold text-slate-900">Location contract</p>
-                                <p className="text-xs text-slate-500">Region and city are stored as WordPress term IDs. Both must be present before provisioning.</p>
+                                <p className="text-xs text-slate-500">
+                                    Region and city are stored as WordPress term IDs. Some regions save directly when WordPress has no child cities.
+                                </p>
                             </div>
                             <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${requiresProvisionLocation ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
                                 {requiresProvisionLocation ? 'Required' : 'Ready'}
@@ -956,10 +993,11 @@ export default function ClientCreateModal({
                             platformId={form.platform_id ? Number(form.platform_id) : null}
                             regionId={form.region_id}
                             cityId={form.city_id}
-                            onChange={({ region_id, city_id }) => setForm((current) => ({
+                            onChange={({ region_id, city_id, location_allows_region_only = false }) => setForm((current) => ({
                                 ...current,
                                 region_id,
                                 city_id,
+                                location_allows_region_only,
                             }))}
                         />
                     </div>
@@ -991,6 +1029,7 @@ export default function ClientCreateModal({
                                 id="client-create-wp-username"
                                 type="text"
                                 value={form.wp_username}
+                                autoComplete="off"
                                 onChange={(event) => setForm((current) => ({ ...current, wp_username: event.target.value }))}
                                 className="crm-input"
                                 placeholder="Auto-generated if blank"
@@ -1003,6 +1042,7 @@ export default function ClientCreateModal({
                                 id="client-create-wp-password"
                                 type="text"
                                 value={form.wp_password}
+                                autoComplete="new-password"
                                 onChange={(event) => setForm((current) => ({ ...current, wp_password: event.target.value }))}
                                 className="crm-input"
                                 placeholder="Auto-generated if blank"
@@ -1457,7 +1497,7 @@ export default function ClientCreateModal({
                         </p>
                     ) : requiresProvisionLocation ? (
                         <p className="text-xs font-medium text-amber-700">
-                            Choose both a region and a city to finish WordPress provisioning.
+                            {locationRequirementMessage}
                         </p>
                     ) : createMutation.isPending ? (
                         <p className="text-xs font-medium text-teal-700">

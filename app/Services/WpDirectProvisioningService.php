@@ -339,28 +339,42 @@ class WpDirectProvisioningService
 
     private function assignLocationTaxonomy(int $postId, ?int $regionId, ?int $cityId): void
     {
-        if ($regionId === null || $cityId === null) {
+        if ($regionId === null) {
             return;
         }
 
         $connection = DB::connection($this->connectionName);
         $taxonomy = $this->resolveLocationTaxonomy();
         $regionTaxonomy = $this->findLocationTermTaxonomy($regionId, $taxonomy);
-        $cityTaxonomy = $this->findLocationTermTaxonomy($cityId, $taxonomy);
 
         if ($regionTaxonomy === null) {
             throw new \InvalidArgumentException('Selected region term does not exist in WordPress.');
         }
 
-        if ($cityTaxonomy === null) {
-            throw new \InvalidArgumentException('Selected city term does not exist in WordPress.');
-        }
+        $termTaxonomyId = (int) $regionTaxonomy->term_taxonomy_id;
 
-        if ((int) $cityTaxonomy->parent !== $regionId) {
-            throw new \InvalidArgumentException('Selected city is not a child of the selected region.');
-        }
+        if ($cityId !== null) {
+            $cityTaxonomy = $this->findLocationTermTaxonomy($cityId, $taxonomy);
 
-        $termTaxonomyId = (int) $cityTaxonomy->term_taxonomy_id;
+            if ($cityTaxonomy === null) {
+                throw new \InvalidArgumentException('Selected city term does not exist in WordPress.');
+            }
+
+            if ((int) $cityTaxonomy->parent !== $regionId) {
+                throw new \InvalidArgumentException('Selected city is not a child of the selected region.');
+            }
+
+            $termTaxonomyId = (int) $cityTaxonomy->term_taxonomy_id;
+        } else {
+            $hasChildCities = $connection->table('term_taxonomy')
+                ->where('taxonomy', $taxonomy)
+                ->where('parent', $regionId)
+                ->exists();
+
+            if ($hasChildCities) {
+                throw new \InvalidArgumentException('Selected region requires a child city.');
+            }
+        }
 
         $connection->table('term_relationships')->updateOrInsert(
             [
@@ -379,7 +393,9 @@ class WpDirectProvisioningService
             ->update(['count' => $count]);
 
         $this->upsertPostMeta($postId, 'country', $regionId);
-        $this->upsertPostMeta($postId, 'city', $cityId);
+        if ($cityId !== null) {
+            $this->upsertPostMeta($postId, 'city', $cityId);
+        }
     }
 
     private function resolveProfilePostType(): string
