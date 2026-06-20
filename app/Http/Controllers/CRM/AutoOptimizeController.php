@@ -490,6 +490,7 @@ class AutoOptimizeController extends Controller
             'criteria.require_below' => ['nullable', 'string', Rule::in(['any', 'all'])],
             'criteria.min_market_sample' => 'nullable|integer|min:1',
             'criteria.only_published' => 'nullable|boolean',
+            'criteria.only_active' => 'nullable|boolean',
             'criteria.eligibility_window_days' => 'nullable|integer|min:1|max:90',
             'actions' => 'nullable|array',
             'actions.optimize_bio' => 'nullable|boolean',

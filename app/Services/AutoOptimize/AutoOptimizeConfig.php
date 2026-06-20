@@ -122,6 +122,7 @@ class AutoOptimizeConfig
             'require_below' => 'any',
             'min_market_sample' => 10,
             'only_published' => true,
+            'only_active' => true, // publish + paid + not deactivated
             'eligibility_window_days' => 30,
         ];
     }

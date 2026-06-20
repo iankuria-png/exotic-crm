@@ -82,6 +82,10 @@ class AutoOptimizeSelectionService
         $engagementPct = (float) ($criteria['engagement_below_market_pct'] ?? 80) / 100;
         $requireBelow = (string) ($criteria['require_below'] ?? 'any');
         $onlyPublished = (bool) ($criteria['only_published'] ?? true);
+        // Only optimize ACTIVE profiles (publish + paid + not deactivated). Without
+        // this the engine queued Payment-Required / churned / never-paid profiles —
+        // wasting LLM cost and worker time on profiles that aren't even live.
+        $onlyActive = (bool) ($criteria['only_active'] ?? true);
         $dailyLimit = (int) ($schedule['daily_limit'] ?? 20);
 
         $candidates = collect();
@@ -99,7 +103,9 @@ class AutoOptimizeSelectionService
             $query = Client::query()
                 ->whereIn('wp_post_id', $chunk)
                 ->where('platform_id', $plan->platform_id)
-                ->when($onlyPublished, fn ($q) => $q->where('profile_status', 'publish'));
+                // scopeActive() = publish AND not needs_payment AND not notactive.
+                ->when($onlyActive, fn ($q) => $q->active())
+                ->when(!$onlyActive && $onlyPublished, fn ($q) => $q->where('profile_status', 'publish'));
 
             $query->chunkById(100, function ($clients) use (
                 $perProfile, $averages,

@@ -265,7 +265,10 @@ class SystemHealthUpdateController extends Controller
             'recent_alert_attempts' => $recentAlertAttempts,
             'queue_cron_command' => ($queueConnection = (string) config('queue.default', 'sync')) !== 'sync'
                 ? sprintf(
-                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
+                    // auto_optimize is LAST (lowest priority) so it never delays payment/push/alert
+                    // jobs — but it MUST be listed or the optimize queue is never consumed (jobs
+                    // pile up unreserved → "stalled"). This was the root cause of the optimizer stall.
+                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,alerts,default,auto_optimize --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
                     base_path(),
                     config('deployment.php_binary', '/usr/local/bin/php'),
                     $queueConnection
@@ -389,9 +392,10 @@ class SystemHealthUpdateController extends Controller
         cache()->forget($mutexKey);
 
         // Run a short-lived worker synchronously — processes jobs immediately.
+        // auto_optimize listed last so it drains too without delaying push.
         Artisan::call('queue:work', [
             'connection' => 'database',
-            '--queue' => 'push,default',
+            '--queue' => 'push,default,auto_optimize',
             '--stop-when-empty' => true,
             '--max-time' => 45,
             '--max-jobs' => 20,

@@ -56,10 +56,10 @@ function WorkerHealthBanner({ worker }) {
         <div className="flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3" role="alert">
             <span className="mt-0.5 text-rose-500" aria-hidden="true">⚠</span>
             <div className="min-w-0">
-                <p className="text-sm font-semibold text-rose-800">Queue worker stalled — optimizations are not being processed</p>
+                <p className="text-sm font-semibold text-rose-800">Queue worker isn’t draining the optimize queue</p>
                 <p className="mt-0.5 text-xs text-rose-700">
-                    <strong>{worker.pending}</strong> job{worker.pending === 1 ? '' : 's'} are queued but nothing is draining them. Start the background worker in
-                    {' '}<strong>Settings → System Health → Queue Worker</strong> (or run <code className="font-mono">php artisan queue:work --queue=auto_optimize</code>). Queued profiles auto-recover after a timeout.
+                    <strong>{worker.pending}</strong> job{worker.pending === 1 ? '' : 's'} are queued on <code className="font-mono">auto_optimize</code> but no worker is consuming it. Your worker must list this queue — re-copy the cron command from
+                    {' '}<strong>Settings → System Health → Queue Worker</strong> (it now ends with <code className="font-mono">--queue=push,alerts,default,auto_optimize</code>). Queued profiles auto-recover after a timeout.
                 </p>
             </div>
         </div>
