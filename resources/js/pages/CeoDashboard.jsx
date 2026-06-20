@@ -231,41 +231,34 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : null}
+            <RevenueTrendWidget
+                data={trendQuery.data}
+                isLoading={trendQuery.isLoading}
+                errorMessage={trendQuery.isError ? apiError(trendQuery.error, 'Revenue trend could not be loaded.') : null}
+                currency={trendQuery.data?.window?.target_currency || reporting.targetCurrency}
+                metric={trendMetric}
+                onMetricChange={setTrendMetric}
+                bucket={trendBucket}
+                onBucketChange={setTrendBucket}
+                showComparison={trendComparison}
+                onShowComparisonChange={setTrendComparison}
+                customerMix={summaryQuery.data?.customer_mix}
+                view={trendView}
+                onViewChange={setTrendView}
+                peakHoursData={peakHoursQuery.data}
+                peakHoursLoading={peakHoursQuery.isLoading}
+                peakHoursError={peakHoursQuery.isError ? apiError(peakHoursQuery.error, 'Peak-hours data could not be loaded.') : null}
+            />
 
-            <section className="grid gap-4 2xl:grid-cols-2">
-                <div>
-                    <RevenueTrendWidget
-                        data={trendQuery.data}
-                        isLoading={trendQuery.isLoading}
-                        errorMessage={trendQuery.isError ? apiError(trendQuery.error, 'Revenue trend could not be loaded.') : null}
-                        currency={trendQuery.data?.window?.target_currency || reporting.targetCurrency}
-                        metric={trendMetric}
-                        onMetricChange={setTrendMetric}
-                        bucket={trendBucket}
-                        onBucketChange={setTrendBucket}
-                        showComparison={trendComparison}
-                        onShowComparisonChange={setTrendComparison}
-                        customerMix={summaryQuery.data?.customer_mix}
-                        view={trendView}
-                        onViewChange={setTrendView}
-                        peakHoursData={peakHoursQuery.data}
-                        peakHoursLoading={peakHoursQuery.isLoading}
-                        peakHoursError={peakHoursQuery.isError ? apiError(peakHoursQuery.error, 'Peak-hours data could not be loaded.') : null}
-                    />
-                </div>
-                <div>
-                    <MarketRevenuePieWidget
-                        data={marketPieQuery.data}
-                        reporting={reporting}
-                        isLoading={marketPieQuery.isLoading}
-                        errorMessage={marketPieQuery.isError ? apiError(marketPieQuery.error, 'Market revenue could not be loaded.') : null}
-                        onSelectMarket={handleMarketScope}
-                        selectedMarket={selectedMarket}
-                        onClearMarket={() => handleMarketScope(null)}
-                    />
-                </div>
-            </section>
+            <MarketRevenuePieWidget
+                data={marketPieQuery.data}
+                reporting={reporting}
+                isLoading={marketPieQuery.isLoading}
+                errorMessage={marketPieQuery.isError ? apiError(marketPieQuery.error, 'Market revenue could not be loaded.') : null}
+                onSelectMarket={handleMarketScope}
+                selectedMarket={selectedMarket}
+                onClearMarket={() => handleMarketScope(null)}
+            />
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
@@ -313,6 +306,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 focusedAgentId={focusedAgentId}
                 onOpenTeam={() => navigate('/team')}
             />
+
+            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : null}
 
             <ProfileEngagementWidget
                 platformFilter={engagementPlatform}
