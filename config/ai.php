@@ -54,6 +54,7 @@ return [
         // Reporting views expose USD-normalized amounts; surface that contract
         // to prompts and UI so answers/tables do not mix native currencies.
         'reporting_currency' => env('AI_INSIGHTS_REPORTING_CURRENCY', 'USD'),
+        'headline_mode' => env('AI_INSIGHTS_HEADLINE_MODE', 'deterministic'),
         'chart_suggestions' => true,
         'show_generated_sql' => true,
         'rate_limit_per_minute' => (int) env('AI_INSIGHTS_RATE_LIMIT', 12),

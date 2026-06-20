@@ -29,6 +29,11 @@ class CeoDashboardController extends Controller
         return response()->json($this->dashboardData->revenueTrend($request));
     }
 
+    public function peakHours(Request $request): JsonResponse
+    {
+        return response()->json($this->dashboardData->peakHours($request));
+    }
+
     public function recentPayments(Request $request): JsonResponse
     {
         return response()->json($this->dashboardData->recentPayments($request));

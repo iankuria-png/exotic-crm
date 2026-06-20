@@ -640,6 +640,7 @@ function TalkToDataSection({ data, toast, queryClient }) {
         chart_suggestions: i.chart_suggestions ?? true,
         rate_limit_per_minute: i.rate_limit_per_minute ?? 12,
         daily_cost_cap_usd: i.daily_cost_cap_usd ?? 5,
+        headline_mode: i.headline_mode ?? 'deterministic',
     });
 
     const mutation = useMutation({
@@ -648,6 +649,7 @@ function TalkToDataSection({ data, toast, queryClient }) {
             toast.success('Talk to Data settings saved.');
             queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
             queryClient.invalidateQueries({ queryKey: ['ai-insights-health'] });
+            queryClient.invalidateQueries({ queryKey: ['ai-insights-headline'] });
         },
         onError: (err) => toast.error(err?.response?.data?.message || 'Could not save Talk to Data settings.'),
     });
@@ -752,6 +754,26 @@ function TalkToDataSection({ data, toast, queryClient }) {
                 </Field>
                 <Field label="Daily cost cap (USD)">
                     <input type="number" min="0" step="0.5" value={form.daily_cost_cap_usd} onChange={(e) => setForm({ ...form, daily_cost_cap_usd: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="Dashboard headline">
+                    <div className="grid grid-cols-2 rounded-md border border-slate-300 bg-white p-0.5">
+                        {[
+                            ['deterministic', 'Deterministic', 'Data-derived, no AI cost'],
+                            ['generated', 'Generated', 'Live AI summary, counts against daily cap'],
+                        ].map(([key, label, description]) => (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => setForm({ ...form, headline_mode: key })}
+                                className={`rounded px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                    form.headline_mode === key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                            >
+                                <span className="block text-xs font-semibold">{label}</span>
+                                <span className={`mt-0.5 block text-[11px] ${form.headline_mode === key ? 'text-slate-200' : 'text-slate-500'}`}>{description}</span>
+                            </button>
+                        ))}
+                    </div>
                 </Field>
                 <Field label="Evidence display">
                     <div className="space-y-2 rounded-md border border-slate-200 px-3 py-2">

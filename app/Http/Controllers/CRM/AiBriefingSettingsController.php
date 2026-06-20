@@ -76,6 +76,7 @@ class AiBriefingSettingsController extends Controller
             'chart_suggestions'    => ['sometimes', 'boolean'],
             'rate_limit_per_minute' => ['sometimes', 'integer', 'min:1', 'max:120'],
             'daily_cost_cap_usd'   => ['sometimes', 'numeric', 'min:0'],
+            'headline_mode'        => ['sometimes', 'string', 'in:deterministic,generated'],
             'project_intelligence' => ['sometimes', 'array'],
             'project_intelligence.enabled' => ['sometimes', 'boolean'],
             'project_intelligence.commit_lookback' => ['sometimes', 'integer', 'min:1', 'max:200'],

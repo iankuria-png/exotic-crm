@@ -184,6 +184,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/summary', [CeoDashboardController::class, 'summary']);
         Route::get('/market-pie', [CeoDashboardController::class, 'marketPie']);
         Route::get('/revenue-trend', [CeoDashboardController::class, 'revenueTrend']);
+        Route::get('/peak-hours', [CeoDashboardController::class, 'peakHours']);
         Route::get('/recent-payments', [CeoDashboardController::class, 'recentPayments']);
         Route::get('/agent-performance', [CeoDashboardController::class, 'agentPerformance']);
     });
@@ -741,6 +742,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     // Gated to admin + sub_admin (CEO is admin); sales/field receive 403.
     Route::middleware('role:admin,sub_admin')->prefix('ai')->group(function () {
         Route::get('/insights/health', [AiInsightsController::class, 'health']);
+        Route::get('/insights/headline', [AiInsightsController::class, 'headline']);
         Route::post('/ask', [AiInsightsController::class, 'ask']);
     });
 });

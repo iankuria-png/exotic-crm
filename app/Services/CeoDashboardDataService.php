@@ -10,6 +10,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use Carbon\Carbon;
+use Carbon\CarbonTimeZone;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -238,6 +239,88 @@ class CeoDashboardDataService
         ];
     }
 
+    public function peakHours(Request $request): array
+    {
+        $context = $this->context($request);
+        $targetCurrency = $context['target_currency'];
+        $timezone = (string) config('ceo.peak_hours_timezone', 'Africa/Nairobi');
+
+        $rows = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->selectRaw($this->dowExpressionRaw() . ' as dow_raw')
+            ->selectRaw($this->hourExpression() . ' as hour')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->groupByRaw($this->dowExpressionRaw())
+            ->groupByRaw($this->hourExpression())
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+
+        $cells = [];
+        for ($dow = 0; $dow < 7; $dow++) {
+            for ($hour = 0; $hour < 24; $hour++) {
+                $cells["{$dow}-{$hour}"] = [
+                    'dow' => $dow,
+                    'hour' => $hour,
+                    'value' => 0.0,
+                    'payments_count' => 0,
+                    'source_breakdown' => [],
+                    'normalization_meta' => null,
+                ];
+            }
+        }
+
+        $driver = DB::connection()->getDriverName();
+        $groups = collect($rows)->groupBy(function ($row) use ($driver) {
+            $dow = $this->normalizePeakHoursDow((int) $row->dow_raw, $driver);
+            $hour = (int) $row->hour;
+
+            return "{$dow}-{$hour}";
+        });
+
+        foreach ($groups as $key => $groupRows) {
+            [$dow, $hour] = array_map('intval', explode('-', (string) $key, 2));
+            $eventRows = $groupRows->map(function ($row) use ($context) {
+                return (object) [
+                    // Peak-hours is a window-level view; use the window end date for FX lookup.
+                    'event_date' => $context['to']->toDateString(),
+                    'currency' => strtoupper((string) $row->currency),
+                    'amount' => (float) $row->amount,
+                ];
+            });
+            $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency, false);
+
+            $cells[$key] = [
+                'dow' => $dow,
+                'hour' => $hour,
+                'value' => (float) ($normalized['normalized_total'] ?? 0),
+                'payments_count' => (int) $groupRows->sum('payments_count'),
+                'source_breakdown' => $normalized['source_breakdown'] ?? [],
+                'normalization_meta' => $normalized['normalization_meta'] ?? null,
+            ];
+        }
+
+        $cellValues = array_values($cells);
+        $total = round((float) array_sum(array_column($cellValues, 'value')), 2);
+        $totalPayments = (int) array_sum(array_column($cellValues, 'payments_count'));
+        $activeHours = count(array_filter($cellValues, fn (array $cell) => (float) $cell['value'] > 0));
+        $peak = collect($cellValues)
+            ->sortByDesc(fn (array $cell) => [(float) $cell['value'], (int) $cell['payments_count']])
+            ->first();
+
+        return [
+            'window' => $this->serializeWindow($context),
+            'target_currency' => $targetCurrency,
+            'timezone' => $timezone,
+            'cells' => $cellValues,
+            'peak' => $peak,
+            'total_normalized' => $total,
+            'total_payments' => $totalPayments,
+            'avg_per_active_hour' => $activeHours > 0 ? round($total / $activeHours, 2) : 0.0,
+        ];
+    }
+
     public function recentPayments(Request $request): array
     {
         $context = $this->context($request);
@@ -430,6 +513,50 @@ class CeoDashboardDataService
             'platform_id' => $platform?->id ? (int) $platform->id : null,
             'platform' => $platform,
             'target_currency' => $targetCurrency,
+        ];
+    }
+
+    public function deterministicHeadline(array $summary): array
+    {
+        $delta = data_get($summary, 'metrics.collected_revenue.delta_percent');
+        if ($delta !== null && (float) $delta != 0.0) {
+            $value = (float) $delta;
+
+            return [
+                'headline' => sprintf('Collected revenue is %s%s%% vs. the prior window.', $value > 0 ? '+' : '', number_format($value, 1)),
+                'accent' => $value > 0 ? 'positive' : 'warning',
+                'key' => 'cash_velocity',
+            ];
+        }
+
+        $newShare = data_get($summary, 'customer_mix.buckets.new_active.share_percent');
+        $existingShare = data_get($summary, 'customer_mix.buckets.existing_active.share_percent');
+        if ($newShare !== null || $existingShare !== null) {
+            return [
+                'headline' => sprintf(
+                    'Existing users contribute %s%% vs. %s%% from new users.',
+                    number_format((float) ($existingShare ?? 0), 1),
+                    number_format((float) ($newShare ?? 0), 1)
+                ),
+                'accent' => (float) ($existingShare ?? 0) >= (float) ($newShare ?? 0) ? 'positive' : 'warning',
+                'key' => 'customer_mix',
+            ];
+        }
+
+        $leadingMarket = collect((array) data_get($summary, 'insights', []))
+            ->firstWhere('key', 'top_market');
+        if ($leadingMarket && !empty($leadingMarket['message'])) {
+            return [
+                'headline' => (string) $leadingMarket['message'],
+                'accent' => 'neutral',
+                'key' => 'top_market',
+            ];
+        }
+
+        return [
+            'headline' => 'Dashboard metrics are ready for the selected window.',
+            'accent' => 'neutral',
+            'key' => 'fallback',
         ];
     }
 
@@ -1001,6 +1128,49 @@ class CeoDashboardDataService
         return DB::connection()->getDriverName() === 'sqlite'
             ? 'date(COALESCE(payments.completed_at, payments.created_at))'
             : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
+    }
+
+    private function hourExpression(): string
+    {
+        $offsets = $this->peakHoursOffsets();
+
+        return DB::connection()->getDriverName() === 'sqlite'
+            ? "strftime('%H', COALESCE(payments.completed_at, payments.created_at), '{$offsets['sqlite']}')"
+            : "HOUR(CONVERT_TZ(COALESCE(payments.completed_at, payments.created_at), '+00:00', '{$offsets['mysql']}'))";
+    }
+
+    private function dowExpressionRaw(): string
+    {
+        $offsets = $this->peakHoursOffsets();
+
+        return DB::connection()->getDriverName() === 'sqlite'
+            ? "strftime('%w', COALESCE(payments.completed_at, payments.created_at), '{$offsets['sqlite']}')"
+            : "DAYOFWEEK(CONVERT_TZ(COALESCE(payments.completed_at, payments.created_at), '+00:00', '{$offsets['mysql']}'))";
+    }
+
+    private function peakHoursOffsets(): array
+    {
+        $timezone = CarbonTimeZone::create((string) config('ceo.peak_hours_timezone', 'Africa/Nairobi'));
+        $offsetSeconds = $timezone->getOffset(now());
+        $sign = $offsetSeconds < 0 ? '-' : '+';
+        $absolute = abs($offsetSeconds);
+        $hours = intdiv($absolute, 3600);
+        $minutes = intdiv($absolute % 3600, 60);
+        $totalMinutes = intdiv($absolute, 60);
+
+        return [
+            'mysql' => sprintf('%s%02d:%02d', $sign, $hours, $minutes),
+            'sqlite' => $minutes === 0
+                ? sprintf('%s%d hours', $sign, $hours)
+                : sprintf('%s%d minutes', $sign, $totalMinutes),
+        ];
+    }
+
+    private function normalizePeakHoursDow(int $raw, string $driver): int
+    {
+        return $driver === 'sqlite'
+            ? ($raw + 6) % 7
+            : ($raw + 5) % 7;
     }
 
     private function paymentMethod(Payment $payment): array

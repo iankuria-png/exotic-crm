@@ -12,10 +12,12 @@ use App\Services\Ai\Exceptions\SqlValidationException;
 use App\Services\Ai\MetricsSnapshotService;
 use App\Services\Ai\ProjectIntelligenceService;
 use App\Services\Ai\SqlSafetyValidator;
+use App\Services\CeoDashboardDataService;
 use App\Services\Seo\Exceptions\AllProvidersFailedException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
@@ -51,6 +53,7 @@ class AiInsightsController extends Controller
         private readonly MetricsSnapshotService $metrics,
         private readonly ProjectIntelligenceService $project,
         private readonly AiGateway $gateway,
+        private readonly CeoDashboardDataService $ceoDashboard,
     ) {}
 
     public function ask(Request $request): JsonResponse
@@ -211,6 +214,7 @@ class AiInsightsController extends Controller
             ],
             'show_generated_sql' => $this->settings->showGeneratedSql(),
             'chart_suggestions'  => $this->settings->chartSuggestions(),
+            'headline_mode'      => $this->settings->headlineMode(),
             'reporting_views'    => (array) config('ai.reporting_views', []),
             'rate_limit_per_minute' => $this->settings->rateLimitPerMinute(),
             'daily_cost_cap_usd' => $this->settings->dailyCostCapUsd(),
@@ -225,6 +229,80 @@ class AiInsightsController extends Controller
             ],
             'scope'              => $this->resolveScope($user) === null ? 'org_wide' : 'market_scoped',
         ]);
+    }
+
+    public function headline(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$this->userAllowed($user)) {
+            return response()->json(['message' => 'You do not have access to AI insights.'], 403);
+        }
+
+        $request->validate([
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
+            'platform_id' => ['nullable', 'integer'],
+            'reporting_currency' => ['nullable', 'string', 'min:3', 'max:8'],
+        ]);
+
+        $summary = $this->ceoDashboard->summary($request);
+        $base = $this->ceoDashboard->deterministicHeadline($summary);
+
+        if ($this->settings->headlineMode() !== 'generated' || !$this->settings->enabled() || $this->dailyCostExceeded()) {
+            return response()->json([
+                'mode' => 'deterministic',
+                ...$base,
+            ]);
+        }
+
+        $window = (array) ($summary['window'] ?? []);
+        $cacheKey = implode('|', [
+            'headline',
+            'generated',
+            $window['from'] ?? (string) $request->query('from', ''),
+            $window['to'] ?? (string) $request->query('to', ''),
+            (string) $request->query('platform_id', 'all'),
+            (string) ($window['target_currency'] ?? $request->query('reporting_currency', $this->settings->reportingCurrency())),
+        ]);
+
+        try {
+            $payload = Cache::remember($cacheKey, now()->endOfDay(), function () use ($summary, $base, $user) {
+                $system = 'You write concise CEO dashboard headlines. Write ONE sentence, max 140 characters, '
+                    . 'summarizing the most important shift. Use only the provided structured dashboard metrics.';
+                $userMsg = "Dashboard summary JSON:\n" . json_encode([
+                    'window' => $summary['window'] ?? null,
+                    'metrics' => $summary['metrics'] ?? [],
+                    'customer_mix' => $summary['customer_mix'] ?? null,
+                    'insights' => $summary['insights'] ?? [],
+                ], JSON_UNESCAPED_SLASHES);
+
+                $result = $this->gateway->generate('insights_summary', $system, $userMsg, [
+                    'user_id' => $user?->id,
+                    'model' => config('ai.providers.summary_model'),
+                    'max_tokens' => 80,
+                ]);
+                $headline = trim(preg_replace('/\s+/', ' ', $result->text()));
+                $headline = $headline !== '' ? mb_substr($headline, 0, 140) : $base['headline'];
+
+                return [
+                    'mode' => 'generated',
+                    'headline' => $headline,
+                    'accent' => $base['accent'],
+                    'key' => $base['key'],
+                    'generated_at' => now()->toIso8601String(),
+                ];
+            });
+        } catch (\Throwable $e) {
+            Log::info('ai.insights.headline_fallback', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'mode' => 'deterministic',
+                ...$base,
+            ]);
+        }
+
+        return response()->json($payload);
     }
 
     // ---------------------------------------------------------------------

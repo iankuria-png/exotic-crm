@@ -48,10 +48,11 @@ function canUseAiInsights(user) {
     return !!user && (user.is_ceo || ['admin', 'sub_admin'].includes(user.role));
 }
 
-export default function AiInsightsPanel({ user, context = null }) {
+export default function AiInsightsPanel({ user, context = null, showHeadline = false }) {
     const [question, setQuestion] = useState('');
     const [source, setSource] = useState('auto');
     const [answer, setAnswer] = useState(null);
+    const [expanded, setExpanded] = useState(false);
 
     const healthQuery = useQuery({
         queryKey: ['ai-insights-health'],
@@ -78,6 +79,13 @@ export default function AiInsightsPanel({ user, context = null }) {
     });
 
     const health = healthQuery.data || {};
+    const headlineQuery = useQuery({
+        queryKey: ['ai-insights-headline', context, health.headline_mode],
+        queryFn: () => api.get('/crm/ai/insights/headline', { params: context || {} }).then((r) => r.data),
+        enabled: canUseAiInsights(user) && !healthQuery.isLoading && showHeadline,
+        staleTime: 120_000,
+        retry: false,
+    });
     const sources = health.sources || {};
     const reportingCurrency = answer?.reporting_currency || health.reporting_currency || 'USD';
     const activeSource = answer?.source || (source === 'auto' ? 'auto' : source);
@@ -111,82 +119,81 @@ export default function AiInsightsPanel({ user, context = null }) {
         return health.enabled && sources[key] !== false;
     };
 
+    const headline = showHeadline && !headlineQuery.isError ? headlineQuery.data?.headline : null;
+    const accent = headlineQuery.data?.accent || 'neutral';
+    const accentClass = accent === 'positive'
+        ? 'bg-emerald-500'
+        : accent === 'warning'
+            ? 'bg-amber-500'
+            : 'bg-slate-400';
+
     return (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm" aria-label="Talk to Your Data">
-            <div className="border-b border-slate-200 bg-slate-50/80 px-4 py-3">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="min-w-0">
-                        <p className="text-xs font-semibold uppercase text-slate-500">AI analyst</p>
-                        <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
-                            <h2 className="text-xl font-semibold text-slate-950">Talk to Your Data</h2>
-                            <span className="text-sm font-medium text-slate-500">Reporting in {reportingCurrency}</span>
+            <div className="px-4 py-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                            <span className="grid h-7 w-7 place-items-center rounded-md bg-teal-50 text-sm font-semibold text-teal-700" aria-hidden="true">AI</span>
+                            <div className="min-w-0">
+                                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">AI Insights</p>
+                                <p className="text-xs font-medium text-slate-500">Reporting in {reportingCurrency}</p>
+                            </div>
                         </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap sm:items-center">
-                        <StatusBadge ok={!!health.enabled}>{health.enabled ? 'Enabled' : 'Disabled'}</StatusBadge>
-                        <StatusBadge ok={health.scope !== 'empty'}>{health.scope === 'market_scoped' ? 'Market scoped' : 'Org wide'}</StatusBadge>
-                        <StatusBadge ok>{reportingCurrency}</StatusBadge>
-                        {health.daily_cost_cap_usd !== undefined ? (
-                            <span className="rounded-md border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600">
-                                ${Number(health.daily_cost_used_usd || 0).toFixed(4)} / ${Number(health.daily_cost_cap_usd || 0).toFixed(2)}
-                            </span>
+                        {showHeadline ? (
+                            headlineQuery.isLoading ? (
+                                <div className="mt-3 h-6 max-w-3xl animate-pulse rounded bg-slate-100" />
+                            ) : headline ? (
+                                <p className="mt-3 flex max-w-4xl items-start gap-2 text-base font-semibold leading-6 text-slate-950">
+                                    <span className={`mt-2 h-2 w-2 shrink-0 rounded-full ${accentClass}`} />
+                                    <span>{headline}</span>
+                                </p>
+                            ) : null
                         ) : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setExpanded((value) => !value)}
+                            className="min-h-10 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                        >
+                            {expanded ? 'Close' : 'Ask AI'}
+                        </button>
                     </div>
                 </div>
             </div>
 
-            {healthQuery.isLoading ? (
-                <AiStateBlock className="m-4" variant="loading" message="Checking AI insight sources..." />
-            ) : healthQuery.isError ? (
-                <AiStateBlock
-                    className="m-4"
-                    variant="error"
-                    title="AI insights are unavailable"
-                    message={healthQuery.error?.response?.data?.message || 'The insight health check did not complete.'}
-                    onRetry={() => healthQuery.refetch()}
-                />
-            ) : !health.enabled ? (
-                <AiStateBlock
-                    className="m-4"
-                    variant="empty"
-                    title="AI insights are disabled"
-                    message="Enable Talk to Data in Settings before asking dashboard questions."
-                />
-            ) : (
-                <div className="grid gap-4 p-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="Insight source">
-                        <p className="mb-2 text-xs font-semibold uppercase text-slate-500">Source</p>
-                        <div className="grid gap-2">
-                        {CHIP_ORDER.map((key) => {
-                            const available = sourceAvailable(key);
-                            return (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    onClick={() => available && setSource(key)}
-                                    disabled={!available}
-                                    aria-pressed={source === key}
-                                    title={!available ? `${SOURCE_LABELS[key]} is disabled or unavailable` : SOURCE_LABELS[key]}
-                                    className={`min-h-11 rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                                        source === key
-                                            ? 'border-teal-300 bg-white text-teal-900 shadow-sm'
-                                            : 'border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white'
-                                    } disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400`}
-                                >
-                                    <span className="flex items-center justify-between gap-3">
-                                        <span>
-                                            <span className="block text-sm font-semibold">{SOURCE_LABELS[key]}</span>
-                                            <span className="mt-0.5 block text-xs font-medium text-slate-500">{SOURCE_DESCRIPTIONS[key]}</span>
-                                        </span>
-                                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${available ? 'bg-emerald-400' : 'bg-slate-300'}`} aria-hidden="true" />
-                                    </span>
-                                </button>
-                            );
-                        })}
-                        </div>
-                    </div>
+            <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+                <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge ok={!!health.enabled}>{health.enabled ? 'Enabled' : 'Disabled'}</StatusBadge>
+                    <StatusBadge ok={health.scope !== 'empty'}>{health.scope === 'market_scoped' ? 'Market scoped' : 'Org wide'}</StatusBadge>
+                    {health.daily_cost_cap_usd !== undefined ? (
+                        <span className="font-semibold text-slate-500">
+                            ${Number(health.daily_cost_used_usd || 0).toFixed(4)} / ${Number(health.daily_cost_cap_usd || 0).toFixed(2)}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
 
-                    <div className="min-w-0 space-y-4">
+            {expanded ? (
+                healthQuery.isLoading ? (
+                    <AiStateBlock className="m-4" variant="loading" message="Checking AI insight sources..." />
+                ) : healthQuery.isError ? (
+                    <AiStateBlock
+                        className="m-4"
+                        variant="error"
+                        title="AI insights are unavailable"
+                        message={healthQuery.error?.response?.data?.message || 'The insight health check did not complete.'}
+                        onRetry={() => healthQuery.refetch()}
+                    />
+                ) : !health.enabled ? (
+                    <AiStateBlock
+                        className="m-4"
+                        variant="empty"
+                        title="AI insights are disabled"
+                        message="Enable Talk to Data in Settings before asking dashboard questions."
+                    />
+                ) : (
+                    <div className="min-w-0 space-y-4 p-4">
                         <form
                             className="rounded-md border border-slate-200 bg-white p-3"
                             onSubmit={(event) => {
@@ -212,6 +219,39 @@ export default function AiInsightsPanel({ user, context = null }) {
                                     {askMutation.isPending ? 'Asking...' : 'Ask'}
                                 </button>
                             </div>
+                            <details className="mt-3 rounded-md border border-slate-200 bg-slate-50">
+                                <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+                                    Advanced source
+                                </summary>
+                                <div className="grid gap-2 border-t border-slate-200 p-3 md:grid-cols-2 xl:grid-cols-5">
+                                    {CHIP_ORDER.map((key) => {
+                                        const available = sourceAvailable(key);
+                                        return (
+                                            <button
+                                                key={key}
+                                                type="button"
+                                                onClick={() => available && setSource(key)}
+                                                disabled={!available}
+                                                aria-pressed={source === key}
+                                                title={!available ? `${SOURCE_LABELS[key]} is disabled or unavailable` : SOURCE_LABELS[key]}
+                                                className={`min-h-11 rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                                    source === key
+                                                        ? 'border-teal-300 bg-white text-teal-900 shadow-sm'
+                                                        : 'border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white'
+                                                } disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400`}
+                                            >
+                                                <span className="flex items-center justify-between gap-3">
+                                                    <span>
+                                                        <span className="block text-sm font-semibold">{SOURCE_LABELS[key]}</span>
+                                                        <span className="mt-0.5 block text-xs font-medium text-slate-500">{SOURCE_DESCRIPTIONS[key]}</span>
+                                                    </span>
+                                                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${available ? 'bg-emerald-400' : 'bg-slate-300'}`} aria-hidden="true" />
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </details>
                             <div className="mt-3 grid gap-2 md:grid-cols-3">
                                 {visibleSuggestions.map((prompt) => (
                                     <button
@@ -246,8 +286,8 @@ export default function AiInsightsPanel({ user, context = null }) {
                             />
                         )}
                     </div>
-                </div>
-            )}
+                )
+            ) : null}
         </section>
     );
 }

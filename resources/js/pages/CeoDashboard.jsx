@@ -59,6 +59,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [trendMetric, setTrendMetric] = useState('revenue');
     const [trendBucket, setTrendBucket] = useState('auto');
     const [trendComparison, setTrendComparison] = useState(true);
+    const [trendView, setTrendView] = useState('trend');
     const [recentLimit, setRecentLimit] = useState(10);
     const [recentChannel, setRecentChannel] = useState('all');
     const [engagementMarket, setEngagementMarket] = useState(null);
@@ -97,6 +98,13 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             },
         }).then((response) => response.data),
         staleTime: 45_000,
+    });
+
+    const peakHoursQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'peak-hours', queryParams],
+        queryFn: () => api.get('/crm/dashboard/ceo/peak-hours', { params: queryParams }).then((response) => response.data),
+        enabled: trendView === 'peak',
+        staleTime: 60_000,
     });
 
     const recentPaymentsQuery = useQuery({
@@ -223,7 +231,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} /> : null}
+            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : null}
 
             <section className="grid gap-4 2xl:grid-cols-2">
                 <div>
@@ -239,6 +247,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         showComparison={trendComparison}
                         onShowComparisonChange={setTrendComparison}
                         customerMix={summaryQuery.data?.customer_mix}
+                        view={trendView}
+                        onViewChange={setTrendView}
+                        peakHoursData={peakHoursQuery.data}
+                        peakHoursLoading={peakHoursQuery.isLoading}
+                        peakHoursError={peakHoursQuery.isError ? apiError(peakHoursQuery.error, 'Peak-hours data could not be loaded.') : null}
                     />
                 </div>
                 <div>

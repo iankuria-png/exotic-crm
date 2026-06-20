@@ -77,6 +77,13 @@ class AiInsightsSettingsService
         return $currency !== '' ? $currency : 'USD';
     }
 
+    public function headlineMode(): string
+    {
+        $mode = trim((string) data_get($this->settings(), 'headline_mode', 'deterministic'));
+
+        return in_array($mode, ['deterministic', 'generated'], true) ? $mode : 'deterministic';
+    }
+
     public function projectIntelligenceSettings(): array
     {
         return array_replace_recursive(
@@ -128,6 +135,11 @@ class AiInsightsSettingsService
 
         if (array_key_exists('daily_cost_cap_usd', $input)) {
             $next['daily_cost_cap_usd'] = max(0.0, (float) $input['daily_cost_cap_usd']);
+        }
+
+        if (array_key_exists('headline_mode', $input)) {
+            $mode = trim((string) $input['headline_mode']);
+            $next['headline_mode'] = in_array($mode, ['deterministic', 'generated'], true) ? $mode : 'deterministic';
         }
 
         if (array_key_exists('allowed_roles', $input)) {

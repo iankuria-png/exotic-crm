@@ -379,6 +379,77 @@ class AiInsightsTest extends TestCase
             ->assertJsonPath('generated_sql', null);
     }
 
+    public function test_headline_mode_setting_round_trips_to_health(): void
+    {
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $this->patchJson('/api/crm/settings/ai/insights', ['headline_mode' => 'generated'])
+            ->assertOk()
+            ->assertJsonPath('insights.headline_mode', 'generated');
+
+        $this->getJson('/api/crm/ai/insights/health')
+            ->assertOk()
+            ->assertJsonPath('headline_mode', 'generated');
+
+        $this->patchJson('/api/crm/settings/ai/insights', ['headline_mode' => 'sometimes'])
+            ->assertStatus(422);
+    }
+
+    public function test_headline_endpoint_returns_deterministic_without_ai_call_when_configured(): void
+    {
+        config(['ai.insights.headline_mode' => 'deterministic']);
+        $this->bindFailingAi();
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $this->getJson('/api/crm/ai/insights/headline?reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('mode', 'deterministic')
+            ->assertJsonStructure(['headline', 'accent', 'key']);
+
+        $this->assertSame(0, AiInteraction::where('feature', 'insights_summary')->count());
+    }
+
+    public function test_headline_endpoint_falls_back_when_generated_mode_cannot_call_ai(): void
+    {
+        config(['ai.insights.headline_mode' => 'generated', 'ai.insights.enabled' => false]);
+        $this->bindFailingAi();
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $this->getJson('/api/crm/ai/insights/headline?reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('mode', 'deterministic');
+
+        $this->assertSame(0, AiInteraction::where('feature', 'insights_summary')->count());
+    }
+
+    public function test_headline_endpoint_falls_back_on_provider_exception_without_500(): void
+    {
+        config(['ai.insights.headline_mode' => 'generated', 'ai.insights.enabled' => true]);
+        $this->bindFailingAi();
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $this->getJson('/api/crm/ai/insights/headline?reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('mode', 'deterministic')
+            ->assertJsonStructure(['headline', 'accent', 'key']);
+    }
+
+    public function test_headline_endpoint_returns_trimmed_generated_headline(): void
+    {
+        config(['ai.insights.headline_mode' => 'generated', 'ai.insights.enabled' => true]);
+        $this->bindAiSequence([
+            str_repeat('Revenue momentum is improving across the selected CEO dashboard window. ', 4),
+        ]);
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $response = $this->getJson('/api/crm/ai/insights/headline?reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('mode', 'generated')
+            ->assertJsonStructure(['headline', 'accent', 'key', 'generated_at']);
+
+        $this->assertLessThanOrEqual(140, mb_strlen($response->json('headline')));
+    }
+
     private function bindSql(string $sql): void
     {
         $this->bindAiSequence([
