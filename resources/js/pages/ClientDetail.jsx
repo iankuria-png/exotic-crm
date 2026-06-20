@@ -77,6 +77,101 @@ function firstProfileErrorMessage(data) {
     return '';
 }
 
+function normalizeProfileCodeList(value, field) {
+    return parseProfileServices(value, field)
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+}
+
+function buildNormalizedProfileUpdateFields(profileForm) {
+    const normalizedGender = resolveProfileEnumValue('gender', profileForm.gender);
+    const normalizedEthnicity = resolveProfileEnumValue('ethnicity', profileForm.ethnicity);
+    const normalizedBuild = resolveProfileEnumValue('build', profileForm.build);
+    const normalizedAvailability = normalizeProfileCodeList(profileForm.availability, 'availability');
+    const normalizedServices = normalizeProfileCodeList(profileForm.services, 'services');
+
+    return {
+        name: profileForm.name?.trim() || '',
+        phone: profileForm.phone?.trim() || null,
+        email: profileForm.email?.trim() || null,
+        birthday: normalizeBirthdayForSave(profileForm.birthday),
+        gender: normalizedGender || null,
+        ethnicity: normalizedEthnicity || null,
+        height: normalizeHeightForSave(profileForm.height),
+        build: normalizedBuild || null,
+        haircolor: profileForm.haircolor || null,
+        hairlength: profileForm.hairlength || null,
+        bustsize: profileForm.bustsize || null,
+        weight: profileForm.weight?.toString().trim() || null,
+        looks: profileForm.looks || null,
+        smoker: profileForm.smoker || null,
+        availability: normalizedAvailability.length ? normalizedAvailability : null,
+        services: normalizedServices.length ? normalizedServices : null,
+        extraservices: profileForm.extraservices?.trim() || null,
+        incall: profileForm.rates_incall?.trim() || null,
+        outcall: profileForm.rates_outcall?.trim() || null,
+        currency: profileForm.currency ? Number(profileForm.currency) : null,
+        rate30min_incall: profileForm.rate30min_incall?.trim() || null,
+        rate30min_outcall: profileForm.rate30min_outcall?.trim() || null,
+        rate1h_incall: profileForm.rate1h_incall?.trim() || null,
+        rate1h_outcall: profileForm.rate1h_outcall?.trim() || null,
+        rate2h_incall: profileForm.rate2h_incall?.trim() || null,
+        rate2h_outcall: profileForm.rate2h_outcall?.trim() || null,
+        rate3h_incall: profileForm.rate3h_incall?.trim() || null,
+        rate3h_outcall: profileForm.rate3h_outcall?.trim() || null,
+        rate6h_incall: profileForm.rate6h_incall?.trim() || null,
+        rate6h_outcall: profileForm.rate6h_outcall?.trim() || null,
+        rate12h_incall: profileForm.rate12h_incall?.trim() || null,
+        rate12h_outcall: profileForm.rate12h_outcall?.trim() || null,
+        rate24h_incall: profileForm.rate24h_incall?.trim() || null,
+        rate24h_outcall: profileForm.rate24h_outcall?.trim() || null,
+        whatsapp: profileForm.whatsapp?.trim() || null,
+        instagram: profileForm.instagram?.trim() || null,
+        twitter: profileForm.twitter?.trim() || null,
+        telegram: profileForm.telegram?.trim() || null,
+        website: profileForm.website?.trim() || null,
+        facebook: profileForm.facebook?.trim() || null,
+        snapchat: profileForm.snapchat?.trim() || null,
+        content: profileForm.bio || '',
+        education: profileForm.education?.trim() || null,
+        occupation: profileForm.occupation?.trim() || null,
+        sports: profileForm.sports?.trim() || null,
+        hobbies: profileForm.hobbies?.trim() || null,
+        zodiacsign: profileForm.zodiacsign?.trim() || null,
+        sexualorientation: profileForm.sexualorientation?.trim() || null,
+        language1: profileForm.language1?.trim() || null,
+        language1level: profileForm.language1level || null,
+        language2: profileForm.language2?.trim() || null,
+        language2level: profileForm.language2level || null,
+        language3: profileForm.language3?.trim() || null,
+        language3level: profileForm.language3level || null,
+    };
+}
+
+function areProfileFieldValuesEqual(left, right) {
+    if (Array.isArray(left) || Array.isArray(right)) {
+        if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+            return false;
+        }
+
+        return left.every((value, index) => String(value) === String(right[index]));
+    }
+
+    return left === right;
+}
+
+function diffProfileFields(initialFields, currentFields) {
+    const changed = {};
+
+    Object.keys(currentFields).forEach((key) => {
+        if (!areProfileFieldValuesEqual(initialFields?.[key], currentFields[key])) {
+            changed[key] = currentFields[key];
+        }
+    });
+
+    return changed;
+}
+
 function normalizeDiscountPercentage(value) {
     const parsed = Number.parseFloat(String(value ?? '').trim());
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
@@ -597,6 +692,7 @@ export default function ClientDetail() {
         reason: 'Wallet adjustment from client profile',
     });
     const [showProfileLinkPeek, setShowProfileLinkPeek] = useState(false);
+    const initialProfileFieldsRef = useRef(null);
 
     const navigateToTab = useCallback((tabKey, sectionKey = null) => {
         setActiveTab(tabKey);
@@ -1309,7 +1405,11 @@ export default function ClientDetail() {
                 force,
                 reason: profileReason,
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
+            initialProfileFieldsRef.current = {
+                ...(initialProfileFieldsRef.current || {}),
+                ...(variables?.fields || {}),
+            };
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
             setProfileConflict(null);
@@ -1558,7 +1658,7 @@ export default function ClientDetail() {
         const cityId = profile?.taxonomies?.city?.id || null;
         const unresolvedLegacyLocation = !regionId && Boolean(cityId);
 
-        setProfileForm({
+        const nextProfileForm = {
             name: profile.name || profile?.post?.title || '',
             phone: meta.phone || profile.phone || client?.phone_normalized || '',
             email: profile.email || client?.email || '',
@@ -1608,7 +1708,16 @@ export default function ClientDetail() {
             language1: meta.language1 || '', language1level: resolveProfileEnumValue('languagelevel', meta.language1level),
             language2: meta.language2 || '', language2level: resolveProfileEnumValue('languagelevel', meta.language2level),
             language3: meta.language3 || '', language3level: resolveProfileEnumValue('languagelevel', meta.language3level),
-        });
+        };
+
+        setProfileForm(nextProfileForm);
+
+        const initialFields = buildNormalizedProfileUpdateFields(nextProfileForm);
+        if (nextProfileForm.region_id && nextProfileForm.city_id) {
+            initialFields.region_id = Number(nextProfileForm.region_id);
+            initialFields.city_id = Number(nextProfileForm.city_id);
+        }
+        initialProfileFieldsRef.current = initialFields;
     }, [wpProfileData?.wp_profile, client?.city, client?.email, client?.phone_normalized]);
 
     const profileSections = [
@@ -2155,15 +2264,12 @@ export default function ClientDetail() {
             return;
         }
 
-        const normalizedGender = resolveProfileEnumValue('gender', profileForm.gender);
-        const normalizedEthnicity = resolveProfileEnumValue('ethnicity', profileForm.ethnicity);
-        const normalizedBuild = resolveProfileEnumValue('build', profileForm.build);
-        const normalizedServices = parseProfileServices(profileForm.services, 'services')
-            .map((value) => String(value || '').trim())
-            .filter(Boolean);
-        const normalizedAvailability = parseProfileServices(profileForm.availability, 'availability')
-            .map((value) => String(value || '').trim())
-            .filter(Boolean);
+        const normalizedFields = buildNormalizedProfileUpdateFields(profileForm);
+        const normalizedGender = normalizedFields.gender;
+        const normalizedEthnicity = normalizedFields.ethnicity;
+        const normalizedBuild = normalizedFields.build;
+        const normalizedServices = normalizedFields.services || [];
+        const normalizedAvailability = normalizedFields.availability || [];
         const invalidServiceValues = normalizedServices.filter((value) => !isKnownProfileEnumCode('services', value));
         const invalidAvailabilityValues = normalizedAvailability.filter((value) => !isKnownProfileEnumCode('availability', value));
 
@@ -2192,62 +2298,7 @@ export default function ClientDetail() {
             return;
         }
 
-        const fields = {
-            name: profileForm.name?.trim() || '',
-            phone: profileForm.phone?.trim() || null,
-            email: profileForm.email?.trim() || null,
-            birthday: normalizeBirthdayForSave(profileForm.birthday),
-            gender: normalizedGender || null,
-            ethnicity: normalizedEthnicity || null,
-            height: normalizeHeightForSave(profileForm.height),
-            build: normalizedBuild || null,
-            haircolor: profileForm.haircolor || null,
-            hairlength: profileForm.hairlength || null,
-            bustsize: profileForm.bustsize || null,
-            weight: profileForm.weight?.toString().trim() || null,
-            looks: profileForm.looks || null,
-            smoker: profileForm.smoker || null,
-            availability: normalizedAvailability.length ? normalizedAvailability : null,
-            services: normalizedServices.length ? normalizedServices : null,
-            extraservices: profileForm.extraservices?.trim() || null,
-            incall: profileForm.rates_incall?.trim() || null,
-            outcall: profileForm.rates_outcall?.trim() || null,
-            currency: profileForm.currency ? Number(profileForm.currency) : null,
-            rate30min_incall: profileForm.rate30min_incall?.trim() || null,
-            rate30min_outcall: profileForm.rate30min_outcall?.trim() || null,
-            rate1h_incall: profileForm.rate1h_incall?.trim() || null,
-            rate1h_outcall: profileForm.rate1h_outcall?.trim() || null,
-            rate2h_incall: profileForm.rate2h_incall?.trim() || null,
-            rate2h_outcall: profileForm.rate2h_outcall?.trim() || null,
-            rate3h_incall: profileForm.rate3h_incall?.trim() || null,
-            rate3h_outcall: profileForm.rate3h_outcall?.trim() || null,
-            rate6h_incall: profileForm.rate6h_incall?.trim() || null,
-            rate6h_outcall: profileForm.rate6h_outcall?.trim() || null,
-            rate12h_incall: profileForm.rate12h_incall?.trim() || null,
-            rate12h_outcall: profileForm.rate12h_outcall?.trim() || null,
-            rate24h_incall: profileForm.rate24h_incall?.trim() || null,
-            rate24h_outcall: profileForm.rate24h_outcall?.trim() || null,
-            whatsapp: profileForm.whatsapp?.trim() || null,
-            instagram: profileForm.instagram?.trim() || null,
-            twitter: profileForm.twitter?.trim() || null,
-            telegram: profileForm.telegram?.trim() || null,
-            website: profileForm.website?.trim() || null,
-            facebook: profileForm.facebook?.trim() || null,
-            snapchat: profileForm.snapchat?.trim() || null,
-            content: profileForm.bio || '',
-            education: profileForm.education?.trim() || null,
-            occupation: profileForm.occupation?.trim() || null,
-            sports: profileForm.sports?.trim() || null,
-            hobbies: profileForm.hobbies?.trim() || null,
-            zodiacsign: profileForm.zodiacsign?.trim() || null,
-            sexualorientation: profileForm.sexualorientation?.trim() || null,
-            language1: profileForm.language1?.trim() || null,
-            language1level: profileForm.language1level || null,
-            language2: profileForm.language2?.trim() || null,
-            language2level: profileForm.language2level || null,
-            language3: profileForm.language3?.trim() || null,
-            language3level: profileForm.language3level || null,
-        };
+        const fields = diffProfileFields(initialProfileFieldsRef.current || {}, normalizedFields);
 
         if (profileForm.locationTouched) {
             const hasRegion = profileForm.region_id !== null && profileForm.region_id !== undefined && profileForm.region_id !== '';
@@ -2258,8 +2309,21 @@ export default function ClientDetail() {
                 return;
             }
 
-            fields.region_id = hasRegion ? Number(profileForm.region_id) : null;
-            fields.city_id = hasCity ? Number(profileForm.city_id) : null;
+            const nextRegionId = hasRegion ? Number(profileForm.region_id) : null;
+            const nextCityId = hasCity ? Number(profileForm.city_id) : null;
+
+            if (!areProfileFieldValuesEqual(initialProfileFieldsRef.current?.region_id ?? null, nextRegionId)) {
+                fields.region_id = nextRegionId;
+            }
+
+            if (!areProfileFieldValuesEqual(initialProfileFieldsRef.current?.city_id ?? null, nextCityId)) {
+                fields.city_id = nextCityId;
+            }
+        }
+
+        if (Object.keys(fields).length === 0) {
+            toast.warning('No profile changes to save.');
+            return;
         }
 
         updateProfileMutation.mutate({ fields, force: profileForce });
