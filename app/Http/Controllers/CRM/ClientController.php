@@ -2127,6 +2127,17 @@ class ClientController extends Controller
                 ]),
                 'wp_profile' => $updatedProfile,
             ]);
+        } catch (ValidationException $exception) {
+            $errors = $exception->errors();
+            $message = collect($errors)
+                ->flatten()
+                ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+                ->first() ?: 'WordPress profile update validation failed.';
+
+            return response()->json([
+                'message' => $message,
+                'errors' => $errors,
+            ], 422);
         } catch (RequestException $exception) {
             $status = $exception->response?->status() ?? 502;
             $payload = $exception->response?->json();

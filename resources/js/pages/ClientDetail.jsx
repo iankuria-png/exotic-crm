@@ -43,6 +43,40 @@ function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
 }
 
+function firstProfileErrorMessage(data) {
+    if (!data || typeof data !== 'object') {
+        return '';
+    }
+
+    if (typeof data.error === 'string' && data.error.trim()) {
+        return data.error.trim();
+    }
+
+    if (typeof data.message === 'string' && data.message.trim()) {
+        return data.message.trim();
+    }
+
+    const errors = data.errors;
+    if (!errors || typeof errors !== 'object') {
+        return '';
+    }
+
+    for (const value of Object.values(errors)) {
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+
+        if (Array.isArray(value)) {
+            const first = value.find((item) => typeof item === 'string' && item.trim());
+            if (first) {
+                return first.trim();
+            }
+        }
+    }
+
+    return '';
+}
+
 function normalizeDiscountPercentage(value) {
     const parsed = Number.parseFloat(String(value ?? '').trim());
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
@@ -1288,7 +1322,7 @@ export default function ClientDetail() {
                 toast.warning('WordPress profile changed since last sync. Review conflict and force save if needed.');
                 return;
             }
-            toast.error(error?.response?.data?.message || 'Profile update failed.');
+            toast.error(firstProfileErrorMessage(error?.response?.data) || 'Profile update failed.');
         },
     });
 
@@ -2216,11 +2250,16 @@ export default function ClientDetail() {
         };
 
         if (profileForm.locationTouched) {
-            fields.region_id = profileForm.region_id ?? null;
-            fields.city_id = profileForm.city_id ?? null;
-        } else if (profileForm.region_id && profileForm.city_id) {
-            fields.region_id = Number(profileForm.region_id);
-            fields.city_id = Number(profileForm.city_id);
+            const hasRegion = profileForm.region_id !== null && profileForm.region_id !== undefined && profileForm.region_id !== '';
+            const hasCity = profileForm.city_id !== null && profileForm.city_id !== undefined && profileForm.city_id !== '';
+
+            if (hasRegion !== hasCity) {
+                toast.error('Choose both region and city before saving location changes, or clear both.');
+                return;
+            }
+
+            fields.region_id = hasRegion ? Number(profileForm.region_id) : null;
+            fields.city_id = hasCity ? Number(profileForm.city_id) : null;
         }
 
         updateProfileMutation.mutate({ fields, force: profileForce });

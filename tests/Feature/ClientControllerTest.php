@@ -195,6 +195,35 @@ class ClientControllerTest extends TestCase
         $this->assertTrue($updateWasSent);
     }
 
+    public function test_wp_profile_update_returns_validation_errors_as_422_with_specific_message(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+
+        Http::fake(function (ClientRequest $request) use ($client) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client));
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => [
+                'region_id' => 10,
+                'city_id' => null,
+            ],
+            'force' => true,
+            'reason' => 'Regression test validation surfacing',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Region and city must be valid identifiers or both null.')
+            ->assertJsonPath('errors.location.0', 'Region and city must be valid identifiers or both null.');
+    }
+
     public function test_show_payload_contains_short_url_permalink_slug_and_canonical_expiry_context(): void
     {
         Carbon::setTestNow(Carbon::create(2026, 5, 6, 12, 0, 0, 'Africa/Nairobi'));
