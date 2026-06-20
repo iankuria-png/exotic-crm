@@ -53,4 +53,37 @@ class WpProfileFieldValidatorTest extends TestCase
             'current_currency_id' => 999,
         ]);
     }
+
+    public function test_it_accepts_valid_availability_codes(): void
+    {
+        $validated = WpProfileFieldValidator::validate([
+            'availability' => ['1', '2'],
+        ], [
+            'currency_catalog_ids' => [50],
+        ]);
+
+        $this->assertSame(['1', '2'], $validated['availability']);
+    }
+
+    public function test_it_accepts_valid_service_codes_as_strings(): void
+    {
+        $validated = WpProfileFieldValidator::validate([
+            'services' => ['1', '8'],
+        ], [
+            'currency_catalog_ids' => [50],
+        ]);
+
+        $this->assertSame(['1', '8'], $validated['services']);
+    }
+
+    public function test_it_rejects_unknown_availability_values(): void
+    {
+        $this->expectException(ValidationException::class);
+
+        WpProfileFieldValidator::validate([
+            'availability' => ['Incall', '2'],
+        ], [
+            'currency_catalog_ids' => [50],
+        ]);
+    }
 }

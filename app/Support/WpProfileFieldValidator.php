@@ -59,7 +59,7 @@ class WpProfileFieldValidator
                 }
 
                 $optionKey = $key === 'availability' ? 'availability' : 'services';
-                $validCodes = array_keys($enumMaps[$optionKey] ?? []);
+                $validCodes = array_map('strval', array_keys($enumMaps[$optionKey] ?? []));
                 $items = [];
 
                 foreach ($value as $item) {

@@ -142,6 +142,59 @@ class ClientControllerTest extends TestCase
         Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with((string) $request->url(), "/clients/{$client->wp_post_id}/update"));
     }
 
+    public function test_wp_profile_update_normalizes_legacy_availability_labels_before_validation(): void
+    {
+        [$platform, $client] = $this->createLinkedClientFixture();
+        $updateWasSent = false;
+
+        Http::fake(function (ClientRequest $request) use ($client, &$updateWasSent) {
+            $url = (string) $request->url();
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}/update")) {
+                $updateWasSent = true;
+                $this->assertSame('POST', $request->method());
+                $this->assertSame(['availability' => ['1', '2'], 'currency' => 50], $request->data()['fields'] ?? null);
+
+                return Http::response([
+                    'wp_post_id' => $client->wp_post_id,
+                    'meta' => ['currency' => 50, 'availability' => ['1', '2']],
+                ]);
+            }
+
+            if (str_ends_with($url, "/clients/{$client->wp_post_id}")) {
+                return Http::response($this->wordpressClientPayload($client, [
+                    'meta' => [
+                        'currency' => 50,
+                        'availability' => 'Incall, Outcall',
+                    ],
+                ]));
+            }
+
+            if (str_ends_with($url, '/currencies')) {
+                return Http::response([
+                    'currencies' => [
+                        ['id' => 50, 'code' => 'RWF', 'name' => 'Rwandan Franc', 'symbol' => 'FRw'],
+                    ],
+                ]);
+            }
+
+            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+        });
+
+        Sanctum::actingAs($this->adminUser());
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => [
+                'availability' => ['Incall', 'Outcall'],
+                'currency' => 50,
+            ],
+            'force' => true,
+            'reason' => 'Regression test availability normalization',
+        ])->assertOk();
+
+        $this->assertTrue($updateWasSent);
+    }
+
     public function test_show_payload_contains_short_url_permalink_slug_and_canonical_expiry_context(): void
     {
         Carbon::setTestNow(Carbon::create(2026, 5, 6, 12, 0, 0, 'Africa/Nairobi'));

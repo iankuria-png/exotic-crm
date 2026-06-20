@@ -3715,8 +3715,12 @@ class ClientController extends Controller
             $normalized[$field] = $resolved;
         }
 
-        if (array_key_exists('services', $normalized)) {
-            $normalized['services'] = $this->normalizeWpProfileServices($normalized['services']);
+        foreach (['services', 'availability'] as $field) {
+            if (!array_key_exists($field, $normalized)) {
+                continue;
+            }
+
+            $normalized[$field] = $this->normalizeWpProfileCodeList($field, $normalized[$field]);
         }
 
         if (array_key_exists('height', $normalized)) {
@@ -3880,7 +3884,7 @@ class ClientController extends Controller
         return $raw;
     }
 
-    private function normalizeWpProfileServices(mixed $value): mixed
+    private function normalizeWpProfileCodeList(string $field, mixed $value): mixed
     {
         if ($value === null) {
             return null;
@@ -3900,7 +3904,7 @@ class ClientController extends Controller
 
         $normalized = [];
         foreach ($tokens as $token) {
-            $resolved = $this->normalizeWpProfileEnumCode('services', $token);
+            $resolved = $this->normalizeWpProfileEnumCode($field, $token);
             if ($resolved === null || $resolved === '') {
                 continue;
             }

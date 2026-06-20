@@ -1544,7 +1544,7 @@ export default function ClientDetail() {
             weight: meta.weight || '',
             looks: resolveProfileEnumValue('looks', meta.looks),
             smoker: resolveProfileEnumValue('smoker', meta.smoker),
-            availability: parseProfileServices(meta.availability),
+            availability: parseProfileServices(meta.availability, 'availability'),
             services: parseProfileServices(meta.services),
             extraservices: meta.extraservices || '',
             rates_incall: meta.incall || meta.rate_incall || '',
@@ -2124,10 +2124,14 @@ export default function ClientDetail() {
         const normalizedGender = resolveProfileEnumValue('gender', profileForm.gender);
         const normalizedEthnicity = resolveProfileEnumValue('ethnicity', profileForm.ethnicity);
         const normalizedBuild = resolveProfileEnumValue('build', profileForm.build);
-        const normalizedServices = parseProfileServices(profileForm.services)
+        const normalizedServices = parseProfileServices(profileForm.services, 'services')
             .map((value) => String(value || '').trim())
             .filter(Boolean);
-        const invalidServiceValues = normalizedServices.filter((value) => !/^\d+$/.test(value));
+        const normalizedAvailability = parseProfileServices(profileForm.availability, 'availability')
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+        const invalidServiceValues = normalizedServices.filter((value) => !isKnownProfileEnumCode('services', value));
+        const invalidAvailabilityValues = normalizedAvailability.filter((value) => !isKnownProfileEnumCode('availability', value));
 
         if (normalizedGender && !isKnownProfileEnumCode('gender', normalizedGender)) {
             toast.error('Gender must be selected from the dropdown list (label + code).');
@@ -2149,6 +2153,11 @@ export default function ClientDetail() {
             return;
         }
 
+        if (invalidAvailabilityValues.length > 0) {
+            toast.error('Availability includes unknown values. Re-select incall or outcall before saving.');
+            return;
+        }
+
         const fields = {
             name: profileForm.name?.trim() || '',
             phone: profileForm.phone?.trim() || null,
@@ -2164,7 +2173,7 @@ export default function ClientDetail() {
             weight: profileForm.weight?.toString().trim() || null,
             looks: profileForm.looks || null,
             smoker: profileForm.smoker || null,
-            availability: Array.isArray(profileForm.availability) && profileForm.availability.length ? profileForm.availability : null,
+            availability: normalizedAvailability.length ? normalizedAvailability : null,
             services: normalizedServices.length ? normalizedServices : null,
             extraservices: profileForm.extraservices?.trim() || null,
             incall: profileForm.rates_incall?.trim() || null,
