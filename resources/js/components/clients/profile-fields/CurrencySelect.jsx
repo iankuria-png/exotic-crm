@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../../services/api';
 import Combobox from '../../shared/Combobox';
@@ -52,12 +52,14 @@ export default function CurrencySelect({
     onChange,
     disabled = false,
     className = '',
+    onCatalogStatusChange = null,
 }) {
     const currenciesQuery = useQuery({
         queryKey: ['wp-profile-currencies', platformId],
         queryFn: () => api.get(`/crm/platforms/${platformId}/currencies`).then((response) => response.data),
         enabled: Boolean(platformId),
         staleTime: 15 * 60 * 1000,
+        retry: false,
     });
 
     const currencies = useMemo(() => {
@@ -70,6 +72,14 @@ export default function CurrencySelect({
     const defaultCurrencyId = currenciesQuery.data?.default_currency_id || null;
     const known = currencies.find((currency) => String(currency.id) === String(value)) || null;
     const defaultCurrency = currencies.find((currency) => String(currency.id) === String(defaultCurrencyId)) || null;
+
+    useEffect(() => {
+        onCatalogStatusChange?.({
+            available: platformId ? !currenciesQuery.isError : null,
+            error: currenciesQuery.isError,
+            loading: currenciesQuery.isLoading,
+        });
+    }, [currenciesQuery.isError, currenciesQuery.isLoading, platformId]);
 
     const groups = useMemo(() => {
         const featuredOptions = [];

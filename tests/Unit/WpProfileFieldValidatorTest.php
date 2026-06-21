@@ -76,6 +76,17 @@ class WpProfileFieldValidatorTest extends TestCase
         $this->assertSame(['1', '8'], $validated['services']);
     }
 
+    public function test_it_accepts_legacy_city_text_payloads(): void
+    {
+        $validated = WpProfileFieldValidator::validate([
+            'city' => 'Kisumu town',
+        ], [
+            'currency_catalog_ids' => [50],
+        ]);
+
+        $this->assertSame('Kisumu town', $validated['city']);
+    }
+
     public function test_it_rejects_unknown_availability_values(): void
     {
         $this->expectException(ValidationException::class);

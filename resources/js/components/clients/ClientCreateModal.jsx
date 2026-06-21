@@ -36,6 +36,7 @@ function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
         name: '',
         phone_normalized: '',
         email: '',
+        city: '',
         region_id: null,
         city_id: null,
         location_allows_region_only: false,
@@ -250,6 +251,8 @@ export default function ClientCreateModal({
     const [form, setForm] = useState(() => defaultForm(resolveInitialPlatformId(lockedPlatformId, initialPlatformId), initialMode));
     const [imagePreviews, setImagePreviews] = useState([]);
     const [duplicateMatches, setDuplicateMatches] = useState([]);
+    const [locationCatalogAvailable, setLocationCatalogAvailable] = useState(null);
+    const [currencyCatalogAvailable, setCurrencyCatalogAvailable] = useState(null);
 
     useEffect(() => {
         if (!open) {
@@ -258,6 +261,8 @@ export default function ClientCreateModal({
 
         setForm(defaultForm(resolveInitialPlatformId(lockedPlatformId, initialPlatformId), initialMode));
         setDuplicateMatches([]);
+        setLocationCatalogAvailable(null);
+        setCurrencyCatalogAvailable(null);
     }, [open, initialPlatformId, initialMode, lockedPlatformId]);
 
     useEffect(() => {
@@ -348,12 +353,14 @@ export default function ClientCreateModal({
 
     const owners = ownersQuery.data?.owners || [];
     const isWpProvision = form.onboarding_mode === 'wp_provision';
+    const isLegacyLocationMode = isWpProvision && locationCatalogAvailable === false;
+    const isLegacyCurrencyMode = isWpProvision && currencyCatalogAvailable === false;
     const requiresProvisionContact = isWpProvision && !form.email.trim() && !form.phone_normalized.trim();
-    const requiresProvisionLocation = isWpProvision && (
+    const requiresProvisionLocation = isWpProvision && !isLegacyLocationMode && (
         !form.region_id || (!form.city_id && !form.location_allows_region_only)
     );
     const birthdayIsValid = isAdultBirthday(form.birthday);
-    const ratesNeedCurrency = form.full_profile && hasAnyRate(form) && !form.currency;
+    const ratesNeedCurrency = form.full_profile && !isLegacyCurrencyMode && hasAnyRate(form) && !form.currency;
     const createMutation = useMutation({
         mutationFn: (payload) => {
             const requestPayload = { ...payload };
@@ -455,11 +462,14 @@ export default function ClientCreateModal({
             ...current,
             platform_id: nextPlatformId,
             assigned_to: '',
+            city: '',
             region_id: null,
             city_id: null,
             location_allows_region_only: false,
             currency: null,
         }));
+        setLocationCatalogAvailable(null);
+        setCurrencyCatalogAvailable(null);
 
         window.setTimeout(() => {
             event.target.blur();
@@ -579,6 +589,11 @@ export default function ClientCreateModal({
             return;
         }
 
+        const fullProfilePayload = buildFullProfilePayload(form);
+        if (isLegacyCurrencyMode) {
+            delete fullProfilePayload.currency;
+        }
+
         createMutation.mutate({
             platform_id: Number(form.platform_id),
             name: form.name.trim(),
@@ -591,11 +606,12 @@ export default function ClientCreateModal({
             provision_request_id: isWpProvision ? form.provision_request_id : undefined,
             wp_username: isWpProvision ? (form.wp_username.trim() || null) : null,
             wp_password: isWpProvision ? (form.wp_password.trim() || null) : null,
-            region_id: isWpProvision && form.region_id ? Number(form.region_id) : undefined,
-            city_id: isWpProvision && form.city_id ? Number(form.city_id) : undefined,
+            city: isWpProvision && isLegacyLocationMode ? (form.city.trim() || null) : undefined,
+            region_id: isWpProvision && !isLegacyLocationMode && form.region_id ? Number(form.region_id) : undefined,
+            city_id: isWpProvision && !isLegacyLocationMode && form.city_id ? Number(form.city_id) : undefined,
             profile_images: isWpProvision ? [...form.profile_images] : [],
             ...(isWpProvision ? buildQuickProfilePayload(form) : {}),
-            ...buildFullProfilePayload(form),
+            ...fullProfilePayload,
             reason,
         });
     };
@@ -759,24 +775,48 @@ export default function ClientCreateModal({
                             <div className="md:col-span-2 rounded-lg border border-slate-200 bg-white p-4">
                                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                                     <div>
-                                        <p className="text-sm font-semibold text-slate-900">Profile location</p>
-                                        <p className="mt-1 text-xs text-slate-500">Choose the region first, then city when that region has child cities.</p>
+                                    <p className="text-sm font-semibold text-slate-900">Profile location</p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            {isLegacyLocationMode
+                                                ? 'This market is still using legacy location sync. Use city until the WordPress plugin is updated.'
+                                                : 'Choose the region first, then city when that region has child cities.'}
+                                        </p>
                                     </div>
-                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${requiresProvisionLocation ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                        {requiresProvisionLocation ? 'Required' : 'Ready'}
+                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${isLegacyLocationMode ? 'bg-slate-100 text-slate-600' : requiresProvisionLocation ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                        {isLegacyLocationMode ? 'Legacy' : requiresProvisionLocation ? 'Required' : 'Ready'}
                                     </span>
                                 </div>
-                                <RegionCitySelect
-                                    platformId={form.platform_id ? Number(form.platform_id) : null}
-                                    regionId={form.region_id}
-                                    cityId={form.city_id}
-                                    onChange={({ region_id, city_id, location_allows_region_only = false }) => setForm((current) => ({
-                                        ...current,
-                                        region_id,
-                                        city_id,
-                                        location_allows_region_only,
-                                    }))}
-                                />
+                                {isLegacyLocationMode ? (
+                                    <div>
+                                        <label htmlFor="client-create-legacy-city" className="mb-1 block text-sm font-medium text-slate-700">City</label>
+                                        <input
+                                            id="client-create-legacy-city"
+                                            type="text"
+                                            value={form.city}
+                                            onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="City name"
+                                        />
+                                        <p className="mt-1 text-xs text-slate-500">Region/city selectors will return after this market receives the updated plugin.</p>
+                                    </div>
+                                ) : (
+                                    <RegionCitySelect
+                                        platformId={form.platform_id ? Number(form.platform_id) : null}
+                                        regionId={form.region_id}
+                                        cityId={form.city_id}
+                                        onCatalogStatusChange={({ available, loading }) => {
+                                            if (!loading) {
+                                                setLocationCatalogAvailable(available);
+                                            }
+                                        }}
+                                        onChange={({ region_id, city_id, location_allows_region_only = false }) => setForm((current) => ({
+                                            ...current,
+                                            region_id,
+                                            city_id,
+                                            location_allows_region_only,
+                                        }))}
+                                    />
+                                )}
                             </div>
                         ) : null}
 
@@ -1049,12 +1089,23 @@ export default function ClientCreateModal({
                                     </div>
 
                                     <div className="mt-4 grid gap-4 md:grid-cols-3">
-                                        <CurrencySelect
-                                            platformId={form.platform_id ? Number(form.platform_id) : null}
-                                            value={form.currency}
-                                            onChange={(currency) => setForm((current) => ({ ...current, currency }))}
-                                            className="md:col-span-3"
-                                        />
+                                        {isLegacyCurrencyMode ? (
+                                            <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 md:col-span-3">
+                                                Currency catalog is unavailable for this market. Rates can still save with the WordPress default currency.
+                                            </p>
+                                        ) : (
+                                            <CurrencySelect
+                                                platformId={form.platform_id ? Number(form.platform_id) : null}
+                                                value={form.currency}
+                                                onChange={(currency) => setForm((current) => ({ ...current, currency }))}
+                                                onCatalogStatusChange={({ available, loading }) => {
+                                                    if (!loading) {
+                                                        setCurrencyCatalogAvailable(available);
+                                                    }
+                                                }}
+                                                className="md:col-span-3"
+                                            />
+                                        )}
                                         {ratesNeedCurrency ? (
                                             <p className="-mt-2 text-xs font-medium text-rose-700 md:col-span-3">Choose a currency before saving rates.</p>
                                         ) : null}

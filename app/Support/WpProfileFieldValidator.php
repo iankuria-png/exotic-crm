@@ -256,6 +256,7 @@ class WpProfileFieldValidator
             'name' => 255,
             'phone' => 50,
             'email' => 255,
+            'city' => 100,
             'content' => 5000,
             'birthday' => 10,
             'height' => 50,

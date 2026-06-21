@@ -94,6 +94,7 @@ function buildNormalizedProfileUpdateFields(profileForm) {
         name: profileForm.name?.trim() || '',
         phone: profileForm.phone?.trim() || null,
         email: profileForm.email?.trim() || null,
+        city: profileForm.city?.trim() || null,
         birthday: normalizeBirthdayForSave(profileForm.birthday),
         gender: normalizedGender || null,
         ethnicity: normalizedEthnicity || null,
@@ -692,6 +693,7 @@ export default function ClientDetail() {
         reason: 'Wallet adjustment from client profile',
     });
     const [showProfileLinkPeek, setShowProfileLinkPeek] = useState(false);
+    const [locationCatalogAvailable, setLocationCatalogAvailable] = useState(null);
     const initialProfileFieldsRef = useRef(null);
 
     const navigateToTab = useCallback((tabKey, sectionKey = null) => {
@@ -753,11 +755,15 @@ export default function ClientDetail() {
         refetchOnWindowFocus: false,
     });
 
-    const { data: wpProfileCurrenciesData } = useQuery({
+    const {
+        data: wpProfileCurrenciesData,
+        isError: wpProfileCurrenciesError,
+    } = useQuery({
         queryKey: ['client-wp-profile-currencies', clientPlatformId],
         queryFn: () => api.get(`/crm/platforms/${clientPlatformId}/currencies`).then((response) => response.data),
         enabled: activeTab === 'edit_profile' && clientPlatformId > 0,
         staleTime: 15 * 60 * 1000,
+        retry: false,
     });
 
     useEffect(() => {
@@ -1712,6 +1718,7 @@ export default function ClientDetail() {
         };
 
         setProfileForm(nextProfileForm);
+        setLocationCatalogAvailable(null);
 
         const initialFields = buildNormalizedProfileUpdateFields(nextProfileForm);
         if (nextProfileForm.region_id && nextProfileForm.city_id) {
@@ -1760,6 +1767,8 @@ export default function ClientDetail() {
             .filter((value, index, values) => value && values.indexOf(value) === index)
             .join(' ')
         : (client?.platform?.currency_code || 'KES');
+    const isLegacyLocationMode = locationCatalogAvailable === false;
+    const isLegacyCurrencyMode = Boolean(wpProfileCurrenciesError);
 
     if (isLoading) {
         return (
@@ -2301,7 +2310,16 @@ export default function ClientDetail() {
 
         const fields = diffProfileFields(initialProfileFieldsRef.current || {}, normalizedFields);
 
-        if (profileForm.locationTouched) {
+        if (isLegacyCurrencyMode) {
+            delete fields.currency;
+        }
+
+        if (isLegacyLocationMode) {
+            delete fields.region_id;
+            delete fields.city_id;
+        }
+
+        if (profileForm.locationTouched && !isLegacyLocationMode) {
             const hasRegion = profileForm.region_id !== null && profileForm.region_id !== undefined && profileForm.region_id !== '';
             const hasCity = profileForm.city_id !== null && profileForm.city_id !== undefined && profileForm.city_id !== '';
             const allowsRegionOnly = Boolean(profileForm.locationAllowsRegionOnly);
@@ -4149,11 +4167,20 @@ export default function ClientDetail() {
                                             <p className="text-xs text-slate-500">Click a service chip to add or remove it. Selected: {selectedServiceCodes.length}</p>
                                         </label>
                                         <div className="md:col-span-2">
-                                            <CurrencySelect
-                                                platformId={clientPlatformId}
-                                                value={profileForm?.currency || ''}
-                                                onChange={(currency) => setProfileForm((current) => ({ ...current, currency }))}
-                                            />
+                                            {isLegacyCurrencyMode ? (
+                                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Currency</p>
+                                                    <p className="mt-1 text-sm text-slate-700">
+                                                        Currency catalog is unavailable for this market. Existing currency is preserved while the WordPress plugin is awaiting update.
+                                                    </p>
+                                                </div>
+                                            ) : (
+                                                <CurrencySelect
+                                                    platformId={clientPlatformId}
+                                                    value={profileForm?.currency || ''}
+                                                    onChange={(currency) => setProfileForm((current) => ({ ...current, currency }))}
+                                                />
+                                            )}
                                         </div>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate (default)</span>
@@ -4228,20 +4255,41 @@ export default function ClientDetail() {
                                     <input value={profileForm?.phone || ''} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} className="crm-input" placeholder="Phone" />
                                     <input value={profileForm?.email || ''} onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))} className="crm-input" placeholder="Email" />
                                     <div className="md:col-span-2">
-                                        <RegionCitySelect
-                                            platformId={clientPlatformId}
-                                            regionId={profileForm?.region_id || null}
-                                            cityId={profileForm?.city_id || null}
-                                            legacyCityHint={profileForm?.legacyLocationUnresolved ? 'Confirm this profile’s region before changing location.' : null}
-                                            onChange={({ region_id, city_id, location_allows_region_only = false }) => setProfileForm((current) => ({
-                                                ...current,
-                                                region_id,
-                                                city_id,
-                                                locationAllowsRegionOnly: location_allows_region_only,
-                                                locationTouched: true,
-                                                legacyLocationUnresolved: false,
-                                            }))}
-                                        />
+                                        {isLegacyLocationMode ? (
+                                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                <label htmlFor="client-profile-legacy-city" className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">City</label>
+                                                <input
+                                                    id="client-profile-legacy-city"
+                                                    value={profileForm?.city || ''}
+                                                    onChange={(event) => setProfileForm((current) => ({ ...current, city: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="City name"
+                                                />
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    This market is using legacy location sync. Region and city selectors will return after the WordPress plugin is updated.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <RegionCitySelect
+                                                platformId={clientPlatformId}
+                                                regionId={profileForm?.region_id || null}
+                                                cityId={profileForm?.city_id || null}
+                                                legacyCityHint={profileForm?.legacyLocationUnresolved ? 'Confirm this profile’s region before changing location.' : null}
+                                                onCatalogStatusChange={({ available, loading }) => {
+                                                    if (!loading) {
+                                                        setLocationCatalogAvailable(available);
+                                                    }
+                                                }}
+                                                onChange={({ region_id, city_id, location_allows_region_only = false }) => setProfileForm((current) => ({
+                                                    ...current,
+                                                    region_id,
+                                                    city_id,
+                                                    locationAllowsRegionOnly: location_allows_region_only,
+                                                    locationTouched: true,
+                                                    legacyLocationUnresolved: false,
+                                                }))}
+                                            />
+                                        )}
                                     </div>
                                     <input value={profileForm?.whatsapp || ''} onChange={(event) => setProfileForm((current) => ({ ...current, whatsapp: event.target.value }))} className="crm-input" placeholder="WhatsApp" />
                                     <input value={profileForm?.instagram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, instagram: event.target.value }))} className="crm-input" placeholder="Instagram URL" />

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../../services/api';
 import Combobox from '../../shared/Combobox';
@@ -15,18 +15,28 @@ export default function RegionCitySelect({
     disabled = false,
     className = '',
     legacyCityHint = null,
+    onCatalogStatusChange = null,
 }) {
     const locationsQuery = useQuery({
         queryKey: ['wp-profile-locations', platformId],
         queryFn: () => api.get(`/crm/platforms/${platformId}/locations`).then((response) => response.data),
         enabled: Boolean(platformId),
         staleTime: 15 * 60 * 1000,
+        retry: false,
     });
 
     const locations = useMemo(() => sortByName(locationsQuery.data?.locations || []), [locationsQuery.data?.locations]);
     const selectedRegion = locations.find((region) => String(region.id) === String(regionId)) || null;
     const cityOptions = useMemo(() => sortByName(selectedRegion?.cities || []), [selectedRegion?.cities]);
     const regionAllowsDirectSave = Boolean(selectedRegion) && cityOptions.length === 0;
+
+    useEffect(() => {
+        onCatalogStatusChange?.({
+            available: platformId ? !locationsQuery.isError : null,
+            error: locationsQuery.isError,
+            loading: locationsQuery.isLoading,
+        });
+    }, [locationsQuery.isError, locationsQuery.isLoading, platformId]);
 
     const regionGroups = useMemo(() => [
         {

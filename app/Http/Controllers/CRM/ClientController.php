@@ -3797,12 +3797,20 @@ class ClientController extends Controller
             $fields['content'] = $fields['bio'];
         }
 
-        $catalogs = $this->fetchWpProfileCatalogs($platform);
+        $currencyCatalogIds = [];
+        if (array_key_exists('currency', $fields) && $fields['currency'] !== null && $fields['currency'] !== '') {
+            $currencyCatalogIds = $this->extractCurrencyIds($this->fetchWpProfileCurrencies($platform));
+        }
+
         $validated = WpProfileFieldValidator::validate($fields, [
-            'currency_catalog_ids' => $this->extractCurrencyIds($catalogs['currencies']),
+            'currency_catalog_ids' => $currencyCatalogIds,
         ]);
 
-        return $this->validateLocationHierarchy($validated, $catalogs['locations']);
+        if (!$this->profileFieldsIncludeLocation($validated)) {
+            return $validated;
+        }
+
+        return $this->validateLocationHierarchy($validated, $this->fetchWpProfileLocations($platform));
     }
 
     /**
@@ -4153,7 +4161,7 @@ class ClientController extends Controller
             }
 
             if ($field === 'city') {
-                $snapshot[$field] = data_get($taxonomies, 'city.name');
+                $snapshot[$field] = data_get($taxonomies, 'city.name') ?? ($profile['city'] ?? null);
                 continue;
             }
 

@@ -46,6 +46,7 @@ class WpProfileFieldCatalog
         'name',
         'phone',
         'email',
+        'city',
         'content',
         'birthday',
         'height',
