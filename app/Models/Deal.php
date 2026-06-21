@@ -98,7 +98,7 @@ class Deal extends Model
         'assigned_to', 'activated_by_field_agent', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'discount_percentage', 'original_amount', 'discount_approved_by', 'discount_source',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
-        'origin', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
+        'origin', 'seo_boost_batch_id', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
         'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
         'linked_deal_id', 'pending_subsidiary_trial',
     ];
@@ -174,6 +174,11 @@ class Deal extends Model
     public function commissions()
     {
         return $this->hasMany(Commission::class);
+    }
+
+    public function seoBoostBatch()
+    {
+        return $this->belongsTo(SeoBoostBatch::class, 'seo_boost_batch_id');
     }
 
     public function timelineEvents()

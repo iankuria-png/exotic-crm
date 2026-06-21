@@ -43,6 +43,7 @@ use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 use App\Http\Controllers\CRM\ScorecardExportController;
+use App\Http\Controllers\CRM\SeoBoostController;
 use App\Http\Controllers\CRM\SetupController;
 use App\Http\Controllers\CRM\SupportBoardController;
 use App\Http\Controllers\CRM\TeamController;
@@ -306,6 +307,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/platforms/{platform}/currencies', [ClientController::class, 'platformCurrencies'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/locations', [ClientLocationController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/locations/geocode', [ClientLocationController::class, 'geocode'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::middleware('role:admin,sub_admin,sales,field_sales')->prefix('seo-boost')->group(function () {
+        Route::get('/batches', [SeoBoostController::class, 'index']);
+        Route::post('/preview', [SeoBoostController::class, 'preview']);
+        Route::post('/batches', [SeoBoostController::class, 'store']);
+        Route::get('/batches/{batch}', [SeoBoostController::class, 'show']);
+    });
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');

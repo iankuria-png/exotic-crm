@@ -166,10 +166,21 @@ class ExpiredSubscriptionReconciler
         $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
 
         // 3. Flip any still-active deal to expired (natural expiry).
-        $expiredDeals = Deal::query()
+        $expiredDealIds = Deal::query()
             ->where('client_id', (int) $client->id)
             ->where('status', 'active')
-            ->update(['status' => 'expired']);
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $expiredDeals = 0;
+        if (!empty($expiredDealIds)) {
+            $expiredDeals = Deal::query()
+                ->whereIn('id', $expiredDealIds)
+                ->update(['status' => 'expired']);
+
+            app(SeoBoostService::class)->markExpiredDeals($expiredDealIds);
+        }
 
         app(ClientChurnStamper::class)->stamp(
             $syncedClient,

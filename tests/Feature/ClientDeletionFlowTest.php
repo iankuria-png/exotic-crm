@@ -74,7 +74,7 @@ class ClientDeletionFlowTest extends TestCase
             ->assertJsonPath('payments_count', 1)
             ->assertJsonPath('notes_count', 1)
             ->assertJsonPath('leads_count', 1)
-            ->assertJsonPath('timeline_events_count', 1)
+            ->assertJsonPath('timeline_events_count', 2)
             ->assertJsonPath('has_active_deal', true)
             ->assertJsonPath('wp_post_id', 9301);
     }

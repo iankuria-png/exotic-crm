@@ -7,6 +7,7 @@ import ClientMap from './locations/ClientMap';
 import CitySpotlight from './locations/CitySpotlight';
 import KpiCard from './locations/KpiCard';
 import LocationTable from './locations/LocationTable';
+import SeoBoostWizard from './SeoBoostWizard';
 import { BANDS, CHANNEL_META, PERIOD_OPTIONS } from './locations/locationMeta';
 
 function formatDate(date) {
@@ -62,6 +63,7 @@ export default function LocationsView({ platformId, marketName }) {
     const toast = useToast();
     const [period, setPeriod] = useState('30d');
     const [selectedCity, setSelectedCity] = useState(null);
+    const [seoBoostOpen, setSeoBoostOpen] = useState(false);
     const [sort, setSort] = useState({ key: 'client_count', direction: 'desc' });
     const [mobileView, setMobileView] = useState(() => (
         typeof window !== 'undefined' && window.innerWidth < 1280 ? 'list' : 'map'
@@ -268,6 +270,15 @@ export default function LocationsView({ platformId, marketName }) {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={() => setSeoBoostOpen(true)}
+                            className="inline-flex items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            <span aria-hidden="true">+</span>
+                            SEO Boost
+                        </button>
+
                         {geocodeSummary && geocodeSummary.pending > 0 ? (
                             <div className="inline-flex items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800">
                                 <span className="h-2 w-2 animate-pulse rounded-full bg-teal-600" aria-hidden="true" />
@@ -401,6 +412,15 @@ export default function LocationsView({ platformId, marketName }) {
                     platformId={normalizedPlatformId}
                 />
             </div>
+
+            <SeoBoostWizard
+                open={seoBoostOpen}
+                onClose={() => setSeoBoostOpen(false)}
+                platformId={normalizedPlatformId}
+                marketName={marketName}
+                locations={locations}
+                selectedCity={selectedCity}
+            />
         </div>
     );
 }
