@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\CRM\ClientController;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
@@ -17,6 +18,39 @@ use Tests\TestCase;
 class ClientControllerTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_client_create_profile_payload_maps_bio_to_wordpress_content(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'domain' => 'kenya.example.test',
+            'country' => 'Kenya',
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+            'timezone' => 'Africa/Nairobi',
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'crm-password',
+        ]);
+
+        $request = \Illuminate\Http\Request::create('/api/crm/clients', 'POST', [
+            'bio' => '<p>Generated profile bio.</p>',
+            'services' => ['1', '2', '3'],
+            'whatsapp' => '+254743394489',
+            'telegram' => 'https://telegram.im/@rawexotichub?lang=en',
+        ]);
+
+        $controller = app(ClientController::class);
+        $method = new \ReflectionMethod(ClientController::class, 'prepareProvisioningProfilePayload');
+
+        $payload = $method->invoke($controller, $request, $platform);
+
+        $this->assertSame('<p>Generated profile bio.</p>', $payload['content']);
+        $this->assertArrayNotHasKey('bio', $payload);
+        $this->assertSame(['1', '2', '3'], $payload['services']);
+        $this->assertSame('+254743394489', $payload['whatsapp']);
+        $this->assertSame('https://telegram.im/@rawexotichub?lang=en', $payload['telegram']);
+    }
 
     public function test_wp_profile_update_skips_catalog_fetches_when_saving_unrelated_fields(): void
     {

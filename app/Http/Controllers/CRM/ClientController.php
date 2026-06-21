@@ -3796,6 +3796,7 @@ class ClientController extends Controller
         if (array_key_exists('bio', $fields) && !array_key_exists('content', $fields)) {
             $fields['content'] = $fields['bio'];
         }
+        unset($fields['bio']);
 
         $currencyCatalogIds = [];
         if (array_key_exists('currency', $fields) && $fields['currency'] !== null && $fields['currency'] !== '') {
