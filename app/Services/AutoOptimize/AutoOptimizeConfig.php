@@ -166,7 +166,8 @@ class AutoOptimizeConfig
             'retry_attempts' => 3,
             'language_confidence' => 0.70,
             'similarity_lookback_days' => 30,
-            'max_similarity_distance' => 6, // Hamming distance threshold
+            'max_similarity_distance' => 6, // Hamming distance threshold (legacy)
+            'no_op_similarity_pct' => 90,   // skip only if new bio ≥ this % similar to the CURRENT bio
         ];
     }
 }

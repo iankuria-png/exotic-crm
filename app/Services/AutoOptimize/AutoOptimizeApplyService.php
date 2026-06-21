@@ -100,7 +100,7 @@ class AutoOptimizeApplyService
             if ($willApplyBio) {
                 try {
                     $currentProfile = $wpSync->getClientProfile($wpPostId);
-                    $currentBio = $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
+                    $currentBio = $currentProfile['post']['content'] ?? $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
                     $currentHash = md5($currentBio);
 
                     if ($currentHash !== $item->source_bio_hash) {
@@ -270,7 +270,7 @@ class AutoOptimizeApplyService
             if ($actionsApplied['bio'] ?? false) {
                 if (!$force) {
                     $currentProfile = $wpSync->getClientProfile($wpPostId);
-                    $currentBio = $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
+                    $currentBio = $currentProfile['post']['content'] ?? $currentProfile['content'] ?? $currentProfile['bio'] ?? '';
                     if (md5($currentBio) !== $item->applied_bio_hash) {
                         $this->alertService->raise(
                             'revert_conflict',
