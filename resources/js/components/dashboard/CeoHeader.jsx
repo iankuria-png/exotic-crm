@@ -3,6 +3,7 @@ import ReportingCurrencyControl from '../ReportingCurrencyControl';
 import { marketLabel } from './ceoFormatters';
 
 const HORIZONS = [
+    { key: '7d', label: '7 days' },
     { key: '30d', label: '30 days' },
     { key: '90d', label: '90 days' },
     { key: 'ytd', label: 'YTD' },

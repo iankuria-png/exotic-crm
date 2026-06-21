@@ -486,6 +486,9 @@ class CeoDashboardDataService
         } elseif ($horizon === '90d') {
             $from = now()->subDays(89)->startOfDay();
             $to = $today;
+        } elseif ($horizon === '7d') {
+            $from = now()->subDays(6)->startOfDay();
+            $to = $today;
         } else {
             $horizon = '30d';
             $from = now()->subDays(29)->startOfDay();
