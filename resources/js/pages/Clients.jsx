@@ -1404,6 +1404,26 @@ export default function Clients() {
 
         const wpPostId = resolution.resolved_wp_post_id ? `WP #${resolution.resolved_wp_post_id}` : null;
 
+        // Pick a market the agent can actually sync: prefer the active market filter when
+        // it's among the resolved platforms, otherwise the first accessible match.
+        const matchedIds = Array.isArray(resolution.matched_platform_ids)
+            ? resolution.matched_platform_ids.map(Number).filter((id) => Number.isFinite(id))
+            : [];
+        const accessibleMatches = matchedIds
+            .map((id) => platformOptions.find((platform) => Number(platform.platform_id) === id))
+            .filter(Boolean);
+        const syncTarget = (platformFilter
+            && accessibleMatches.find((platform) => String(platform.platform_id) === String(platformFilter)))
+            || accessibleMatches[0]
+            || null;
+        const syncAction = syncTarget
+            ? {
+                kind: 'sync',
+                platformId: Number(syncTarget.platform_id),
+                platformName: syncTarget.platform_name || 'this market',
+            }
+            : null;
+
         if (resolution.mode === 'exact') {
             return {
                 tone: 'success',
@@ -1411,6 +1431,7 @@ export default function Clients() {
                 message: wpPostId
                     ? `Matched the pasted URL directly to ${wpPostId}.`
                     : 'Matched the pasted URL directly to one CRM profile.',
+                action: null,
             };
         }
 
@@ -1421,6 +1442,7 @@ export default function Clients() {
                 message: wpPostId
                     ? `The public site resolved this URL to ${wpPostId}, but that profile is not currently in this CRM scope.`
                     : 'The public site resolved this URL, but the profile is not currently in this CRM scope.',
+                action: syncAction,
             };
         }
 
@@ -1428,12 +1450,104 @@ export default function Clients() {
             return {
                 tone: 'info',
                 title: 'No exact URL match found',
-                message: 'Showing similar profiles from the URL slug so the team can still continue.',
+                message: syncAction
+                    ? 'Showing similar profiles from the URL slug. If the exact profile is missing, it may not be synced yet.'
+                    : 'Showing similar profiles from the URL slug so the team can still continue.',
+                action: syncAction,
             };
         }
 
-        return null;
-    }, [data?.search_resolution, search]);
+        // Unresolved / host mismatch: the link does not match any market the agent can access.
+        return {
+            tone: 'warning',
+            title: "We couldn't match this link to a market you can access",
+            message: platformFilter
+                ? 'This link may belong to a different market. Try searching across all of your markets.'
+                : 'The link did not resolve to any of your markets. Double-check the URL, or paste a profile link from a market you manage.',
+            action: platformFilter ? { kind: 'clear_market' } : null,
+        };
+    }, [data?.search_resolution, search, platformFilter, platformOptions]);
+
+    // When a profile link resolves but the client isn't synced yet, agents can queue a
+    // background market sync straight from the banner; we poll its status and re-run the
+    // search automatically once it finishes so the profile appears.
+    const [syncingPlatformId, setSyncingPlatformId] = useState(null);
+
+    const syncMarketMutation = useMutation({
+        mutationFn: (platformId) => api.post(`/crm/markets/${platformId}/sync`, {
+            reason: 'Triggered from client profile URL search',
+        }).then((response) => response.data),
+        onSuccess: (response, platformId) => {
+            const run = response?.run;
+            if (run && run.in_progress === false) {
+                queryClient.invalidateQueries({ queryKey: ['clients'] });
+                toast.success('Market sync finished — results refreshed.');
+                return;
+            }
+            setSyncingPlatformId(platformId);
+            toast.info(response?.reused_run
+                ? 'A market sync is already running — watching for results.'
+                : 'Market sync started — results will refresh automatically.');
+        },
+        onError: (error) => {
+            toast.error(
+                error?.response?.data?.message
+                || error?.response?.data?.error
+                || 'Market sync failed.',
+            );
+        },
+    });
+
+    const marketSyncStatusQuery = useQuery({
+        queryKey: ['client-search-market-sync', syncingPlatformId],
+        queryFn: () => api.get(`/crm/markets/${syncingPlatformId}/sync/latest`).then((response) => response.data),
+        enabled: syncingPlatformId !== null,
+        refetchInterval: (query) => (query.state.data?.run?.in_progress === false ? false : 3000),
+    });
+
+    useEffect(() => {
+        if (syncingPlatformId === null) {
+            return;
+        }
+        const run = marketSyncStatusQuery.data?.run;
+        if (run && run.in_progress === false) {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast[run.status === 'failed' ? 'error' : 'success'](
+                run.status === 'failed'
+                    ? 'Market sync failed. Please try again.'
+                    : 'Market sync finished — results refreshed.',
+            );
+            setSyncingPlatformId(null);
+        }
+    }, [marketSyncStatusQuery.data, syncingPlatformId, queryClient, toast]);
+
+    useEffect(() => {
+        if (syncingPlatformId === null) {
+            return undefined;
+        }
+        const timer = setTimeout(() => {
+            toast.info('Market sync is still running. Re-run your search in a moment.');
+            setSyncingPlatformId(null);
+        }, 90000);
+        return () => clearTimeout(timer);
+    }, [syncingPlatformId, toast]);
+
+    const handleResolutionAction = (action) => {
+        if (!action) {
+            return;
+        }
+        if (action.kind === 'clear_market') {
+            setPlatformFilter('');
+            setPage(1);
+            return;
+        }
+        if (action.kind === 'sync') {
+            if (syncingPlatformId !== null || syncMarketMutation.isPending) {
+                return;
+            }
+            syncMarketMutation.mutate(action.platformId);
+        }
+    };
 
     const handleCopyPhone = async (event, phone) => {
         event.stopPropagation();
@@ -2178,6 +2292,31 @@ export default function Clients() {
                 }`}>
                     <p className="font-semibold">{searchResolutionNotice.title}</p>
                     <p className="mt-1 text-xs opacity-80">{searchResolutionNotice.message}</p>
+                    {searchResolutionNotice.action ? (
+                        <div className="mt-2.5">
+                            {searchResolutionNotice.action.kind === 'sync' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => handleResolutionAction(searchResolutionNotice.action)}
+                                    disabled={syncingPlatformId !== null || syncMarketMutation.isPending}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {(syncingPlatformId !== null || syncMarketMutation.isPending)
+                                        ? `Syncing ${searchResolutionNotice.action.platformName}…`
+                                        : `Sync ${searchResolutionNotice.action.platformName}`}
+                                </button>
+                            ) : null}
+                            {searchResolutionNotice.action.kind === 'clear_market' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => handleResolutionAction(searchResolutionNotice.action)}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100"
+                                >
+                                    Try all markets
+                                </button>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </section>
             ) : null}
 

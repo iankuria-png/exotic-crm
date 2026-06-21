@@ -44,7 +44,10 @@ class ClientProfileUrlSearchService
                 'resolution' => $this->resolution(
                     $clientIds === [] ? 'exact_missing' : 'exact',
                     'query_param',
-                    $normalizedUrl['wp_post_id']
+                    $normalizedUrl['wp_post_id'],
+                    $clientIds === []
+                        ? ['matched_platform_ids' => $this->platformIds($candidatePlatforms)]
+                        : []
                 ),
             ];
         }
@@ -76,7 +79,9 @@ class ClientProfileUrlSearchService
             return [
                 'client_ids' => [],
                 'fallback_terms' => $this->buildFallbackTerms($normalizedUrl['slug_candidates']),
-                'resolution' => $this->resolution('fallback', 'slug_fallback'),
+                'resolution' => $this->resolution('fallback', 'slug_fallback', null, [
+                    'matched_platform_ids' => $this->platformIds($candidatePlatforms),
+                ]),
             ];
         }
 
@@ -88,7 +93,13 @@ class ClientProfileUrlSearchService
             'resolution' => $this->resolution(
                 $clientIds === [] ? 'exact_missing' : 'exact',
                 'local_wp_lookup',
-                (int) ($matches[0]['wp_post_id'] ?? 0) ?: null
+                (int) ($matches[0]['wp_post_id'] ?? 0) ?: null,
+                $clientIds === []
+                    ? ['matched_platform_ids' => array_values(array_unique(array_map(
+                        static fn (array $match) => (int) $match['platform_id'],
+                        $matches
+                    )))]
+                    : []
             ),
         ];
     }
@@ -187,6 +198,15 @@ class ClientProfileUrlSearchService
         return $query->get()->filter(function (Platform $platform) use ($host) {
             return $this->platformMatchesHost($platform, $host);
         })->values();
+    }
+
+    private function platformIds(Collection $platforms): array
+    {
+        return $platforms
+            ->pluck('id')
+            ->map(static fn ($id) => (int) $id)
+            ->values()
+            ->all();
     }
 
     private function findClientIdsByPostId(Collection $platforms, int $wpPostId): array
