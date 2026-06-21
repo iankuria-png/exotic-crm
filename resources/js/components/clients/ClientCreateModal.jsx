@@ -146,10 +146,6 @@ function buildFullProfilePayload(form) {
     }
 
     return {
-        birthday: form.birthday || null,
-        height: form.height.trim() || null,
-        weight: form.weight.trim() || null,
-        bio: form.bio.trim() || null,
         gender: form.gender || null,
         ethnicity: form.ethnicity || null,
         build: form.build || null,
@@ -211,6 +207,22 @@ function buildQuickProfilePayload(form) {
 
     if (form.telegram.trim()) {
         payload.telegram = form.telegram.trim();
+    }
+
+    if (form.birthday) {
+        payload.birthday = form.birthday;
+    }
+
+    if (form.height.trim()) {
+        payload.height = form.height.trim();
+    }
+
+    if (form.weight.trim()) {
+        payload.weight = form.weight.trim();
+    }
+
+    if (form.bio.trim()) {
+        payload.bio = form.bio.trim();
     }
 
     return payload;
@@ -340,7 +352,7 @@ export default function ClientCreateModal({
     const requiresProvisionLocation = isWpProvision && (
         !form.region_id || (!form.city_id && !form.location_allows_region_only)
     );
-    const birthdayIsValid = !form.full_profile || isAdultBirthday(form.birthday);
+    const birthdayIsValid = isAdultBirthday(form.birthday);
     const ratesNeedCurrency = form.full_profile && hasAnyRate(form) && !form.currency;
     const createMutation = useMutation({
         mutationFn: (payload) => {
@@ -581,7 +593,7 @@ export default function ClientCreateModal({
             wp_password: isWpProvision ? (form.wp_password.trim() || null) : null,
             region_id: isWpProvision && form.region_id ? Number(form.region_id) : undefined,
             city_id: isWpProvision && form.city_id ? Number(form.city_id) : undefined,
-            profile_images: isWpProvision && form.full_profile ? [...form.profile_images] : [],
+            profile_images: isWpProvision ? [...form.profile_images] : [],
             ...(isWpProvision ? buildQuickProfilePayload(form) : {}),
             ...buildFullProfilePayload(form),
             reason,
@@ -873,33 +885,16 @@ export default function ClientCreateModal({
                                     </div>
                                 </div>
 
-                                <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
-                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-900">More profile details</p>
-                                            <p className="mt-1 text-xs text-slate-500">Keep this off for fast client creation. Turn it on to add bio, photos, appearance, rates, lifestyle, and extra socials now.</p>
-                                        </div>
-                                        <label className="inline-flex min-h-[44px] items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
-                                            <input
-                                                type="checkbox"
-                                                checked={Boolean(form.full_profile)}
-                                                onChange={(event) => setForm((current) => ({ ...current, full_profile: event.target.checked }))}
-                                                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
-                                            />
-                                            Capture full profile now
-                                        </label>
-                                    </div>
-                                </div>
                             </>
                         ) : null}
 
-                        {isWpProvision && form.full_profile ? (
+                        {isWpProvision ? (
                             <>
                                 <section className="border-t border-slate-100 pt-4 md:col-span-2">
                                     <div className="mb-3 flex items-center justify-between gap-3">
                                         <div>
                                             <h4 className="text-sm font-semibold text-slate-900">Profile basics</h4>
-                                            <p className="mt-1 text-xs text-slate-500">Public profile copy, images, and core appearance details.</p>
+                                            <p className="mt-1 text-xs text-slate-500">These save with quick provisioning and can be finished later from Edit Profile.</p>
                                         </div>
                                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Optional</span>
                                     </div>
@@ -996,7 +991,34 @@ export default function ClientCreateModal({
                                         ) : null}
                                     </div>
 
-                                    <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                                </section>
+
+                                <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">More profile details</p>
+                                            <p className="mt-1 text-xs text-slate-500">Keep this off for fast client creation. Turn it on to add appearance, rates, lifestyle, and extra socials now.</p>
+                                        </div>
+                                        <label className="inline-flex min-h-[44px] items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(form.full_profile)}
+                                                onChange={(event) => setForm((current) => ({ ...current, full_profile: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
+                                            />
+                                            Capture full profile now
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {form.full_profile ? (
+                                    <>
+                                <section className="border-t border-slate-100 pt-4 md:col-span-2">
+                                    <div className="mb-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Appearance</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Optional catalog fields for richer WordPress profiles.</p>
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
                                         {['gender', 'ethnicity', 'build', 'haircolor', 'hairlength', 'bustsize', 'looks', 'smoker'].map(renderEnumSelect)}
                                     </div>
                                 </section>
@@ -1126,6 +1148,8 @@ export default function ClientCreateModal({
                                         ))}
                                     </div>
                                 </section>
+                                    </>
+                                ) : null}
                             </>
                         ) : null}
                     </div>
