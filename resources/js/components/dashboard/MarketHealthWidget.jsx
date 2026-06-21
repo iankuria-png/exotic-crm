@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import SectionFrame from '../SectionFrame';
 import StatusBadge from '../StatusBadge';
 import { marketLabel, relativeTime } from './ceoFormatters';
+
+const INITIAL_VISIBLE_MARKETS = 6;
 
 const STATUS_META = {
     healthy: {
@@ -90,18 +92,53 @@ export default function MarketHealthWidget({
     syncingId = null,
     checkingId = null,
 }) {
-    const markets = Array.isArray(data?.markets) ? sortMarkets(data.markets) : [];
+    const [expanded, setExpanded] = useState(false);
+    const markets = useMemo(() => (
+        Array.isArray(data?.markets) ? sortMarkets(data.markets) : []
+    ), [data?.markets]);
     const summary = data?.summary || {};
+    const hasOverflow = markets.length > INITIAL_VISIBLE_MARKETS;
+    const visibleMarkets = expanded ? markets : markets.slice(0, INITIAL_VISIBLE_MARKETS);
+    const hiddenCount = Math.max(0, markets.length - visibleMarkets.length);
+    const healthActionLabel = Number(summary.down || 0) > 0
+        ? `${formatNumber(summary.down)} market${Number(summary.down || 0) === 1 ? '' : 's'} need attention`
+        : 'All monitored markets clear';
 
     return (
         <SectionFrame
             title="Market Health"
-            subtitle={`${summaryText(summary)} · scheduled probes every 5 minutes`}
+            subtitle={`${summaryText(summary)} · probes every 5 minutes`}
             contentClassName="p-0"
             action={data?.sync_queue_available === false ? (
                 <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
                     Sync queue offline
                 </span>
+            ) : markets.length > 0 ? (
+                <span className={`rounded-md px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
+                    Number(summary.down || 0) > 0
+                        ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                        : 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                }`}
+                >
+                    {healthActionLabel}
+                </span>
+            ) : null}
+            footer={!isLoading && hasOverflow ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs font-medium text-slate-500">
+                        {expanded
+                            ? `Showing all ${formatNumber(markets.length)} markets`
+                            : `Showing first ${INITIAL_VISIBLE_MARKETS} by health priority`}
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => setExpanded((current) => !current)}
+                        className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
+                        aria-expanded={expanded}
+                    >
+                        {expanded ? 'Show first 6' : `Show ${formatNumber(hiddenCount)} more`}
+                    </button>
+                </div>
             ) : null}
         >
             {errorMessage ? (
@@ -140,7 +177,7 @@ export default function MarketHealthWidget({
                 </div>
             ) : (
                 <div className="divide-y divide-slate-100">
-                    {markets.map((market) => {
+                    {visibleMarkets.map((market) => {
                         const meta = statusMeta(market.health_status);
                         const checking = Number(checkingId) === Number(market.id);
                         const syncing = Number(syncingId) === Number(market.id);
@@ -150,7 +187,7 @@ export default function MarketHealthWidget({
                         return (
                             <article
                                 key={market.id}
-                                className={`px-4 py-4 transition-colors hover:bg-slate-50/70 ${market.is_down ? meta.surface : 'bg-white'}`}
+                                className={`px-4 py-3.5 transition-colors hover:bg-slate-50/70 ${market.is_down ? meta.surface : 'bg-white'}`}
                             >
                                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)_auto] xl:items-center">
                                     <div className="min-w-0">
