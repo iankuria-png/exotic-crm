@@ -39,6 +39,9 @@ React SPA (Vite 6)  →  Laravel 10 API (Sanctum)  →  MySQL (shared with Ads A
 cd ~/Projects/exotic-crm
 /usr/local/opt/php@8.2/bin/php artisan serve
 
+# Profile media uploads support 50 MB videos. Make sure the PHP process serving
+# the API has upload_max_filesize and post_max_size set to at least 64M.
+
 # Terminal 2: Vite dev server
 cd ~/Projects/exotic-crm
 npm run dev

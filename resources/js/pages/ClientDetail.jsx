@@ -22,7 +22,7 @@ import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import KycPanel from '../components/kyc/KycPanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
-import { getMediaUploadPreflight, useMediaUploads } from '../components/MediaUploadProvider';
+import { getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
 import {
     PROFILE_ENUM_OPTIONS,
     RATE_DURATION_OPTIONS,
@@ -1806,19 +1806,16 @@ export default function ClientDetail() {
     const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
     const mediaUploadHasSelection = mediaUploadFiles.length > 0;
-    const mediaUploadHasMultiple = mediaUploadFiles.length > 1;
-    const mediaUploadIsVideo = mediaUploadFiles.length === 1 && isVideoUploadFile(mediaUploadFiles[0]);
+    const mediaUploadIsSingleImage = mediaUploadFiles.length === 1 && isImageUploadFile(mediaUploadFiles[0]);
     const mediaUploadPreflight = getMediaUploadPreflight(
         mediaUploadFiles,
-        mediaUploadHasMultiple || mediaUploadIsVideo ? false : mediaUploadSetMain
+        mediaUploadIsSingleImage ? mediaUploadSetMain : false
     );
     const mediaUploadHasInvalidBatch = mediaUploadHasSelection && !mediaUploadPreflight.ok;
     const backgroundMediaUploads = uploadsForClient(id);
     const hasBackgroundMediaUploads = backgroundMediaUploads.length > 0;
     const mediaUploadSelectionLabel = mediaUploadHasSelection
-        ? mediaUploadHasMultiple
-            ? `${mediaUploadFiles.length} images selected`
-            : mediaUploadFiles[0]?.name || '1 file selected'
+        ? mediaUploadPreflight.label
         : '';
     const wpProfileErrorData = wpProfileError?.response?.data || null;
     const mediaErrorData = mediaError?.response?.data || null;
@@ -4410,7 +4407,7 @@ export default function ClientDetail() {
                                                 }}
                                                 className="crm-input"
                                             />
-                                            {!mediaUploadHasMultiple && !mediaUploadIsVideo ? (
+                                            {mediaUploadIsSingleImage ? (
                                                 <label className="flex items-center gap-2 text-sm text-slate-700">
                                                     <input
                                                         type="checkbox"
@@ -4426,7 +4423,7 @@ export default function ClientDetail() {
                                             <p className="mt-2 text-xs text-slate-500">{mediaUploadSelectionLabel}</p>
                                         ) : null}
                                         <p className="mt-2 text-xs text-slate-500">
-                                            Images: JPG, PNG, or WEBP up to 5MB. Video: single MP4 up to 50MB.
+                                            Videos: MP4 up to 50MB (max 5). Images: JPG/PNG/WEBP up to 5MB (max 20).
                                         </p>
                                         {mediaUploadPreflight.errors.map((message) => (
                                             <p key={message} className="mt-2 text-xs text-rose-700">{message}</p>
@@ -4443,7 +4440,7 @@ export default function ClientDetail() {
                                                         clientId: id,
                                                         clientName: client?.name || '',
                                                         files: mediaUploadFiles,
-                                                        setMain: mediaUploadHasMultiple || mediaUploadIsVideo ? false : mediaUploadSetMain,
+                                                        setMain: mediaUploadIsSingleImage ? mediaUploadSetMain : false,
                                                     });
                                                     if (result?.queued) {
                                                         setMediaUploadFiles([]);
@@ -4481,6 +4478,39 @@ export default function ClientDetail() {
                                                             }>
                                                                 {upload.message}
                                                             </p>
+                                                            {upload.items?.length ? (
+                                                                <div className="mt-2 space-y-1">
+                                                                    {upload.items.map((item) => (
+                                                                        <div key={item.id} className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                                                            <div className="flex items-center justify-between gap-2">
+                                                                                <p className="truncate text-xs font-medium text-slate-700">{item.name}</p>
+                                                                                <span className={
+                                                                                    item.status === 'success'
+                                                                                        ? 'text-xs font-semibold text-emerald-700'
+                                                                                        : item.status === 'failed'
+                                                                                            ? 'text-xs font-semibold text-rose-700'
+                                                                                            : 'text-xs font-semibold text-amber-700'
+                                                                                }>
+                                                                                    {item.status === 'uploading' ? `${item.percent || 0}%` : item.status}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                                                                <div
+                                                                                    className={`h-full rounded-full transition-all ${
+                                                                                        item.status === 'failed'
+                                                                                            ? 'bg-rose-500'
+                                                                                            : item.status === 'success'
+                                                                                                ? 'bg-emerald-500'
+                                                                                                : 'bg-amber-500'
+                                                                                    }`}
+                                                                                    style={{ width: `${Math.max(0, Math.min(100, Number(item.percent || 0)))}%` }}
+                                                                                />
+                                                                            </div>
+                                                                            <p className="mt-1 truncate text-xs text-slate-500">{item.message}</p>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            ) : null}
                                                         </div>
                                                         {upload.status === 'failed' ? (
                                                             <div className="flex gap-2">
@@ -5334,18 +5364,6 @@ function resolveMediaKind(media) {
     return 'image';
 }
 
-function isVideoUploadFile(file) {
-    if (!file) {
-        return false;
-    }
-
-    const mimeType = String(file.type || '').toLowerCase();
-    if (mimeType.startsWith('video/')) {
-        return true;
-    }
-
-    return /\.mp4$/i.test(String(file.name || ''));
-}
 
 function ClientMediaCard({
     media,

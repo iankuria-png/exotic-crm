@@ -2290,6 +2290,15 @@ class ClientController extends Controller
 
         $uploadedFiles = $this->resolveProfileMediaUploadFiles($request);
         if ($uploadedFiles === []) {
+            $contentLength = (int) $request->server('CONTENT_LENGTH', 0);
+            $postMaxBytes = $this->iniSizeToBytes((string) ini_get('post_max_size'));
+
+            if ($postMaxBytes > 0 && $contentLength > $postMaxBytes) {
+                return response()->json([
+                    'message' => 'This file is too large for the server. Ask an admin to raise the upload limit.',
+                ], 413);
+            }
+
             return response()->json([
                 'message' => 'At least one file upload is required.',
             ], 422);
@@ -2353,7 +2362,7 @@ class ClientController extends Controller
                 'attachments' => $uploadedAttachments,
                 'message' => count($uploadedAttachments) === 1
                     ? 'Media uploaded successfully.'
-                    : sprintf('%d images uploaded successfully.', count($uploadedAttachments)),
+                    : sprintf('%d media files uploaded successfully.', count($uploadedAttachments)),
             ];
 
             if (count($uploadedAttachments) === 1) {
@@ -4313,25 +4322,41 @@ class ClientController extends Controller
     private function validateProfileMediaBatch(array $files, bool $setMain): void
     {
         $hasMultiple = count($files) > 1;
-        $videoCount = 0;
 
         foreach ($files as $file) {
             $this->validateProfileMediaUpload($file, $setMain && !$hasMultiple, function (string $message): void {
                 throw new InvalidArgumentException($message);
             });
-
-            if ($this->isProfileMediaVideoUpload($file)) {
-                $videoCount++;
-            }
-        }
-
-        if ($hasMultiple && $videoCount > 0) {
-            throw new InvalidArgumentException('You can upload multiple files at once only when all selected files are images.');
         }
 
         if ($hasMultiple && $setMain) {
             throw new InvalidArgumentException('Set main image is only available for single-image uploads.');
         }
+    }
+
+    private function iniSizeToBytes(string $value): int
+    {
+        $normalized = trim(strtolower($value));
+        if ($normalized === '') {
+            return 0;
+        }
+
+        $number = (float) $normalized;
+        $unit = substr($normalized, -1);
+
+        if ($unit === 'g') {
+            return (int) ($number * 1024 * 1024 * 1024);
+        }
+
+        if ($unit === 'm') {
+            return (int) ($number * 1024 * 1024);
+        }
+
+        if ($unit === 'k') {
+            return (int) ($number * 1024);
+        }
+
+        return (int) $number;
     }
 
     /**

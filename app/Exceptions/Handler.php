@@ -4,6 +4,7 @@ namespace App\Exceptions;
 
 use App\Services\ErrorLogRecorder;
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Throwable;
 
 class Handler extends ExceptionHandler
@@ -46,6 +47,16 @@ class Handler extends ExceptionHandler
             app(ErrorLogRecorder::class)->recordException($e, [
                 '__error_log_recorder_skip' => true,
             ]);
+        });
+
+        $this->renderable(function (PostTooLargeException $e, $request) {
+            if ($request->is('api/crm/*')) {
+                return response()->json([
+                    'message' => 'This file is too large for the server. Ask an admin to raise the upload limit.',
+                ], 413);
+            }
+
+            return null;
         });
     }
 }

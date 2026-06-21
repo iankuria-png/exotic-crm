@@ -4,6 +4,12 @@ import api from '../../services/api';
 import { normalizePhone } from '../../utils/phone';
 import GenerateBioButton from '../seo/GenerateBioButton';
 import { useToast } from '../ToastProvider';
+import {
+    MEDIA_UPLOAD_LIMITS,
+    isImageUploadFile,
+    isVideoUploadFile,
+    useMediaUploads,
+} from '../MediaUploadProvider';
 import RegionCitySelect from './profile-fields/RegionCitySelect';
 import CurrencySelect from './profile-fields/CurrencySelect';
 import {
@@ -12,10 +18,8 @@ import {
     parseProfileServices,
 } from './profile-fields/profileFieldCatalog';
 
-const PROFILE_IMAGE_LIMIT = 6;
-const PROFILE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-const PROFILE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const PROFILE_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const PROFILE_MEDIA_IMAGE_LIMIT = 6;
+const PROFILE_MEDIA_VIDEO_LIMIT = 5;
 const RATE_FIELD_KEYS = [
     'incall',
     'outcall',
@@ -100,11 +104,6 @@ function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
         language3level: '',
         profile_images: [],
     };
-}
-
-function fileExtension(filename) {
-    const parts = String(filename || '').split('.');
-    return parts.length > 1 ? parts.pop().toLowerCase() : '';
 }
 
 function humanizeFieldName(field) {
@@ -244,6 +243,7 @@ export default function ClientCreateModal({
 }) {
     const toast = useToast();
     const queryClient = useQueryClient();
+    const { startClientMediaUpload } = useMediaUploads();
     const initialMode = lockedOnboardingMode || 'wp_provision';
     const dialogRef = useRef(null);
     const clientNameRef = useRef(null);
@@ -268,6 +268,7 @@ export default function ClientCreateModal({
     useEffect(() => {
         const previews = form.profile_images.map((file) => ({
             name: file.name,
+            isVideo: isVideoUploadFile(file),
             url: URL.createObjectURL(file),
         }));
 
@@ -369,7 +370,7 @@ export default function ClientCreateModal({
             return api.post('/crm/clients', requestPayload).then((response) => response.data);
         },
         onSuccess: (createdClient, variables) => {
-            const images = Array.isArray(variables?.profile_images) ? variables.profile_images : [];
+            const mediaFiles = Array.isArray(variables?.profile_images) ? variables.profile_images : [];
             const matches = Array.isArray(createdClient?.duplicate_phone_matches)
                 ? createdClient.duplicate_phone_matches
                 : [];
@@ -379,15 +380,21 @@ export default function ClientCreateModal({
             queryClient.invalidateQueries({ queryKey: ['field-home'] });
             setDuplicateMatches(matches);
 
-            if (images.length > 0) {
-                void uploadProfileImages(createdClient, images);
+            if (mediaFiles.length > 0) {
+                const setMain = mediaFiles.length === 1 && isImageUploadFile(mediaFiles[0]);
+                startClientMediaUpload({
+                    clientId: createdClient.id,
+                    clientName: createdClient.name || '',
+                    files: mediaFiles,
+                    setMain,
+                });
             }
 
             toast.success(isWpProvision ? 'Client provisioned.' : 'Client created.');
             onCreated?.(createdClient, {
                 duplicateMatches: matches,
                 onboardingMode: variables?.onboarding_mode || null,
-                imagesQueued: images.length,
+                imagesQueued: mediaFiles.length,
             });
             setForm(defaultForm(resolveInitialPlatformId(lockedPlatformId, initialPlatformId), initialMode));
         },
@@ -403,6 +410,9 @@ export default function ClientCreateModal({
         && !ratesNeedCurrency
         && !createMutation.isPending;
     const selectedServiceCodes = useMemo(() => parseProfileServices(form.services), [form.services]);
+    const selectedProfileImageCount = form.profile_images.filter((file) => isImageUploadFile(file)).length;
+    const selectedProfileVideoCount = form.profile_images.filter((file) => isVideoUploadFile(file)).length;
+    const profileMediaSelectionLabel = `${selectedProfileImageCount}/${PROFILE_MEDIA_IMAGE_LIMIT} images, ${selectedProfileVideoCount}/${PROFILE_MEDIA_VIDEO_LIMIT} videos selected`;
 
     const locationRequirementMessage = !form.region_id
         ? 'Choose a region before provisioning this WordPress profile.'
@@ -430,27 +440,6 @@ export default function ClientCreateModal({
             </div>
         );
     }, [signupSource]);
-
-    const uploadProfileImages = async (client, files) => {
-        if (!client?.id || files.length === 0) {
-            return;
-        }
-
-        const formData = new FormData();
-        files.forEach((file) => formData.append('files[]', file));
-        formData.append('set_main', files.length === 1 ? '1' : '0');
-        formData.append('reason', 'Background image upload from client create flow');
-
-        try {
-            await api.post(`/crm/clients/${client.id}/media`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-            });
-            queryClient.invalidateQueries({ queryKey: ['clients'] });
-            toast.success('Images uploaded.');
-        } catch {
-            toast.warning('Client was created. Some images may need retry from the Media tab.', { duration: 7000 });
-        }
-    };
 
     const handleMarketChange = (event) => {
         const nextPlatformId = event.target.value;
@@ -484,30 +473,56 @@ export default function ClientCreateModal({
         }
 
         setForm((current) => {
-            const accepted = [];
+            const accepted = [...current.profile_images];
             const rejected = [];
+            let imageCount = accepted.filter((file) => isImageUploadFile(file)).length;
+            let videoCount = accepted.filter((file) => isVideoUploadFile(file)).length;
+            let imageLimitReached = false;
+            let videoLimitReached = false;
 
-            [...current.profile_images, ...files].forEach((file) => {
-                const extension = fileExtension(file.name);
-                const validType = PROFILE_IMAGE_TYPES.has(file.type) || PROFILE_IMAGE_EXTENSIONS.has(extension);
-                const validSize = file.size <= PROFILE_IMAGE_MAX_BYTES;
+            files.forEach((file) => {
+                const isImage = isImageUploadFile(file);
+                const isVideo = isVideoUploadFile(file);
+                const validSize = isImage
+                    ? file.size <= MEDIA_UPLOAD_LIMITS.imageMaxBytes
+                    : isVideo && file.size <= MEDIA_UPLOAD_LIMITS.videoMaxBytes;
 
-                if (!validType || !validSize) {
+                if ((!isImage && !isVideo) || !validSize) {
                     rejected.push(file.name);
                     return;
                 }
 
-                if (accepted.length < PROFILE_IMAGE_LIMIT) {
-                    accepted.push(file);
+                if (isImage) {
+                    if (imageCount >= PROFILE_MEDIA_IMAGE_LIMIT) {
+                        imageLimitReached = true;
+                        return;
+                    }
+
+                    imageCount += 1;
                 }
+
+                if (isVideo) {
+                    if (videoCount >= PROFILE_MEDIA_VIDEO_LIMIT) {
+                        videoLimitReached = true;
+                        return;
+                    }
+
+                    videoCount += 1;
+                }
+
+                accepted.push(file);
             });
 
             if (rejected.length > 0) {
-                toast.warning('Some images were skipped. Use JPG, PNG, or WEBP up to 5MB.');
+                toast.warning('Some media was skipped. Use JPG, PNG, WEBP up to 5MB or MP4 up to 50MB.');
             }
 
-            if (current.profile_images.length + files.length > PROFILE_IMAGE_LIMIT) {
-                toast.warning(`Only ${PROFILE_IMAGE_LIMIT} images can be attached during creation.`);
+            if (imageLimitReached) {
+                toast.warning(`Only ${PROFILE_MEDIA_IMAGE_LIMIT} images can be attached during creation.`);
+            }
+
+            if (videoLimitReached) {
+                toast.warning(`Only ${PROFILE_MEDIA_VIDEO_LIMIT} videos can be attached during creation.`);
             }
 
             return { ...current, profile_images: accepted };
@@ -1002,13 +1017,13 @@ export default function ClientCreateModal({
 
                                     <div className="mt-3">
                                         <div className="flex flex-wrap items-center justify-between gap-2">
-                                            <label htmlFor="client-create-profile-images" className="block text-sm font-medium text-slate-700">Profile images</label>
-                                            <span className="text-xs text-slate-500">{form.profile_images.length}/{PROFILE_IMAGE_LIMIT} selected</span>
+                                            <label htmlFor="client-create-profile-images" className="block text-sm font-medium text-slate-700">Profile media</label>
+                                            <span className="text-xs text-slate-500">{profileMediaSelectionLabel}</span>
                                         </div>
                                         <input
                                             id="client-create-profile-images"
                                             type="file"
-                                            accept="image/jpeg,image/png,image/webp"
+                                            accept="image/jpeg,image/png,image/webp,video/mp4"
                                             multiple
                                             onChange={handleProfileImageSelect}
                                             className="crm-input mt-1"
@@ -1017,7 +1032,14 @@ export default function ClientCreateModal({
                                             <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">
                                                 {imagePreviews.map((preview, index) => (
                                                     <div key={`${preview.name}-${index}`} className="group relative overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                                                        <img src={preview.url} alt="" className="aspect-square w-full object-cover" />
+                                                        {preview.isVideo ? (
+                                                            <>
+                                                                <video src={preview.url} className="aspect-square w-full object-cover" muted playsInline preload="metadata" />
+                                                                <span className="absolute bottom-1 left-1 rounded bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">MP4</span>
+                                                            </>
+                                                        ) : (
+                                                            <img src={preview.url} alt="" className="aspect-square w-full object-cover" />
+                                                        )}
                                                         <button
                                                             type="button"
                                                             onClick={() => removeProfileImage(index)}

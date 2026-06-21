@@ -132,14 +132,14 @@ test.describe('client detail media background upload', () => {
         await uploadButton.click();
         await uploadStarted;
 
-        await expect(page.getByText('Uploading in the background', { exact: true })).toBeVisible();
+        await expect(page.getByText(/Uploading/).first()).toBeVisible();
         await expect(page.getByRole('button', { name: '1 upload active' })).toBeVisible();
         await expect(uploadButton).toBeDisabled();
         await expect(fileInput).toBeEnabled();
         await expect(page.getByText('You can keep working while media finishes.')).toBeVisible();
         expect(mediaPostCount).toBe(1);
 
-        await expect(page.getByRole('main').getByText('Media uploaded to WordPress.', { exact: true })).toBeVisible();
+        await expect(page.getByRole('main').getByText('1 media file uploaded to WordPress.', { exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: '1 upload active' })).toHaveCount(0);
     });
 
@@ -188,8 +188,95 @@ test.describe('client detail media background upload', () => {
         expect(mediaPostCount).toBe(1);
 
         await page.getByRole('main').getByRole('button', { name: 'Retry' }).click();
-        await expect(page.getByRole('main').getByText('Media uploaded to WordPress.', { exact: true })).toBeVisible();
+        await expect(page.getByRole('main').getByText('1 media file uploaded to WordPress.', { exact: true })).toBeVisible();
         expect(mediaPostCount).toBe(2);
+    });
+
+    test('mixed media uploads one file per request sequentially with per-file status', async ({ page }) => {
+        await seedBrowserAuth(page);
+        await stubClientDetail(page);
+
+        let mediaPostCount = 0;
+        let inFlightPostCount = 0;
+        let maxInFlightPostCount = 0;
+        const releases = [];
+
+        await page.route(`**/api/crm/clients/${CLIENT_ID}/media`, async (route) => {
+            if (route.request().method() === 'POST') {
+                mediaPostCount += 1;
+                const currentPostCount = mediaPostCount;
+                inFlightPostCount += 1;
+                maxInFlightPostCount = Math.max(maxInFlightPostCount, inFlightPostCount);
+
+                await new Promise((resolve) => {
+                    releases.push(resolve);
+                });
+
+                inFlightPostCount -= 1;
+                await route.fulfill({
+                    contentType: 'application/json',
+                    body: JSON.stringify({
+                        success: true,
+                        uploaded_count: 1,
+                        attachment: {
+                            id: 9000 + currentPostCount,
+                            url: `https://ghana.example.test/wp-content/uploads/media-${currentPostCount}`,
+                            mime_type: currentPostCount === 3 ? 'video/mp4' : 'image/jpeg',
+                            is_main: false,
+                        },
+                    }),
+                });
+                return;
+            }
+
+            await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+        });
+
+        await openMediaTab(page);
+
+        const fileInput = page.locator('input[type="file"][accept*="image/jpeg"]');
+        await fileInput.setInputFiles([
+            {
+                name: 'first-photo.jpeg',
+                mimeType: 'image/jpeg',
+                buffer: Buffer.from('fake first image bytes'),
+            },
+            {
+                name: 'second-photo.jpeg',
+                mimeType: 'image/jpeg',
+                buffer: Buffer.from('fake second image bytes'),
+            },
+            {
+                name: 'intro-video.mp4',
+                mimeType: 'video/mp4',
+                buffer: Buffer.from('fake mp4 bytes'),
+            },
+        ]);
+
+        await expect(page.getByText('2 images, 1 video')).toBeVisible();
+        await page.getByRole('button', { name: 'Upload in background' }).click();
+
+        await expect.poll(() => mediaPostCount).toBe(1);
+        await expect(page.getByText('first-photo.jpeg')).toBeVisible();
+        await expect(page.getByText('second-photo.jpeg')).toBeVisible();
+        await expect(page.getByText('intro-video.mp4')).toBeVisible();
+
+        await page.waitForTimeout(150);
+        expect(mediaPostCount).toBe(1);
+        releases.shift()();
+
+        await expect.poll(() => mediaPostCount).toBe(2);
+        await page.waitForTimeout(150);
+        expect(mediaPostCount).toBe(2);
+        releases.shift()();
+
+        await expect.poll(() => mediaPostCount).toBe(3);
+        await page.waitForTimeout(150);
+        expect(mediaPostCount).toBe(3);
+        releases.shift()();
+
+        await expect(page.getByRole('main').getByText('3 media files uploaded to WordPress.', { exact: true })).toBeVisible();
+        expect(maxInFlightPostCount).toBe(1);
     });
 
     test('oversized files are blocked before posting to CRM', async ({ page }) => {

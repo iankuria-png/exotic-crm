@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { useToast } from './ToastProvider';
@@ -26,7 +26,7 @@ function formatBytes(bytes) {
     return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
 }
 
-function isImageUploadFile(file) {
+export function isImageUploadFile(file) {
     const mime = String(file?.type || '').toLowerCase();
     const ext = fileExtension(file);
 
@@ -34,7 +34,7 @@ function isImageUploadFile(file) {
         || ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
 }
 
-function isVideoUploadFile(file) {
+export function isVideoUploadFile(file) {
     const mime = String(file?.type || '').toLowerCase();
     const ext = fileExtension(file);
 
@@ -46,19 +46,76 @@ function describeMediaUploadFiles(files) {
     if (list.length === 0) return 'Media upload';
     if (list.length === 1) return list[0]?.name || '1 file';
 
-    return `${list.length} images`;
+    const imageCount = list.filter((file) => isImageUploadFile(file)).length;
+    const videoCount = list.filter((file) => isVideoUploadFile(file)).length;
+    const parts = [];
+
+    if (imageCount > 0) {
+        parts.push(`${imageCount} image${imageCount === 1 ? '' : 's'}`);
+    }
+
+    if (videoCount > 0) {
+        parts.push(`${videoCount} video${videoCount === 1 ? '' : 's'}`);
+    }
+
+    return parts.length > 0 ? parts.join(', ') : `${list.length} files`;
+}
+
+function uploadErrorDetails(error) {
+    const status = Number(error?.response?.status || 0);
+    const serverMessage = String(error?.response?.data?.message || '').trim();
+
+    if (status === 413) {
+        return {
+            status,
+            message: serverMessage || 'This file is too large for the server. Ask an admin to raise the upload limit.',
+            stopBatch: false,
+        };
+    }
+
+    if ([401, 419].includes(status)) {
+        return {
+            status,
+            message: serverMessage || 'Your CRM session expired. Sign in again, then retry this upload.',
+            stopBatch: true,
+        };
+    }
+
+    if (status === 403) {
+        return {
+            status,
+            message: serverMessage || 'You do not have permission to upload media for this client.',
+            stopBatch: true,
+        };
+    }
+
+    if (serverMessage) {
+        return {
+            status,
+            message: serverMessage,
+            stopBatch: false,
+        };
+    }
+
+    if (!error?.response) {
+        return {
+            status: 0,
+            message: 'Network connection lost while uploading. Check your connection, then retry.',
+            stopBatch: false,
+        };
+    }
+
+    return {
+        status,
+        message: 'Upload failed. Retry this file.',
+        stopBatch: false,
+    };
 }
 
 export function getMediaUploadPreflight(files, setMain = false) {
     const list = Array.isArray(files) ? files.filter(Boolean) : [];
     const guidance = [];
     const errors = [];
-    const hasMultiple = list.length > 1;
-    const hasVideo = list.some((file) => isVideoUploadFile(file));
-
-    if (hasMultiple && hasVideo) {
-        errors.push('Multiple uploads are available for images only. Upload videos one at a time.');
-    }
 
     list.forEach((file) => {
         const name = file?.name || 'Selected file';
@@ -100,58 +157,204 @@ export function MediaUploadProvider({ children }) {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [uploads, setUploads] = useState([]);
+    const activeClientUploadsRef = useRef(new Set());
 
     const dismissUpload = useCallback((uploadId) => {
-        setUploads((current) => current.filter((upload) => upload.id !== uploadId));
+        setUploads((current) => current.filter((upload) => {
+            if (upload.id !== uploadId) {
+                return true;
+            }
+
+            if (upload.status === 'uploading') {
+                toast.warning('Wait for this media upload to finish before dismissing it.');
+                return true;
+            }
+
+            return false;
+        }));
+    }, [toast]);
+
+    const clearClientUploadLock = useCallback((clientId) => {
+        activeClientUploadsRef.current.delete(String(clientId));
     }, []);
 
-    const uploadToWordPress = useCallback((uploadId, uploadFiles, setMain, clientId) => {
-        const formData = new FormData();
-        if (uploadFiles.length === 1) {
-            formData.append('file', uploadFiles[0]);
+    const updateUpload = useCallback((uploadId, updater) => {
+        setUploads((current) => current.map((upload) => (
+            upload.id === uploadId ? updater(upload) : upload
+        )));
+    }, []);
+
+    const updateUploadItem = useCallback((uploadId, itemId, patch) => {
+        updateUpload(uploadId, (upload) => ({
+            ...upload,
+            items: upload.items.map((item) => (
+                item.id === itemId
+                    ? { ...item, ...(typeof patch === 'function' ? patch(item) : patch) }
+                    : item
+            )),
+        }));
+    }, [updateUpload]);
+
+    const finalizeUpload = useCallback((uploadId, clientId, summary) => {
+        clearClientUploadLock(clientId);
+
+        const successCount = Number(summary?.successCount || 0);
+        const failedCount = Number(summary?.failedCount || 0);
+        const totalCount = Number(summary?.totalCount || successCount + failedCount);
+        const stopMessage = String(summary?.stopMessage || '').trim();
+        const finalStatus = failedCount > 0 ? 'failed' : 'success';
+        const finalMessage = failedCount > 0
+            ? `${successCount} of ${totalCount} uploaded. ${failedCount} failed.${stopMessage ? ` ${stopMessage}` : ''}`
+            : `${successCount} media file${successCount === 1 ? '' : 's'} uploaded to WordPress.`;
+
+        setUploads((current) => current.map((upload) => {
+            if (upload.id !== uploadId) {
+                return upload;
+            }
+
+            return {
+                ...upload,
+                status: finalStatus,
+                message: finalMessage,
+            };
+        }));
+
+        queryClient.invalidateQueries({ queryKey: ['client', String(clientId)] });
+        queryClient.invalidateQueries({ queryKey: ['client-media', String(clientId)] });
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+        if (finalStatus === 'success') {
+            toast.success(finalMessage);
+            window.setTimeout(() => dismissUpload(uploadId), 30000);
         } else {
-            uploadFiles.forEach((file) => {
-                formData.append('files[]', file);
+            toast.warning(finalMessage, { duration: 7000 });
+        }
+    }, [clearClientUploadLock, dismissUpload, queryClient, toast]);
+
+    const uploadItemsToWordPress = useCallback(async (uploadId, uploadItems, setMainItemId, clientId, summaryBase = {}) => {
+        const runResults = new Map(uploadItems.map((item) => [item.id, 'pending']));
+        let batchStopMessage = '';
+
+        try {
+            for (let index = 0; index < uploadItems.length; index += 1) {
+                const item = uploadItems[index];
+
+                if (batchStopMessage) {
+                    runResults.set(item.id, 'failed');
+                    updateUploadItem(uploadId, item.id, {
+                        status: 'failed',
+                        message: `Skipped after upload was interrupted: ${batchStopMessage}`,
+                    });
+                    continue;
+                }
+
+                const formData = new FormData();
+                formData.append('file', item.file);
+                formData.append('set_main', item.id === setMainItemId ? '1' : '0');
+                formData.append('reason', 'Background media upload from CRM');
+
+                updateUpload(uploadId, (upload) => ({
+                    ...upload,
+                    status: 'uploading',
+                    message: `Uploading ${index + 1} of ${uploadItems.length}: ${item.name}`,
+                    items: upload.items.map((currentItem) => (
+                        currentItem.id === item.id
+                            ? { ...currentItem, status: 'uploading', percent: 0, message: 'Uploading' }
+                            : currentItem
+                    )),
+                }));
+
+                try {
+                    await api.post(`/crm/clients/${clientId}/media`, formData, {
+                        headers: {
+                            'Content-Type': 'multipart/form-data',
+                        },
+                        onUploadProgress: (progressEvent) => {
+                            const total = Number(progressEvent.total || item.file?.size || 0);
+                            const loaded = Number(progressEvent.loaded || 0);
+                            const percent = total > 0
+                                ? Math.min(100, Math.round((loaded / total) * 100))
+                                : 0;
+
+                            updateUploadItem(uploadId, item.id, {
+                                percent,
+                                message: percent >= 100 ? 'Processing' : `${percent}% uploaded`,
+                            });
+                        },
+                    });
+
+                    runResults.set(item.id, 'success');
+                    updateUploadItem(uploadId, item.id, {
+                        status: 'success',
+                        percent: 100,
+                        message: 'Uploaded',
+                    });
+                } catch (error) {
+                    const details = uploadErrorDetails(error);
+                    runResults.set(item.id, 'failed');
+                    updateUploadItem(uploadId, item.id, {
+                        status: 'failed',
+                        errorStatus: details.status,
+                        message: details.message,
+                    });
+
+                    if (details.stopBatch) {
+                        batchStopMessage = details.message;
+                    }
+                }
+            }
+        } catch (error) {
+            const details = uploadErrorDetails(error);
+            batchStopMessage = details.message;
+            uploadItems.forEach((item) => {
+                if (runResults.get(item.id) !== 'success') {
+                    runResults.set(item.id, 'failed');
+                    updateUploadItem(uploadId, item.id, {
+                        status: 'failed',
+                        errorStatus: details.status,
+                        message: details.message,
+                    });
+                }
+            });
+        } finally {
+            const processedSuccessCount = Array.from(runResults.values()).filter((status) => status === 'success').length;
+            const processedFailedCount = Array.from(runResults.values()).filter((status) => status === 'failed').length;
+
+            finalizeUpload(uploadId, clientId, {
+                totalCount: Number(summaryBase.totalCount || uploadItems.length),
+                successCount: Number(summaryBase.existingSuccessCount || 0) + processedSuccessCount,
+                failedCount: processedFailedCount,
+                stopMessage: batchStopMessage,
             });
         }
-        formData.append('set_main', setMain ? '1' : '0');
-        formData.append('reason', 'Background media upload from client detail');
+    }, [finalizeUpload, updateUpload, updateUploadItem]);
 
-        void api.post(`/crm/clients/${clientId}/media`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        }).then((response) => {
-            queryClient.invalidateQueries({ queryKey: ['client', String(clientId)] });
-            queryClient.invalidateQueries({ queryKey: ['client-media', String(clientId)] });
-            queryClient.invalidateQueries({ queryKey: ['clients'] });
+    const uploadToWordPress = useCallback((uploadId, uploadItems, setMainItemId, clientId, summaryBase = {}) => {
+        void uploadItemsToWordPress(uploadId, uploadItems, setMainItemId, clientId, summaryBase);
+    }, [uploadItemsToWordPress]);
 
-            const uploadedCount = Number(response?.data?.uploaded_count || 0);
-            const successMessage = uploadedCount > 1
-                ? `${uploadedCount} images uploaded to WordPress.`
-                : 'Media uploaded to WordPress.';
+    const buildUploadItems = useCallback((uploadId, uploadFiles) => (
+        uploadFiles.map((file, index) => ({
+            id: `${uploadId}-${index}`,
+            file,
+            name: file?.name || `File ${index + 1}`,
+            isVideo: isVideoUploadFile(file),
+            status: 'pending',
+            percent: 0,
+            message: 'Waiting',
+        }))
+    ), []);
 
-            setUploads((current) => current.map((upload) => (
-                upload.id === uploadId
-                    ? { ...upload, status: 'success', message: successMessage, files: [] }
-                    : upload
-            )));
-            toast.success(successMessage);
-            window.setTimeout(() => dismissUpload(uploadId), 30000);
-        }).catch((error) => {
-            const failureMessage = error?.response?.data?.message || 'Upload failed. Retry from the Media tab.';
-            setUploads((current) => current.map((upload) => (
-                upload.id === uploadId
-                    ? { ...upload, status: 'failed', message: failureMessage }
-                    : upload
-            )));
-            toast.warning(failureMessage, { duration: 7000 });
-        });
-    }, [dismissUpload, queryClient, toast]);
+    const startUploadRun = useCallback((uploadId, items, setMainItemId, clientId, summaryBase = {}) => {
+        const clientKey = String(clientId);
+        activeClientUploadsRef.current.add(clientKey);
+        uploadToWordPress(uploadId, items, setMainItemId, clientKey, summaryBase);
+    }, [uploadToWordPress]);
 
     const startClientMediaUpload = useCallback(({ clientId, clientName = '', files, setMain = false }) => {
         const uploadFiles = Array.isArray(files) ? files.filter(Boolean) : [];
         const preflight = getMediaUploadPreflight(uploadFiles, setMain);
+        const clientKey = String(clientId);
         if (uploadFiles.length === 0) {
             return { queued: false, error: 'Select at least one file first.' };
         }
@@ -161,14 +364,23 @@ export function MediaUploadProvider({ children }) {
             return { queued: false, error: preflight.errors[0] || 'Invalid media upload.' };
         }
 
+        if (activeClientUploadsRef.current.has(clientKey)) {
+            const message = 'A media upload is already running for this client. Wait for it to finish, then start another batch.';
+            toast.warning(message);
+            return { queued: false, error: message };
+        }
+
         const uploadId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const items = buildUploadItems(uploadId, uploadFiles);
+        const setMainItem = setMain ? items.find((item) => !item.isVideo) : null;
         const entry = {
             id: uploadId,
-            clientId: String(clientId),
+            clientId: clientKey,
             clientName,
             label: preflight.label,
-            files: uploadFiles,
+            items,
             setMain,
+            setMainItemId: setMainItem?.id || null,
             status: 'uploading',
             message: 'Uploading in the background',
             attempts: 1,
@@ -177,18 +389,24 @@ export function MediaUploadProvider({ children }) {
 
         setUploads((current) => [entry, ...current]);
         toast.info(`${preflight.label} uploading in the background.`);
-        uploadToWordPress(uploadId, uploadFiles, setMain, clientId);
+        startUploadRun(uploadId, items, setMainItem?.id || null, clientKey);
 
         return { queued: true, uploadId };
-    }, [toast, uploadToWordPress]);
+    }, [buildUploadItems, startUploadRun, toast]);
 
     const retryUpload = useCallback((uploadId) => {
         const upload = uploads.find((item) => item.id === uploadId);
-        if (!upload || upload.status !== 'failed' || !upload.files?.length) {
+        const failedItems = upload?.items?.filter((item) => item.status === 'failed') || [];
+        if (!upload || upload.status !== 'failed' || failedItems.length === 0) {
             return;
         }
 
-        const preflight = getMediaUploadPreflight(upload.files, upload.setMain);
+        if (activeClientUploadsRef.current.has(String(upload.clientId))) {
+            toast.warning('A media upload is already running for this client. Wait for it to finish, then retry.');
+            return;
+        }
+
+        const preflight = getMediaUploadPreflight(failedItems.map((item) => item.file), false);
         if (!preflight.ok) {
             toast.warning(preflight.errors[0] || 'Media upload cannot be retried.');
             return;
@@ -201,12 +419,24 @@ export function MediaUploadProvider({ children }) {
                     status: 'uploading',
                     message: 'Retrying upload',
                     attempts: Number(item.attempts || 1) + 1,
+                    items: item.items.map((uploadItem) => (
+                        uploadItem.status === 'failed'
+                            ? { ...uploadItem, status: 'pending', percent: 0, message: 'Waiting to retry' }
+                            : uploadItem
+                    )),
                 }
                 : item
         )));
         toast.info(`Retrying ${upload.label}.`);
-        uploadToWordPress(upload.id, upload.files, upload.setMain, upload.clientId);
-    }, [toast, uploadToWordPress, uploads]);
+        const retrySetMainItemId = failedItems.some((item) => item.id === upload.setMainItemId)
+            ? upload.setMainItemId
+            : null;
+
+        startUploadRun(upload.id, failedItems, retrySetMainItemId, upload.clientId, {
+            totalCount: upload.items.length,
+            existingSuccessCount: upload.items.filter((item) => item.status === 'success').length,
+        });
+    }, [startUploadRun, toast, uploads]);
 
     const value = useMemo(() => {
         const activeUploads = uploads.filter((upload) => upload.status === 'uploading');
