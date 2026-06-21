@@ -188,6 +188,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/peak-hours', [CeoDashboardController::class, 'peakHours']);
         Route::get('/recent-payments', [CeoDashboardController::class, 'recentPayments']);
         Route::get('/agent-performance', [CeoDashboardController::class, 'agentPerformance']);
+        Route::get('/market-health', [CeoDashboardController::class, 'marketHealth']);
+        Route::post('/market-health/{platform}/check', [CeoDashboardController::class, 'checkMarketHealth']);
     });
     Route::get('/products', [CrmDashboardController::class, 'products']);
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales,field_sales');

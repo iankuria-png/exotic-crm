@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import CountryRevenueWidget from '../components/dashboard/CountryRevenueWidget';
@@ -12,10 +12,12 @@ import RevenueTrendWidget from '../components/dashboard/RevenueTrendWidget';
 import RecentPaymentsWidget from '../components/dashboard/RecentPaymentsWidget';
 import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
+import MarketHealthWidget from '../components/dashboard/MarketHealthWidget';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
+import { useToast } from '../components/ToastProvider';
 import { marketLabel } from '../components/dashboard/ceoFormatters';
 
 function toInputDate(date) {
@@ -50,6 +52,8 @@ function compactWindowLabel(window) {
 
 export default function CeoDashboard({ user, onSwitchAdminView }) {
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const toast = useToast();
     const reporting = useCeoReportingCurrency();
     const { config: widgetConfig } = useDashboardWidgets();
     const [horizon, setHorizon] = useState('30d');
@@ -126,6 +130,13 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         staleTime: 60_000,
     });
 
+    const marketHealthQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'market-health'],
+        queryFn: () => api.get('/crm/dashboard/ceo/market-health').then((response) => response.data),
+        staleTime: 45_000,
+        refetchInterval: 60_000,
+    });
+
     const countryRevenueQuery = useQuery({
         queryKey: ['ceo-dashboard', 'top-markets', queryParams, summaryQuery.data?.window?.from, summaryQuery.data?.window?.to],
         queryFn: () => api.get('/crm/dashboard/country-revenue', {
@@ -175,6 +186,54 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             country: engagementMarketOption.country || engagementMarketOption.platform_country,
         })
         : null;
+
+    const checkNowMutation = useMutation({
+        mutationFn: (marketId) => api.post(`/crm/dashboard/ceo/market-health/${marketId}/check`).then((response) => response.data),
+        onSuccess: (response) => {
+            if (response?.market) {
+                queryClient.setQueryData(['ceo-dashboard', 'market-health'], (current) => {
+                    if (!current?.markets) return current;
+                    const markets = current.markets.map((market) => (
+                        Number(market.id) === Number(response.market.id) ? response.market : market
+                    ));
+                    const healthy = markets.filter((market) => market.health_status === 'healthy').length;
+                    const unconfigured = markets.filter((market) => market.health_status === 'unconfigured').length;
+                    const down = markets.filter((market) => !['healthy', 'unconfigured'].includes(market.health_status)).length;
+
+                    return {
+                        ...current,
+                        summary: {
+                            total: markets.length,
+                            healthy,
+                            down,
+                            unconfigured,
+                        },
+                        markets,
+                    };
+                });
+            }
+            queryClient.invalidateQueries({ queryKey: ['ceo-dashboard', 'market-health'] });
+            toast.success('Market health refreshed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Market health check failed.');
+        },
+    });
+
+    const syncMutation = useMutation({
+        mutationFn: (marketId) => api.post(`/crm/markets/${marketId}/sync`, {
+            reason: 'CEO dashboard market health sync',
+        }).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['ceo-dashboard', 'market-health'] });
+            toast[response?.reused_run ? 'warning' : 'success'](
+                response?.message || (response?.reused_run ? 'A market sync is already running.' : 'Market sync has been queued.')
+            );
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || error?.response?.data?.error || 'Market sync failed.');
+        },
+    });
 
     const engagementSwitcher = (
         <select
@@ -305,6 +364,16 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 errorMessage={agentPerformanceQuery.isError ? apiError(agentPerformanceQuery.error, 'Agent performance could not be loaded.') : null}
                 focusedAgentId={focusedAgentId}
                 onOpenTeam={() => navigate('/team')}
+            />
+
+            <MarketHealthWidget
+                data={marketHealthQuery.data}
+                isLoading={marketHealthQuery.isLoading}
+                errorMessage={marketHealthQuery.isError ? apiError(marketHealthQuery.error, 'Market health could not be loaded.') : null}
+                onCheckNow={(marketId) => checkNowMutation.mutate(marketId)}
+                onSync={(marketId) => syncMutation.mutate(marketId)}
+                checkingId={checkNowMutation.isPending ? checkNowMutation.variables : null}
+                syncingId={syncMutation.isPending ? syncMutation.variables : null}
             />
 
             {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : null}

@@ -47,6 +47,13 @@ const statusStyles = {
     manual_review: 'bg-amber-50 text-amber-700 ring-amber-200',
     resolved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     sandbox: 'bg-sky-50 text-sky-700 ring-sky-200',
+    // Market health
+    healthy: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    domain_unreachable: 'bg-rose-50 text-rose-700 ring-rose-200',
+    server_error: 'bg-rose-50 text-rose-700 ring-rose-200',
+    auth_error: 'bg-rose-50 text-rose-700 ring-rose-200',
+    wp_error: 'bg-amber-50 text-amber-700 ring-amber-200',
+    unconfigured: 'bg-slate-100 text-slate-600 ring-slate-200',
 };
 
 const statusLabels = {
@@ -62,6 +69,12 @@ const statusLabels = {
     duplicate_in_file: 'Duplicate in File',
     duplicate_in_crm: 'Duplicate in CRM',
     confirmed_fraud: 'Confirmed Fraud',
+    healthy: 'Healthy',
+    domain_unreachable: 'Domain down',
+    server_error: 'Server down',
+    auth_error: 'Credentials',
+    wp_error: 'WP error',
+    unconfigured: 'Not configured',
 };
 
 export default function StatusBadge({ status, label = null, tone = null, className = '' }) {

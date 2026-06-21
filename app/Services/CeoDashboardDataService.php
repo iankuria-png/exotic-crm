@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
-use App\Models\ClientActiveSnapshot;
 use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
+use App\Models\Client;
+use App\Models\ClientActiveSnapshot;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -21,9 +22,10 @@ class CeoDashboardDataService
     public function __construct(
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
-        private readonly PaymentPresenter $paymentPresenter
-    ) {
-    }
+        private readonly PaymentPresenter $paymentPresenter,
+        private readonly ClientSyncRunService $clientSyncRunService,
+        private readonly MarketHealthService $marketHealthService
+    ) {}
 
     public function summary(Request $request): array
     {
@@ -195,10 +197,12 @@ class CeoDashboardDataService
                 ->map(function (array $channel) use ($value) {
                     $channelValue = (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'] ?? []));
                     $channel['share_percent'] = $value > 0 ? round(($channelValue / $value) * 100, 1) : 0.0;
+
                     return $channel;
                 })
                 ->values()
                 ->all();
+
             return $market;
         });
 
@@ -221,6 +225,7 @@ class CeoDashboardDataService
 
         $points = collect(array_values($current))->map(function (array $point, int $index) use ($priorValues) {
             $priorPoint = $priorValues[$index] ?? null;
+
             return [
                 ...$point,
                 'prior_label' => $priorPoint['label'] ?? null,
@@ -247,8 +252,8 @@ class CeoDashboardDataService
 
         $rows = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-            ->selectRaw($this->dowExpressionRaw() . ' as dow_raw')
-            ->selectRaw($this->hourExpression() . ' as hour')
+            ->selectRaw($this->dowExpressionRaw().' as dow_raw')
+            ->selectRaw($this->hourExpression().' as hour')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
@@ -451,9 +456,9 @@ class CeoDashboardDataService
                     'period' => $target['period'],
                     'target' => $targetAmount,
                     'target_currency' => $target['target_currency'],
-                    'target_display' => $target['target_currency'] . ' ' . number_format($targetAmount, 2),
+                    'target_display' => $target['target_currency'].' '.number_format($targetAmount, 2),
                     'current' => $currentToTarget,
-                    'current_display' => $target['target_currency'] . ' ' . number_format($currentToTarget, 2),
+                    'current_display' => $target['target_currency'].' '.number_format($currentToTarget, 2),
                     'percentage' => $targetAmount && $targetAmount > 0 ? (int) min(100, round(($currentToTarget / $targetAmount) * 100)) : 0,
                 ] : null,
                 'activations' => [
@@ -469,6 +474,48 @@ class CeoDashboardDataService
             'window' => $this->serializeWindow($context),
             'agents' => $payload->all(),
         ];
+    }
+
+    public function marketHealth(Request $request): array
+    {
+        $platforms = Platform::query()
+            ->orderBy('name')
+            ->get();
+
+        $platformIds = $platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $clientCounts = empty($platformIds)
+            ? collect()
+            : Client::query()
+                ->selectRaw('platform_id, COUNT(*) as total')
+                ->whereIn('platform_id', $platformIds)
+                ->groupBy('platform_id')
+                ->pluck('total', 'platform_id');
+        $queue = $this->clientSyncRunService->queueReadiness();
+
+        return [
+            'summary' => $this->marketHealthService->summarize($platforms),
+            'sync_queue_available' => (bool) ($queue['available'] ?? false),
+            'sync_queue' => $queue,
+            'markets' => $platforms
+                ->map(fn (Platform $platform) => $this->serializeMarketHealthRow(
+                    $platform,
+                    (int) ($clientCounts[(int) $platform->id] ?? 0),
+                    $queue
+                ))
+                ->values()
+                ->all(),
+        ];
+    }
+
+    public function marketHealthRow(Platform $platform): array
+    {
+        $queue = $this->clientSyncRunService->queueReadiness();
+
+        return $this->serializeMarketHealthRow(
+            $platform,
+            (int) Client::query()->where('platform_id', (int) $platform->id)->count(),
+            $queue
+        );
     }
 
     public function context(Request $request): array
@@ -548,7 +595,7 @@ class CeoDashboardDataService
 
         $leadingMarket = collect((array) data_get($summary, 'insights', []))
             ->firstWhere('key', 'top_market');
-        if ($leadingMarket && !empty($leadingMarket['message'])) {
+        if ($leadingMarket && ! empty($leadingMarket['message'])) {
             return [
                 'headline' => (string) $leadingMarket['message'],
                 'accent' => 'neutral',
@@ -705,7 +752,7 @@ class CeoDashboardDataService
     {
         $rows = $this->baseCollectedPayments($from, $to, $platformId)
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-            ->selectRaw($this->dateExpression() . ' as event_date')
+            ->selectRaw($this->dateExpression().' as event_date')
             ->selectRaw('payments.platform_id')
             ->selectRaw('platforms.name as platform_name')
             ->selectRaw('platforms.country as platform_country')
@@ -720,6 +767,7 @@ class CeoDashboardDataService
         return $this->bucketRows($rows, $from, $to, $bucket)
             ->map(function (Collection $bucketRows, string $label) use ($targetCurrency) {
                 $normalized = $this->reportingCurrencyService->normalizeEventRows($bucketRows, $targetCurrency, false);
+
                 return [
                     'label' => $label,
                     'value' => $normalized['normalized_total'] ?? 0,
@@ -741,7 +789,7 @@ class CeoDashboardDataService
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
             ->whereNotNull('deals.assigned_to')
             ->selectRaw('deals.assigned_to as agent_id')
-            ->selectRaw($this->dateExpression() . ' as event_date')
+            ->selectRaw($this->dateExpression().' as event_date')
             ->selectRaw('payments.platform_id')
             ->selectRaw('platforms.name as platform_name')
             ->selectRaw('platforms.country as platform_country')
@@ -798,11 +846,11 @@ class CeoDashboardDataService
             foreach ($defaults as $goal) {
                 $goalPlatformId = $goal->platform_id ? (int) $goal->platform_id : null;
 
-                if (!$this->goalRoleScopeMatchesAgent((string) $goal->role_scope, (string) $agent->role)) {
+                if (! $this->goalRoleScopeMatchesAgent((string) $goal->role_scope, (string) $agent->role)) {
                     continue;
                 }
 
-                if ($goalPlatformId !== null && !in_array($goalPlatformId, $agentPlatforms, true)) {
+                if ($goalPlatformId !== null && ! in_array($goalPlatformId, $agentPlatforms, true)) {
                     continue;
                 }
 
@@ -1047,11 +1095,13 @@ class CeoDashboardDataService
     {
         if ($channel === 'manual') {
             $this->whereManualChannel($query);
+
             return;
         }
 
         if ($channel === 'self_service') {
             $this->whereSelfServiceChannel($query);
+
             return;
         }
 
@@ -1213,6 +1263,50 @@ class CeoDashboardDataService
             'country' => $platform->country,
             'currency_code' => $platform->currency_code,
         ];
+    }
+
+    private function serializeMarketHealthRow(Platform $platform, int $profilesTotal, array $queue): array
+    {
+        $hasCredentials = filled($platform->wp_api_url)
+            && filled($platform->wp_api_user)
+            && filled($platform->wp_api_password);
+        $status = $platform->health_status ?: MarketHealthService::STATUS_UNCONFIGURED;
+
+        return [
+            'id' => (int) $platform->id,
+            'name' => $platform->name,
+            'country' => $platform->country,
+            'domain' => $platform->domain,
+            'url' => $this->marketRootUrl($platform),
+            'is_active' => (bool) $platform->is_active,
+            'credentials_ready' => $hasCredentials,
+            'health_status' => $status,
+            'health_error' => $platform->health_error,
+            'health_latency_ms' => $platform->health_latency_ms !== null ? (int) $platform->health_latency_ms : null,
+            'health_checked_at' => optional($platform->health_checked_at)->toDateTimeString(),
+            'health_down_since_at' => optional($platform->health_down_since_at)->toDateTimeString(),
+            'health_consecutive_failures' => (int) ($platform->health_consecutive_failures ?? 0),
+            'is_down' => $this->marketHealthService->isDown($status),
+            'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
+            'sync_last_status' => $platform->sync_last_status,
+            'sync_queue_available' => (bool) ($queue['available'] ?? false),
+            'profiles_total' => $profilesTotal,
+        ];
+    }
+
+    private function marketRootUrl(Platform $platform): ?string
+    {
+        $domain = trim((string) ($platform->domain ?: ''));
+        if ($domain !== '') {
+            return preg_match('#^https?://#i', $domain) ? rtrim($domain, '/') : 'https://'.rtrim($domain, '/');
+        }
+
+        $apiUrl = trim((string) ($platform->wp_api_url ?: ''));
+        if ($apiUrl === '') {
+            return null;
+        }
+
+        return preg_replace('#/wp-json/.*$#', '', rtrim($apiUrl, '/')) ?: rtrim($apiUrl, '/');
     }
 
     private function percentDelta($current, $prior): ?float

@@ -27,6 +27,9 @@ class Platform extends Model
         'client_sync_protocol', 'client_sync_contract_version',
         'client_sync_capability_checked_at', 'client_sync_capability_status',
         'client_sync_last_reconciled_at',
+        'health_status', 'health_checked_at', 'health_error',
+        'health_latency_ms', 'health_consecutive_failures',
+        'health_down_since_at', 'health_last_down_notified_at',
     ];
 
     protected $hidden = [
@@ -46,6 +49,11 @@ class Platform extends Model
         'client_sync_tombstone_checkpoint_post_id' => 'integer',
         'client_sync_capability_checked_at' => 'datetime',
         'client_sync_last_reconciled_at' => 'datetime',
+        'health_checked_at' => 'datetime',
+        'health_latency_ms' => 'integer',
+        'health_consecutive_failures' => 'integer',
+        'health_down_since_at' => 'datetime',
+        'health_last_down_notified_at' => 'datetime',
         'payment_link_providers' => 'array',
         'supported_currencies' => 'array',
         'multi_currency_wallet_enabled' => 'boolean',
@@ -59,7 +67,7 @@ class Platform extends Model
         'field_renewal_commission_rate' => 'decimal:4',
         'field_renewal_commission_months' => 'integer',
     ];
-    
+
     public function getConnectionConfig()
     {
         return [
@@ -74,12 +82,12 @@ class Platform extends Model
             'prefix' => $this->db_prefix ?? '',
         ];
     }
-    
+
     public function product()
     {
         return $this->belongsTo(Product::class);
     }
-    
+
     // Add relationship to users
     public function users()
     {

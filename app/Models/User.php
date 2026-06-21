@@ -37,13 +37,13 @@ class User extends Authenticatable
         'is_ceo' => 'boolean',
         'notification_prefs' => 'array',
     ];
-    
+
     // Add relationship to platforms
     public function platforms()
     {
         return $this->belongsToMany(Platform::class, 'user_platforms');
     }
-    
+
     // Helper method to check if user has access to a platform
     public function hasPlatformAccess($platformId)
     {
@@ -78,7 +78,7 @@ class User extends Authenticatable
         $prefs = $this->notification_prefs;
         $default = in_array($this->role, ['sales', 'field_sales'], true);
 
-        if (!is_array($prefs)) {
+        if (! is_array($prefs)) {
             return $default;
         }
 
@@ -101,10 +101,44 @@ class User extends Authenticatable
 
     public function paymentFailureSmsState(): string
     {
-        if (!in_array($this->role, ['admin', 'sub_admin', 'sales', 'field_sales'], true)) {
+        if (! in_array($this->role, ['admin', 'sub_admin', 'sales', 'field_sales'], true)) {
             return 'not_eligible';
         }
 
         return $this->paymentFailureSmsEnabled() ? 'enabled' : 'disabled';
+    }
+
+    public function marketDownSmsEnabled(): bool
+    {
+        $prefs = $this->notification_prefs;
+
+        if (! is_array($prefs)) {
+            return false;
+        }
+
+        return (bool) data_get($prefs, 'market_down_sms.enabled', false);
+    }
+
+    public function marketDownSmsMarketIds(): ?array
+    {
+        $ids = data_get($this->notification_prefs ?? [], 'market_down_sms.market_ids');
+
+        if ($ids === null) {
+            return null;
+        }
+
+        return array_values(array_unique(array_filter(
+            array_map('intval', (array) $ids),
+            static fn (int $id): bool => $id > 0
+        )));
+    }
+
+    public function marketDownSmsState(): string
+    {
+        if (! in_array($this->role, ['admin', 'sub_admin'], true)) {
+            return 'not_eligible';
+        }
+
+        return $this->marketDownSmsEnabled() ? 'enabled' : 'disabled';
     }
 }

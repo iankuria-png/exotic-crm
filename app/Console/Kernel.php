@@ -133,6 +133,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_clients_reconcile.log'));
 
+        $schedule->command('crm:check-market-health')
+            ->name('crm_check_market_health')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_market_health.log'));
+
         // Backfill Support Board user links shortly after the WordPress client sync completes.
         $schedule->command('crm:sync-sb-users')
             ->name('crm_sync_support_board_users')

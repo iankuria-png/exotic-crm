@@ -7106,19 +7106,29 @@ function RolesWorkspace() {
             const selectableMarketIds = assignedMarketIds.length > 0
                 ? assignedMarketIds
                 : (current.role === 'admin' ? availableMarkets.map((market) => Number(market.id)) : []);
-            const scopedMarketIds = current.notification_prefs?.payment_failure_sms?.market_ids;
+            const paymentScopedMarketIds = current.notification_prefs?.payment_failure_sms?.market_ids;
+            const marketDownScopedMarketIds = current.notification_prefs?.market_down_sms?.market_ids;
+            const nextNotificationPrefs = {
+                ...current.notification_prefs,
+                ...(Array.isArray(paymentScopedMarketIds) ? {
+                    payment_failure_sms: {
+                        enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
+                        market_ids: paymentScopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
+                    },
+                } : {}),
+                ...(Array.isArray(marketDownScopedMarketIds) ? {
+                    market_down_sms: {
+                        enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
+                        market_ids: marketDownScopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
+                    },
+                } : {}),
+            };
 
             return {
                 ...current,
                 assigned_market_ids: assignedMarketIds,
-                notification_prefs: Array.isArray(scopedMarketIds)
-                    ? {
-                        ...current.notification_prefs,
-                        payment_failure_sms: {
-                            enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
-                            market_ids: scopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
-                        },
-                    }
+                notification_prefs: Array.isArray(paymentScopedMarketIds) || Array.isArray(marketDownScopedMarketIds)
+                    ? nextNotificationPrefs
                     : current.notification_prefs,
             };
         });
@@ -7225,6 +7235,70 @@ function RolesWorkspace() {
         return getSmsEnabled() ? 'enabled' : 'disabled';
     };
 
+    const getMarketDownSmsEnabled = () => {
+        if (!editor) return false;
+        return !!editor.notification_prefs?.market_down_sms?.enabled;
+    };
+
+    const getMarketDownSmsMarketScope = () => {
+        const ids = editor?.notification_prefs?.market_down_sms?.market_ids;
+        return ids === null || ids === undefined ? 'all' : 'specific';
+    };
+
+    const getMarketDownSmsMarketIds = () => editor?.notification_prefs?.market_down_sms?.market_ids ?? [];
+
+    const setMarketDownSmsEnabled = (enabled) => {
+        setEditor((current) => ({
+            ...current,
+            notification_prefs: {
+                ...current.notification_prefs,
+                market_down_sms: {
+                    enabled,
+                    market_ids: current.notification_prefs?.market_down_sms?.market_ids ?? null,
+                },
+            },
+        }));
+    };
+
+    const setMarketDownSmsMarketScope = (scope) => {
+        setEditor((current) => ({
+            ...current,
+            notification_prefs: {
+                ...current.notification_prefs,
+                market_down_sms: {
+                    enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
+                    market_ids: scope === 'all' ? null : [],
+                },
+            },
+        }));
+    };
+
+    const toggleMarketDownSmsMarket = (marketId) => {
+        setEditor((current) => {
+            const existing = current.notification_prefs?.market_down_sms?.market_ids ?? [];
+            const next = existing.includes(marketId)
+                ? existing.filter((id) => id !== marketId)
+                : [...existing, marketId];
+
+            return {
+                ...current,
+                notification_prefs: {
+                    ...current.notification_prefs,
+                    market_down_sms: {
+                        enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
+                        market_ids: next,
+                    },
+                },
+            };
+        });
+    };
+
+    const getMarketDownAlertState = () => {
+        if (!editor) return 'disabled';
+        if (!['admin', 'sub_admin'].includes(editor.role)) return 'not_eligible';
+        return getMarketDownSmsEnabled() ? 'enabled' : 'disabled';
+    };
+
     return (
         <div className="space-y-4">
             <section className="grid gap-4 md:grid-cols-4">
@@ -7266,7 +7340,7 @@ function RolesWorkspace() {
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Live Alerts</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">SMS Alerts</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
                                 </tr>
                             </thead>
@@ -7315,9 +7389,14 @@ function RolesWorkspace() {
                                                 <p className="font-mono text-xs text-slate-500">{user.phone || '—'}</p>
                                             </td>
                                             <td className="px-4 py-2.5">
-                                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.payment_failure_sms_state)}`}>
-                                                    {paymentFailureSmsStateLabel(user.payment_failure_sms_state)}
-                                                </span>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.payment_failure_sms_state)}`}>
+                                                        Pay {paymentFailureSmsStateLabel(user.payment_failure_sms_state)}
+                                                    </span>
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.market_down_sms_state)}`}>
+                                                        Market {paymentFailureSmsStateLabel(user.market_down_sms_state)}
+                                                    </span>
+                                                </div>
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 <div className="flex flex-wrap items-center gap-2">
@@ -7556,6 +7635,69 @@ function RolesWorkspace() {
                                                                     type="checkbox"
                                                                     checked={getSmsMarketIds().includes(market.id)}
                                                                     onChange={() => toggleSmsMarket(market.id)}
+                                                                    className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                                />
+                                                                {market.name}
+                                                            </label>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                <div className="md:col-span-2 space-y-3 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-medium text-slate-700">Market-down SMS alerts</p>
+                                            <p className="text-xs text-slate-500">
+                                                {['admin', 'sub_admin'].includes(editor.role)
+                                                    ? 'Receive one SMS when an accessible market first transitions to down.'
+                                                    : 'This operational alert is available for admin and sub-admin roles only.'}
+                                            </p>
+                                        </div>
+                                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(getMarketDownAlertState())}`}>
+                                            {paymentFailureSmsStateLabel(getMarketDownAlertState())}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={getMarketDownSmsEnabled()}
+                                            disabled={!['admin', 'sub_admin'].includes(editor.role)}
+                                            onClick={() => setMarketDownSmsEnabled(!getMarketDownSmsEnabled())}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${!['admin', 'sub_admin'].includes(editor.role) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${getMarketDownSmsEnabled() ? 'bg-slate-900' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${getMarketDownSmsEnabled() ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+
+                                    {getMarketDownSmsEnabled() && ['admin', 'sub_admin'].includes(editor.role) ? (
+                                        <div className="space-y-2 border-t border-slate-200 pt-3">
+                                            <p className="text-xs font-medium text-slate-600">Alert scope</p>
+                                            {['all', 'specific'].map((scope) => (
+                                                <label key={scope} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="radio"
+                                                        name="market-down-sms-scope"
+                                                        checked={getMarketDownSmsMarketScope() === scope}
+                                                        onChange={() => setMarketDownSmsMarketScope(scope)}
+                                                        className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    {scope === 'all' ? 'All accessible markets' : 'Specific markets only'}
+                                                </label>
+                                            ))}
+                                            {getMarketDownSmsMarketScope() === 'specific' ? (
+                                                <div className="grid gap-1 pl-6 pt-1 sm:grid-cols-2">
+                                                    {getSmsSelectableMarkets().length === 0 ? (
+                                                        <p className="text-xs text-slate-500">Assign markets above first.</p>
+                                                    ) : (
+                                                        getSmsSelectableMarkets().map((market) => (
+                                                            <label key={market.id} className="flex cursor-pointer items-center gap-2 text-xs text-slate-700">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={getMarketDownSmsMarketIds().includes(market.id)}
+                                                                    onChange={() => toggleMarketDownSmsMarket(market.id)}
                                                                     className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
                                                                 />
                                                                 {market.name}
