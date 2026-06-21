@@ -1581,6 +1581,11 @@ export default function Clients() {
         }
     };
 
+    const toggleValueSort = () => {
+        setSortOption((current) => (current === 'value_desc' ? 'value_asc' : 'value_desc'));
+        setPage(1);
+    };
+
     const columns = [
         {
             key: 'name',
@@ -1696,6 +1701,29 @@ export default function Clients() {
             width: '140px',
             headerClassName: 'text-right',
             cellClassName: 'w-[140px] max-w-[140px]',
+            renderHeader: () => {
+                const isValueSortActive = sortOption === 'value_desc' || sortOption === 'value_asc';
+                const directionLabel = sortOption === 'value_asc' ? 'lowest first' : 'highest first';
+
+                return (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            toggleValueSort();
+                        }}
+                        className={`inline-flex items-center justify-end gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] transition ${
+                            isValueSortActive
+                                ? 'bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200'
+                                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                        }`}
+                        title={`Sort by value (${directionLabel})`}
+                    >
+                        Value
+                        <span aria-hidden="true">{isValueSortActive ? (sortOption === 'value_asc' ? 'LOW' : 'HIGH') : 'SORT'}</span>
+                    </button>
+                );
+            },
             render: (row) => <ClientValueCell row={row} />,
         },
         {
@@ -2096,8 +2124,8 @@ export default function Clients() {
                             { value: 'name_desc', label: 'Client name Z-A' },
                             { value: 'created_desc', label: 'Newest signups' },
                             { value: 'created_asc', label: 'Oldest signups' },
-                            { value: 'value_desc', label: 'Highest value' },
-                            { value: 'value_asc', label: 'Lowest value' },
+                            { value: 'value_desc', label: 'Value: highest first' },
+                            { value: 'value_asc', label: 'Value: lowest first' },
                         ]}
                     />
                 </div>
