@@ -4,6 +4,7 @@ import api from '../../services/api';
 import { normalizePhone } from '../../utils/phone';
 import GenerateBioButton from '../seo/GenerateBioButton';
 import { useToast } from '../ToastProvider';
+import Combobox from '../shared/Combobox';
 import RegionCitySelect from './profile-fields/RegionCitySelect';
 import CurrencySelect, { formatCurrencyBadge } from './profile-fields/CurrencySelect';
 import {
@@ -121,6 +122,39 @@ function storageSafeForm(form) {
     };
 }
 
+function parseStoredDraft(rawDraft) {
+    if (!rawDraft) {
+        return { form: null, savedAt: null };
+    }
+
+    const parsed = JSON.parse(rawDraft);
+    if (!parsed || typeof parsed !== 'object') {
+        return { form: null, savedAt: null };
+    }
+
+    if (parsed.form && typeof parsed.form === 'object') {
+        return {
+            form: parsed.form,
+            savedAt: typeof parsed.saved_at === 'string' ? parsed.saved_at : null,
+        };
+    }
+
+    return { form: parsed, savedAt: null };
+}
+
+function formatDraftSavedAt(value) {
+    if (!value) {
+        return '';
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function humanizeFieldName(field) {
     return String(field || '')
         .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -202,9 +236,11 @@ export default function ClientCreateModal({
     const [duplicateMatches, setDuplicateMatches] = useState([]);
     const [wizardStep, setWizardStep] = useState(STEP_SETUP);
     const [stepErrors, setStepErrors] = useState([]);
+    const [draftState, setDraftState] = useState({ status: 'idle', savedAt: null, restored: false });
     const dialogRef = useRef(null);
     const primaryFocusRef = useRef(null);
     const clientNameRef = useRef(null);
+    const skipNextDraftWriteRef = useRef(false);
     const wasOpenRef = useRef(open);
     const titleId = useId();
 
@@ -234,17 +270,23 @@ export default function ClientCreateModal({
         try {
             const rawDraft = globalThis.localStorage?.getItem(draftStorageKey);
             if (rawDraft) {
-                const parsed = JSON.parse(rawDraft);
-                if (parsed && typeof parsed === 'object') {
+                const parsed = parseStoredDraft(rawDraft);
+                if (parsed.form) {
                     nextForm = {
                         ...fallbackForm,
-                        ...parsed,
+                        ...parsed.form,
                         profile_images: [],
                     };
+                    setDraftState({ status: 'restored', savedAt: parsed.savedAt, restored: true });
+                } else {
+                    setDraftState({ status: 'idle', savedAt: null, restored: false });
                 }
+            } else {
+                setDraftState({ status: 'idle', savedAt: null, restored: false });
             }
         } catch {
             nextForm = fallbackForm;
+            setDraftState({ status: 'idle', savedAt: null, restored: false });
         }
 
         if (lockedPlatformId) {
@@ -256,6 +298,7 @@ export default function ClientCreateModal({
             nextForm.onboarding_mode = lockedOnboardingMode;
         }
 
+        skipNextDraftWriteRef.current = true;
         setForm(nextForm);
         setDuplicateMatches([]);
         setWizardStep(STEP_SETUP);
@@ -267,10 +310,21 @@ export default function ClientCreateModal({
             return;
         }
 
+        if (skipNextDraftWriteRef.current) {
+            skipNextDraftWriteRef.current = false;
+            return;
+        }
+
         try {
-            globalThis.localStorage?.setItem(draftStorageKey, JSON.stringify(storageSafeForm(form)));
+            const savedAt = new Date().toISOString();
+            setDraftState((current) => ({ ...current, status: 'saving' }));
+            globalThis.localStorage?.setItem(draftStorageKey, JSON.stringify({
+                saved_at: savedAt,
+                form: storageSafeForm(form),
+            }));
+            setDraftState({ status: 'saved', savedAt, restored: false });
         } catch {
-            // Ignore draft persistence failures in restricted browsers.
+            setDraftState((current) => ({ ...current, status: 'failed' }));
         }
     }, [draftStorageKey, form, open]);
 
@@ -294,6 +348,18 @@ export default function ClientCreateModal({
     });
 
     const platformOptions = integrationsQuery.data?.platforms || [];
+    const marketGroups = useMemo(() => [
+        {
+            label: 'Accessible markets',
+            options: platformOptions.map((platform) => ({
+                value: String(platform.platform_id),
+                label: platform.platform_name,
+                inputLabel: platform.platform_name,
+                secondaryLabel: platform.domain || platform.currency_code || '',
+                searchText: `${platform.platform_name || ''} ${platform.name || ''} ${platform.domain || ''} ${platform.currency_code || ''}`,
+            })),
+        },
+    ], [platformOptions]);
     const selectedPlatform = platformOptions.find(
         (platform) => String(platform.platform_id) === String(form.platform_id),
     ) || null;
@@ -395,6 +461,7 @@ export default function ClientCreateModal({
 
     const resetDraft = () => {
         const nextForm = createFreshForm();
+        skipNextDraftWriteRef.current = true;
         setForm(nextForm);
         setDuplicateMatches([]);
         setWizardStep(STEP_SETUP);
@@ -404,6 +471,7 @@ export default function ClientCreateModal({
         } catch {
             // Ignore storage cleanup failures.
         }
+        setDraftState({ status: 'idle', savedAt: null, restored: false });
     };
 
     const createMutation = useMutation({
@@ -433,6 +501,8 @@ export default function ClientCreateModal({
             } catch {
                 // Ignore storage cleanup failures.
             }
+            skipNextDraftWriteRef.current = true;
+            setDraftState({ status: 'idle', savedAt: null, restored: false });
 
             toast.success(isWpProvision ? 'Client provisioned.' : 'Client created.');
             onCreated?.(createdClient, {
@@ -616,8 +686,8 @@ export default function ClientCreateModal({
         setStepErrors([]);
     };
 
-    const handleMarketChange = (event) => {
-        const nextPlatformId = event.target.value;
+    const handleMarketChange = (value) => {
+        const nextPlatformId = value ? String(value) : '';
         setForm((current) => ({
             ...current,
             platform_id: nextPlatformId,
@@ -735,13 +805,23 @@ export default function ClientCreateModal({
     };
 
     const bodySubtitle = subtitle || (isWpProvision
-        ? 'Provision a real WordPress profile and link it to CRM in one flow.'
+        ? 'Create the WordPress profile and CRM record in one guided flow.'
         : 'Create a CRM client record for outreach and deal tracking.');
     const resolvedSubmitLabel = submitLabel || (createMutation.isPending
         ? (isWpProvision ? 'Provisioning WordPress profile…' : 'Creating client…')
         : isWpProvision
             ? (form.full_profile && isReviewStep ? 'Provision profile now' : 'Provision and create client')
             : 'Create client');
+    const draftSavedTime = formatDraftSavedAt(draftState.savedAt);
+    const draftStatusLabel = draftState.status === 'failed'
+        ? 'Draft not saved'
+        : draftState.status === 'saving'
+            ? 'Saving draft...'
+            : draftState.status === 'restored'
+                ? (draftSavedTime ? `Draft restored from ${draftSavedTime}` : 'Draft restored')
+                : draftSavedTime
+                    ? `Draft saved at ${draftSavedTime}`
+                    : 'Draft saves automatically';
 
     const fieldSourceBanner = useMemo(() => {
         if (signupSource !== 'field') {
@@ -840,23 +920,20 @@ export default function ClientCreateModal({
         <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
-                    <label htmlFor="client-create-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
-                    <select
-                        id="client-create-market"
-                        ref={primaryFocusRef}
+                    <Combobox
+                        label="Market"
                         value={form.platform_id}
-                        autoComplete="off"
+                        inputRef={primaryFocusRef}
                         onChange={handleMarketChange}
-                        className="crm-select w-full"
+                        groups={marketGroups}
+                        placeholder="Choose market"
+                        searchPlaceholder="Search markets"
+                        emptyMessage={integrationsQuery.isError ? 'Could not load markets. Retry in a moment.' : 'No accessible markets found.'}
+                        loading={integrationsQuery.isLoading}
                         disabled={Boolean(lockedPlatformId)}
-                    >
-                        <option value="">Select market</option>
-                        {platformOptions.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
+                        allowClear={!lockedPlatformId}
+                        hint="Pick the WordPress market first. Typing in client fields will not change this selection."
+                    />
                 </div>
 
                 {!lockedOnboardingMode ? (
@@ -892,31 +969,6 @@ export default function ClientCreateModal({
                                 Provision in WordPress
                             </button>
                         </div>
-                    </div>
-                ) : null}
-
-                {isWpProvision ? (
-                    <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                                <p className="text-sm font-semibold text-slate-900">Full profile mode</p>
-                                <p className="mt-1 text-xs text-slate-500">Quick provision keeps this short. Turn this on only when you want to capture appearance, services, rates, socials, bio, and media now.</p>
-                            </div>
-                            <label className="inline-flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
-                                <input
-                                    type="checkbox"
-                                    checked={Boolean(form.full_profile)}
-                                    onChange={(event) => setForm((current) => ({ ...current, full_profile: event.target.checked }))}
-                                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
-                                />
-                                Capture full profile now
-                            </label>
-                        </div>
-                        {!form.full_profile ? (
-                            <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                                Quick provision will create the client with market, contact, location, status, owner, and WordPress credentials first. You can complete the rest immediately after from the Edit Profile tab.
-                            </div>
-                        ) : null}
                     </div>
                 ) : null}
 
@@ -977,12 +1029,37 @@ export default function ClientCreateModal({
                 </div>
 
                 {isWpProvision ? (
+                    <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">Optional profile details</p>
+                                <p className="mt-1 text-xs text-slate-500">Keep this off for fast client creation. Turn it on only when rates, bio, services, socials, and media are ready now.</p>
+                            </div>
+                            <label className="inline-flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(form.full_profile)}
+                                    onChange={(event) => setForm((current) => ({ ...current, full_profile: event.target.checked }))}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-200"
+                                />
+                                Capture full profile now
+                            </label>
+                        </div>
+                        {!form.full_profile ? (
+                            <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                This creates the WordPress profile first. The team can finish richer details from Edit Profile immediately after.
+                            </div>
+                        ) : null}
+                    </div>
+                ) : null}
+
+                {isWpProvision ? (
                     <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white/70 p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-sm font-semibold text-slate-900">Location contract</p>
+                                <p className="text-sm font-semibold text-slate-900">Profile location</p>
                                 <p className="text-xs text-slate-500">
-                                    Region and city are stored as WordPress term IDs. Some regions save directly when WordPress has no child cities.
+                                    Choose where the profile should appear. Some markets save a region directly when no city list exists.
                                 </p>
                             </div>
                             <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${requiresProvisionLocation ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
@@ -1422,8 +1499,10 @@ export default function ClientCreateModal({
                             <p className="mt-1 max-w-2xl text-sm text-slate-500">{bodySubtitle}</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Draft saves in this browser</span>
-                            <button type="button" onClick={resetDraft} className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900">
+                            <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${draftState.status === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-700' : draftState.status === 'restored' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                                {draftStatusLabel}
+                            </span>
+                            <button type="button" onClick={resetDraft} className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900" title="Clear the saved browser draft and start this form again.">
                                 Reset draft
                             </button>
                         </div>
@@ -1466,6 +1545,12 @@ export default function ClientCreateModal({
                 <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
                     <div className="mx-auto w-full max-w-4xl space-y-5">
                         {fieldSourceBanner}
+
+                        {draftState.restored ? (
+                            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                                A saved browser draft was restored. Review the market and contact details before provisioning.
+                            </div>
+                        ) : null}
 
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>

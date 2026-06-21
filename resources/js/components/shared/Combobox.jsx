@@ -50,6 +50,7 @@ export default function Combobox({
     allowClear = true,
     hint = null,
     className = '',
+    inputRef: externalInputRef = null,
 }) {
     const rootRef = useRef(null);
     const inputRef = useRef(null);
@@ -133,7 +134,12 @@ export default function Combobox({
             <div className="relative">
                 <div className={`flex items-center rounded-xl border border-slate-200 bg-white shadow-sm transition focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${disabled ? 'bg-slate-100 opacity-70' : ''}`}>
                     <input
-                        ref={inputRef}
+                        ref={(node) => {
+                            inputRef.current = node;
+                            if (externalInputRef) {
+                                externalInputRef.current = node;
+                            }
+                        }}
                         type="text"
                         value={displayValue}
                         onFocus={() => {
