@@ -12,6 +12,10 @@ function productLabel(product) {
     return product?.display_name || product?.name || `Product #${product?.id}`;
 }
 
+function cityTargetCount(location) {
+    return Math.max(1, Math.min(8, Math.max(0, 5 - Number(location.active_count || 0)) || 2));
+}
+
 function defaultTargets(locations, selectedCity) {
     const selected = locations.find((location) => location.canonical_key === selectedCity);
     const source = selected
@@ -24,7 +28,7 @@ function defaultTargets(locations, selectedCity) {
     return source.map((location) => ({
         canonical_key: location.canonical_key,
         display_city: location.display_city,
-        target_count: Math.max(1, Math.min(8, Math.max(0, 5 - Number(location.active_count || 0)) || 2)),
+        target_count: cityTargetCount(location),
     }));
 }
 
@@ -54,6 +58,17 @@ function StatusPill({ status }) {
     );
 }
 
+function seoScoreLabel(score) {
+    return score === null || score === undefined ? 'No score' : `${score}/100`;
+}
+
+function cityBandLabel(location) {
+    const band = location?.performance?.band;
+    if (!band || band === 'unavailable') return 'No data';
+    if (band === 'insufficient') return 'Low sample';
+    return band.charAt(0).toUpperCase() + band.slice(1);
+}
+
 export default function SeoBoostWizard({
     open,
     onClose,
@@ -69,6 +84,8 @@ export default function SeoBoostWizard({
     const [productPriceId, setProductPriceId] = useState('');
     const [durationDays, setDurationDays] = useState(14);
     const [selectedClientIds, setSelectedClientIds] = useState([]);
+    const [citySearch, setCitySearch] = useState('');
+    const [replaceClientId, setReplaceClientId] = useState(null);
     const [pin, setPin] = useState('');
     const [notes, setNotes] = useState('SEO Boost from client locations map');
 
@@ -88,11 +105,31 @@ export default function SeoBoostWizard({
     const selectedProduct = products.find((product) => Number(product.id) === Number(productId)) || null;
     const prices = selectedProduct?.active_prices || selectedProduct?.activePrices || [];
     const chosenPrice = selectedPrice(selectedProduct, productPriceId);
+    const cityOptions = useMemo(() => {
+        const rows = locations
+            .filter((location) => location.canonical_key && location.display_city)
+            .map((location) => ({
+                ...location,
+                searchText: `${location.display_city || ''} ${location.canonical_key || ''}`.toLowerCase(),
+            }));
+
+        rows.sort((left, right) => {
+            const bandWeight = { weak: 0, moderate: 1, strong: 2, insufficient: 3, unavailable: 4 };
+            const leftBand = bandWeight[left.performance?.band] ?? 5;
+            const rightBand = bandWeight[right.performance?.band] ?? 5;
+            if (leftBand !== rightBand) return leftBand - rightBand;
+            return (left.display_city || '').localeCompare(right.display_city || '');
+        });
+
+        return rows;
+    }, [locations]);
 
     useEffect(() => {
         if (!open) return;
         setTargets(defaultTargets(locations, selectedCity));
         setSelectedClientIds([]);
+        setCitySearch('');
+        setReplaceClientId(null);
         setProductId('');
         setProductPriceId('');
         setDurationDays(14);
@@ -167,6 +204,14 @@ export default function SeoBoostWizard({
     const preview = previewMutation.data;
     const candidates = preview?.candidates || [];
     const selectedSet = new Set(selectedClientIds.map(Number));
+    const selectedTargetKeys = new Set(targets.map((target) => target.canonical_key));
+    const targetSummaryByKey = new Map((preview?.targets || []).map((target) => [target.canonical_key, target]));
+    const filteredCityOptions = cityOptions
+        .filter((location) => {
+            const needle = citySearch.trim().toLowerCase();
+            return !needle || location.searchText.includes(needle);
+        })
+        .slice(0, 18);
     const selectedCandidates = selectedClientIds
         .map((id) => candidates.find((candidate) => Number(candidate.client_id) === Number(id)))
         .filter(Boolean);
@@ -178,23 +223,99 @@ export default function SeoBoostWizard({
         && pin.trim().length >= 4
         && !createMutation.isPending;
 
+    const resetCandidatePreview = () => {
+        previewMutation.reset();
+        setSelectedClientIds([]);
+        setReplaceClientId(null);
+    };
+
     const updateTarget = (canonicalKey, patch) => {
+        resetCandidatePreview();
         setTargets((current) => current.map((target) => (
             target.canonical_key === canonicalKey ? { ...target, ...patch } : target
         )));
     };
 
     const removeTarget = (canonicalKey) => {
+        resetCandidatePreview();
         setTargets((current) => current.filter((target) => target.canonical_key !== canonicalKey));
+    };
+
+    const toggleCityTarget = (location) => {
+        resetCandidatePreview();
+        setTargets((current) => {
+            const exists = current.some((target) => target.canonical_key === location.canonical_key);
+            if (exists) {
+                return current.filter((target) => target.canonical_key !== location.canonical_key);
+            }
+
+            return [
+                ...current,
+                {
+                    canonical_key: location.canonical_key,
+                    display_city: location.display_city,
+                    target_count: cityTargetCount(location),
+                },
+            ];
+        });
+    };
+
+    const addWeakestCities = () => {
+        resetCandidatePreview();
+        setTargets((current) => {
+            const existing = new Set(current.map((target) => target.canonical_key));
+            const additions = cityOptions
+                .filter((location) => !existing.has(location.canonical_key))
+                .slice(0, 5)
+                .map((location) => ({
+                    canonical_key: location.canonical_key,
+                    display_city: location.display_city,
+                    target_count: cityTargetCount(location),
+                }));
+
+            return [...current, ...additions];
+        });
+    };
+
+    const replaceCandidate = (clientId) => {
+        const replacement = Number(clientId);
+        const target = Number(replaceClientId);
+        if (!target || replacement === target) {
+            setReplaceClientId(null);
+            return;
+        }
+
+        setSelectedClientIds((current) => {
+            const next = current.map(Number);
+            const targetIndex = next.findIndex((id) => id === target);
+            const replacementIndex = next.findIndex((id) => id === replacement);
+            if (targetIndex < 0) return current;
+            if (replacementIndex >= 0) {
+                [next[targetIndex], next[replacementIndex]] = [next[replacementIndex], next[targetIndex]];
+                return next;
+            }
+
+            next[targetIndex] = replacement;
+            return next;
+        });
+        setReplaceClientId(null);
     };
 
     const toggleCandidate = (clientId) => {
         const numeric = Number(clientId);
+        if (replaceClientId && !selectedSet.has(numeric)) {
+            replaceCandidate(numeric);
+            return;
+        }
+
         setSelectedClientIds((current) => (
             current.map(Number).includes(numeric)
                 ? current.filter((id) => Number(id) !== numeric)
                 : [...current, numeric]
         ));
+        if (Number(replaceClientId) === numeric) {
+            setReplaceClientId(null);
+        }
     };
 
     const moveCandidate = (clientId, direction) => {
@@ -206,6 +327,18 @@ export default function SeoBoostWizard({
             [next[index], next[target]] = [next[target], next[index]];
             return next;
         });
+    };
+
+    const shuffleCandidates = () => {
+        setSelectedClientIds((current) => {
+            const next = current.map(Number);
+            for (let index = next.length - 1; index > 0; index -= 1) {
+                const swapIndex = Math.floor(Math.random() * (index + 1));
+                [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+            }
+            return next;
+        });
+        setReplaceClientId(null);
     };
 
     return (
@@ -307,12 +440,57 @@ export default function SeoBoostWizard({
                                     <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">City targets</label>
                                     <span className="text-xs text-slate-500">{targetRows.length} selected</span>
                                 </div>
-                                <div className="mt-2 space-y-2">
+                                <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                                    <input
+                                        type="search"
+                                        value={citySearch}
+                                        onChange={(event) => setCitySearch(event.target.value)}
+                                        placeholder="Search cities"
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                                    />
+                                    <div className="mt-3 max-h-48 space-y-1 overflow-auto pr-1">
+                                        {filteredCityOptions.length === 0 ? (
+                                            <p className="px-2 py-4 text-center text-sm text-slate-500">No city matches.</p>
+                                        ) : filteredCityOptions.map((location) => {
+                                            const checked = selectedTargetKeys.has(location.canonical_key);
+
+                                            return (
+                                                <label key={location.canonical_key} className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${checked ? 'border-teal-200 bg-teal-50 text-teal-900' : 'border-transparent hover:border-slate-200 hover:bg-slate-50'}`}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={() => toggleCityTarget(location)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                                                    />
+                                                    <span className="min-w-0 flex-1">
+                                                        <span className="block truncate font-semibold">{location.display_city}</span>
+                                                        <span className="block text-xs text-slate-500">{cityBandLabel(location)} · {Number(location.client_count || 0).toLocaleString()} clients</span>
+                                                    </span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                        <button type="button" onClick={addWeakestCities} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+                                            Add weakest 5
+                                        </button>
+                                        <button type="button" onClick={() => { resetCandidatePreview(); setTargets([]); }} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+                                            Clear cities
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="mt-3 space-y-2">
                                     {targets.map((target) => (
                                         <div key={target.canonical_key} className="rounded-lg border border-slate-200 bg-white p-3">
                                             <div className="flex items-start justify-between gap-3">
                                                 <div>
                                                     <p className="text-sm font-semibold text-slate-800">{target.display_city}</p>
+                                                    {targetSummaryByKey.has(target.canonical_key) ? (
+                                                        <p className="mt-0.5 text-xs text-slate-500">
+                                                            {targetSummaryByKey.get(target.canonical_key).selected_count}/{target.target_count} matched
+                                                        </p>
+                                                    ) : null}
                                                 </div>
                                                 <button
                                                     type="button"
@@ -322,6 +500,11 @@ export default function SeoBoostWizard({
                                                     Remove
                                                 </button>
                                             </div>
+                                            {Number(targetSummaryByKey.get(target.canonical_key)?.shortfall || 0) > 0 ? (
+                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
+                                                    Short by {targetSummaryByKey.get(target.canonical_key).shortfall}
+                                                </div>
+                                            ) : null}
                                             <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500">Target activations</label>
                                             <input
                                                 type="number"
@@ -392,8 +575,17 @@ export default function SeoBoostWizard({
                         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
                             <section className="min-w-0 rounded-lg border border-slate-200">
                                 <div className="border-b border-slate-200 px-4 py-3">
-                                    <h3 className="text-sm font-semibold text-slate-800">Candidate preview</h3>
-                                    <p className="mt-1 text-sm text-slate-500">Ranked by SEO quality score, verification, media, and recency.</p>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-800">Candidate preview</h3>
+                                            <p className="mt-1 text-sm text-slate-500">Best inactive profiles for the selected cities.</p>
+                                        </div>
+                                        {replaceClientId ? (
+                                            <button type="button" onClick={() => setReplaceClientId(null)} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
+                                                Cancel replace
+                                            </button>
+                                        ) : null}
+                                    </div>
                                 </div>
                                 <div className="max-h-[430px] overflow-auto">
                                     {candidates.length === 0 ? (
@@ -401,81 +593,87 @@ export default function SeoBoostWizard({
                                             Run preview to see eligible profiles.
                                         </div>
                                     ) : (
-                                        <table className="min-w-full divide-y divide-slate-200 text-sm">
-                                            <thead className="sticky top-0 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                                <tr>
-                                                    <th className="px-3 py-3">Use</th>
-                                                    <th className="px-3 py-3">Profile</th>
-                                                    <th className="px-3 py-3">City</th>
-                                                    <th className="px-3 py-3">SEO</th>
-                                                    <th className="px-3 py-3">Signals</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {candidates.map((candidate) => (
-                                                    <tr key={candidate.client_id} className={selectedSet.has(Number(candidate.client_id)) ? 'bg-teal-50/50' : 'bg-white'}>
-                                                        <td className="px-3 py-3">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={selectedSet.has(Number(candidate.client_id))}
-                                                                onChange={() => toggleCandidate(candidate.client_id)}
-                                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
-                                                                aria-label={`Use ${candidate.name}`}
-                                                            />
-                                                        </td>
-                                                        <td className="px-3 py-3">
-                                                            <div className="flex min-w-[180px] items-center gap-3">
-                                                                {candidate.display_image_url ? (
-                                                                    <img src={candidate.display_image_url} alt="" className="h-10 w-10 rounded-full object-cover" />
-                                                                ) : (
-                                                                    <div className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-xs font-semibold text-slate-500">
-                                                                        {String(candidate.name || '?').slice(0, 1).toUpperCase()}
+                                        <div className="grid gap-3 p-3 lg:grid-cols-2">
+                                            {candidates.map((candidate) => {
+                                                const candidateId = Number(candidate.client_id);
+                                                const selected = selectedSet.has(candidateId);
+                                                const replacing = Boolean(replaceClientId) && !selected;
+
+                                                return (
+                                                    <article key={candidate.client_id} className={`rounded-lg border p-3 transition ${selected ? 'border-teal-300 bg-teal-50/70' : replacing ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white hover:border-teal-200'}`}>
+                                                        <div className="flex items-start gap-3">
+                                                            {candidate.display_image_url ? (
+                                                                <img src={candidate.display_image_url} alt="" className="h-14 w-14 rounded-lg object-cover" />
+                                                            ) : (
+                                                                <div className="grid h-14 w-14 place-items-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-500">
+                                                                    {String(candidate.name || '?').slice(0, 1).toUpperCase()}
+                                                                </div>
+                                                            )}
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-start justify-between gap-2">
+                                                                    <div className="min-w-0">
+                                                                        <p className="truncate text-sm font-semibold text-slate-900">{candidate.name}</p>
+                                                                        <p className="text-xs text-slate-500">#{candidate.client_id} · {candidate.display_city}</p>
                                                                     </div>
-                                                                )}
-                                                                <div>
-                                                                    <p className="font-semibold text-slate-900">{candidate.name}</p>
-                                                                    <p className="text-xs text-slate-500">#{candidate.client_id}</p>
+                                                                    <span className="shrink-0 rounded-full border border-teal-200 bg-white px-2 py-1 text-xs font-semibold text-teal-700">
+                                                                        {seoScoreLabel(candidate.seo_score)}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                    {(candidate.reasons || []).slice(0, 3).map((reason) => (
+                                                                        <span key={reason} className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                                                            {reason}
+                                                                        </span>
+                                                                    ))}
                                                                 </div>
                                                             </div>
-                                                        </td>
-                                                        <td className="px-3 py-3 text-slate-600">{candidate.display_city}</td>
-                                                        <td className="px-3 py-3">
-                                                            <span className="rounded-full border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-700">
-                                                                {candidate.seo_score ?? '-'} / 100
+                                                        </div>
+                                                        <div className="mt-3 flex items-center justify-between gap-2">
+                                                            <span className="text-xs font-medium text-slate-500">
+                                                                {selected ? `Priority #${selectedClientIds.findIndex((id) => Number(id) === candidateId) + 1}` : `Rank #${candidate.rank || '-'}`}
                                                             </span>
-                                                        </td>
-                                                        <td className="px-3 py-3">
-                                                            <div className="flex max-w-[280px] flex-wrap gap-1.5">
-                                                                {(candidate.reasons || []).map((reason) => (
-                                                                    <span key={reason} className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                                                        {reason}
-                                                                    </span>
-                                                                ))}
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleCandidate(candidate.client_id)}
+                                                                className={`min-h-9 rounded-md px-3 text-xs font-semibold transition ${selected ? 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50' : replacing ? 'bg-amber-600 text-white hover:bg-amber-700' : 'bg-teal-700 text-white hover:bg-teal-800'}`}
+                                                            >
+                                                                {selected ? 'Remove' : replacing ? 'Replace' : 'Add'}
+                                                            </button>
+                                                        </div>
+                                                    </article>
+                                                );
+                                            })}
+                                        </div>
                                     )}
                                 </div>
                             </section>
 
                             <aside className="rounded-lg border border-slate-200 p-4">
-                                <h3 className="text-sm font-semibold text-slate-800">Activation order</h3>
-                                <p className="mt-1 text-sm text-slate-500">Manual override applies to this list.</p>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-slate-800">Activation priority</h3>
+                                        <p className="mt-1 text-sm text-slate-500">Top profiles activate first.</p>
+                                    </div>
+                                    {selectedCandidates.length > 1 ? (
+                                        <button type="button" onClick={shuffleCandidates} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+                                            Shuffle
+                                        </button>
+                                    ) : null}
+                                </div>
                                 <div className="mt-3 max-h-64 space-y-2 overflow-auto">
                                     {selectedCandidates.length === 0 ? (
                                         <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">No profiles selected.</p>
                                     ) : selectedCandidates.map((candidate, index) => (
-                                        <div key={candidate.client_id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                                        <div key={candidate.client_id} className={`rounded-lg border px-3 py-2 ${Number(replaceClientId) === Number(candidate.client_id) ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'}`}>
                                             <div className="min-w-0">
                                                 <p className="truncate text-sm font-semibold text-slate-800">{index + 1}. {candidate.name}</p>
-                                                <p className="text-xs text-slate-500">{candidate.display_city} · SEO {candidate.seo_score ?? '-'}</p>
+                                                <p className="text-xs text-slate-500">{candidate.display_city} · SEO {seoScoreLabel(candidate.seo_score)}</p>
                                             </div>
-                                            <div className="flex items-center gap-1">
-                                                <button type="button" onClick={() => moveCandidate(candidate.client_id, -1)} disabled={index === 0} className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 disabled:opacity-40">Up</button>
-                                                <button type="button" onClick={() => moveCandidate(candidate.client_id, 1)} disabled={index === selectedCandidates.length - 1} className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 disabled:opacity-40">Down</button>
+                                            <div className="mt-2 grid grid-cols-2 gap-1.5">
+                                                <button type="button" onClick={() => moveCandidate(candidate.client_id, -1)} disabled={index === 0} className="rounded border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 disabled:opacity-40">Earlier</button>
+                                                <button type="button" onClick={() => moveCandidate(candidate.client_id, 1)} disabled={index === selectedCandidates.length - 1} className="rounded border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 disabled:opacity-40">Later</button>
+                                                <button type="button" onClick={() => setReplaceClientId(candidate.client_id)} className="rounded border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Replace</button>
+                                                <button type="button" onClick={() => toggleCandidate(candidate.client_id)} className="rounded border border-rose-200 px-2 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50">Remove</button>
                                             </div>
                                         </div>
                                     ))}
