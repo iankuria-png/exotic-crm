@@ -245,6 +245,8 @@ function resolveInitialSortOption(searchParams) {
     if (sortBy === 'name' && sortDirection === 'desc') return 'name_desc';
     if (sortBy === 'created_at' && sortDirection === 'asc') return 'created_asc';
     if (sortBy === 'created_at' && sortDirection === 'desc') return 'created_desc';
+    if (sortBy === 'value' && sortDirection === 'asc') return 'value_asc';
+    if (sortBy === 'value' && sortDirection === 'desc') return 'value_desc';
 
     return DEFAULT_SORT_OPTION;
 }
@@ -259,6 +261,10 @@ function getSortParams(sortOption) {
             return { sort_by: 'created_at', sort_direction: 'asc' };
         case 'created_desc':
             return { sort_by: 'created_at', sort_direction: 'desc' };
+        case 'value_desc':
+            return { sort_by: 'value', sort_direction: 'desc' };
+        case 'value_asc':
+            return { sort_by: 'value', sort_direction: 'asc' };
         case DEFAULT_SORT_OPTION:
         default:
             return { sort_by: 'updated_at', sort_direction: 'desc' };
@@ -618,6 +624,17 @@ export default function Clients() {
                 },
             }).then((response) => response.data),
     });
+
+    // Lifetime value is normalized per-currency in PHP, so it can't be ranked across very
+    // large result sets. When the API reports that, drop back to the default sort and tell
+    // the agent to narrow their filters.
+    useEffect(() => {
+        if (data?.meta?.value_ranking_unavailable && (sortOption === 'value_desc' || sortOption === 'value_asc')) {
+            setSortOption(DEFAULT_SORT_OPTION);
+            setPage(1);
+            toast.warning(data.meta.message || 'Value ranking is unavailable for this many clients. Narrow your filters and try again.');
+        }
+    }, [data?.meta?.value_ranking_unavailable, data?.meta?.message, sortOption, toast]);
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'client-create'],
@@ -2079,6 +2096,8 @@ export default function Clients() {
                             { value: 'name_desc', label: 'Client name Z-A' },
                             { value: 'created_desc', label: 'Newest signups' },
                             { value: 'created_asc', label: 'Oldest signups' },
+                            { value: 'value_desc', label: 'Highest value' },
+                            { value: 'value_asc', label: 'Lowest value' },
                         ]}
                     />
                 </div>

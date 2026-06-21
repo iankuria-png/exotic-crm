@@ -327,21 +327,128 @@ class ClientController extends Controller
             'purging_soon' => (clone $closedStatsBase)->closed()->whereNotNull('purge_after')->where('purge_after', '<=', now()->addDays(7))->count(),
         ];
 
-        $this->applyClientSort(
-            $query,
-            (string) $request->input('sort_by', 'updated_at'),
-            (string) $request->input('sort_direction', 'desc')
-        );
+        $sortBy = (string) $request->input('sort_by', 'updated_at');
+        $sortDirection = (string) $request->input('sort_direction', 'desc');
 
-        $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
-        $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
-        $this->decorateLifetimeValue($clients->getCollection());
+        if ($sortBy === 'value') {
+            $payload = $this->paginateClientsByLifetimeValue(
+                $request,
+                $query,
+                $sortDirection,
+                (int) ($validated['per_page'] ?? 25)
+            );
+        } else {
+            $this->applyClientSort($query, $sortBy, $sortDirection);
 
-        $payload = $clients->toArray();
+            $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
+            $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
+            $this->decorateLifetimeValue($clients->getCollection());
+
+            $payload = $clients->toArray();
+        }
+
         $payload['stats'] = $stats;
         $payload['search_resolution'] = $searchResolution;
 
         return response()->json($payload);
+    }
+
+    /**
+     * Rank the filtered client list by lifetime value (USD).
+     *
+     * Lifetime value is normalized across currencies in PHP rather than stored on the
+     * row, so it can't be ordered in SQL. We pull the matching ids (capped), sort them
+     * by computed value, then page over the sorted ids — mirroring the churned-list
+     * value ranking. Over the cap we fall back to the default sort and flag the response.
+     */
+    private function paginateClientsByLifetimeValue(
+        Request $request,
+        $baseQuery,
+        string $sortDirection,
+        int $perPage,
+    ): array {
+        $valueSortCap = 5000;
+        $matchingIds = (clone $baseQuery)
+            ->reorder()
+            ->limit($valueSortCap + 1)
+            ->pluck('clients.id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if ($matchingIds->count() > $valueSortCap) {
+            $fallbackQuery = clone $baseQuery;
+            $this->applyClientSort($fallbackQuery, 'updated_at', 'desc');
+
+            $clients = $fallbackQuery->paginate($perPage);
+            $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
+            $this->decorateLifetimeValue($clients->getCollection());
+
+            $payload = $clients->toArray();
+            $payload['meta'] = array_merge($payload['meta'] ?? [], [
+                'value_ranking_unavailable' => true,
+                'effective_sort_by' => 'updated_at',
+                'message' => 'Value ranking is unavailable for this many clients. Narrow your filters to rank by lifetime value.',
+            ]);
+
+            return $payload;
+        }
+
+        $lifetimeValues = $this->clientLifetimeValueService->forClientIds($matchingIds);
+        $sortedIds = $matchingIds->all();
+        $direction = strtolower($sortDirection) === 'asc' ? 'asc' : 'desc';
+
+        usort($sortedIds, function (int $left, int $right) use ($lifetimeValues, $direction): int {
+            $leftValue = $lifetimeValues[$left]['value_usd'] ?? null;
+            $rightValue = $lifetimeValues[$right]['value_usd'] ?? null;
+            $leftRank = $leftValue !== null && (float) $leftValue > 0 ? 0 : 1;
+            $rightRank = $rightValue !== null && (float) $rightValue > 0 ? 0 : 1;
+
+            if ($leftRank !== $rightRank) {
+                return $leftRank <=> $rightRank;
+            }
+
+            if ($leftRank > 0) {
+                return $left <=> $right;
+            }
+
+            $comparison = (float) $leftValue <=> (float) $rightValue;
+            if ($direction === 'desc') {
+                $comparison *= -1;
+            }
+
+            return $comparison !== 0 ? $comparison : $left <=> $right;
+        });
+
+        $page = max(1, (int) $request->input('page', 1));
+        $total = count($sortedIds);
+        $pageIds = array_slice($sortedIds, ($page - 1) * $perPage, $perPage);
+        $order = array_flip($pageIds);
+
+        $clients = (clone $baseQuery)
+            ->reorder()
+            ->whereIn('clients.id', $pageIds ?: [0])
+            ->get()
+            ->sortBy(fn (Client $client) => $order[(int) $client->id] ?? PHP_INT_MAX)
+            ->values();
+
+        $clients->each(fn (Client $client) => $this->decorateExpiryState($client));
+        $this->decorateLifetimeValue($clients);
+
+        $paginator = new LengthAwarePaginator(
+            $clients,
+            $total,
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
+
+        $payload = $paginator->toArray();
+        $payload['meta'] = array_merge($payload['meta'] ?? [], [
+            'value_ranking_unavailable' => false,
+            'effective_sort_by' => 'value',
+        ]);
+
+        return $payload;
     }
 
     private function applyClientTextSearch($query, array $terms): void
