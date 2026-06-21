@@ -159,7 +159,6 @@ function buildFullProfilePayload(form) {
         looks: form.looks || null,
         smoker: form.smoker || null,
         availability: form.availability?.length ? form.availability : null,
-        services: form.services?.length ? form.services : null,
         extraservices: form.extraservices.trim() || null,
         incall: form.incall.trim() || null,
         outcall: form.outcall.trim() || null,
@@ -178,10 +177,8 @@ function buildFullProfilePayload(form) {
         rate12h_outcall: form.rate12h_outcall.trim() || null,
         rate24h_incall: form.rate24h_incall.trim() || null,
         rate24h_outcall: form.rate24h_outcall.trim() || null,
-        whatsapp: form.whatsapp.trim() || null,
         instagram: form.instagram.trim() || null,
         twitter: form.twitter.trim() || null,
-        telegram: form.telegram.trim() || null,
         website: form.website.trim() || null,
         facebook: form.facebook.trim() || null,
         snapchat: form.snapchat.trim() || null,
@@ -198,6 +195,25 @@ function buildFullProfilePayload(form) {
         language3: form.language3.trim() || null,
         language3level: form.language3level || null,
     };
+}
+
+function buildQuickProfilePayload(form) {
+    const payload = {};
+    const services = parseProfileServices(form.services);
+
+    if (services.length > 0) {
+        payload.services = services;
+    }
+
+    if (form.whatsapp.trim()) {
+        payload.whatsapp = form.whatsapp.trim();
+    }
+
+    if (form.telegram.trim()) {
+        payload.telegram = form.telegram.trim();
+    }
+
+    return payload;
 }
 
 export default function ClientCreateModal({
@@ -566,6 +582,7 @@ export default function ClientCreateModal({
             region_id: isWpProvision && form.region_id ? Number(form.region_id) : undefined,
             city_id: isWpProvision && form.city_id ? Number(form.city_id) : undefined,
             profile_images: isWpProvision && form.full_profile ? [...form.profile_images] : [],
+            ...(isWpProvision ? buildQuickProfilePayload(form) : {}),
             ...buildFullProfilePayload(form),
             reason,
         });
@@ -798,10 +815,69 @@ export default function ClientCreateModal({
                                 </div>
 
                                 <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+                                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">Quick profile details</p>
+                                            <p className="mt-1 text-xs text-slate-500">Add services and direct chat contacts now. These save with quick provisioning.</p>
+                                        </div>
+                                        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ring-1 ring-slate-200">Optional</span>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services</span>
+                                            <span className="text-xs text-slate-500">{selectedServiceCodes.length} selected</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                                            {PROFILE_ENUM_OPTIONS.services.map((option) => {
+                                                const selected = selectedServiceCodes.includes(option.value);
+                                                return (
+                                                    <button
+                                                        key={option.value}
+                                                        type="button"
+                                                        onClick={() => toggleMultiValue('services', option.value)}
+                                                        className={`min-h-[36px] rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
+                                                    >
+                                                        {option.label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                        <div>
+                                            <label htmlFor="client-create-whatsapp" className="mb-1 block text-sm font-medium text-slate-700">WhatsApp</label>
+                                            <input
+                                                id="client-create-whatsapp"
+                                                type="text"
+                                                value={form.whatsapp}
+                                                autoComplete="off"
+                                                onChange={(event) => setForm((current) => ({ ...current, whatsapp: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="WhatsApp number or handle"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="client-create-telegram" className="mb-1 block text-sm font-medium text-slate-700">Telegram</label>
+                                            <input
+                                                id="client-create-telegram"
+                                                type="text"
+                                                value={form.telegram}
+                                                autoComplete="off"
+                                                onChange={(event) => setForm((current) => ({ ...current, telegram: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Telegram username or link"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-900">Optional profile details</p>
-                                            <p className="mt-1 text-xs text-slate-500">Keep this off for fast client creation. Turn it on to add bio, photos, services, rates, socials, and lifestyle now.</p>
+                                            <p className="text-sm font-semibold text-slate-900">More profile details</p>
+                                            <p className="mt-1 text-xs text-slate-500">Keep this off for fast client creation. Turn it on to add bio, photos, appearance, rates, lifestyle, and extra socials now.</p>
                                         </div>
                                         <label className="inline-flex min-h-[44px] items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
                                             <input
@@ -927,27 +1003,8 @@ export default function ClientCreateModal({
 
                                 <section className="border-t border-slate-100 pt-4 md:col-span-2">
                                     <div className="mb-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">Services and rates</h4>
-                                        <p className="mt-1 text-xs text-slate-500">Use approved service codes and choose a currency when entering rates.</p>
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services</span>
-                                        <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-3">
-                                            {PROFILE_ENUM_OPTIONS.services.map((option) => {
-                                                const selected = selectedServiceCodes.includes(option.value);
-                                                return (
-                                                    <button
-                                                        key={option.value}
-                                                        type="button"
-                                                        onClick={() => toggleMultiValue('services', option.value)}
-                                                        className={`rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
-                                                    >
-                                                        {option.label}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Availability and rates</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Choose a currency when entering rates. Services are saved from the quick profile section above.</p>
                                     </div>
 
                                     <div className="mt-4 space-y-2">
@@ -1043,7 +1100,7 @@ export default function ClientCreateModal({
                                         <p className="mt-1 text-xs text-slate-500">Optional public channels and profile details.</p>
                                     </div>
                                     <div className="grid gap-3 md:grid-cols-2">
-                                        {['whatsapp', 'instagram', 'twitter', 'telegram', 'website', 'facebook', 'snapchat', 'education', 'occupation', 'sports', 'hobbies', 'zodiacsign', 'sexualorientation', 'language1', 'language2', 'language3'].map((field) => (
+                                        {['instagram', 'twitter', 'website', 'facebook', 'snapchat', 'education', 'occupation', 'sports', 'hobbies', 'zodiacsign', 'sexualorientation', 'language1', 'language2', 'language3'].map((field) => (
                                             <input
                                                 key={field}
                                                 value={form[field] || ''}
