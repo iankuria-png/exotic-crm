@@ -51,6 +51,8 @@ export default function Combobox({
     hint = null,
     className = '',
     inputRef: externalInputRef = null,
+    openOnFocus = true,
+    blurOnSelect = true,
 }) {
     const rootRef = useRef(null);
     const inputRef = useRef(null);
@@ -117,6 +119,9 @@ export default function Combobox({
         onChange?.(option?.value ?? null, option || null);
         setOpen(false);
         setQuery('');
+        if (blurOnSelect) {
+            requestAnimationFrame(() => inputRef.current?.blur());
+        }
     };
 
     const selectedLabel = selectedOption?.inputLabel || selectedOption?.label || '';
@@ -144,10 +149,17 @@ export default function Combobox({
                         value={displayValue}
                         onFocus={() => {
                             if (!disabled) {
-                                setOpen(true);
+                                if (openOnFocus) {
+                                    setOpen(true);
+                                }
                                 if (selectedLabel && query === '') {
                                     requestAnimationFrame(() => inputRef.current?.select());
                                 }
+                            }
+                        }}
+                        onClick={() => {
+                            if (!disabled) {
+                                setOpen(true);
                             }
                         }}
                         onChange={(event) => {
@@ -226,6 +238,7 @@ export default function Combobox({
                                                 type="button"
                                                 role="option"
                                                 aria-selected={selected}
+                                                onMouseDown={(event) => event.preventDefault()}
                                                 onMouseEnter={() => setActiveIndex(index)}
                                                 onClick={() => commit(option)}
                                                 className={`flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${active ? 'bg-teal-50 text-teal-800' : 'text-slate-700 hover:bg-slate-50'} ${selected ? 'font-semibold' : ''}`}

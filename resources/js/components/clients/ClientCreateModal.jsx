@@ -932,6 +932,7 @@ export default function ClientCreateModal({
                         loading={integrationsQuery.isLoading}
                         disabled={Boolean(lockedPlatformId)}
                         allowClear={!lockedPlatformId}
+                        openOnFocus={false}
                         hint="Pick the WordPress market first. Typing in client fields will not change this selection."
                     />
                 </div>
