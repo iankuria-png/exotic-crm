@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Area,
     AreaChart,
     CartesianGrid,
+    Customized,
     Line,
     ResponsiveContainer,
     Tooltip,
@@ -33,6 +34,8 @@ const VIEWS = [
     { key: 'mix', label: 'Customer mix' },
 ];
 
+const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 function EmptyState({ message }) {
     return (
         <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-center text-sm text-slate-500">
@@ -56,6 +59,64 @@ function formatMetricValue(value, metric, currency) {
     }
 
     return Number(value || 0).toLocaleString();
+}
+
+function weekdayKey(label) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(label || ''))) return null;
+    const [year, month, day] = label.split('-').map((part) => Number(part));
+    const date = new Date(year, month - 1, day);
+
+    return Number.isNaN(date.getTime()) ? null : date.getDay();
+}
+
+function WeekdayBands({ xAxisMap, offset, points, selectedWeekday }) {
+    if (selectedWeekday === null || selectedWeekday === undefined) return null;
+    const xAxis = Object.values(xAxisMap || {})[0];
+    const scale = xAxis?.scale;
+    if (typeof scale !== 'function' || !offset) return null;
+
+    const bandWidth = typeof scale.bandwidth === 'function'
+        ? scale.bandwidth()
+        : Math.max(12, Number(offset.width || 0) / Math.max(points.length, 1));
+
+    return (
+        <g aria-hidden="true">
+            {points
+                .filter((point) => point.weekday === selectedWeekday)
+                .map((point) => {
+                    const x = scale(point.label);
+                    if (!Number.isFinite(x)) return null;
+
+                    return (
+                        <rect
+                            key={`weekday-band-${point.label}`}
+                            x={x - bandWidth / 2}
+                            y={offset.top}
+                            width={bandWidth}
+                            height={offset.height}
+                            rx={6}
+                            fill="#0f766e"
+                            opacity={point.is_selected_day ? 0.12 : 0.065}
+                        />
+                    );
+                })}
+        </g>
+    );
+}
+
+function weekdayDot(selectedWeekday) {
+    return function renderWeekdayDot({ cx, cy, payload }) {
+        if (selectedWeekday === null || payload?.weekday !== selectedWeekday) return null;
+
+        return (
+            <g>
+                {payload.is_selected_day ? (
+                    <circle cx={cx} cy={cy} r={7} fill="#ffffff" stroke="#0f766e" strokeWidth={2.5} />
+                ) : null}
+                <circle cx={cx} cy={cy} r={payload.is_selected_day ? 3.5 : 3} fill="#0f766e" stroke="#ffffff" strokeWidth={1.5} />
+            </g>
+        );
+    };
 }
 
 function TrendTooltip({ active, payload, label, currency, metric }) {
@@ -94,15 +155,31 @@ export default function RevenueTrendWidget({
     peakHoursLoading = false,
     peakHoursError = null,
 }) {
-    const points = (data?.points || []).map((point) => ({
-        ...point,
-        revenue: Number(point.value || 0),
-        prior_revenue: Number(point.prior_value || 0),
-        payments: Number(point.payments_count || 0),
-        prior_payments: Number(point.prior_payments_count || 0),
-        average_ticket: Number(point.average_ticket || 0),
-        prior_average_ticket: Number(point.prior_average_ticket || 0),
-    }));
+    const [selectedDay, setSelectedDay] = useState(null);
+    const rawPoints = data?.points || [];
+    const activeBucket = data?.bucket || 'auto';
+    const points = rawPoints.map((point) => {
+        const weekday = weekdayKey(point.label);
+
+        return {
+            ...point,
+            weekday,
+            is_selected_day: selectedDay === point.label,
+            revenue: Number(point.value || 0),
+            prior_revenue: Number(point.prior_value || 0),
+            payments: Number(point.payments_count || 0),
+            prior_payments: Number(point.prior_payments_count || 0),
+            average_ticket: Number(point.average_ticket || 0),
+            prior_average_ticket: Number(point.prior_average_ticket || 0),
+        };
+    });
+    const selectedWeekday = selectedDay ? weekdayKey(selectedDay) : null;
+    const selectedWeekdayPoints = useMemo(() => (
+        selectedWeekday === null
+            ? []
+            : points.filter((point) => point.weekday === selectedWeekday)
+    ), [points, selectedWeekday]);
+    const weekdaySelectionEnabled = activeBucket === 'day';
     const hasData = points.some((point) => Number(valueForMetric(point, metric) || 0) > 0 || Number(valueForMetric(point, metric, 'prior') || 0) > 0);
     const currentKey = metric === 'revenue' ? 'revenue' : metric;
     const priorKey = `prior_${currentKey}`;
@@ -113,6 +190,21 @@ export default function RevenueTrendWidget({
         : activeView === 'peak'
             ? 'Sales concentration by East Africa hour, normalized to the reporting currency.'
             : 'New vs existing customer revenue, with unmatched revenue separated.';
+
+    useEffect(() => {
+        if (!weekdaySelectionEnabled && selectedDay !== null) {
+            setSelectedDay(null);
+        }
+    }, [selectedDay, weekdaySelectionEnabled]);
+
+    const handleChartClick = (state) => {
+        if (!weekdaySelectionEnabled) return;
+        const point = state?.activePayload?.[0]?.payload;
+        const nextDay = point?.label;
+        if (!nextDay || weekdayKey(nextDay) === null) return;
+
+        setSelectedDay((current) => current === nextDay ? null : nextDay);
+    };
 
     return (
         <SectionFrame
@@ -188,25 +280,58 @@ export default function RevenueTrendWidget({
             ) : !hasData ? (
                 <EmptyState message="No collected revenue in this window yet." />
             ) : (
-                <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={points} margin={{ top: 12, right: 16, left: 4, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="ceoRevenueTrend" x1="0" x2="0" y1="0" y2="1">
-                                    <stop offset="5%" stopColor="#0f766e" stopOpacity={0.24} />
-                                    <stop offset="95%" stopColor="#0f766e" stopOpacity={0.02} />
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-                            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} minTickGap={20} />
-                            <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} width={72} tickFormatter={(value) => metric === 'payments' ? Number(value || 0).toLocaleString() : formatCurrency(value, currency).replace(`${currency} `, '')} />
-                            <Tooltip content={<TrendTooltip currency={currency} metric={metric} />} />
-                            <Area type="monotone" dataKey={currentKey} stroke="#0f766e" strokeWidth={2.5} fill="url(#ceoRevenueTrend)" name="Current" />
-                            {showComparison ? (
-                                <Line type="monotone" dataKey={priorKey} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Prior" />
+                <div>
+                    {weekdaySelectionEnabled ? (
+                        <div className="mb-3 flex flex-col gap-2 px-1 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                            <span>
+                                {selectedWeekday === null
+                                    ? 'Click a day to compare that weekday across the window.'
+                                    : `${WEEKDAY_LABELS[selectedWeekday]} pattern selected · ${selectedWeekdayPoints.length.toLocaleString()} matching days highlighted`}
+                            </span>
+                            {selectedWeekday !== null ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedDay(null)}
+                                    className="self-start rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-700 sm:self-auto"
+                                >
+                                    Clear weekday
+                                </button>
                             ) : null}
-                        </AreaChart>
-                    </ResponsiveContainer>
+                        </div>
+                    ) : null}
+                    <div className="h-80">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart
+                                data={points}
+                                margin={{ top: 12, right: 16, left: 4, bottom: 0 }}
+                                onClick={handleChartClick}
+                                className={weekdaySelectionEnabled ? 'cursor-pointer' : ''}
+                            >
+                                <defs>
+                                    <linearGradient id="ceoRevenueTrend" x1="0" x2="0" y1="0" y2="1">
+                                        <stop offset="5%" stopColor="#0f766e" stopOpacity={0.24} />
+                                        <stop offset="95%" stopColor="#0f766e" stopOpacity={0.02} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
+                                <Customized content={(props) => (
+                                    <WeekdayBands
+                                        {...props}
+                                        points={points}
+                                        selectedWeekday={selectedWeekday}
+                                    />
+                                )}
+                                />
+                                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} minTickGap={20} />
+                                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} width={72} tickFormatter={(value) => metric === 'payments' ? Number(value || 0).toLocaleString() : formatCurrency(value, currency).replace(`${currency} `, '')} />
+                                <Tooltip content={<TrendTooltip currency={currency} metric={metric} />} />
+                                <Area type="monotone" dataKey={currentKey} stroke="#0f766e" strokeWidth={2.5} fill="url(#ceoRevenueTrend)" name="Current" dot={weekdaySelectionEnabled ? weekdayDot(selectedWeekday) : false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }} />
+                                {showComparison ? (
+                                    <Line type="monotone" dataKey={priorKey} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Prior" />
+                                ) : null}
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
                 </div>
             )}
         </SectionFrame>
