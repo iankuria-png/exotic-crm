@@ -205,7 +205,6 @@ class PaymentQueueController extends Controller
         $discountedNormalized = $this->reportingCurrencyService->normalizeEventRows($foregoneEventRows, $targetCurrency);
         $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedStatsQuery = (clone $statsQuery)
-            ->excludingWalletTopups()
             ->where('status', 'failed');
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));

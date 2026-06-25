@@ -25,6 +25,7 @@ class PaymentQueueQueryBuilder
             'matched' => 'nullable|in:matched,unmatched',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
+            'purpose' => 'nullable|in:wallet_topup,non_wallet',
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
             'has_discount' => 'nullable|in:0,1',
@@ -128,6 +129,13 @@ class PaymentQueueQueryBuilder
             $query->where('source', $sourceFilter);
         }
 
+        $purposeFilter = trim((string) ($validated['purpose'] ?? $request->input('purpose', '')));
+        if ($purposeFilter === 'wallet_topup') {
+            $query->walletTopups();
+        } elseif ($purposeFilter === 'non_wallet') {
+            $query->excludingWalletTopups();
+        }
+
         $hasDiscountFilter = trim((string) ($validated['has_discount'] ?? ''));
         if ($hasDiscountFilter !== '') {
             if ($hasDiscountFilter === '1') {
@@ -201,6 +209,17 @@ class PaymentQueueQueryBuilder
             $query->where('created_at', '>=', $context['from']);
         }
         $query->where('created_at', '<=', $context['to']);
+
+        // Revenue KPIs exclude wallet top-ups by default to avoid double-counting
+        // (a top-up is credited here, then counted again when the balance is spent
+        // on a subscription). When the queue is explicitly filtered to top-ups, the
+        // stats reflect top-up totals so the cards stay consistent with the table.
+        $purposeFilter = trim((string) ($validated['purpose'] ?? $request->input('purpose', '')));
+        if ($purposeFilter === 'wallet_topup') {
+            $query->walletTopups();
+        } else {
+            $query->excludingWalletTopups();
+        }
 
         return $query;
     }

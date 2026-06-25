@@ -1493,6 +1493,7 @@ export default function Payments() {
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import']);
+    const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
@@ -1532,6 +1533,10 @@ export default function Payments() {
     const [sourceFilter, setSourceFilter] = useState(() => {
         const requested = (searchParams.get('source') || '').trim();
         return allowedSourceFilters.has(requested) ? requested : '';
+    });
+    const [purposeFilter, setPurposeFilter] = useState(() => {
+        const requested = (searchParams.get('purpose') || '').trim();
+        return allowedPurposeFilters.has(requested) ? requested : '';
     });
     const [environmentFilter, setEnvironmentFilter] = useState(() => {
         const requested = (searchParams.get('environment') || '').trim().toLowerCase();
@@ -1684,6 +1689,7 @@ export default function Payments() {
         ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
         ...(platformFilter && { platform_id: Number(platformFilter) }),
         ...(sourceFilter && { source: sourceFilter }),
+        ...(purposeFilter && { purpose: purposeFilter }),
         ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
         ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
         ...(confidenceFilter && { match_confidence: confidenceFilter }),
@@ -1700,6 +1706,7 @@ export default function Payments() {
         hasDiscountFilter,
         platformFilter,
         sourceFilter,
+        purposeFilter,
         canViewTests,
         environmentFilter,
         testVisibility,
@@ -1713,7 +1720,7 @@ export default function Payments() {
     ]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, purposeFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -1725,6 +1732,7 @@ export default function Payments() {
                     ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
+                    ...(purposeFilter && { purpose: purposeFilter }),
                     ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
                     ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
@@ -2986,7 +2994,16 @@ export default function Payments() {
             key: 'product',
             label: 'Product',
             width: '11rem',
-            render: (row) => <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>,
+            render: (row) => (
+                row.purpose === 'wallet_topup'
+                    ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
+                            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h2m6 0h2M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z" /></svg>
+                            Wallet top-up
+                        </span>
+                    )
+                    : <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>
+            ),
         },
         {
             key: 'status',
@@ -3608,6 +3625,17 @@ export default function Payments() {
                         ]}
                     />
 
+                    <FilterSelect
+                        label="Type"
+                        value={purposeFilter}
+                        onChange={(event) => { setPurposeFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All types' },
+                            { value: 'non_wallet', label: 'Subscriptions' },
+                            { value: 'wallet_topup', label: 'Wallet top-ups' },
+                        ]}
+                    />
+
                     <div className="flex flex-col gap-1">
                         <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="payments-from">From</label>
                         <input
@@ -3730,7 +3758,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || purposeFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -3741,6 +3769,7 @@ export default function Payments() {
                                 setHasDiscountFilter('');
                                 setPlatformFilter('');
                                 setSourceFilter('');
+                                setPurposeFilter('');
                                 setEnvironmentFilter('');
                                 setTestVisibility('hide');
                                 setConfidenceFilter('');
