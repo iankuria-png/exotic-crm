@@ -2334,11 +2334,17 @@ export default function ClientDetail() {
             const nextRegionId = hasRegion ? Number(profileForm.region_id) : null;
             const nextCityId = hasCity ? Number(profileForm.city_id) : null;
 
-            if (!areProfileFieldValuesEqual(initialProfileFieldsRef.current?.region_id ?? null, nextRegionId)) {
-                fields.region_id = nextRegionId;
-            }
+            // Region and city must be submitted together: the backend
+            // (WpProfileFieldValidator::validateLocationPair) rejects a payload
+            // containing only one of them. Diffing them independently meant a
+            // city-only change (region unchanged) sent city_id without region_id
+            // and failed with "Region and city must be provided together." So if
+            // EITHER changed, send BOTH as a pair.
+            const regionChanged = !areProfileFieldValuesEqual(initialProfileFieldsRef.current?.region_id ?? null, nextRegionId);
+            const cityChanged = !areProfileFieldValuesEqual(initialProfileFieldsRef.current?.city_id ?? null, nextCityId);
 
-            if (!areProfileFieldValuesEqual(initialProfileFieldsRef.current?.city_id ?? null, nextCityId)) {
+            if (regionChanged || cityChanged) {
+                fields.region_id = nextRegionId;
                 fields.city_id = nextCityId;
             }
         }
