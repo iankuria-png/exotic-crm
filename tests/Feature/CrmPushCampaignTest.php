@@ -15,6 +15,7 @@ use App\Services\PushCampaign\ProfileExtractionService;
 use App\Services\PushCampaign\PushCampaignItemMatchService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\UploadBatchStatusService;
+use App\Services\PushNotification\ExoticPushProvider;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
@@ -2670,6 +2671,250 @@ HTML,
 
         $response->assertOk();
         $response->assertJsonPath('push_provider.enabled', true);
+    }
+
+    public function test_exotic_push_provider_maps_send_payload_and_headers(): void
+    {
+        config(['services.exotic_push.base_url' => 'https://push.example.test/api/']);
+
+        Http::fake([
+            'https://push.example.test/api/sites/site-123/rest-api/notifications' => Http::response([
+                'success' => true,
+                'data' => [
+                    'notificationId' => 'epe-notification-1',
+                    'jobId' => 'job-1',
+                    'queued' => true,
+                ],
+            ]),
+        ]);
+
+        $provider = new ExoticPushProvider();
+        $result = $provider->send([
+            'title' => Str::repeat('T', 160),
+            'message' => Str::repeat('M', 520),
+            'target_url' => 'https://kenya.example/profiles/1',
+            'icon_url' => 'https://kenya.example/icon.png',
+            'image_url' => 'https://kenya.example/image.jpg',
+        ], [
+            'site_id' => 'site-123',
+            'api_key' => 'rest_sample',
+            'auth_token' => 'token-sample',
+        ], [
+            'idempotency_key' => 'epe-item-99',
+        ]);
+
+        $this->assertTrue((bool) $result['success']);
+        $this->assertSame('exoticpush', $result['provider']);
+        $this->assertSame('epe-notification-1', $result['provider_notification_id']);
+
+        Http::assertSent(function ($request): bool {
+            $data = $request->data();
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://push.example.test/api/sites/site-123/rest-api/notifications'
+                && ($request->header('X-EPE-Site-Key')[0] ?? null) === 'rest_sample'
+                && ($request->header('Authorization')[0] ?? null) === 'Bearer token-sample'
+                && ($request->header('Idempotency-Key')[0] ?? null) === 'epe-item-99'
+                && mb_strlen((string) ($data['title'] ?? '')) === 150
+                && mb_strlen((string) ($data['body'] ?? '')) === 500
+                && ($data['url'] ?? null) === 'https://kenya.example/profiles/1'
+                && ($data['icon'] ?? null) === 'https://kenya.example/icon.png'
+                && ($data['image'] ?? null) === 'https://kenya.example/image.jpg';
+        });
+    }
+
+    public function test_exotic_push_provider_treats_success_flag_as_required(): void
+    {
+        config(['services.exotic_push.base_url' => 'https://push.example.test/api']);
+
+        Http::fake([
+            'https://push.example.test/api/sites/site-123/rest-api/notifications' => Http::response([
+                'success' => false,
+                'message' => 'Rejected by provider',
+            ]),
+        ]);
+
+        $result = (new ExoticPushProvider())->send([
+            'title' => 'Test',
+            'message' => 'Body',
+            'target_url' => 'https://kenya.example/profiles/1',
+        ], [
+            'site_id' => 'site-123',
+            'api_key' => 'rest_sample',
+            'auth_token' => 'token-sample',
+        ]);
+
+        $this->assertFalse((bool) $result['success']);
+        $this->assertSame(200, data_get($result, 'provider_response.status'));
+        $this->assertSame('Rejected by provider', data_get($result, 'provider_response.body.message'));
+    }
+
+    public function test_exotic_push_provider_returns_failures_for_unauthorized_and_rate_limited_send(): void
+    {
+        config(['services.exotic_push.base_url' => 'https://push.example.test/api']);
+
+        Http::fake([
+            'https://push.example.test/api/sites/site-401/rest-api/notifications' => Http::response([
+                'success' => false,
+                'message' => 'Unauthorized',
+            ], 401),
+            'https://push.example.test/api/sites/site-429/rest-api/notifications' => Http::response([
+                'success' => false,
+                'message' => 'Rate limited',
+                'retryAfterMs' => 1000,
+            ], 429),
+        ]);
+
+        foreach ([401, 429] as $status) {
+            $result = (new ExoticPushProvider())->send([
+                'title' => 'Test',
+                'message' => 'Body',
+                'target_url' => 'https://kenya.example/profiles/1',
+            ], [
+                'site_id' => 'site-' . $status,
+                'api_key' => 'rest_sample',
+                'auth_token' => 'token-sample',
+            ]);
+
+            $this->assertFalse((bool) $result['success']);
+            $this->assertSame($status, data_get($result, 'provider_response.status'));
+        }
+    }
+
+    public function test_exotic_push_provider_maps_status_and_subscriber_count(): void
+    {
+        config(['services.exotic_push.base_url' => 'https://push.example.test/api']);
+
+        Http::fake([
+            'https://push.example.test/api/sites/site-123/rest-api/notifications/notification-123/status' => Http::response([
+                'data' => [
+                    'status' => 'sent',
+                    'sent' => 148,
+                    'delivered' => 140,
+                    'clicked' => 25,
+                    'failed' => 8,
+                ],
+            ]),
+            'https://push.example.test/api/sites/site-123/rest-api/subscribers/count' => Http::response([
+                'data' => [
+                    'subscriberCount' => 148,
+                ],
+            ]),
+        ]);
+
+        $provider = new ExoticPushProvider();
+        $config = [
+            'site_id' => 'site-123',
+            'api_key' => 'rest_sample',
+            'auth_token' => 'token-sample',
+        ];
+
+        $status = $provider->getStatus('notification-123', $config);
+        $count = $provider->getSubscriberCount($config);
+
+        $this->assertSame(148, $status['total_sent']);
+        $this->assertSame(140, $status['delivered']);
+        $this->assertSame(25, $status['clicked']);
+        $this->assertSame(8, $status['failed']);
+        $this->assertSame(148, $count['total']);
+        $this->assertSame(148, $count['active']);
+    }
+
+    public function test_sub_admin_can_save_and_mask_exotic_push_provider_config(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('sub_admin', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/push-provider', [
+            'enabled' => true,
+            'default_provider' => 'exoticpush',
+            'platforms' => [
+                (string) $platform->id => [
+                    'active_provider' => 'exoticpush',
+                    'fallback_provider' => 'webpushr',
+                    'exoticpush' => [
+                        'site_id' => 'site-123',
+                        'api_key' => 'rest_sample',
+                        'auth_token' => 'token-sample',
+                    ],
+                ],
+            ],
+            'reason' => 'Configure EPE for Kenya',
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.site_id", 'site-123');
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.api_key", '••••••••');
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.api_key_configured", true);
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.auth_token_configured", true);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/push-provider', [
+            'enabled' => true,
+            'default_provider' => 'exoticpush',
+            'platforms' => [
+                (string) $platform->id => [
+                    'active_provider' => 'exoticpush',
+                    'fallback_provider' => 'none',
+                    'exoticpush' => [
+                        'site_id' => 'site-456',
+                        'api_key' => '',
+                        'auth_token' => '',
+                    ],
+                ],
+            ],
+            'reason' => 'Rotate EPE site id only',
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.site_id", 'site-456');
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.api_key_configured", true);
+        $response->assertJsonPath("push_provider.platforms.{$platform->id}.exoticpush.auth_token_configured", true);
+
+        $stored = IntegrationSetting::query()->where('key', 'push_provider_config')->value('value');
+        $this->assertSame('site-456', data_get($stored, "platforms.{$platform->id}.exoticpush.site_id"));
+        $this->assertSame('rest_sample', data_get($stored, "platforms.{$platform->id}.exoticpush.api_key"));
+        $this->assertSame('token-sample', data_get($stored, "platforms.{$platform->id}.exoticpush.auth_token"));
+    }
+
+    public function test_refresh_analytics_uses_item_provider_meta_when_present(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Fallback analytics',
+            'platform_id' => $platform->id,
+            'provider' => 'webpushr',
+            'status' => 'running',
+        ]);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/profile',
+            'custom_message' => 'Hello',
+            'status' => 'sent',
+            'provider_notification_id' => 'epe-notification-1',
+            'provider_meta' => [
+                'provider' => 'exoticpush',
+            ],
+        ]);
+
+        $this->mock(PushProviderService::class, function ($mock) use ($platform): void {
+            $mock->shouldReceive('pollAnalytics')
+                ->once()
+                ->with('epe-notification-1', 'exoticpush', ['platform_id' => (int) $platform->id])
+                ->andReturn([
+                    'total_sent' => 10,
+                    'delivered' => 9,
+                    'clicked' => 2,
+                    'failed' => 1,
+                    'closed' => null,
+                    'raw' => [],
+                ]);
+        });
+
+        app(PushCampaignService::class)->refreshAnalytics($campaign);
+
+        $this->assertSame(10, data_get($item->fresh()->delivery_stats, 'total_sent'));
     }
 
     private function createPlatform(string $name, string $domain, string $country, string $timezone = 'Africa/Nairobi'): Platform

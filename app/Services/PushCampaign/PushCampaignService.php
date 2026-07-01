@@ -310,9 +310,11 @@ class PushCampaignService
             ->get();
 
         foreach ($items as $item) {
+            $provider = data_get($item->provider_meta, 'provider') ?: $campaign->provider;
+
             $stats = $this->pushProviderService->pollAnalytics(
                 (string) $item->provider_notification_id,
-                $campaign->provider,
+                $provider,
                 [
                     'platform_id' => (int) $campaign->platform_id,
                 ]

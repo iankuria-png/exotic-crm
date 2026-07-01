@@ -847,10 +847,10 @@ class SettingsController extends Controller
 
         $validated = $request->validate([
             'enabled' => 'required|boolean',
-            'default_provider' => 'required|in:webpushr,wonderpush,izooto',
+            'default_provider' => 'required|in:webpushr,wonderpush,izooto,exoticpush',
             'platforms' => 'nullable|array',
-            'platforms.*.active_provider' => 'nullable|in:webpushr,wonderpush,izooto',
-            'platforms.*.fallback_provider' => 'nullable|in:none,webpushr,wonderpush,izooto',
+            'platforms.*.active_provider' => 'nullable|in:webpushr,wonderpush,izooto,exoticpush',
+            'platforms.*.fallback_provider' => 'nullable|in:none,webpushr,wonderpush,izooto,exoticpush',
             'platforms.*.webpushr' => 'nullable|array',
             'platforms.*.webpushr.api_key' => 'nullable|string|max:255',
             'platforms.*.webpushr.auth_token' => 'nullable|string|max:255',
@@ -859,6 +859,10 @@ class SettingsController extends Controller
             'platforms.*.wonderpush.project_id' => 'nullable|string|max:255',
             'platforms.*.izooto' => 'nullable|array',
             'platforms.*.izooto.api_token' => 'nullable|string|max:255',
+            'platforms.*.exoticpush' => 'nullable|array',
+            'platforms.*.exoticpush.site_id' => 'nullable|string|max:255',
+            'platforms.*.exoticpush.api_key' => 'nullable|string|max:255',
+            'platforms.*.exoticpush.auth_token' => 'nullable|string|max:255',
             'reason' => 'nullable|string|max:500',
         ]);
 

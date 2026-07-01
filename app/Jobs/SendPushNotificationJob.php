@@ -139,6 +139,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         $result = $pushProviderService->sendPush($notification, [
             'platform_id' => (int) $campaign->platform_id,
             'provider' => $campaign->provider,
+            'idempotency_key' => 'epe-item-' . $item->id,
         ]);
 
         $success = (bool) ($result['success'] ?? false);

@@ -211,6 +211,44 @@ export default function PushRoutingPanel({
                         </p>
                     </section>
 
+                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                        <h4 className="text-sm font-semibold text-slate-900">Exotic Push Engine Credentials</h4>
+                        <div className="mt-3 grid gap-3 md:grid-cols-3">
+                            <input
+                                value={selectedPushConfig?.exoticpush?.site_id || ''}
+                                onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'exoticpush', 'site_id', event.target.value)}
+                                disabled={!canManagePushProviders || !pushPlatformId}
+                                className="crm-input"
+                                placeholder="Site ID"
+                            />
+                            <input
+                                type="password"
+                                value={selectedPushConfig?.exoticpush?.api_key || ''}
+                                onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'exoticpush', 'api_key', event.target.value)}
+                                disabled={!canManagePushProviders || !pushPlatformId}
+                                className="crm-input"
+                                placeholder="API key (leave blank to keep current)"
+                            />
+                            <input
+                                type="password"
+                                value={selectedPushConfig?.exoticpush?.auth_token || ''}
+                                onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'exoticpush', 'auth_token', event.target.value)}
+                                disabled={!canManagePushProviders || !pushPlatformId}
+                                className="crm-input"
+                                placeholder="Auth token (leave blank to keep current)"
+                            />
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                            Site:
+                            {' '}
+                            {selectedPushConfig?.exoticpush?.site_id ? selectedPushConfig.exoticpush.site_id : 'missing'}
+                            {' • '}
+                            {selectedPushConfig?.exoticpush?.api_key_configured ? 'API key configured' : 'API key missing'}
+                            {' • '}
+                            {selectedPushConfig?.exoticpush?.auth_token_configured ? 'Auth token configured' : 'Auth token missing'}
+                        </p>
+                    </section>
+
                     {pushFallbackInvalid ? (
                         <p className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
                             Fallback provider must be different from the active provider.

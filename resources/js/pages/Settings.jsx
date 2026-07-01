@@ -398,6 +398,7 @@ function pushProviderLabel(providerId) {
     if (providerId === 'webpushr') return 'WebPushr';
     if (providerId === 'wonderpush') return 'WonderPush';
     if (providerId === 'izooto') return 'iZooto';
+    if (providerId === 'exoticpush') return 'Exotic Push Engine';
     return 'Unknown';
 }
 
@@ -599,6 +600,13 @@ function defaultPushPlatformConfig(defaultProvider = 'webpushr') {
             api_token: '',
             api_token_configured: false,
         },
+        exoticpush: {
+            site_id: '',
+            api_key: '',
+            auth_token: '',
+            api_key_configured: false,
+            auth_token_configured: false,
+        },
     };
 }
 
@@ -609,6 +617,28 @@ function defaultPushProviderForm() {
         reason: 'Updated push provider routing settings',
         platforms: {},
     };
+}
+
+function pushPlatformReady(config, defaultProvider = 'webpushr') {
+    const active = config?.active_provider || defaultProvider || 'webpushr';
+
+    if (active === 'webpushr') {
+        return Boolean((config?.webpushr?.auth_token?.trim?.() || config?.webpushr?.auth_token_configured)
+            && (config?.webpushr?.api_key?.trim?.() || config?.webpushr?.api_key_configured));
+    }
+
+    if (active === 'wonderpush') {
+        return Boolean(config?.wonderpush?.project_id?.trim?.())
+            && Boolean(config?.wonderpush?.access_token?.trim?.() || config?.wonderpush?.access_token_configured);
+    }
+
+    if (active === 'exoticpush') {
+        return Boolean(config?.exoticpush?.site_id?.trim?.())
+            && Boolean(config?.exoticpush?.api_key?.trim?.() || config?.exoticpush?.api_key_configured)
+            && Boolean(config?.exoticpush?.auth_token?.trim?.() || config?.exoticpush?.auth_token_configured);
+    }
+
+    return Boolean(config?.izooto?.api_token?.trim?.() || config?.izooto?.api_token_configured);
 }
 
 function buildPushProviderForm(pushProvider, platformRows = []) {
@@ -656,6 +686,15 @@ function buildPushProviderForm(pushProvider, platformRows = []) {
             ...(next.izooto || {}),
             api_token: '',
             api_token_configured: Boolean(next.izooto?.api_token_configured),
+        };
+        merged.exoticpush = {
+            ...merged.exoticpush,
+            ...(next.exoticpush || {}),
+            site_id: next.exoticpush?.site_id || '',
+            api_key: '',
+            auth_token: '',
+            api_key_configured: Boolean(next.exoticpush?.api_key_configured),
+            auth_token_configured: Boolean(next.exoticpush?.auth_token_configured),
         };
 
         base.platforms[String(platformId)] = merged;
@@ -2608,6 +2647,7 @@ function IntegrationsWorkspace({
             const webpushr = config?.webpushr || {};
             const wonderpush = config?.wonderpush || {};
             const izooto = config?.izooto || {};
+            const exoticpush = config?.exoticpush || {};
 
             const platformPayload = {
                 active_provider: activeProvider,
@@ -2623,12 +2663,19 @@ function IntegrationsWorkspace({
                 izooto: {
                     api_token: izooto.api_token?.trim() || undefined,
                 },
+                exoticpush: {
+                    site_id: exoticpush.site_id?.trim() || '',
+                    api_key: exoticpush.api_key?.trim() || undefined,
+                    auth_token: exoticpush.auth_token?.trim() || undefined,
+                },
             };
 
             if (!platformPayload.webpushr.auth_token) delete platformPayload.webpushr.auth_token;
             if (!platformPayload.webpushr.api_key) delete platformPayload.webpushr.api_key;
             if (!platformPayload.wonderpush.access_token) delete platformPayload.wonderpush.access_token;
             if (!platformPayload.izooto.api_token) delete platformPayload.izooto.api_token;
+            if (!platformPayload.exoticpush.api_key) delete platformPayload.exoticpush.api_key;
+            if (!platformPayload.exoticpush.auth_token) delete platformPayload.exoticpush.auth_token;
 
             platformsPayload[String(platformId)] = platformPayload;
         });
@@ -3021,6 +3068,7 @@ function IntegrationsWorkspace({
         { value: 'webpushr', label: 'WebPushr' },
         { value: 'wonderpush', label: 'WonderPush' },
         { value: 'izooto', label: 'iZooto' },
+        { value: 'exoticpush', label: 'Exotic Push Engine' },
     ];
     const pushFallbackOptions = [
         { value: 'none', label: 'No fallback' },
@@ -3031,25 +3079,12 @@ function IntegrationsWorkspace({
         : null;
     const selectedPushPlatform = platformRows.find((platform) => String(platform.platform_id) === String(pushPlatformId)) || null;
     const selectedPushProvider = selectedPushConfig?.active_provider || pushProviderForm.default_provider || 'webpushr';
-    const selectedPushReady = selectedPushProvider === 'webpushr'
-        ? Boolean(selectedPushConfig?.webpushr?.auth_token?.trim() || selectedPushConfig?.webpushr?.auth_token_configured)
-            && Boolean(selectedPushConfig?.webpushr?.api_key?.trim() || selectedPushConfig?.webpushr?.api_key_configured)
-        : selectedPushProvider === 'wonderpush'
-            ? Boolean(selectedPushConfig?.wonderpush?.project_id?.trim())
-                && Boolean(selectedPushConfig?.wonderpush?.access_token?.trim() || selectedPushConfig?.wonderpush?.access_token_configured)
-            : Boolean(selectedPushConfig?.izooto?.api_token?.trim() || selectedPushConfig?.izooto?.api_token_configured);
+    const selectedPushReady = pushPlatformReady(selectedPushConfig, pushProviderForm.default_provider);
     const pushFallbackInvalid = Boolean(selectedPushConfig)
         && selectedPushConfig.fallback_provider !== 'none'
         && selectedPushConfig.fallback_provider === selectedPushConfig.active_provider;
     const pushReadyPlatforms = Object.values(pushProviderForm.platforms || {}).filter((config) => {
-        const active = config?.active_provider || pushProviderForm.default_provider || 'webpushr';
-        if (active === 'webpushr') {
-            return Boolean((config?.webpushr?.auth_token || config?.webpushr?.auth_token_configured) && (config?.webpushr?.api_key || config?.webpushr?.api_key_configured));
-        }
-        if (active === 'wonderpush') {
-            return Boolean(config?.wonderpush?.project_id) && Boolean(config?.wonderpush?.access_token || config?.wonderpush?.access_token_configured);
-        }
-        return Boolean(config?.izooto?.api_token || config?.izooto?.api_token_configured);
+        return pushPlatformReady(config, pushProviderForm.default_provider);
     }).length;
     const pushConfiguredPlatforms = Object.keys(pushProviderForm.platforms || {}).length;
     const walletSystemReadOnly = !canManageWalletSystem;

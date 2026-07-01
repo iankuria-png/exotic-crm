@@ -18,6 +18,7 @@ class PushProviderService
             'webpushr' => new WebPushrProvider(),
             'wonderpush' => new WonderPushProvider(),
             'izooto' => new IZootoProvider(),
+            'exoticpush' => new ExoticPushProvider(),
         ];
     }
 
@@ -303,6 +304,11 @@ class PushProviderService
             'izooto' => [
                 'api_token' => '',
             ],
+            'exoticpush' => [
+                'site_id' => '',
+                'api_key' => '',
+                'auth_token' => '',
+            ],
         ];
     }
 
@@ -370,7 +376,7 @@ class PushProviderService
             }
         }
 
-        foreach (['webpushr', 'wonderpush', 'izooto'] as $providerId) {
+        foreach (['webpushr', 'wonderpush', 'izooto', 'exoticpush'] as $providerId) {
             $incomingProviderConfig = $incoming[$providerId] ?? null;
             if (!is_array($incomingProviderConfig)) {
                 continue;
@@ -477,7 +483,7 @@ class PushProviderService
                 continue;
             }
 
-            foreach (['webpushr', 'wonderpush', 'izooto'] as $providerId) {
+            foreach (['webpushr', 'wonderpush', 'izooto', 'exoticpush'] as $providerId) {
                 $providerConfig = $platformConfig[$providerId] ?? null;
 
                 if (!is_array($providerConfig)) {
@@ -495,6 +501,11 @@ class PushProviderService
 
                 if ($providerId === 'izooto') {
                     $providerConfig = $this->maskProviderSecret($providerConfig, 'api_token');
+                }
+
+                if ($providerId === 'exoticpush') {
+                    $providerConfig = $this->maskProviderSecret($providerConfig, 'api_key');
+                    $providerConfig = $this->maskProviderSecret($providerConfig, 'auth_token');
                 }
 
                 $platformConfig[$providerId] = $providerConfig;

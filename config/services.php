@@ -125,6 +125,10 @@ return [
         'auto_match_min_margin' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_MARGIN', 15),
     ],
 
+    'exotic_push' => [
+        'base_url' => env('EXOTIC_PUSH_BASE_URL', 'https://push.exotic-online.com/api'),
+    ],
+
     'seo_engine' => [
         'enabled' => filter_var(env('SEO_ENGINE_ENABLED', false), FILTER_VALIDATE_BOOL),
         'providers' => array_filter(array_map(
