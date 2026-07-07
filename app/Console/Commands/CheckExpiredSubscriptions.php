@@ -25,19 +25,22 @@ class CheckExpiredSubscriptions extends Command
         try {
             $this->info("Checking at: {$now->toDateTimeString()}");
             
-            // Get active payments that have expired
-            $expiredPayments = Payment::where('status', 'completed')
+            // Active payments that have expired. Stream in batches (chunkById) to
+            // keep memory flat as the payments table grows — loading the whole set
+            // at once risks overrunning the CLI memory_limit. Safe with the status
+            // mutation below: the id-forward cursor never revisits processed rows.
+            $expiredPaymentsQuery = Payment::where('status', 'completed')
                 ->where('end_date', '<=', $now)
-                ->with(['platform', 'product']) 
-                ->get();
+                ->with(['platform', 'product']);
 
-            $this->info("Found {$expiredPayments->count()} potentially expired payments");
+            $this->info("Found {$expiredPaymentsQuery->clone()->count()} potentially expired payments");
 
             $processedCount = 0;
             $failedCount = 0;
 
-            foreach ($expiredPayments as $payment) {
-                try {
+            $expiredPaymentsQuery->chunkById(200, function ($expiredPayments) use (&$processedCount, &$failedCount) {
+                foreach ($expiredPayments as $payment) {
+                    try {
                     $this->info("Processing payment ID: {$payment->id} for user {$payment->user_id}");
                     
                     $result = $this->deactivateUserServices($payment->user_id, $payment);
@@ -65,7 +68,8 @@ class CheckExpiredSubscriptions extends Command
                         'trace' => $e->getTraceAsString()
                     ]);
                 }
-            }
+                }
+            });
 
             $this->info("Processed {$processedCount} expired subscriptions");
             if ($failedCount > 0) {
