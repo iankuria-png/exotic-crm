@@ -153,13 +153,11 @@ class Kernel extends ConsoleKernel
                 ->exists())
             ->sendOutputTo(storage_path('logs/crm_sync_support_board_users.log'));
 
-        // Keep lead intake synced from WordPress profiles flagged needs_payment=1.
-        $schedule->command('crm:import-leads --per-page=100')
-            ->name('crm_import_leads')
-            ->everyFifteenMinutes()
-            ->withoutOverlapping(10)
-            ->onOneServer()
-            ->sendOutputTo(storage_path('logs/crm_import_leads.log'));
+        // Lead intake (crm:import-leads) is intentionally NOT scheduled. It is a
+        // heavy WordPress-backed import and must be run manually/on-demand only:
+        //   php artisan crm:import-leads --per-page=100
+        // (It previously ran every 15 minutes and contributed to resource
+        // exhaustion on the shared host.)
 
         // Sprint 3: execute renewal campaigns for day -7/-3/0/+3 SMS reminders
         $schedule->command('crm:run-renewals')
@@ -300,6 +298,21 @@ class Kernel extends ConsoleKernel
                 ->withoutOverlapping(2)
                 ->onOneServer()
                 ->sendOutputTo(storage_path('logs/queue_worker.log'));
+
+            // Dedicated worker for the heavy SEO auto-optimize queue, kept separate
+            // so long LLM/WP jobs never block the time-sensitive push/alerts queue.
+            // Routed through schedule:run (withoutOverlapping + onOneServer) instead
+            // of a hand-added cron — a duplicate direct `queue:work` cron for this
+            // queue exhausted the account's entry-process limit and 504'd the site.
+            $schedule->command(sprintf(
+                'queue:work %s --queue=auto_optimize --max-time=55 --max-jobs=30 --tries=3 --sleep=3',
+                $queueConnection
+            ))
+                ->name('queue_worker_auto_optimize')
+                ->everyMinute()
+                ->withoutOverlapping(2)
+                ->onOneServer()
+                ->sendOutputTo(storage_path('logs/queue_worker_optimize.log'));
         }
     }
 
