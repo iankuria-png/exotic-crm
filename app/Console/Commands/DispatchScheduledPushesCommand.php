@@ -28,7 +28,7 @@ class DispatchScheduledPushesCommand extends Command
 
         foreach ($dueCampaigns as $campaign) {
             try {
-                $pushCampaignService->executeCampaign($campaign, 0);
+                $pushCampaignService->activateDueScheduledCampaign($campaign, 0);
                 $activatedCampaigns++;
             } catch (PushCampaignActivationBlockedException $exception) {
                 $blockedCampaigns++;

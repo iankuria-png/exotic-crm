@@ -60,6 +60,39 @@ class PushCampaignService
         return $campaign;
     }
 
+    /**
+     * Unattended activation entry point for the cron dispatcher. Auto-heals overdue
+     * pending items by marking them failed before delegating to executeCampaign(),
+     * so a single stuck campaign can't block the whole plan forever. Interactive
+     * callers (API /execute, /schedule) still hit executeCampaign() directly and
+     * receive the strict activation error so operators can act on it.
+     */
+    public function activateDueScheduledCampaign(PushCampaign $campaign, int $actorId): PushCampaign
+    {
+        $referenceAt = now()->utc();
+        $missedCount = $this->markMissedPendingItems($campaign, $referenceAt);
+
+        if ($missedCount > 0) {
+            $this->auditService->record([
+                'platform_id' => (int) $campaign->platform_id,
+                'actor_id' => $actorId ?: null,
+                'action' => CrmAuditAction::PUSH_NOTIFICATION_FAILED,
+                'entity_type' => 'push_campaign',
+                'entity_id' => (int) $campaign->id,
+                'after_state' => ['missed_window_items' => $missedCount],
+                'reason' => 'Auto-healed overdue items during scheduled campaign activation.',
+            ]);
+        }
+
+        $activated = $this->executeCampaign($campaign, $actorId);
+
+        // If every pending item was culled, executeCampaign left the campaign in
+        // 'running' with nothing to queue; close it out now instead of waiting a tick.
+        $this->syncCampaignOutcomeIfDone((int) $activated->id);
+
+        return $activated->fresh();
+    }
+
     public function executeCampaign(PushCampaign $campaign, int $actorId): PushCampaign
     {
         $campaign->loadMissing('platform:id,timezone');
@@ -97,6 +130,7 @@ class PushCampaignService
     public function queueRunningCampaignPendingItems(PushCampaign $campaign, ?Carbon $referenceAtUtc = null): int
     {
         $referenceAt = ($referenceAtUtc?->copy() ?? now())->utc();
+        $this->salvageStuckScheduledItems($campaign, $referenceAt);
         $missedCount = $this->markMissedPendingItems($campaign, $referenceAt);
         $queuedCount = $this->queueDispatchablePendingItems($campaign, $referenceAt);
 
@@ -154,6 +188,27 @@ class PushCampaignService
         return (int) $items->count();
     }
 
+    /**
+     * Reset items stuck in item-status 'scheduled' back to 'pending' so the normal
+     * dispatch flow can re-queue them. Only touches rows whose last update predates
+     * SendPushNotificationJob's uniqueness window ({@see SendPushNotificationJob::$uniqueFor}),
+     * so we never race the queue worker on a job that's still in flight.
+     */
+    private function salvageStuckScheduledItems(PushCampaign $campaign, Carbon $referenceAtUtc): int
+    {
+        $staleThreshold = $referenceAtUtc->copy()->subMinutes(15);
+
+        return PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->where('status', 'scheduled')
+            ->whereNull('sent_at')
+            ->where('updated_at', '<', $staleThreshold->toDateTimeString())
+            ->update([
+                'status' => 'pending',
+                'updated_at' => now(),
+            ]);
+    }
+
     private function markMissedPendingItems(PushCampaign $campaign, Carbon $referenceAtUtc): int
     {
         $missedThreshold = $referenceAtUtc->copy()->subMinutes(PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES);
@@ -189,7 +244,7 @@ class PushCampaignService
         return (int) $missedItems->count();
     }
 
-    private function syncCampaignOutcomeIfDone(int $campaignId): void
+    public function syncCampaignOutcomeIfDone(int $campaignId): void
     {
         $campaign = PushCampaign::query()->find($campaignId);
         if (!$campaign) {

@@ -925,7 +925,7 @@ class CrmPushCampaignTest extends TestCase
             'campaign_id' => $campaign->id,
             'profile_url' => 'https://kenya.example/overdue',
             'custom_message' => 'Overdue',
-            'scheduled_at' => Carbon::parse('2026-03-04 08:30:00', 'Africa/Nairobi')->utc(),
+            'scheduled_at' => Carbon::parse('2026-03-04 08:00:00', 'Africa/Nairobi')->utc(),
             'status' => 'pending',
         ]);
 
@@ -1266,7 +1266,7 @@ class CrmPushCampaignTest extends TestCase
             'upload_batch_id' => 'batch-missed-window',
         ]);
 
-        $scheduledAt = now()->subMinutes(20);
+        $scheduledAt = now()->subMinutes(60);
         $item = PushCampaignItem::query()->create([
             'campaign_id' => $campaign->id,
             'profile_url' => 'https://kenya.example/item',
@@ -1321,15 +1321,18 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('scheduled', $item->fresh()->status);
     }
 
-    public function test_dispatch_command_skips_blocked_scheduled_campaign_and_continues_running_campaigns(): void
+    public function test_dispatch_command_auto_heals_overdue_scheduled_campaign_and_continues_running_campaigns(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-03-04 16:00:00', 'Africa/Nairobi')->utc());
 
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
         $admin = $this->createUser('admin', [$platform->id]);
 
-        $blockedCampaign = PushCampaign::query()->create([
-            'name' => 'Blocked scheduled campaign',
+        // Previously-stuck scheduled campaign: its only item is well past the grace
+        // window, which used to block activation forever. The cron path now marks
+        // the overdue item failed and completes the campaign instead of stalling.
+        $stuckCampaign = PushCampaign::query()->create([
+            'name' => 'Overdue scheduled campaign',
             'platform_id' => $platform->id,
             'status' => 'scheduled',
             'created_by' => $admin->id,
@@ -1337,8 +1340,8 @@ class CrmPushCampaignTest extends TestCase
             'scheduled_at' => now()->subMinute(),
         ]);
 
-        PushCampaignItem::query()->create([
-            'campaign_id' => $blockedCampaign->id,
+        $overdueItem = PushCampaignItem::query()->create([
+            'campaign_id' => $stuckCampaign->id,
             'profile_url' => 'https://kenya.example/old-item',
             'custom_message' => 'Old item',
             'scheduled_at' => Carbon::parse('2026-03-04 02:00:00', 'Africa/Nairobi')->utc(),
@@ -1367,9 +1370,174 @@ class CrmPushCampaignTest extends TestCase
 
         Queue::assertPushed(SendPushNotificationJob::class, 1);
         $this->assertSame('scheduled', (string) $runningItem->fresh()->status);
-        $this->assertSame('scheduled', (string) $blockedCampaign->fresh()->status);
+
+        $freshOverdueItem = $overdueItem->fresh();
+        $this->assertSame('failed', (string) $freshOverdueItem->status);
+        $this->assertStringStartsWith('missed_window:', (string) $freshOverdueItem->error_message);
+        $this->assertSame('failed', (string) $stuckCampaign->fresh()->status);
 
         Carbon::setTestNow();
+    }
+
+    public function test_dispatch_command_activates_scheduled_campaign_when_only_send_now_items_remain_after_self_heal(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 16:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Mixed overdue and send-now campaign',
+            'platform_id' => $platform->id,
+            'status' => 'scheduled',
+            'created_by' => $admin->id,
+            'upload_batch_id' => 'batch-self-heal-mixed',
+            'scheduled_at' => now()->subMinute(),
+        ]);
+
+        // Well past the 45-minute grace — should be auto-healed to failed.
+        $overdueItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/old',
+            'custom_message' => 'Old',
+            'scheduled_at' => Carbon::parse('2026-03-04 02:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        // Within window — should still activate and dispatch.
+        $viableItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/now',
+            'custom_message' => 'Now',
+            'scheduled_at' => now(),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+
+        $this->artisan('crm:dispatch-scheduled-pushes')->assertExitCode(0);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 1);
+        $this->assertSame('failed', (string) $overdueItem->fresh()->status);
+        $this->assertSame('scheduled', (string) $viableItem->fresh()->status);
+        $this->assertSame('running', (string) $campaign->fresh()->status);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_running_campaign_salvages_items_stuck_in_scheduled_state(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Stuck scheduled items campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $admin->id,
+            'upload_batch_id' => 'batch-stuck-scheduled',
+        ]);
+
+        // Item is item-status 'scheduled' (a job was previously dispatched) but the
+        // queue worker never ran and its updated_at is stale, so the salvage pass
+        // should reset it to pending and the dispatcher should re-queue it.
+        $stuckItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/stuck',
+            'custom_message' => 'Stuck',
+            'scheduled_at' => now()->addHours(2),
+            'status' => 'scheduled',
+            'sent_at' => null,
+        ]);
+        // Manually backdate updated_at past the 15-minute uniqueness margin.
+        PushCampaignItem::query()->whereKey($stuckItem->id)
+            ->update(['updated_at' => now()->subMinutes(30)]);
+
+        // A freshly dispatched scheduled item (updated in the last few seconds)
+        // must NOT be salvaged — the worker may still be processing it.
+        $freshItem = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/fresh',
+            'custom_message' => 'Fresh',
+            'scheduled_at' => now()->addHours(2),
+            'status' => 'scheduled',
+            'sent_at' => null,
+        ]);
+
+        Queue::fake();
+
+        $this->artisan('crm:dispatch-scheduled-pushes')->assertExitCode(0);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 1);
+        $this->assertSame('scheduled', (string) $stuckItem->fresh()->status);
+        $this->assertSame('scheduled', (string) $freshItem->fresh()->status);
+    }
+
+    public function test_send_push_job_re_resolves_missing_image_and_url_from_client(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 424242,
+            'name' => 'Aisha',
+            'phone_normalized' => '254700000042',
+            'city' => 'Mombasa',
+            'main_image_url' => 'https://cdn.kenya.example/aisha.jpg',
+            'wp_profile_permalink' => 'https://kenya.example/escort/aisha/',
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Fallback resolve campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-fallback-resolve',
+            'provider' => 'exoticpush',
+        ]);
+
+        // Snapshot at build time: empty image and the WP /?p= fallback URL.
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 424242,
+            'profile_name' => 'Aisha',
+            'profile_city' => 'Mombasa',
+            'profile_image_url' => null,
+            'profile_url' => 'https://kenya.example/?p=424242',
+            'custom_message' => 'Hi from Aisha',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $capturedNotification = null;
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
+                $capturedNotification = $notification;
+                return [
+                    'success' => true,
+                    'provider' => 'exoticpush',
+                    'provider_notification_id' => 'notif-1',
+                    'provider_response' => ['success' => true],
+                ];
+            });
+        $this->app->instance(PushProviderService::class, $mock);
+
+        (new SendPushNotificationJob((int) $item->id))->handle(
+            $mock,
+            app(\App\Services\AuditService::class)
+        );
+
+        $this->assertSame('https://cdn.kenya.example/aisha.jpg', $capturedNotification['icon_url']);
+        $this->assertSame('https://cdn.kenya.example/aisha.jpg', $capturedNotification['image_url']);
+        $this->assertSame('https://kenya.example/escort/aisha/', $capturedNotification['target_url']);
+
+        $fresh = $item->fresh();
+        $this->assertSame('https://cdn.kenya.example/aisha.jpg', (string) $fresh->profile_image_url);
+        $this->assertSame('https://kenya.example/escort/aisha/', (string) $fresh->profile_url);
     }
 
     public function test_subscribers_endpoint_is_platform_scoped(): void

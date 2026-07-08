@@ -11,7 +11,7 @@ class PushCampaignDispatchReadinessService
 {
     public const DISPATCH_WINDOW_HOURS = 24;
 
-    public const LATE_GRACE_MINUTES = 15;
+    public const LATE_GRACE_MINUTES = 45;
 
     private const OVERDUE_SAMPLE_LIMIT = 5;
 

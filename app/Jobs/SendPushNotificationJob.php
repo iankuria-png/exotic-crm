@@ -106,13 +106,41 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             $scheduleAt = $item->scheduled_at->toIso8601String();
         }
 
-        // Resolve city: use stored value, or look up from linked client as fallback.
+        // Resolve city / image / URL against the linked client at send time. The item
+        // is a snapshot from campaign-build time; if the client's data was incomplete
+        // then (WP sync lag, image just uploaded, pretty permalink synced later), the
+        // snapshot is stale. Re-reading now and persisting back keeps future retries
+        // and analytics consistent.
+        $clientRow = null;
+        if ($item->client_id
+            && (!$item->profile_city || !$item->profile_image_url || $this->isFallbackProfileUrl((string) $item->profile_url))
+        ) {
+            $clientRow = Client::query()
+                ->where('id', (int) $item->client_id)
+                ->first(['city', 'main_image_url', 'wp_profile_permalink']);
+        }
+
         $city = $item->profile_city;
-        if (!$city && $item->client_id) {
-            $city = Client::query()->where('id', (int) $item->client_id)->value('city');
-            if ($city) {
-                $item->forceFill(['profile_city' => $city])->save();
-            }
+        if (!$city && $clientRow?->city) {
+            $city = $clientRow->city;
+            $item->forceFill(['profile_city' => $city])->save();
+        }
+
+        $imageUrl = $item->profile_image_url;
+        if (!$imageUrl && $clientRow?->main_image_url) {
+            $imageUrl = $clientRow->main_image_url;
+            $item->forceFill(['profile_image_url' => $imageUrl])->save();
+        }
+        $imageUrl = $imageUrl ?: null;
+
+        // Prefer the client's synced pretty permalink over the /?p=NN fallback that
+        // WordPress can silently redirect to the homepage when the target post is
+        // archived/private/deleted (issue #3).
+        $targetUrl = (string) $item->profile_url;
+        $permalink = trim((string) ($clientRow?->wp_profile_permalink ?? ''));
+        if ($permalink !== '' && ($targetUrl === '' || $this->isFallbackProfileUrl($targetUrl))) {
+            $targetUrl = $permalink;
+            $item->forceFill(['profile_url' => $targetUrl])->save();
         }
 
         $title = $item->profile_name ?: 'New profile';
@@ -122,14 +150,13 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
         // Use profile image as both notification icon (small) and image (large banner).
         // Skip the HEAD pre-check — it can be blocked by Cloudflare bot protection on
-        // the production server, causing images to be silently dropped. WebPushr handles
-        // unreachable images gracefully by simply omitting them from the notification.
-        $imageUrl = $item->profile_image_url ?: null;
+        // the production server, causing images to be silently dropped. The provider
+        // handles unreachable images gracefully by omitting them from the notification.
 
         $notification = [
             'title' => $title,
             'message' => $item->custom_message,
-            'target_url' => $item->profile_url,
+            'target_url' => $targetUrl,
             'icon_url' => $imageUrl,
             'image_url' => $imageUrl,
             'campaign_name' => $campaign->name,
@@ -203,6 +230,17 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
     public function backoff(): array
     {
         return [30, 60, 120];
+    }
+
+    /**
+     * True when the URL is the "{domain}/?p={wp_post_id}" fallback shape produced by
+     * {@see \App\Support\ClientProfileUrl::resolve()} when a client has no synced
+     * pretty permalink. WordPress may fail to redirect these when the post has since
+     * been unpublished, so we prefer the client's wp_profile_url if it's available.
+     */
+    private function isFallbackProfileUrl(string $url): bool
+    {
+        return $url !== '' && (bool) preg_match('#/\?p=\d+/?$#', $url);
     }
 
     private function completeCampaignIfDone(int $campaignId): void
