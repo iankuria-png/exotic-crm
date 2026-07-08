@@ -3283,12 +3283,15 @@ class PaymentQueueController extends Controller
         $search = trim((string) ($request->query('search') ?? ''));
         $confidenceFilter = trim((string) ($request->query('confidence') ?? ''));
 
+        // Admins resolve to null (all markets); non-admins get an array to scope by.
+        // Guard the whereIn so null never reaches count() — passing null throws a
+        // TypeError and 500s the whole screen.
         $query = Payment::query()
             ->with(['platform:id,name,phone_prefix,currency_code', 'client:id,name,phone_normalized,profile_status,wp_post_id'])
             ->where('source', 'mpesa_xml_import')
             ->whereNotNull('client_id')
             ->whereNull('deal_id')
-            ->whereIn('platform_id', $platformIds);
+            ->when(is_array($platformIds), fn ($q) => $q->whereIn('platform_id', $platformIds));
 
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
@@ -3325,7 +3328,7 @@ class PaymentQueueController extends Controller
             ->where('source', 'mpesa_xml_import')
             ->whereNotNull('client_id')
             ->whereNull('deal_id')
-            ->whereIn('platform_id', $platformIds)
+            ->when(is_array($platformIds), fn ($q) => $q->whereIn('platform_id', $platformIds))
             ->count();
 
         return response()->json([

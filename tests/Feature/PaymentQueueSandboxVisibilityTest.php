@@ -370,6 +370,36 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('meta.total_review', 0);
     }
 
+    public function test_mpesa_review_loads_for_admin_with_unrestricted_market_access(): void
+    {
+        // Regression: admins resolve to null platform access (all markets). Passing
+        // that null straight to whereIn('platform_id', ...) threw a TypeError and
+        // 500'd the entire M-Pesa review screen for admin users.
+        $platform = $this->createPlatform();
+        $admin = $this->createUser($platform, 'admin');
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'phone_normalized' => '254700000123',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'MPESA-REVIEW-ADMIN-001',
+            'source' => 'mpesa_xml_import',
+            'client_id' => $client->id,
+            'deal_id' => null,
+            'reconciliation_confidence' => 'high',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/payments/mpesa-review');
+
+        $response->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('meta.total_review', 1);
+    }
+
     public function test_payment_workspace_can_filter_by_resolution_code(): void
     {
         $platform = $this->createPlatform();
