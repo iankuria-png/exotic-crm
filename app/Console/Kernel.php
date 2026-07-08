@@ -284,13 +284,16 @@ class Kernel extends ConsoleKernel
 
         // Queue worker: processes push queue first (time-sensitive), then client sync queues, alert jobs, then default queue.
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
-        // --queue=push,sync-clients,sync-clients-reconcile,alerts,default ensures market syncs are handled in the background without blocking alerts.
+        // --queue=push,sync-clients,sync-clients-reconcile,alerts,default,kyc-fanout ensures market syncs are handled in the background without blocking alerts.
+        // kyc-fanout is last (lowest priority) so KYC status pushes to WordPress only
+        // drain when higher queues are idle. Previously NO worker listened on it, so
+        // PushKycStatusJob never ran and KYC status never synced to the WP sites.
         // --max-jobs=100 prevents memory leaks during long-running batches.
         $queueConnection = (string) config('queue.default', 'sync');
 
         if ($queueConnection !== 'sync') {
             $schedule->command(sprintf(
-                'queue:work %s --queue=push,sync-clients,sync-clients-reconcile,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
+                'queue:work %s --queue=push,sync-clients,sync-clients-reconcile,alerts,default,kyc-fanout --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
                 $queueConnection
             ))
                 ->name('queue_worker')
