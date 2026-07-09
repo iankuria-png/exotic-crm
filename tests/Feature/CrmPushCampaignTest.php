@@ -1078,6 +1078,42 @@ class CrmPushCampaignTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_scheduler_does_not_requeue_future_scheduled_push_items(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Future scheduled campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-future-scheduled',
+            'activated_at' => now()->utc(),
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/future',
+            'custom_message' => 'Future send',
+            'scheduled_at' => now()->utc()->addHours(2),
+            'status' => 'scheduled',
+            'updated_at' => now()->utc()->subMinutes(30),
+        ]);
+
+        Queue::fake();
+
+        $queuedCount = app(PushCampaignService::class)
+            ->queueRunningCampaignPendingItems($campaign, now()->utc());
+
+        $this->assertSame(0, $queuedCount);
+        $this->assertSame('scheduled', $item->fresh()->status);
+        Queue::assertNotPushed(SendPushNotificationJob::class);
+
+        Carbon::setTestNow();
+    }
+
     public function test_schedule_endpoint_blocks_activation_that_would_make_items_overdue(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc());
@@ -1438,14 +1474,14 @@ class CrmPushCampaignTest extends TestCase
             'upload_batch_id' => 'batch-stuck-scheduled',
         ]);
 
-        // Item is item-status 'scheduled' (a job was previously dispatched) but the
-        // queue worker never ran and its updated_at is stale, so the salvage pass
-        // should reset it to pending and the dispatcher should re-queue it.
+        // Item is item-status 'scheduled' (a job was previously dispatched), its
+        // scheduled window is already due, and its updated_at is stale, so the
+        // salvage pass should reset it to pending and re-queue it.
         $stuckItem = PushCampaignItem::query()->create([
             'campaign_id' => $campaign->id,
             'profile_url' => 'https://kenya.example/stuck',
             'custom_message' => 'Stuck',
-            'scheduled_at' => now()->addHours(2),
+            'scheduled_at' => now()->subMinutes(5),
             'status' => 'scheduled',
             'sent_at' => null,
         ]);

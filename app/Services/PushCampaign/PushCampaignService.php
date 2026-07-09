@@ -202,6 +202,10 @@ class PushCampaignService
             ->where('campaign_id', (int) $campaign->id)
             ->where('status', 'scheduled')
             ->whereNull('sent_at')
+            ->where(function ($query) use ($referenceAtUtc) {
+                $query->whereNull('scheduled_at')
+                    ->orWhere('scheduled_at', '<=', $referenceAtUtc->toDateTimeString());
+            })
             ->where('updated_at', '<', $staleThreshold->toDateTimeString())
             ->update([
                 'status' => 'pending',
