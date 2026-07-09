@@ -568,7 +568,7 @@ export default function SystemHealthWorkspace({
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                         <div>
                             <h3 className="text-base font-semibold text-slate-900">Client Sync</h3>
-                            <p className="text-xs text-slate-500">WordPress profile sync health, queue load, and active schedule settings.</p>
+                            <p className="text-xs text-slate-500">WordPress profile sync coverage, queue load, and schedule health.</p>
                         </div>
                         <div className="flex items-center gap-2">
                             <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(clientSync?.status || 'pending')}`}>
@@ -588,7 +588,7 @@ export default function SystemHealthWorkspace({
                                 <p className="mt-1 text-xs text-slate-500">full {clientSyncConfig.full_schedule || 'not configured'}</p>
                             </div>
                             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Window</p>
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Batch Window</p>
                                 <p className="mt-2 text-lg font-semibold text-slate-900">
                                     {formatNumber(clientSyncConfig.delta_max_platforms_per_run)} markets
                                 </p>
@@ -604,12 +604,15 @@ export default function SystemHealthWorkspace({
                                 </p>
                             </div>
                             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Market Health</p>
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Market Health</p>
                                 <p className={`mt-2 text-lg font-semibold ${(clientSyncSummary.error_platforms || clientSyncSummary.failed_jobs || 0) > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
-                                    {formatNumber(clientSyncSummary.wp_ready_platforms)} / {formatNumber(clientSyncSummary.active_platforms)}
+                                    {formatNumber(clientSyncSummary.healthy_platforms)} / {formatNumber(clientSyncSummary.active_platforms)}
                                 </p>
                                 <p className="mt-1 text-xs text-slate-500">
-                                    {formatNumber(clientSyncSummary.stale_platforms)} stale, {formatNumber(clientSyncSummary.error_platforms)} errors
+                                    {formatNumber(clientSyncSummary.wp_ready_platforms)} / {formatNumber(clientSyncSummary.total_platforms)} WP-ready
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    {formatNumber(clientSyncSummary.attention_platforms)} need attention
                                 </p>
                             </div>
                         </div>

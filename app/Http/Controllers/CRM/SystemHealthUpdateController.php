@@ -414,6 +414,12 @@ class SystemHealthUpdateController extends Controller
             'total_platforms' => $rows->count(),
             'active_platforms' => $rows->where('is_active', true)->count(),
             'wp_ready_platforms' => $rows->where('credentials_ready', true)->count(),
+            'active_wp_ready_platforms' => $rows->where('is_active', true)->where('credentials_ready', true)->count(),
+            'healthy_platforms' => $rows->where('is_active', true)->where('status', 'healthy')->count(),
+            'attention_platforms' => $rows
+                ->where('is_active', true)
+                ->whereIn('status', ['error', 'failed', 'stale', 'missing_credentials'])
+                ->count(),
             'stale_platforms' => $rows->where('status', 'stale')->count(),
             'error_platforms' => $rows->whereIn('status', ['error', 'failed'])->count(),
             'running_runs' => (int) ($runStatusCounts[ClientSyncRun::STATUS_RUNNING] ?? 0),
