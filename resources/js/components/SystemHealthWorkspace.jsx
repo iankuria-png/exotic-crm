@@ -7,7 +7,7 @@ function statusChip(status) {
     if (['connected', 'healthy', 'success', 'complete', 'sent'].includes(status)) {
         return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     }
-    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'processing', 'stale', 'missing', 'skipped', 'running', 'idle', 'rolling_back'].includes(status)) {
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'processing', 'stale', 'missing', 'missing_credentials', 'skipped', 'running', 'idle', 'rolling_back', 'inactive'].includes(status)) {
         return 'bg-amber-50 text-amber-700 ring-amber-200';
     }
     return 'bg-rose-50 text-rose-700 ring-rose-200';
@@ -18,6 +18,11 @@ function formatDateTime(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return 'Never';
     return date.toLocaleString();
+}
+
+function formatNumber(value) {
+    const number = Number(value || 0);
+    return new Intl.NumberFormat().format(Number.isFinite(number) ? number : 0);
 }
 
 function extractProfileCount(latestResult, platform) {
@@ -279,6 +284,13 @@ export default function SystemHealthWorkspace({
         refetchInterval: 15000,
     });
 
+    const clientSyncQuery = useQuery({
+        queryKey: ['system-health-client-sync'],
+        queryFn: () => api.get('/crm/settings/system-health/client-sync').then((r) => r.data),
+        enabled: canViewUpdates,
+        refetchInterval: 30000,
+    });
+
     const retryFailedMutation = useMutation({
         mutationFn: () => api.post('/crm/settings/system-health/queue-retry').then((r) => r.data),
         onSuccess: (data) => {
@@ -337,6 +349,17 @@ export default function SystemHealthWorkspace({
     const [copiedQueueCron, setCopiedQueueCron] = useState(false);
     const pulseUrl = queueStatusQuery.data?.pulse_url || '/pulse';
     const pulseCheckCommand = queueStatusQuery.data?.pulse_check_command || null;
+    const clientSync = clientSyncQuery.data || null;
+    const clientSyncSummary = clientSync?.summary || {};
+    const clientSyncConfig = clientSync?.configuration || {};
+    const clientSyncQueues = clientSync?.queues || {};
+    const clientSyncPlatforms = Array.isArray(clientSync?.platforms) ? clientSync.platforms : [];
+    const clientSyncAttentionPlatforms = clientSyncPlatforms
+        .filter((platform) => ['error', 'failed', 'stale', 'missing_credentials', 'queued', 'running'].includes(platform.status))
+        .slice(0, 10);
+    const visibleClientSyncPlatforms = clientSyncAttentionPlatforms.length > 0
+        ? clientSyncAttentionPlatforms
+        : clientSyncPlatforms.slice(0, 10);
 
     const handleBackupUpload = async (e) => {
         const file = e.target.files?.[0];
@@ -539,6 +562,155 @@ export default function SystemHealthWorkspace({
                     </div>
                 ))}
             </section>
+
+            {canViewUpdates ? (
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                        <div>
+                            <h3 className="text-base font-semibold text-slate-900">Client Sync</h3>
+                            <p className="text-xs text-slate-500">WordPress profile sync health, queue load, and active schedule settings.</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(clientSync?.status || 'pending')}`}>
+                                {(clientSync?.status || (clientSyncQuery.isLoading ? 'loading' : 'pending')).replaceAll('_', ' ')}
+                            </span>
+                            <button type="button" onClick={() => clientSyncQuery.refetch()} className="crm-btn-secondary px-3 py-2">
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4 p-4">
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Schedule</p>
+                                <p className="mt-2 text-lg font-semibold text-slate-900">{clientSyncConfig.delta_schedule || 'Unknown'}</p>
+                                <p className="mt-1 text-xs text-slate-500">full {clientSyncConfig.full_schedule || 'not configured'}</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Window</p>
+                                <p className="mt-2 text-lg font-semibold text-slate-900">
+                                    {formatNumber(clientSyncConfig.delta_max_platforms_per_run)} markets
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">{formatNumber(clientSyncConfig.per_page)} profiles per request</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Sync Queue</p>
+                                <p className="mt-2 text-lg font-semibold text-slate-900">
+                                    {formatNumber((clientSyncQueues['sync-clients']?.pending || 0) + (clientSyncQueues['sync-clients-reconcile']?.pending || 0))}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    {formatNumber((clientSyncQueues['sync-clients']?.processing || 0) + (clientSyncQueues['sync-clients-reconcile']?.processing || 0))} processing
+                                </p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Market Health</p>
+                                <p className={`mt-2 text-lg font-semibold ${(clientSyncSummary.error_platforms || clientSyncSummary.failed_jobs || 0) > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                                    {formatNumber(clientSyncSummary.wp_ready_platforms)} / {formatNumber(clientSyncSummary.active_platforms)}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    {formatNumber(clientSyncSummary.stale_platforms)} stale, {formatNumber(clientSyncSummary.error_platforms)} errors
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+                            <div className="overflow-hidden rounded-lg border border-slate-200">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+                                    <p className="text-sm font-semibold text-slate-900">
+                                        {clientSyncAttentionPlatforms.length > 0 ? 'Markets Needing Attention' : 'Market Snapshot'}
+                                    </p>
+                                    <p className="text-xs text-slate-500">{formatNumber(clientSyncSummary.total_platforms)} configured</p>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-slate-200">
+                                        <thead className="bg-white">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Market</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Protocol</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Clients</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Last Sync</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                            {clientSyncQuery.isLoading ? (
+                                                <tr>
+                                                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-500">Loading client sync status...</td>
+                                                </tr>
+                                            ) : visibleClientSyncPlatforms.length > 0 ? visibleClientSyncPlatforms.map((platform) => (
+                                                <tr key={platform.platform_id}>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        <p className="font-medium text-slate-900">{platform.platform_name}</p>
+                                                        <p className="break-all text-slate-500">{platform.domain || platform.country || 'No domain'}</p>
+                                                        {platform.last_error ? <p className="mt-1 max-w-sm break-words text-rose-600">{platform.last_error}</p> : null}
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.status)}`}>
+                                                            {String(platform.status || 'unknown').replaceAll('_', ' ')}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        <p className="font-medium text-slate-900">{platform.protocol || 'v1'}</p>
+                                                        <p className="text-slate-500">{platform.capability_status || 'not probed'}</p>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        <p className="font-medium text-slate-900">{formatNumber(platform.clients_total)}</p>
+                                                        <p className="text-slate-500">{formatNumber(platform.clients_published)} published</p>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        <p>{formatDateTime(platform.last_synced_at)}</p>
+                                                        {platform.latest_run ? (
+                                                            <p className="text-slate-500">
+                                                                {platform.latest_run.mode} · {formatNumber(platform.latest_run.processed)} processed
+                                                            </p>
+                                                        ) : null}
+                                                    </td>
+                                                </tr>
+                                            )) : (
+                                                <tr>
+                                                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-500">No market sync records found.</td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <p className="text-sm font-semibold text-slate-900">Recent Runs</p>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(clientSync?.status || 'pending')}`}>
+                                        {(clientSync?.status || 'pending').replaceAll('_', ' ')}
+                                    </span>
+                                </div>
+                                <div className="mt-3 space-y-2">
+                                    {(clientSync?.recent_runs || []).length ? clientSync.recent_runs.slice(0, 6).map((run) => (
+                                        <div key={run.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-medium text-slate-900">{run.platform_name || `Market #${run.platform_id}`}</p>
+                                                    <p className="text-xs text-slate-500">{run.mode} · {run.origin} · {formatDateTime(run.created_at)}</p>
+                                                </div>
+                                                <span className={`shrink-0 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(run.status)}`}>
+                                                    {String(run.status || 'unknown').replaceAll('_', ' ')}
+                                                </span>
+                                            </div>
+                                            <p className="mt-1 text-xs text-slate-600">
+                                                {formatNumber(run.processed)} processed, {formatNumber(run.errors)} errors
+                                            </p>
+                                        </div>
+                                    )) : (
+                                        <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-500">
+                                            No recent client sync runs.
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            ) : null}
 
             {canViewUpdates ? (
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">

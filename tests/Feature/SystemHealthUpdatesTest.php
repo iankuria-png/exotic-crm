@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\SendPaymentFailureAlertRecipientJob;
 use App\Jobs\SendPaymentFailureAlertsJob;
 use App\Models\Client;
+use App\Models\ClientSyncRun;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
@@ -334,6 +335,81 @@ class SystemHealthUpdatesTest extends TestCase
             ->assertJsonPath('latest_failed_alert_job', 'SendPaymentFailureAlertRecipientJob')
             ->assertJsonPath('recent_alert_attempts.0.attempt_type', 'payment_failure_alert_sms')
             ->assertJsonPath('recent_alert_attempts.0.recipient_name', 'Ops Admin');
+    }
+
+    public function test_client_sync_status_includes_config_queue_and_market_health(): void
+    {
+        config([
+            'queue.default' => 'database',
+            'services.client_sync.per_page' => 100,
+            'services.client_sync.delta_max_platforms_per_run' => 3,
+            'services.client_sync.delta_stagger_seconds' => 120,
+            'services.client_sync.reconcile_stagger_seconds' => 180,
+        ]);
+
+        $user = $this->createUser('sub_admin');
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'domain' => 'kenya.example.test',
+            'sync_last_status' => 'success',
+            'sync_last_synced_at' => now()->subMinutes(20),
+            'client_sync_protocol' => 'v2',
+            'client_sync_capability_status' => 'v2',
+            'client_sync_checkpoint_at' => now()->subMinutes(20),
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 101,
+            'name' => 'Published Client',
+            'profile_status' => 'publish',
+            'last_synced_at' => now(),
+        ]);
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 102,
+            'name' => 'Draft Client',
+            'profile_status' => 'draft',
+            'last_synced_at' => now(),
+        ]);
+
+        ClientSyncRun::query()->create([
+            'platform_id' => $platform->id,
+            'origin' => 'scheduler',
+            'mode' => 'delta',
+            'protocol' => 'v2',
+            'status' => ClientSyncRun::STATUS_COMPLETED,
+            'processed' => 2,
+            'created' => 1,
+            'updated' => 1,
+            'started_at' => now()->subMinutes(5),
+            'finished_at' => now()->subMinutes(4),
+        ]);
+
+        DB::table('jobs')->insert([
+            'queue' => 'sync-clients',
+            'payload' => json_encode(['displayName' => 'App\\Jobs\\RunClientSyncJob'], JSON_UNESCAPED_SLASHES),
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => now()->timestamp,
+            'created_at' => now()->timestamp,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/system-health/client-sync')
+            ->assertOk()
+            ->assertJsonPath('configuration.delta_schedule', 'every 30 minutes')
+            ->assertJsonPath('configuration.per_page', 100)
+            ->assertJsonPath('configuration.delta_max_platforms_per_run', 3)
+            ->assertJsonPath('queues.sync-clients.pending', 1)
+            ->assertJsonPath('summary.total_platforms', 1)
+            ->assertJsonPath('summary.wp_ready_platforms', 1)
+            ->assertJsonPath('platforms.0.platform_name', 'Kenya')
+            ->assertJsonPath('platforms.0.status', 'healthy')
+            ->assertJsonPath('platforms.0.clients_total', 2)
+            ->assertJsonPath('platforms.0.clients_published', 1)
+            ->assertJsonPath('recent_runs.0.status', ClientSyncRun::STATUS_COMPLETED);
     }
 
     private function createUser(string $role, array $assignedMarketIds = []): User

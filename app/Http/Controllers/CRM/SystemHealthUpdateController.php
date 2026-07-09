@@ -5,6 +5,8 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Jobs\SendPaymentFailureAlertRecipientJob;
 use App\Jobs\SendPaymentFailureAlertsJob;
+use App\Models\Client;
+use App\Models\ClientSyncRun;
 use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\DeploymentStatusService;
@@ -286,6 +288,238 @@ class SystemHealthUpdateController extends Controller
                 config('deployment.php_binary', '/usr/local/bin/php')
             ),
         ]);
+    }
+
+    public function clientSyncStatus(): JsonResponse
+    {
+        $syncQueues = ['sync-clients', 'sync-clients-reconcile'];
+        $config = config('services.client_sync', []);
+
+        $platforms = Platform::query()
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+                'domain',
+                'country',
+                'is_active',
+                'wp_api_url',
+                'wp_api_user',
+                'wp_api_password',
+                'sync_last_synced_at',
+                'sync_last_status',
+                'sync_last_error',
+                'client_sync_protocol',
+                'client_sync_contract_version',
+                'client_sync_capability_status',
+                'client_sync_capability_checked_at',
+                'client_sync_checkpoint_at',
+                'client_sync_last_reconciled_at',
+            ]);
+
+        $platformIds = $platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $clientCounts = Client::query()
+            ->selectRaw('platform_id, COUNT(*) AS total, SUM(CASE WHEN profile_status = ? THEN 1 ELSE 0 END) AS published', ['publish'])
+            ->whereIn('platform_id', $platformIds)
+            ->groupBy('platform_id')
+            ->get()
+            ->keyBy('platform_id');
+
+        $latestRunIds = ClientSyncRun::query()
+            ->selectRaw('MAX(id) AS id')
+            ->whereIn('platform_id', $platformIds)
+            ->groupBy('platform_id')
+            ->pluck('id');
+
+        $latestRuns = ClientSyncRun::query()
+            ->with('initiatedBy:id,name,email')
+            ->whereIn('id', $latestRunIds)
+            ->get()
+            ->keyBy('platform_id');
+
+        $recentRuns = ClientSyncRun::query()
+            ->with('platform:id,name,domain')
+            ->latest('id')
+            ->limit(12)
+            ->get()
+            ->map(fn (ClientSyncRun $run): array => $this->serializeClientSyncRun($run))
+            ->values();
+
+        $queueRows = DB::table('jobs')
+            ->selectRaw('queue, COUNT(*) AS total, SUM(CASE WHEN reserved_at IS NULL THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN reserved_at IS NOT NULL THEN 1 ELSE 0 END) AS processing')
+            ->whereIn('queue', $syncQueues)
+            ->groupBy('queue')
+            ->get()
+            ->keyBy('queue');
+
+        $syncFailedJobs = DB::table('failed_jobs')
+            ->where(function ($query) use ($syncQueues) {
+                $query->whereIn('queue', $syncQueues)
+                    ->orWhere('payload', 'like', '%RunClientSyncJob%');
+            })
+            ->count();
+
+        $runStatusCounts = ClientSyncRun::query()
+            ->selectRaw('status, COUNT(*) AS total')
+            ->groupBy('status')
+            ->pluck('total', 'status')
+            ->map(fn ($count) => (int) $count)
+            ->all();
+
+        $runModeCounts = ClientSyncRun::query()
+            ->selectRaw('mode, COUNT(*) AS total')
+            ->groupBy('mode')
+            ->pluck('total', 'mode')
+            ->map(fn ($count) => (int) $count)
+            ->all();
+
+        $staleAfter = now()->subHours(2);
+        $rows = $platforms
+            ->map(function (Platform $platform) use ($clientCounts, $latestRuns, $staleAfter): array {
+                $latestRun = $latestRuns->get((int) $platform->id);
+                $counts = $clientCounts->get((int) $platform->id);
+                $credentialsReady = filled($platform->wp_api_url)
+                    && filled($platform->wp_api_user)
+                    && filled($platform->wp_api_password);
+                $lastSyncedAt = $platform->sync_last_synced_at;
+                $isStale = (bool) $platform->is_active
+                    && $credentialsReady
+                    && (! $lastSyncedAt || $lastSyncedAt->lt($staleAfter));
+
+                return [
+                    'platform_id' => (int) $platform->id,
+                    'platform_name' => $platform->name,
+                    'domain' => $platform->domain,
+                    'country' => $platform->country,
+                    'is_active' => (bool) $platform->is_active,
+                    'credentials_ready' => $credentialsReady,
+                    'status' => $this->platformClientSyncStatus($platform, $credentialsReady, $isStale, $latestRun),
+                    'protocol' => $platform->client_sync_protocol ?: 'v1',
+                    'contract_version' => $platform->client_sync_contract_version,
+                    'capability_status' => $platform->client_sync_capability_status,
+                    'capability_checked_at' => optional($platform->client_sync_capability_checked_at)->toDateTimeString(),
+                    'last_synced_at' => optional($lastSyncedAt)->toDateTimeString(),
+                    'last_status' => $platform->sync_last_status ?: 'unknown',
+                    'last_error' => $platform->sync_last_error ? Str::limit((string) $platform->sync_last_error, 180) : null,
+                    'checkpoint_at' => optional($platform->client_sync_checkpoint_at)->toDateTimeString(),
+                    'last_reconciled_at' => optional($platform->client_sync_last_reconciled_at)->toDateTimeString(),
+                    'clients_total' => (int) ($counts->total ?? 0),
+                    'clients_published' => (int) ($counts->published ?? 0),
+                    'latest_run' => $latestRun ? $this->serializeClientSyncRun($latestRun) : null,
+                ];
+            })
+            ->values();
+
+        $summary = [
+            'total_platforms' => $rows->count(),
+            'active_platforms' => $rows->where('is_active', true)->count(),
+            'wp_ready_platforms' => $rows->where('credentials_ready', true)->count(),
+            'stale_platforms' => $rows->where('status', 'stale')->count(),
+            'error_platforms' => $rows->whereIn('status', ['error', 'failed'])->count(),
+            'running_runs' => (int) ($runStatusCounts[ClientSyncRun::STATUS_RUNNING] ?? 0),
+            'queued_runs' => (int) ($runStatusCounts[ClientSyncRun::STATUS_QUEUED] ?? 0),
+            'failed_jobs' => (int) $syncFailedJobs,
+        ];
+
+        $status = 'healthy';
+        if ($summary['error_platforms'] > 0 || $summary['failed_jobs'] > 0) {
+            $status = 'degraded';
+        } elseif ($summary['stale_platforms'] > 0) {
+            $status = 'stale';
+        } elseif ($summary['running_runs'] > 0 || $summary['queued_runs'] > 0) {
+            $status = 'processing';
+        }
+
+        return response()->json([
+            'status' => $status,
+            'summary' => $summary,
+            'configuration' => [
+                'delta_schedule' => 'every 30 minutes',
+                'full_schedule' => 'daily at 02:05 UTC',
+                'per_page' => (int) ($config['per_page'] ?? 100),
+                'delta_max_platforms_per_run' => (int) ($config['delta_max_platforms_per_run'] ?? 3),
+                'delta_stagger_seconds' => (int) ($config['delta_stagger_seconds'] ?? 120),
+                'reconcile_stagger_seconds' => (int) ($config['reconcile_stagger_seconds'] ?? 180),
+                'queue_connection' => (string) config('queue.default', 'sync'),
+                'delta_queue' => 'sync-clients',
+                'full_queue' => 'sync-clients-reconcile',
+            ],
+            'queues' => [
+                'sync-clients' => [
+                    'pending' => (int) ($queueRows->get('sync-clients')->pending ?? 0),
+                    'processing' => (int) ($queueRows->get('sync-clients')->processing ?? 0),
+                    'total' => (int) ($queueRows->get('sync-clients')->total ?? 0),
+                ],
+                'sync-clients-reconcile' => [
+                    'pending' => (int) ($queueRows->get('sync-clients-reconcile')->pending ?? 0),
+                    'processing' => (int) ($queueRows->get('sync-clients-reconcile')->processing ?? 0),
+                    'total' => (int) ($queueRows->get('sync-clients-reconcile')->total ?? 0),
+                ],
+                'failed' => (int) $syncFailedJobs,
+            ],
+            'run_counts' => [
+                'by_status' => $runStatusCounts,
+                'by_mode' => $runModeCounts,
+            ],
+            'platforms' => $rows,
+            'recent_runs' => $recentRuns,
+        ]);
+    }
+
+    private function platformClientSyncStatus(
+        Platform $platform,
+        bool $credentialsReady,
+        bool $isStale,
+        ?ClientSyncRun $latestRun
+    ): string {
+        if (! $platform->is_active) {
+            return 'inactive';
+        }
+
+        if (! $credentialsReady) {
+            return 'missing_credentials';
+        }
+
+        if ($latestRun && in_array($latestRun->status, [ClientSyncRun::STATUS_QUEUED, ClientSyncRun::STATUS_RUNNING], true)) {
+            return $latestRun->status;
+        }
+
+        if (in_array((string) $platform->sync_last_status, ['error', 'failed'], true)) {
+            return 'error';
+        }
+
+        if ($latestRun && in_array($latestRun->status, [ClientSyncRun::STATUS_FAILED, ClientSyncRun::STATUS_STALE], true)) {
+            return $latestRun->status;
+        }
+
+        if ($isStale) {
+            return 'stale';
+        }
+
+        return 'healthy';
+    }
+
+    private function serializeClientSyncRun(ClientSyncRun $run): array
+    {
+        return [
+            'id' => (int) $run->id,
+            'platform_id' => (int) $run->platform_id,
+            'platform_name' => $run->platform?->name,
+            'origin' => $run->origin,
+            'mode' => $run->mode,
+            'protocol' => $run->protocol,
+            'status' => $run->status,
+            'processed' => (int) ($run->processed ?? 0),
+            'created' => (int) ($run->created ?? 0),
+            'updated' => (int) ($run->updated ?? 0),
+            'skipped' => (int) ($run->skipped ?? 0),
+            'errors' => (int) ($run->errors ?? 0),
+            'reason' => $run->reason,
+            'started_at' => optional($run->started_at)->toDateTimeString(),
+            'finished_at' => optional($run->finished_at)->toDateTimeString(),
+            'last_heartbeat_at' => optional($run->last_heartbeat_at)->toDateTimeString(),
+            'created_at' => optional($run->created_at)->toDateTimeString(),
+        ];
     }
 
     private function extractJobDisplayName(string $payload): ?string

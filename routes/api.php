@@ -634,6 +634,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/system-health/updates/upload-backup', [SystemHealthUpdateController::class, 'uploadBackup'])->middleware('role:admin');
     Route::delete('/settings/system-health/updates/backups/{filename}', [SystemHealthUpdateController::class, 'deleteBackup'])->middleware('role:admin');
     Route::post('/settings/system-health/updates/rollback', [SystemHealthUpdateController::class, 'rollback'])->middleware('role:admin');
+    Route::get('/settings/system-health/client-sync', [SystemHealthUpdateController::class, 'clientSyncStatus'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/queue-status', [SystemHealthUpdateController::class, 'queueStatus'])->middleware('role:admin,sub_admin');
     Route::post('/settings/system-health/queue-retry', [SystemHealthUpdateController::class, 'retryFailedJobs'])->middleware('role:admin');
     Route::post('/settings/system-health/queue-flush-failed', [SystemHealthUpdateController::class, 'flushFailedJobs'])->middleware('role:admin');
