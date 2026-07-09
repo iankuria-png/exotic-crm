@@ -112,12 +112,39 @@ function extractionReason(item) {
     }
 
     const normalizedCode = code.trim();
+
+    // Safety net: if the "code" isn't a valid identifier (e.g. a legacy raw JSON
+    // blob like {"status":429,...} that pre-dates structured provider errors),
+    // don't render it as a garbled badge. Show a generic label and keep the full
+    // string in the message so operators can still eyeball it.
+    if (!/^[a-z][a-z0-9_]*$/i.test(normalizedCode)) {
+        return {
+            code: 'provider error',
+            kind: 'provider_error',
+            message,
+        };
+    }
+
     const codeLabels = {
+        // CRM-side URL/match/timing issues
         redirect_home: 'stale URL',
         no_post_id: 'unresolved URL',
         ambiguous_match: 'review match',
         http_404: 'missing page',
         wp_payload_invalid: 'profile data issue',
+        missed_window: 'missed send window',
+        // Exotic Push Engine provider errors
+        epe_credentials_missing: 'missing credentials',
+        epe_unauthorized: 'auth failure',
+        epe_forbidden: 'forbidden',
+        epe_not_found: 'site not found',
+        epe_validation: 'validation error',
+        epe_rate_limited: 'rate limited',
+        epe_provider_error: 'provider error',
+        epe_rejected: 'provider rejected',
+        epe_http_error: 'provider error',
+        // Generic fallback
+        provider_error: 'provider error',
     };
 
     return {

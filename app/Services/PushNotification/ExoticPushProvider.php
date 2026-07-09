@@ -28,7 +28,10 @@ class ExoticPushProvider implements PushProviderInterface
                 'success' => false,
                 'provider' => $this->id(),
                 'provider_notification_id' => null,
-                'provider_response' => 'Exotic Push Engine credentials are incomplete.',
+                'provider_response' => [
+                    'code' => 'epe_credentials_missing',
+                    'message' => 'Exotic Push Engine credentials are incomplete.',
+                ],
             ];
         }
 
@@ -66,15 +69,74 @@ class ExoticPushProvider implements PushProviderInterface
             ];
         }
 
+        [$code, $message] = $this->classifyFailure($response->status(), $body);
+
         return [
             'success' => false,
             'provider' => $this->id(),
             'provider_notification_id' => $providerNotificationId,
             'provider_response' => [
+                'code' => $code,
+                'message' => $message,
                 'status' => $response->status(),
                 'body' => $body,
             ],
         ];
+    }
+
+    /**
+     * Map an EPE failure response to a stable code + human message. The code is a
+     * short identifier the CRM UI uses to render friendly badges; the message is a
+     * one-line summary suitable for an item's error_message column.
+     *
+     * @return array{0:string,1:string}
+     */
+    private function classifyFailure(int $status, array $body): array
+    {
+        $detail = $this->extractServerMessage($body);
+
+        // 2xx with success:false is an application-level rejection (bad URL, no
+        // subscribers, etc). Prefer the server-supplied reason when available.
+        if ($status >= 200 && $status < 300) {
+            return [
+                'epe_rejected',
+                $detail !== '' ? $detail : 'Push Engine rejected the notification.',
+            ];
+        }
+
+        return match (true) {
+            $status === 401 => ['epe_unauthorized', $detail !== '' ? $detail : 'Auth token invalid or rotated (401).'],
+            $status === 403 => ['epe_forbidden', $detail !== '' ? $detail : 'Site key not permitted for this action (403).'],
+            $status === 404 => ['epe_not_found', $detail !== '' ? $detail : 'Site or notification not found (404).'],
+            $status === 422 => ['epe_validation', $detail !== '' ? $detail : 'Payload rejected as invalid (422).'],
+            $status === 429 => ['epe_rate_limited', $this->formatRateLimitMessage($body, $detail)],
+            $status >= 500 => ['epe_provider_error', $detail !== '' ? $detail : "Push Engine internal error ({$status})."],
+            default => ['epe_http_error', $detail !== '' ? $detail : "Push Engine returned HTTP {$status}."],
+        };
+    }
+
+    private function extractServerMessage(array $body): string
+    {
+        foreach (['error.message', 'error', 'message', 'description'] as $path) {
+            $value = Arr::get($body, $path);
+            if (is_string($value) && trim($value) !== '') {
+                return mb_substr(trim($value), 0, 240);
+            }
+        }
+
+        return '';
+    }
+
+    private function formatRateLimitMessage(array $body, string $detail): string
+    {
+        $retryAfterMs = Arr::get($body, 'retryAfterMs');
+        if (is_numeric($retryAfterMs) && (int) $retryAfterMs > 0) {
+            $seconds = max(1, (int) ceil(((int) $retryAfterMs) / 1000));
+            $base = $detail !== '' ? $detail : 'Rate limit exceeded';
+            return "{$base} (retry after {$seconds}s).";
+        }
+
+        return $detail !== '' ? $detail : 'Rate limit exceeded (429).';
     }
 
     public function getStatus(string $providerNotificationId, array $config): ?array

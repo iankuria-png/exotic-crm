@@ -212,11 +212,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
                 'fallback_attempted' => (bool) ($result['fallback_attempted'] ?? false),
                 'fallback_from' => $result['fallback_from'] ?? null,
             ],
-            'error_message' => $success
-                ? null
-                : (is_string($result['provider_response'] ?? null)
-                    ? $result['provider_response']
-                    : json_encode($result['provider_response'] ?? null)),
+            'error_message' => $success ? null : $this->formatProviderError($result['provider_response'] ?? null),
         ])->save();
 
         if ($item->client_id) {
@@ -262,6 +258,40 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
     public function backoff(): array
     {
         return [30, 60, 120];
+    }
+
+    /**
+     * Normalize a provider's failure response into a compact `<code>: <message>` string
+     * the CRM UI can parse and render as a friendly badge. Providers that emit the
+     * structured shape `{code, message, ...}` win; legacy string/array shapes fall
+     * back cleanly instead of dumping a raw JSON blob into the item.
+     */
+    private function formatProviderError(mixed $providerResponse): string
+    {
+        if (is_string($providerResponse)) {
+            return $providerResponse;
+        }
+
+        if (is_array($providerResponse)) {
+            $code = trim((string) ($providerResponse['code'] ?? ''));
+            $message = trim((string) ($providerResponse['message'] ?? ''));
+
+            if ($code !== '' && $message !== '') {
+                return "{$code}: {$message}";
+            }
+
+            if ($code !== '') {
+                return $code;
+            }
+
+            if ($message !== '') {
+                return "provider_error: {$message}";
+            }
+
+            return 'provider_error: ' . (string) json_encode($providerResponse);
+        }
+
+        return 'provider_error: unknown';
     }
 
     /**

@@ -3155,6 +3155,137 @@ HTML,
         }
     }
 
+    public function test_exotic_push_provider_classifies_failure_responses_with_stable_codes(): void
+    {
+        config(['services.exotic_push.base_url' => 'https://push.example.test/api']);
+
+        Http::fake([
+            'https://push.example.test/api/sites/site-401/rest-api/notifications' => Http::response([
+                'success' => false,
+                'error' => 'Token invalid',
+            ], 401),
+            'https://push.example.test/api/sites/site-422/rest-api/notifications' => Http::response([
+                'success' => false,
+                'error' => ['message' => 'title is required'],
+            ], 422),
+            'https://push.example.test/api/sites/site-429/rest-api/notifications' => Http::response([
+                'success' => false,
+                'message' => 'Rate limited',
+                'retryAfterMs' => 4000,
+            ], 429),
+            'https://push.example.test/api/sites/site-500/rest-api/notifications' => Http::response([
+                'success' => false,
+            ], 500),
+            'https://push.example.test/api/sites/site-reject/rest-api/notifications' => Http::response([
+                'success' => false,
+                'error' => 'No active subscribers for this site.',
+            ], 200),
+        ]);
+
+        $cases = [
+            ['site-401', 'epe_unauthorized', 'Token invalid'],
+            ['site-422', 'epe_validation', 'title is required'],
+            ['site-429', 'epe_rate_limited', 'Rate limited (retry after 4s).'],
+            ['site-500', 'epe_provider_error', 'Push Engine internal error (500).'],
+            ['site-reject', 'epe_rejected', 'No active subscribers for this site.'],
+        ];
+
+        foreach ($cases as [$siteId, $expectedCode, $expectedMessage]) {
+            $result = (new ExoticPushProvider())->send([
+                'title' => 'Test',
+                'message' => 'Body',
+                'target_url' => 'https://kenya.example/profiles/1',
+            ], [
+                'site_id' => $siteId,
+                'api_key' => 'rest_sample',
+                'auth_token' => 'token-sample',
+            ]);
+
+            $this->assertFalse((bool) $result['success'], "site {$siteId} should fail");
+            $this->assertSame($expectedCode, data_get($result, 'provider_response.code'), "site {$siteId} code");
+            $this->assertSame($expectedMessage, data_get($result, 'provider_response.message'), "site {$siteId} message");
+        }
+    }
+
+    public function test_exotic_push_provider_signals_missing_credentials_with_code(): void
+    {
+        $result = (new ExoticPushProvider())->send([
+            'title' => 'Test',
+            'message' => 'Body',
+            'target_url' => 'https://kenya.example/profiles/1',
+        ], [
+            'site_id' => '',
+            'api_key' => '',
+            'auth_token' => '',
+        ]);
+
+        $this->assertFalse((bool) $result['success']);
+        $this->assertSame('epe_credentials_missing', data_get($result, 'provider_response.code'));
+        $this->assertSame('Exotic Push Engine credentials are incomplete.', data_get($result, 'provider_response.message'));
+    }
+
+    public function test_send_push_job_writes_structured_error_message_from_provider(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 55550,
+            'name' => 'Leya',
+            'phone_normalized' => '251913348460',
+            'city' => 'Addis Ababa Town',
+            'main_image_url' => 'https://cdn.ghana.example/leya.jpg',
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Error format campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-error-format',
+            'provider' => 'exoticpush',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 55550,
+            'profile_name' => 'Leya',
+            'profile_city' => 'Addis Ababa Town',
+            'profile_image_url' => 'https://cdn.ghana.example/leya.jpg',
+            'profile_url' => 'https://ghana.example/escort/leya/',
+            'custom_message' => 'Hi',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturn([
+                'success' => false,
+                'provider' => 'exoticpush',
+                'provider_notification_id' => null,
+                'provider_response' => [
+                    'code' => 'epe_rate_limited',
+                    'message' => 'Rate limited (retry after 4s).',
+                    'status' => 429,
+                    'body' => ['retryAfterMs' => 4000],
+                ],
+            ]);
+        $this->app->instance(PushProviderService::class, $mock);
+
+        (new SendPushNotificationJob((int) $item->id))->handle(
+            $mock,
+            app(\App\Services\AuditService::class)
+        );
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertSame('epe_rate_limited: Rate limited (retry after 4s).', (string) $fresh->error_message);
+    }
+
     public function test_exotic_push_provider_maps_status_and_subscriber_count(): void
     {
         config(['services.exotic_push.base_url' => 'https://push.example.test/api']);
