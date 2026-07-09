@@ -151,6 +151,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
     Route::middleware('role:admin,sub_admin')->group(function () {
         Route::get('/admin/commissions', [FieldSalesController::class, 'adminCommissions']);
+        Route::get('/admin/commissions/export', [FieldSalesController::class, 'exportCommissions']);
         Route::post('/admin/commissions/mark-paid', [FieldSalesController::class, 'markPaid']);
         Route::get('/reports/field-sales', [FieldSalesController::class, 'report']);
         Route::get('/settings/field-sales', [FieldSalesController::class, 'settings']);

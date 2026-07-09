@@ -19,9 +19,11 @@ use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FieldSalesController extends Controller
 {
@@ -256,16 +258,83 @@ class FieldSalesController extends Controller
 
     public function adminCommissions(Request $request)
     {
-        $validated = $request->validate([
+        $validated = $this->validateCommissionFilters($request);
+        $query = $this->buildCommissionsQuery($validated);
+
+        return response()->json([
+            'data' => $query->paginate((int) $request->input('per_page', 50)),
+            'agents' => User::query()->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)->orderBy('name')->get(['id', 'name', 'email']),
+            'markets' => Platform::query()->orderBy('name')->get(['id', 'name', 'currency_code']),
+            'summary' => $this->buildCommissionSummary($validated),
+        ]);
+    }
+
+    public function exportCommissions(Request $request): StreamedResponse
+    {
+        $validated = $this->validateCommissionFilters($request);
+        $query = $this->buildCommissionsQuery($validated);
+
+        $filename = 'field-commissions-' . now()->format('Ymd-His') . '.csv';
+
+        return response()->streamDownload(function () use ($query) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, [
+                'earned_at', 'agent_name', 'agent_email', 'market', 'client_name', 'client_phone',
+                'deal_id', 'payment_reference', 'type', 'basis_amount', 'rate', 'amount', 'currency',
+                'status', 'paid_at', 'payout_reference',
+            ]);
+            $query->chunkById(200, function ($rows) use ($out) {
+                foreach ($rows as $row) {
+                    fputcsv($out, [
+                        optional($row->earned_at)->toIso8601String(),
+                        $row->agent?->name,
+                        $row->agent?->email,
+                        $row->client?->platform?->name,
+                        $row->client?->name,
+                        $row->client?->phone_normalized,
+                        $row->deal_id,
+                        $row->deal?->payment_reference,
+                        $row->type,
+                        $row->basis_amount,
+                        $row->rate,
+                        $row->amount,
+                        $row->currency,
+                        $row->status,
+                        optional($row->paid_at)->toIso8601String(),
+                        $row->payout?->external_reference,
+                    ]);
+                }
+            });
+            fclose($out);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
+    }
+
+    private function validateCommissionFilters(Request $request): array
+    {
+        return $request->validate([
             'agent_user_id' => 'nullable|integer|exists:users,id',
             'market_id' => 'nullable|integer|exists:platforms,id',
             'status' => ['nullable', Rule::in(['pending', 'earned', 'paid', 'void'])],
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date',
         ]);
+    }
 
+    private function buildCommissionsQuery(array $validated)
+    {
         $query = Commission::query()
-            ->with(['agent:id,name,email,role', 'client:id,name,platform_id,phone_normalized', 'client.platform:id,name,currency_code', 'deal:id,activated_at,expires_at'])
+            ->with([
+                'agent:id,name,email,role',
+                'client:id,name,platform_id,phone_normalized,display_image_url,main_image_url,city',
+                'client.platform:id,name,currency_code',
+                'client.retentionInsight:client_id,score,band,primary_tag,computed_at',
+                'deal:id,client_id,product_id,activated_at,expires_at,payment_reference,amount,currency',
+                'deal.product:id,name,display_name',
+                'payout:id,external_reference,paid_at,paid_by,notes',
+                'payout.paidBy:id,name,email',
+            ])
             ->latest('earned_at')
             ->latest('id');
 
@@ -282,14 +351,67 @@ class FieldSalesController extends Controller
             $query->where('earned_at', '>=', $validated['date_from']);
         }
         if (!empty($validated['date_to'])) {
-            $query->where('earned_at', '<=', $validated['date_to']);
+            $query->where('earned_at', '<=', Carbon::parse($validated['date_to'])->endOfDay());
         }
 
-        return response()->json([
-            'data' => $query->paginate((int) $request->input('per_page', 50)),
-            'agents' => User::query()->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)->orderBy('name')->get(['id', 'name', 'email']),
-            'markets' => Platform::query()->orderBy('name')->get(['id', 'name', 'currency_code']),
-        ]);
+        return $query;
+    }
+
+    private function buildCommissionSummary(array $validated): array
+    {
+        $scope = function () use ($validated) {
+            $q = Commission::query();
+            if (!empty($validated['agent_user_id'])) {
+                $q->where('agent_user_id', (int) $validated['agent_user_id']);
+            }
+            if (!empty($validated['market_id'])) {
+                $q->whereHas('client', fn ($cq) => $cq->where('platform_id', (int) $validated['market_id']));
+            }
+            if (!empty($validated['date_from'])) {
+                $q->where('earned_at', '>=', $validated['date_from']);
+            }
+            if (!empty($validated['date_to'])) {
+                $q->where('earned_at', '<=', Carbon::parse($validated['date_to'])->endOfDay());
+            }
+            return $q;
+        };
+
+        $startOfMonth = now()->startOfMonth();
+        $thirtyDaysAgo = now()->subDays(30);
+
+        $earnedByCurrency = (clone $scope())
+            ->where('status', 'earned')
+            ->groupBy('currency')
+            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as rows')
+            ->get()
+            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'rows' => (int) $r->rows])
+            ->values();
+
+        $paidThisMonthByCurrency = (clone $scope())
+            ->where('status', 'paid')
+            ->where('paid_at', '>=', $startOfMonth)
+            ->groupBy('currency')
+            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as rows')
+            ->get()
+            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'rows' => (int) $r->rows])
+            ->values();
+
+        $thisMonthCount = (clone $scope())
+            ->where('earned_at', '>=', $startOfMonth)
+            ->count();
+
+        $activeAgents = (clone $scope())
+            ->whereIn('status', ['earned', 'paid'])
+            ->where('earned_at', '>=', $thirtyDaysAgo)
+            ->distinct('agent_user_id')
+            ->count('agent_user_id');
+
+        return [
+            'earned_by_currency' => $earnedByCurrency,
+            'paid_this_month_by_currency' => $paidThisMonthByCurrency,
+            'this_month_count' => (int) $thisMonthCount,
+            'active_agents_30d' => (int) $activeAgents,
+        ];
     }
 
     public function markPaid(Request $request)

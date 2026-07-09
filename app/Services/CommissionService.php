@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Client;
 use App\Models\Commission;
 use App\Models\CommissionPayout;
 use App\Models\Deal;
 use App\Models\Platform;
+use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +27,11 @@ class CommissionService
             return null;
         }
 
-        $agentId = (int) ($deal->activated_by_field_agent ?: $this->seedAgentFromPriorTrial($deal));
+        $agentId = (int) (
+            $deal->activated_by_field_agent
+            ?: $this->seedAgentFromPriorTrial($deal)
+            ?: $this->seedAgentFromClient($deal)
+        );
         if ($agentId <= 0) {
             return null;
         }
@@ -49,7 +55,11 @@ class CommissionService
             return null;
         }
 
-        $agentId = (int) ($deal->activated_by_field_agent ?: $this->seedAgentFromPriorPaidDeal($deal));
+        $agentId = (int) (
+            $deal->activated_by_field_agent
+            ?: $this->seedAgentFromPriorPaidDeal($deal)
+            ?: $this->seedAgentFromClient($deal)
+        );
         if ($agentId <= 0) {
             return null;
         }
@@ -202,6 +212,46 @@ class CommissionService
             ->whereNotNull('activated_by_field_agent')
             ->latest('activated_at')
             ->value('activated_by_field_agent');
+    }
+
+    private function seedAgentFromClient(Deal $deal): ?int
+    {
+        $client = $deal->client ?: $deal->client()->first();
+        if (!$client) {
+            return null;
+        }
+
+        return $this->resolveFieldAgentForClient($client);
+    }
+
+    public function resolveFieldAgentForClient(?Client $client): ?int
+    {
+        if (!$client) {
+            return null;
+        }
+
+        $candidates = array_values(array_unique(array_filter([
+            (int) ($client->created_by ?? 0),
+            (int) ($client->assigned_to ?? 0),
+        ])));
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $fieldSalesIds = User::query()
+            ->whereIn('id', $candidates)
+            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->pluck('id')
+            ->all();
+
+        foreach ($candidates as $candidate) {
+            if (in_array($candidate, $fieldSalesIds, true)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     private function firstPaidFieldDeal(Deal $deal, int $agentId): ?Deal

@@ -23,7 +23,8 @@ class ManualPaymentSubmissionService
     public function __construct(
         private readonly BillingConfigurationRepository $billingConfigurationRepository,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
-        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
+        private readonly CommissionService $commissionService
     ) {
     }
 
@@ -258,6 +259,7 @@ class ManualPaymentSubmissionService
             'payment_reference' => $submission->transaction_reference,
             'duration_days' => (int) data_get($payment->payment_data, 'duration_days', 30),
             'actor_id' => $actorId,
+            'activated_by_field_agent' => $this->commissionService->resolveFieldAgentForClient($payment->client),
             'emit_payment_received_timeline' => false,
             'emit_profile_activated_timeline' => true,
             'emit_deal_activated_timeline' => true,

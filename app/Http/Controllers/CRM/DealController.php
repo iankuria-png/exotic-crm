@@ -11,6 +11,7 @@ use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Services\AuditService;
+use App\Services\CommissionService;
 use App\Services\WpSyncService;
 use App\Services\ClientSyncService;
 use App\Services\DealPaymentService;
@@ -45,7 +46,8 @@ class DealController extends Controller
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly SubsidiaryTrialService $subsidiaryTrialService
+        private readonly SubsidiaryTrialService $subsidiaryTrialService,
+        private readonly CommissionService $commissionService
     ) {
     }
 
@@ -657,6 +659,7 @@ class DealController extends Controller
             }
 
             $isFreeTrial = $paymentMethod === 'free_trial';
+            $fieldAgentId = $this->commissionService->resolveFieldAgentForClient($deal->client);
             $deal = $this->subscriptionProvisioningService->activateDeal($deal, [
                 'payment' => $payment,
                 'payment_method' => $paymentMethod,
@@ -666,6 +669,7 @@ class DealController extends Controller
                 'is_free_trial' => $isFreeTrial,
                 'free_trial_approved_by' => null,
                 'actor_id' => (int) $request->user()->id,
+                'activated_by_field_agent' => $fieldAgentId,
                 'emit_profile_activated_timeline' => true,
                 'emit_deal_activated_timeline' => true,
             ]);

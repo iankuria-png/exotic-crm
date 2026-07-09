@@ -28,7 +28,8 @@ class ManualPaymentBundleService
         private readonly WalletSettingsService $walletSettingsService,
         private readonly AuditService $auditService,
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly CommissionService $commissionService
     ) {
     }
 
@@ -203,6 +204,7 @@ class ManualPaymentBundleService
                     'payment_reference' => (string) $item['child_reference'],
                     'is_free_trial' => false,
                     'actor_id' => $actorId,
+                    'activated_by_field_agent' => $this->commissionService->resolveFieldAgentForClient($payment->client),
                     'payment_status' => 'completed',
                     'match_confidence' => 'manual',
                     'confirmed_by' => $actorId,
