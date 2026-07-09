@@ -382,18 +382,18 @@ class FieldSalesController extends Controller
         $earnedByCurrency = (clone $scope())
             ->where('status', 'earned')
             ->groupBy('currency')
-            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as rows')
+            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as entries')
             ->get()
-            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'rows' => (int) $r->rows])
+            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'entries' => (int) $r->entries])
             ->values();
 
         $paidThisMonthByCurrency = (clone $scope())
             ->where('status', 'paid')
             ->where('paid_at', '>=', $startOfMonth)
             ->groupBy('currency')
-            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as rows')
+            ->selectRaw('currency, SUM(amount) as total, COUNT(*) as entries')
             ->get()
-            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'rows' => (int) $r->rows])
+            ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total, 'entries' => (int) $r->entries])
             ->values();
 
         $thisMonthCount = (clone $scope())
