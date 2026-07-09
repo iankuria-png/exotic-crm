@@ -158,7 +158,7 @@ class SyncClientsCommandTest extends TestCase
     public function test_command_limits_and_rotates_platforms_for_scheduled_delta_sync(): void
     {
         Queue::fake();
-        Carbon::setTestNow(Carbon::create(1970, 1, 1, 1, 0, 0, 'UTC'));
+        Carbon::setTestNow(Carbon::create(1970, 1, 1, 0, 30, 0, 'UTC'));
 
         $platforms = collect(['Kenya', 'Uganda', 'Ghana', 'Nigeria', 'Tanzania'])
             ->map(fn (string $name) => Platform::factory()->create([

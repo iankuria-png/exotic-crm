@@ -140,8 +140,8 @@ class SyncClients extends Command
 
         $offset = 0;
         if ($rotate) {
-            $hourSlot = intdiv(now()->timestamp, 3600);
-            $offset = (int) (($hourSlot * $maxPlatforms) % $count);
+            $halfHourSlot = intdiv(now()->timestamp, 1800);
+            $offset = (int) (($halfHourSlot * $maxPlatforms) % $count);
         }
 
         return $platforms

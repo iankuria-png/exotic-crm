@@ -133,7 +133,7 @@ class Kernel extends ConsoleKernel
             $clientSyncDeltaStaggerSeconds
         ))
             ->name('crm_sync_clients_delta')
-            ->hourly()
+            ->everyThirtyMinutes()
             ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
