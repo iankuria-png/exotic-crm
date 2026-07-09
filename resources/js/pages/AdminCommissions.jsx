@@ -418,6 +418,44 @@ export default function AdminCommissions() {
                 />
             </section>
 
+            <section>
+                <div className="mb-2 flex items-baseline justify-between">
+                    <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Field-sales funnel</h3>
+                    <p className="text-[11px] text-slate-400">clients where <code className="rounded bg-slate-100 px-1 text-[10px]">created_by</code> is a field agent · respects filters</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <MetricCard
+                        label="Acquired"
+                        value={(summary.funnel?.acquired ?? 0).toLocaleString()}
+                        hint="clients brought in by field sales"
+                        tone="accent"
+                        isLoading={query.isLoading}
+                    />
+                    <MetricCard
+                        label="Trialed"
+                        value={(summary.funnel?.trialed ?? 0).toLocaleString()}
+                        hint={(() => {
+                            const a = Number(summary.funnel?.acquired || 0);
+                            const t = Number(summary.funnel?.trialed || 0);
+                            return a > 0 ? `${((t / a) * 100).toFixed(0)}% of acquired started a trial` : 'none yet';
+                        })()}
+                        tone="warning"
+                        isLoading={query.isLoading}
+                    />
+                    <MetricCard
+                        label="Converted to paid"
+                        value={(summary.funnel?.converted ?? 0).toLocaleString()}
+                        hint={(() => {
+                            const a = Number(summary.funnel?.acquired || 0);
+                            const c = Number(summary.funnel?.converted || 0);
+                            return a > 0 ? `${((c / a) * 100).toFixed(0)}% conversion rate` : 'none yet';
+                        })()}
+                        tone="success"
+                        isLoading={query.isLoading}
+                    />
+                </div>
+            </section>
+
             <section className="crm-filter-row flex flex-wrap items-end gap-3">
                 <FilterSelect
                     label="Status"

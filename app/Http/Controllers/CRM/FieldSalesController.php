@@ -411,6 +411,56 @@ class FieldSalesController extends Controller
             'paid_this_month_by_currency' => $paidThisMonthByCurrency,
             'this_month_count' => (int) $thisMonthCount,
             'active_agents_30d' => (int) $activeAgents,
+            'funnel' => $this->buildAcquisitionFunnel($validated),
+        ];
+    }
+
+    private function buildAcquisitionFunnel(array $validated): array
+    {
+        $fieldSalesIds = User::query()
+            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->pluck('id')
+            ->all();
+
+        if ($fieldSalesIds === []) {
+            return ['acquired' => 0, 'trialed' => 0, 'converted' => 0];
+        }
+
+        $agentFilter = !empty($validated['agent_user_id']) ? (int) $validated['agent_user_id'] : null;
+        if ($agentFilter && !in_array($agentFilter, $fieldSalesIds, true)) {
+            return ['acquired' => 0, 'trialed' => 0, 'converted' => 0];
+        }
+
+        $base = Client::query()
+            ->whereIn('created_by', $agentFilter ? [$agentFilter] : $fieldSalesIds);
+
+        if (!empty($validated['market_id'])) {
+            $base->where('platform_id', (int) $validated['market_id']);
+        }
+        if (!empty($validated['date_from'])) {
+            $base->where('created_at', '>=', $validated['date_from']);
+        }
+        if (!empty($validated['date_to'])) {
+            $base->where('created_at', '<=', Carbon::parse($validated['date_to'])->endOfDay());
+        }
+
+        $acquired = (clone $base)->count();
+
+        $trialed = (clone $base)
+            ->whereHas('deals', fn ($q) => $q->where('is_free_trial', true))
+            ->count();
+
+        $converted = (clone $base)
+            ->whereHas('deals', fn ($q) => $q
+                ->where('is_free_trial', false)
+                ->whereIn('status', ['active', 'expired', 'renewed'])
+                ->whereNotNull('activated_at'))
+            ->count();
+
+        return [
+            'acquired' => (int) $acquired,
+            'trialed' => (int) $trialed,
+            'converted' => (int) $converted,
         ];
     }
 
