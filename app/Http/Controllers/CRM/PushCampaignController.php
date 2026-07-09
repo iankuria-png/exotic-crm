@@ -873,7 +873,7 @@ class PushCampaignController extends Controller
                 'wp_post_id' => $client->wp_post_id ? (int) $client->wp_post_id : null,
                 'profile_name' => $client->name,
                 'profile_phone' => $client->phone_normalized,
-                'profile_image_url' => $client->main_image_url,
+                'profile_image_url' => $client->resolvePushImageUrl(),
                 'custom_message' => $message,
                 'scheduled_at' => $scheduledAtString,
                 'date_label' => $dateLabel,
@@ -1152,7 +1152,7 @@ class PushCampaignController extends Controller
             'profile_url' => $profileUrl,
             'profile_name' => $client->name,
             'profile_phone' => $client->phone_normalized,
-            'profile_image_url' => $client->main_image_url,
+            'profile_image_url' => $client->resolvePushImageUrl(),
             'status' => 'pending',
             'error_message' => null,
         ];

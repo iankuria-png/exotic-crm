@@ -201,7 +201,7 @@ class AutoPushCampaignBuilder
             'profile_name' => $client->name,
             'profile_city' => $client->city,
             'profile_phone' => $client->phone_normalized,
-            'profile_image_url' => $client->main_image_url,
+            'profile_image_url' => $client->resolvePushImageUrl(),
             'profile_age' => null,
             'custom_message' => $customMessage ?? '',
             'scheduled_at' => $scheduledAtUtc->toDateTimeString(),

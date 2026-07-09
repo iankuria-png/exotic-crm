@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Models\TimelineEvent;
+use App\Services\ClientProfileImageService;
 use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
 use App\Services\AuditService;
 use App\Services\PushNotification\PushProviderService;
@@ -17,6 +18,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 {
@@ -115,9 +117,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         if ($item->client_id
             && (!$item->profile_city || !$item->profile_image_url || $this->isFallbackProfileUrl((string) $item->profile_url))
         ) {
-            $clientRow = Client::query()
-                ->where('id', (int) $item->client_id)
-                ->first(['city', 'main_image_url', 'wp_profile_permalink']);
+            $clientRow = Client::query()->find((int) $item->client_id);
         }
 
         $city = $item->profile_city;
@@ -126,12 +126,44 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             $item->forceFill(['profile_city' => $city])->save();
         }
 
-        $imageUrl = $item->profile_image_url;
-        if (!$imageUrl && $clientRow?->main_image_url) {
-            $imageUrl = $clientRow->main_image_url;
-            $item->forceFill(['profile_image_url' => $imageUrl])->save();
+        $imageUrl = trim((string) ($item->profile_image_url ?? '')) ?: null;
+        if (!$imageUrl && $clientRow) {
+            // Tier 2: stored fields (main_image_url from WP sync, then display_image_url
+            // computed from the WP media library by ClientProfileImageService).
+            $imageUrl = $clientRow->resolvePushImageUrl();
+
+            // Tier 3: live-refresh from WP media library. When the sync payload never
+            // provided main_image_url AND display_image_url hasn't been computed yet
+            // (or was cleared), fetch the media list now. Fails soft — the send still
+            // ships without an image rather than blocking on WP being reachable.
+            if (!$imageUrl && (int) ($clientRow->wp_post_id ?? 0) > 0) {
+                try {
+                    $selection = app(ClientProfileImageService::class)
+                        ->refreshClient($clientRow, verifyReachable: false);
+                    $imageUrl = isset($selection['url']) ? trim((string) $selection['url']) : null;
+                    $imageUrl = $imageUrl ?: null;
+                } catch (\Throwable $exception) {
+                    Log::warning('Push image live-refresh failed', [
+                        'item_id' => (int) $item->id,
+                        'client_id' => (int) $item->client_id,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
+
+            if ($imageUrl) {
+                $item->forceFill(['profile_image_url' => $imageUrl])->save();
+            }
         }
-        $imageUrl = $imageUrl ?: null;
+
+        if (!$imageUrl) {
+            Log::warning('Push item shipping without image', [
+                'item_id' => (int) $item->id,
+                'client_id' => $item->client_id,
+                'campaign_id' => (int) $campaign->id,
+                'wp_post_id' => (int) ($clientRow->wp_post_id ?? 0),
+            ]);
+        }
 
         // Prefer the client's synced pretty permalink over the /?p=NN fallback that
         // WordPress can silently redirect to the homepage when the target post is

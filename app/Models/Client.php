@@ -391,6 +391,23 @@ class Client extends Model
         return "{$baseUrl}/?p={$wpPostId}";
     }
 
+    /**
+     * Best-known image for outbound push snapshots. Prefers main_image_url (returned
+     * by the WP sync payload) and falls back to display_image_url (computed from the
+     * WP media library by ClientProfileImageService when the sync payload omitted it).
+     */
+    public function resolvePushImageUrl(): ?string
+    {
+        $main = trim((string) ($this->main_image_url ?? ''));
+        if ($main !== '') {
+            return $main;
+        }
+
+        $display = trim((string) ($this->display_image_url ?? ''));
+
+        return $display !== '' ? $display : null;
+    }
+
     public function getPlanKeyAttribute(): string
     {
         return $this->resolvePlanPresentation()['key'];

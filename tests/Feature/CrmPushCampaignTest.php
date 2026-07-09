@@ -1540,6 +1540,212 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('https://kenya.example/escort/aisha/', (string) $fresh->profile_url);
     }
 
+    public function test_send_push_job_falls_back_to_display_image_url_when_main_is_empty(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 424243,
+            'name' => 'Creamy',
+            'phone_normalized' => '233556227592',
+            'city' => 'Community 14',
+            'main_image_url' => null,
+            'display_image_url' => 'https://cdn.ghana.example/media/creamy-main.webp',
+            'wp_profile_permalink' => 'https://ghana.example/escort/creamy/',
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Display fallback campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-display-fallback',
+            'provider' => 'exoticpush',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 424243,
+            'profile_name' => 'Creamy',
+            'profile_city' => 'Community 14',
+            'profile_image_url' => null,
+            'profile_url' => 'https://ghana.example/escort/creamy/',
+            'custom_message' => 'Hi from Creamy',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $capturedNotification = null;
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
+                $capturedNotification = $notification;
+                return [
+                    'success' => true,
+                    'provider' => 'exoticpush',
+                    'provider_notification_id' => 'notif-display',
+                    'provider_response' => ['success' => true],
+                ];
+            });
+        $this->app->instance(PushProviderService::class, $mock);
+
+        (new SendPushNotificationJob((int) $item->id))->handle(
+            $mock,
+            app(\App\Services\AuditService::class)
+        );
+
+        $this->assertSame('https://cdn.ghana.example/media/creamy-main.webp', $capturedNotification['icon_url']);
+        $this->assertSame('https://cdn.ghana.example/media/creamy-main.webp', $capturedNotification['image_url']);
+        $this->assertSame('https://cdn.ghana.example/media/creamy-main.webp', (string) $item->fresh()->profile_image_url);
+    }
+
+    public function test_send_push_job_live_refreshes_image_when_both_stored_fields_empty(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 424244,
+            'name' => 'Valerie',
+            'phone_normalized' => '233267030705',
+            'city' => 'Spintex',
+            'main_image_url' => null,
+            'display_image_url' => null,
+            'wp_profile_permalink' => 'https://ghana.example/escort/valerie/',
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Live refresh fallback campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-live-refresh',
+            'provider' => 'exoticpush',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 424244,
+            'profile_name' => 'Valerie',
+            'profile_city' => 'Spintex',
+            'profile_image_url' => null,
+            'profile_url' => 'https://ghana.example/escort/valerie/',
+            'custom_message' => 'Hi from Valerie',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $imageServiceMock = \Mockery::mock(\App\Services\ClientProfileImageService::class);
+        $imageServiceMock->shouldReceive('refreshClient')
+            ->once()
+            ->andReturnUsing(function (Client $c) {
+                $c->forceFill(['display_image_url' => 'https://cdn.ghana.example/media/valerie-live.webp'])->save();
+                return [
+                    'url' => 'https://cdn.ghana.example/media/valerie-live.webp',
+                    'source' => 'wp_media_main',
+                    'media' => ['id' => 99],
+                ];
+            });
+        $this->app->instance(\App\Services\ClientProfileImageService::class, $imageServiceMock);
+
+        $capturedNotification = null;
+        $providerMock = \Mockery::mock(PushProviderService::class);
+        $providerMock->shouldReceive('sendPush')
+            ->once()
+            ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
+                $capturedNotification = $notification;
+                return [
+                    'success' => true,
+                    'provider' => 'exoticpush',
+                    'provider_notification_id' => 'notif-live',
+                    'provider_response' => ['success' => true],
+                ];
+            });
+        $this->app->instance(PushProviderService::class, $providerMock);
+
+        (new SendPushNotificationJob((int) $item->id))->handle(
+            $providerMock,
+            app(\App\Services\AuditService::class)
+        );
+
+        $this->assertSame('https://cdn.ghana.example/media/valerie-live.webp', $capturedNotification['icon_url']);
+        $this->assertSame('https://cdn.ghana.example/media/valerie-live.webp', $capturedNotification['image_url']);
+        $this->assertSame('https://cdn.ghana.example/media/valerie-live.webp', (string) $item->fresh()->profile_image_url);
+    }
+
+    public function test_send_push_job_logs_warning_when_no_image_can_be_resolved(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 0,
+            'name' => 'NoImage',
+            'phone_normalized' => '233111000000',
+            'city' => 'Accra',
+            'main_image_url' => null,
+            'display_image_url' => null,
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'No image campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-no-image',
+            'provider' => 'exoticpush',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 0,
+            'profile_name' => 'NoImage',
+            'profile_city' => 'Accra',
+            'profile_image_url' => null,
+            'profile_url' => 'https://ghana.example/escort/no-image/',
+            'custom_message' => 'Hi',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        \Illuminate\Support\Facades\Log::spy();
+
+        $capturedNotification = null;
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
+                $capturedNotification = $notification;
+                return [
+                    'success' => true,
+                    'provider' => 'exoticpush',
+                    'provider_notification_id' => 'notif-none',
+                    'provider_response' => ['success' => true],
+                ];
+            });
+        $this->app->instance(PushProviderService::class, $mock);
+
+        (new SendPushNotificationJob((int) $item->id))->handle(
+            $mock,
+            app(\App\Services\AuditService::class)
+        );
+
+        $this->assertNull($capturedNotification['icon_url']);
+        $this->assertNull($capturedNotification['image_url']);
+
+        \Illuminate\Support\Facades\Log::shouldHaveReceived('warning')
+            ->with('Push item shipping without image', \Mockery::type('array'))
+            ->atLeast()->once();
+    }
+
     public function test_subscribers_endpoint_is_platform_scoped(): void
     {
         $platformA = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
