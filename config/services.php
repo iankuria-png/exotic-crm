@@ -106,6 +106,13 @@ return [
         'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),
     ],
 
+    'client_sync' => [
+        'per_page' => (int) env('CRM_CLIENT_SYNC_PER_PAGE', 100),
+        'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 3),
+        'delta_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_DELTA_STAGGER_SECONDS', 120),
+        'reconcile_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_RECONCILE_STAGGER_SECONDS', 180),
+    ],
+
     'africastalking' => [
         'endpoint' => env('AFRICASTALKING_ENDPOINT', 'https://api.africastalking.com/version1/messaging'),
         'username' => env('AFRICASTALKING_USERNAME'),

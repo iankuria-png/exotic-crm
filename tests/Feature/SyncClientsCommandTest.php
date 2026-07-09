@@ -2,15 +2,23 @@
 
 namespace Tests\Feature;
 
-use App\Models\Client;
 use App\Models\Platform;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class SyncClientsCommandTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
+    }
 
     public function test_command_continues_syncing_other_markets_after_one_market_fails(): void
     {
@@ -145,5 +153,75 @@ class SyncClientsCommandTest extends TestCase
         ]);
 
         Http::assertSentCount(2);
+    }
+
+    public function test_command_limits_and_rotates_platforms_for_scheduled_delta_sync(): void
+    {
+        Queue::fake();
+        Carbon::setTestNow(Carbon::create(1970, 1, 1, 1, 0, 0, 'UTC'));
+
+        $platforms = collect(['Kenya', 'Uganda', 'Ghana', 'Nigeria', 'Tanzania'])
+            ->map(fn (string $name) => Platform::factory()->create([
+                'name' => $name,
+                'wp_api_url' => sprintf('https://%s.example.test/wp-json/exotic-crm-sync/v1', strtolower($name)),
+                'wp_api_user' => 'crm-user',
+                'wp_api_password' => 'secret',
+            ]))
+            ->values();
+
+        $this->artisan('crm:sync-clients --max-platforms=3 --rotate --per-page=50 --stagger-seconds=120')
+            ->assertExitCode(0);
+
+        $expectedPlatformIds = [
+            $platforms[3]->id,
+            $platforms[4]->id,
+            $platforms[0]->id,
+        ];
+
+        Queue::assertPushed(\App\Jobs\RunClientSyncJob::class, 3);
+        Queue::assertPushed(\App\Jobs\RunClientSyncJob::class, function ($job) use ($expectedPlatformIds) {
+            $run = \App\Models\ClientSyncRun::find($job->runId);
+
+            return $run
+                && in_array((int) $run->platform_id, $expectedPlatformIds, true)
+                && $job->perPage === 50
+                && $job->queue === 'sync-clients';
+        });
+
+        $this->assertEqualsCanonicalizing(
+            $expectedPlatformIds,
+            \App\Models\ClientSyncRun::query()->pluck('platform_id')->map(fn ($id) => (int) $id)->all()
+        );
+    }
+
+    public function test_manual_platform_sync_ignores_platform_window_limits(): void
+    {
+        Queue::fake();
+
+        $platformA = Platform::factory()->create([
+            'name' => 'Kenya',
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        Platform::factory()->create([
+            'name' => 'Uganda',
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        $this->artisan(sprintf('crm:sync-clients --platform=%d --max-platforms=0 --per-page=75', $platformA->id))
+            ->assertExitCode(0);
+
+        Queue::assertPushed(\App\Jobs\RunClientSyncJob::class, 1);
+        Queue::assertPushed(\App\Jobs\RunClientSyncJob::class, function ($job) use ($platformA) {
+            $run = \App\Models\ClientSyncRun::find($job->runId);
+
+            return $run
+                && (int) $run->platform_id === (int) $platformA->id
+                && $job->perPage === 75;
+        });
     }
 }

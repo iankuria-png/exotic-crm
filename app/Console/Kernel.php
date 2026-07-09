@@ -118,15 +118,31 @@ class Kernel extends ConsoleKernel
         ->onOneServer()
         ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
 
+        $clientSyncPerPage = max(1, min(100, (int) config('services.client_sync.per_page', 100)));
+        $clientSyncDeltaMaxPlatforms = max(0, (int) config('services.client_sync.delta_max_platforms_per_run', 3));
+        $clientSyncDeltaStaggerSeconds = max(0, (int) config('services.client_sync.delta_stagger_seconds', 120));
+        $clientSyncReconcileStaggerSeconds = max(0, (int) config('services.client_sync.reconcile_stagger_seconds', 180));
+
         // Keep CRM clients in sync with WordPress profile changes across active markets.
-        $schedule->command('crm:sync-clients')
+        // Delta syncs are intentionally paced to avoid synchronized bursts against
+        // the WordPress source sites' PHP-FPM/MariaDB pools.
+        $schedule->command(sprintf(
+            'crm:sync-clients --per-page=%d --max-platforms=%d --stagger-seconds=%d --rotate',
+            $clientSyncPerPage,
+            $clientSyncDeltaMaxPlatforms,
+            $clientSyncDeltaStaggerSeconds
+        ))
             ->name('crm_sync_clients_delta')
-            ->everyFifteenMinutes()
+            ->hourly()
             ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
 
-        $schedule->command('crm:sync-clients --full')
+        $schedule->command(sprintf(
+            'crm:sync-clients --full --per-page=%d --stagger-seconds=%d',
+            $clientSyncPerPage,
+            $clientSyncReconcileStaggerSeconds
+        ))
             ->name('crm_sync_clients_reconcile')
             ->dailyAt('02:05')
             ->withoutOverlapping(120)
