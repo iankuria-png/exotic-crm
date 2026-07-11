@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Models\Platform;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\UploadedFile;
 use RuntimeException;
@@ -77,6 +78,43 @@ class WpSyncService
     public function getClientProfile(int $postId): array
     {
         return $this->get("/clients/{$postId}");
+    }
+
+    /**
+     * Concurrently fetch the bio (post.content) for many profiles.
+     *
+     * WordPress only returns post_content in the full single-profile payload, so
+     * bulk bio work still needs one request per profile — but they can run in
+     * parallel. Returns [postId => content|null] where null means the read
+     * failed (missing/errored) so callers can skip rather than corrupt.
+     *
+     * @param  int[]  $postIds
+     * @return array<int, string|null>
+     */
+    public function getClientBiosPool(array $postIds, int $concurrency = 8): array
+    {
+        $concurrency = max(1, min(20, $concurrency));
+        $results = [];
+
+        foreach (array_chunk($postIds, $concurrency) as $chunk) {
+            $responses = Http::pool(function (Pool $pool) use ($chunk) {
+                foreach ($chunk as $postId) {
+                    $pool->as((string) $postId)
+                        ->withHeaders($this->headers())
+                        ->timeout($this->defaultTimeout)
+                        ->get($this->baseUrl . "/clients/{$postId}");
+                }
+            });
+
+            foreach ($chunk as $postId) {
+                $response = $responses[(string) $postId] ?? null;
+                $results[$postId] = ($response instanceof Response && $response->successful())
+                    ? (string) ($response->json('post.content') ?? '')
+                    : null;
+            }
+        }
+
+        return $results;
     }
 
     public function probeClientSyncMeta(): array

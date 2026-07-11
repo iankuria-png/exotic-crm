@@ -19,26 +19,32 @@ use Illuminate\Support\Collection;
  * targets were). It also unwraps links to pages that do not exist at all
  * (/mature/), keeping the visible word and dropping the dead anchor.
  *
- * Bios live only in WordPress (post_content), so this reads each profile from
- * WP, rewrites in memory, and writes back. It follows the prod-change
- * discipline: DRY-RUN (default) -> BACKUP (on --apply) -> APPLY -> VERIFY.
+ * Bios live only in WordPress (post_content), and WordPress only returns
+ * post_content in the full single-profile payload — so each bio is read
+ * individually, but reads run in parallel (--concurrency) to stay fast at
+ * scale. It follows the prod-change discipline: DRY-RUN (default) -> BACKUP
+ * (on --apply) -> APPLY -> VERIFY (opt-in --verify).
  *
  * Run on the production box (cPanel): WordPress writes are blocked from
  * non-production environments by WpSyncService::assertRemoteWriteAllowed().
  *
- *   php artisan crm:repair-bio-links 1                 # dry run, platform 1
- *   php artisan crm:repair-bio-links 1 --limit=20      # dry run, first 20 affected
- *   php artisan crm:repair-bio-links 1 --apply         # apply + backup + verify
- *   php artisan crm:repair-bio-links 1 --post-id=1456235 --apply   # pilot one profile
+ *   php artisan crm:repair-bio-links 1 --active            # dry run, active profiles on Kenya
+ *   php artisan crm:repair-bio-links --all --active --apply# fix active profiles on every market
+ *   php artisan crm:repair-bio-links 1 --apply             # fix every affected profile on Kenya
+ *   php artisan crm:repair-bio-links 1 --post-id=1456235 --apply --verify  # pilot one profile
  */
 class RepairBioLinksCommand extends Command
 {
     protected $signature = 'crm:repair-bio-links
-        {platform : Platform ID or exact name}
+        {platform? : Platform ID or exact name. Omit and pass --all to process every active market.}
+        {--all : Process all active platforms that have WordPress credentials.}
+        {--active : Only repair active (published, paying, not-deactivated) profiles. Recommended first pass.}
         {--apply : Persist rewritten bios to WordPress. Without this flag the command is preview-only.}
-        {--limit=0 : Stop after this many AFFECTED profiles (0 = no limit).}
-        {--post-id=* : Restrict to specific WP post IDs (repeatable). Handy for piloting.}
-        {--sleep=200 : Milliseconds to pause between WordPress writes to stay gentle on the WP host.}';
+        {--limit=0 : Stop after this many AFFECTED profiles per platform (0 = no limit).}
+        {--post-id=* : Restrict to specific WP post IDs (repeatable; implies a single platform).}
+        {--concurrency=8 : Parallel WordPress reads during the scan (1-20).}
+        {--verify : After each write, re-read the profile and confirm no broken links remain (slower).}
+        {--sleep=0 : Milliseconds to pause between WordPress writes to stay gentle on the WP host.}';
 
     protected $description = 'Rewrite broken service/attribute links in already-saved WordPress profile bios (no bio regeneration).';
 
@@ -70,48 +76,79 @@ class RepairBioLinksCommand extends Command
 
     public function handle(): int
     {
-        $platform = $this->resolvePlatform((string) $this->argument('platform'));
-        if (! $platform) {
-            $this->error('Platform not found.');
-
-            return self::FAILURE;
-        }
-
-        if (! $this->platformHasWpCredentials($platform)) {
-            $this->error('Platform is missing WordPress API credentials.');
-
+        $platforms = $this->resolvePlatforms();
+        if ($platforms === null) {
             return self::FAILURE;
         }
 
         $apply = (bool) $this->option('apply');
+        $active = (bool) $this->option('active');
         $limit = max(0, (int) $this->option('limit'));
+        $concurrency = max(1, min(20, (int) $this->option('concurrency')));
+        $verify = (bool) $this->option('verify');
         $sleepMs = max(0, (int) $this->option('sleep'));
         $postIds = collect($this->option('post-id'))
             ->map(fn ($id) => (int) $id)
             ->filter(fn (int $id) => $id > 0)
             ->values();
 
+        $grand = ['scanned' => 0, 'affected' => 0, 'applied' => 0, 'verified' => 0, 'errors' => 0];
+
+        foreach ($platforms as $platform) {
+            $summary = $this->repairPlatform(
+                $platform,
+                compact('apply', 'active', 'limit', 'concurrency', 'verify', 'sleepMs') + ['postIds' => $postIds]
+            );
+
+            foreach (array_keys($grand) as $key) {
+                $grand[$key] += $summary[$key] ?? 0;
+            }
+        }
+
+        if ($platforms->count() > 1) {
+            $this->newLine();
+            $this->info('Grand total across ' . $platforms->count() . ' platforms:');
+            $this->line(json_encode($grand + ['mode' => $apply ? 'apply' : 'dry-run'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        }
+
+        if (! $apply) {
+            $this->comment('Dry run only. Re-run with --apply to persist the rewrites to WordPress.');
+        }
+
+        return $grand['errors'] > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * @return array{scanned:int,affected:int,applied:int,verified:int,errors:int}
+     */
+    private function repairPlatform(Platform $platform, array $opts): array
+    {
+        /** @var Collection<int, int> $postIds */
+        $postIds = $opts['postIds'];
+
         $clients = Client::query()
             ->where('platform_id', $platform->id)
             ->whereNotNull('wp_post_id')
             ->where('wp_post_id', '>', 0)
+            ->when($opts['active'], fn ($q) => $q->active())
             ->when($postIds->isNotEmpty(), fn ($q) => $q->whereIn('wp_post_id', $postIds->all()))
             ->orderBy('id')
             ->get(['id', 'wp_post_id', 'name']);
 
-        if ($clients->isEmpty()) {
-            $this->info('No clients with a WordPress post ID found for this platform.');
-
-            return self::SUCCESS;
-        }
-
+        $this->newLine();
         $this->info(sprintf(
-            'Scanning %d profiles on %s (ID %d) in %s mode. Reading each bio from WordPress...',
-            $clients->count(),
+            '%s (ID %d): scanning %d %sprofiles in %s mode, concurrency %d...',
             $platform->name,
             $platform->id,
-            $apply ? 'APPLY' : 'DRY-RUN'
+            $clients->count(),
+            $opts['active'] ? 'active ' : '',
+            $opts['apply'] ? 'APPLY' : 'DRY-RUN',
+            $opts['concurrency']
         ));
+
+        if ($clients->isEmpty()) {
+            return ['scanned' => 0, 'affected' => 0, 'applied' => 0, 'verified' => 0, 'errors' => 0];
+        }
 
         $wpSync = new WpSyncService($platform);
         $preview = collect();
@@ -123,93 +160,93 @@ class RepairBioLinksCommand extends Command
         $verified = 0;
         $errors = 0;
 
-        foreach ($clients as $client) {
-            if ($limit > 0 && $affected >= $limit) {
+        foreach ($clients->chunk($opts['concurrency']) as $chunk) {
+            if ($opts['limit'] > 0 && $affected >= $opts['limit']) {
                 break;
             }
 
-            $scanned++;
-            if ($scanned % 100 === 0) {
-                $this->line("  ...scanned {$scanned}, affected {$affected}");
-            }
+            /** @var array<int, Client> $byPostId */
+            $byPostId = $chunk->keyBy('wp_post_id');
+            $bios = $wpSync->getClientBiosPool($byPostId->keys()->all(), $opts['concurrency']);
 
-            try {
-                $payload = $wpSync->getClientProfile((int) $client->wp_post_id);
-                $original = (string) ($payload['post']['content'] ?? '');
-            } catch (\Throwable $e) {
-                $errors++;
-                $preview->push([
-                    'wp_post_id' => $client->wp_post_id,
+            foreach ($bios as $postId => $original) {
+                $scanned++;
+                $client = $byPostId[$postId];
+
+                if ($original === null) {
+                    $errors++;
+                    $preview->push(['wp_post_id' => $postId, 'name' => $client->name, 'renamed' => 0, 'unwrapped' => 0, 'status' => 'read_error']);
+                    continue;
+                }
+
+                if ($original === '') {
+                    continue;
+                }
+
+                [$rewritten, $renamed, $unwrapped] = $this->rewrite($original);
+                if ($renamed === 0 && $unwrapped === 0) {
+                    continue; // no broken links — leave byte-identical
+                }
+
+                $affected++;
+                $row = ['wp_post_id' => $postId, 'name' => $client->name, 'renamed' => $renamed, 'unwrapped' => $unwrapped, 'status' => 'affected'];
+
+                if (! $opts['apply']) {
+                    $preview->push($row);
+                    if ($opts['limit'] > 0 && $affected >= $opts['limit']) {
+                        break;
+                    }
+                    continue;
+                }
+
+                // BACKUP the original before overwriting (rollback source; WP also keeps a revision).
+                $backupRows[] = [
+                    'wp_post_id' => (int) $postId,
                     'name' => $client->name,
-                    'renamed' => 0,
-                    'unwrapped' => 0,
-                    'status' => 'read_error',
-                    'error' => mb_substr($e->getMessage(), 0, 160),
-                ]);
-                continue;
-            }
+                    'renamed' => $renamed,
+                    'unwrapped' => $unwrapped,
+                    'old_content' => $original,
+                    'new_content' => $rewritten,
+                    'backed_up_at' => now()->toIso8601String(),
+                ];
 
-            if ($original === '') {
-                continue;
-            }
-
-            [$rewritten, $renamed, $unwrapped] = $this->rewrite($original);
-            if ($renamed === 0 && $unwrapped === 0) {
-                continue; // no broken links — leave byte-identical
-            }
-
-            $affected++;
-            $row = [
-                'wp_post_id' => $client->wp_post_id,
-                'name' => $client->name,
-                'renamed' => $renamed,
-                'unwrapped' => $unwrapped,
-                'status' => 'affected',
-            ];
-
-            if (! $apply) {
-                $preview->push($row);
-                continue;
-            }
-
-            // BACKUP the original before overwriting (rollback source; WP also keeps a revision).
-            $backupRows[] = [
-                'wp_post_id' => (int) $client->wp_post_id,
-                'name' => $client->name,
-                'renamed' => $renamed,
-                'unwrapped' => $unwrapped,
-                'old_content' => $original,
-                'new_content' => $rewritten,
-                'backed_up_at' => now()->toIso8601String(),
-            ];
-
-            try {
-                $wpSync->updateClientProfile((int) $client->wp_post_id, ['content' => $rewritten]);
-                $applied++;
-
-                // VERIFY: re-read and confirm no broken links remain.
                 try {
-                    $after = (string) ($wpSync->getClientProfile((int) $client->wp_post_id)['post']['content'] ?? '');
-                    [, $leftRenamed, $leftUnwrapped] = $this->rewrite($after);
-                    if ($leftRenamed === 0 && $leftUnwrapped === 0) {
-                        $verified++;
-                        $row['status'] = 'repaired';
-                    } else {
-                        $row['status'] = 'verify_mismatch';
+                    $wpSync->updateClientProfile((int) $postId, ['content' => $rewritten]);
+                    $applied++;
+                    $row['status'] = 'repaired';
+
+                    if ($opts['verify']) {
+                        try {
+                            $after = (string) ($wpSync->getClientProfile((int) $postId)['post']['content'] ?? '');
+                            [, $leftRenamed, $leftUnwrapped] = $this->rewrite($after);
+                            if ($leftRenamed === 0 && $leftUnwrapped === 0) {
+                                $verified++;
+                            } else {
+                                $row['status'] = 'verify_mismatch';
+                            }
+                        } catch (\Throwable $e) {
+                            $row['status'] = 'verify_read_error';
+                        }
                     }
                 } catch (\Throwable $e) {
-                    $row['status'] = 'verify_read_error';
+                    $errors++;
+                    $row['status'] = 'write_error';
+                    $row['error'] = mb_substr($e->getMessage(), 0, 160);
                 }
-            } catch (\Throwable $e) {
-                $errors++;
-                $row['status'] = 'write_error';
-                $row['error'] = mb_substr($e->getMessage(), 0, 160);
+
+                $preview->push($row);
+
+                if ($opts['sleepMs'] > 0) {
+                    usleep($opts['sleepMs'] * 1000);
+                }
+
+                if ($opts['limit'] > 0 && $affected >= $opts['limit']) {
+                    break;
+                }
             }
 
-            $preview->push($row);
-
-            if ($sleepMs > 0) {
-                usleep($sleepMs * 1000);
+            if ($scanned % 200 < $opts['concurrency']) {
+                $this->line("  ...scanned {$scanned}, affected {$affected}");
             }
         }
 
@@ -219,13 +256,12 @@ class RepairBioLinksCommand extends Command
             'scanned' => $scanned,
             'affected' => $affected,
             'applied' => $applied,
-            'verified' => $verified,
+            'verified' => $opts['verify'] ? $verified : null,
             'errors' => $errors,
-            'mode' => $apply ? 'apply' : 'dry-run',
+            'mode' => $opts['apply'] ? 'apply' : 'dry-run',
         ];
 
-        $this->newLine();
-        $this->line(json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $this->line(json_encode(array_filter($summary, fn ($v) => $v !== null), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $this->table(
             ['wp_post_id', 'name', 'renamed', 'unwrapped', 'status'],
             $preview->take(25)->map(fn (array $r) => [
@@ -237,7 +273,7 @@ class RepairBioLinksCommand extends Command
             ])->all()
         );
 
-        if ($apply && ! empty($backupRows)) {
+        if ($opts['apply'] && ! empty($backupRows)) {
             $backupPath = storage_path(
                 'app/bio-link-repair/platform-' . $platform->id . '-' . now()->format('Ymd_His') . '.json'
             );
@@ -252,11 +288,13 @@ class RepairBioLinksCommand extends Command
             $this->info('Backup (old + new content) written to: ' . $backupPath);
         }
 
-        if (! $apply) {
-            $this->comment('Dry run only. Re-run with --apply to persist the rewrites to WordPress.');
-        }
-
-        return $errors > 0 ? self::FAILURE : self::SUCCESS;
+        return [
+            'scanned' => $scanned,
+            'affected' => $affected,
+            'applied' => $applied,
+            'verified' => $verified,
+            'errors' => $errors,
+        ];
     }
 
     /**
@@ -294,6 +332,65 @@ class RepairBioLinksCommand extends Command
         }
 
         return [$html, $renamed, $unwrapped];
+    }
+
+    /**
+     * @return Collection<int, Platform>|null  null on a resolution error (message already printed).
+     */
+    private function resolvePlatforms(): ?Collection
+    {
+        $argument = $this->argument('platform');
+        $all = (bool) $this->option('all');
+        $hasPostIds = ! empty($this->option('post-id'));
+
+        if ($all) {
+            if ($argument !== null) {
+                $this->error('Pass either a platform or --all, not both.');
+
+                return null;
+            }
+            if ($hasPostIds) {
+                $this->error('--post-id targets specific posts and cannot be combined with --all.');
+
+                return null;
+            }
+
+            $platforms = Platform::query()
+                ->where('is_active', true)
+                ->whereNotNull('wp_api_url')
+                ->orderBy('id')
+                ->get()
+                ->filter(fn (Platform $p) => $this->platformHasWpCredentials($p))
+                ->values();
+
+            if ($platforms->isEmpty()) {
+                $this->error('No active platforms with WordPress credentials found.');
+
+                return null;
+            }
+
+            return $platforms;
+        }
+
+        if ($argument === null) {
+            $this->error('Specify a platform (ID or name), or pass --all.');
+
+            return null;
+        }
+
+        $platform = $this->resolvePlatform((string) $argument);
+        if (! $platform) {
+            $this->error('Platform not found.');
+
+            return null;
+        }
+        if (! $this->platformHasWpCredentials($platform)) {
+            $this->error('Platform is missing WordPress API credentials.');
+
+            return null;
+        }
+
+        return collect([$platform]);
     }
 
     private function resolvePlatform(string $input): ?Platform
