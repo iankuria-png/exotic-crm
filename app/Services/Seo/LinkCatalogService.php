@@ -19,16 +19,23 @@ class LinkCatalogService
      *
      * Use market-relative URLs so the same generated bio works on Exotic Kenya,
      * Exotic Uganda, and future platform domains without baking one host into CRM.
+     *
+     * The real WordPress discovery pages use an "-escorts" suffix on the slug
+     * (e.g. /bdsm-escorts/, /massage-escorts/); the bare slugs used previously
+     * 404. Only slugs verified to resolve on the live markets are listed here —
+     * "Mature" and a generic "Escort" have no landing page and were removed.
+     * These slugs are per-market and admin-editable in WordPress, so this map is
+     * a fallback; Phase 2 sources the authoritative slugs live from WP.
      */
     private const SERVICE_PAGES = [
-        'BDSM'       => 'bdsm',
-        'Couples'    => 'couples',
-        'Domination' => 'domination',
-        'Escort'     => 'escort',
-        'Massage'    => 'massage',
-        'Fetish'     => 'fetish',
-        'Mature'     => 'mature',
-        'GFE'        => 'gfe',
+        'BDSM'       => 'bdsm-escorts',
+        'Couples'    => 'couples-escorts',
+        'Domination' => 'domination-escorts',
+        'Massage'    => 'massage-escorts',
+        'Fetish'     => 'fetish-escorts',
+        'GFE'        => 'gfe-escorts',
+        'Incall'     => 'incall-escorts',
+        'Outcall'    => 'outcall-escorts',
     ];
 
     /**
@@ -36,8 +43,8 @@ class LinkCatalogService
      * Keep this list conservative: only include attributes that have canonical pages.
      */
     private const ATTRIBUTE_PAGES = [
-        'Black' => 'black',
-        'Curvy' => 'curvy',
+        'Black' => 'black-escorts',
+        'Curvy' => 'curvy-escorts',
     ];
 
     public function forPlatform(int $platformId): array

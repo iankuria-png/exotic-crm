@@ -30,7 +30,7 @@ class ErrorLogController extends Controller
             $query->where('level', $level);
         }
 
-        if (in_array($source, ['exception', 'log', 'queue_job'], true)) {
+        if (in_array($source, ['exception', 'log', 'queue_job', 'client'], true)) {
             $query->where('source', $source);
         }
 

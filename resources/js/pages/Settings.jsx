@@ -6652,6 +6652,7 @@ function errorLogSourceLabel(source) {
         case 'queue_job': return 'Queue job';
         case 'log': return 'Log call';
         case 'exception': return 'Exception';
+        case 'client': return 'Browser';
         default: return source || '—';
     }
 }
@@ -6856,6 +6857,7 @@ function ErrorLogsWorkspace() {
                         <option value="exception">Exception</option>
                         <option value="log">Log call</option>
                         <option value="queue_job">Queue job</option>
+                        <option value="client">Browser</option>
                     </select>
                     <select
                         value={statusFilter}
@@ -6948,8 +6950,11 @@ function ErrorLogsWorkspace() {
                                                 <li key={occurrence.id} className="py-2 text-xs">
                                                     <p className="font-semibold text-slate-700">{occurrence.occurred_at ? new Date(occurrence.occurred_at).toLocaleString() : '—'}</p>
                                                     <p className="text-slate-600">
-                                                        {occurrence.method ? `${occurrence.method} ` : ''}{occurrence.url || (occurrence.context?.job ? `Job: ${occurrence.context.job}` : 'Console')}
+                                                        {occurrence.method ? `${occurrence.method} ` : ''}{occurrence.url || occurrence.context?.client_url || (occurrence.context?.job ? `Job: ${occurrence.context.job}` : 'Console')}
                                                     </p>
+                                                    {occurrence.context?.request_id ? (
+                                                        <p className="crm-mono text-[11px] text-slate-500">Request ID: {occurrence.context.request_id}</p>
+                                                    ) : null}
                                                     {occurrence.user ? (
                                                         <p className="text-slate-500">User: {occurrence.user.name} ({occurrence.user.email})</p>
                                                     ) : null}

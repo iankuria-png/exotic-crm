@@ -16,7 +16,11 @@ return new class extends Migration
             $table->text('message');
             $table->string('file', 500)->nullable();
             $table->unsignedInteger('line')->nullable();
-            $table->enum('source', ['exception', 'log', 'queue_job'])->default('exception');
+            // 'client' (browser-origin errors) is widened onto already-deployed
+            // databases by a later migration; it is included here so fresh
+            // installs (and the SQLite test DB, where enum compiles to a CHECK
+            // constraint) accept it from the start.
+            $table->enum('source', ['exception', 'log', 'queue_job', 'client'])->default('exception');
             $table->unsignedBigInteger('occurrence_count')->default(1);
             $table->timestamp('first_seen_at')->nullable();
             $table->timestamp('last_seen_at')->nullable();

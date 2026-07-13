@@ -76,7 +76,7 @@ class ErrorLogRecorder
                     'group_id' => $group->id,
                     'occurred_at' => now(),
                     'trace' => $trace,
-                    'context' => $this->sanitizeContext($context),
+                    'context' => $this->sanitizeContext($this->withRequestId($context)),
                     'url' => $this->safeUrl(),
                     'method' => $this->safeMethod(),
                     'user_id' => $this->safeUserId(),
@@ -146,6 +146,32 @@ class ErrorLogRecorder
     {
         $level = strtolower($level);
         return in_array($level, ['error', 'critical', 'alert', 'emergency'], true) ? $level : 'error';
+    }
+
+    /**
+     * Stamp the request correlation id (set by AttachRequestId) onto the
+     * occurrence context so a logged error is traceable to the id the user
+     * was shown. A caller-supplied request_id always wins (e.g. client-error
+     * ingest passes the id the browser actually saw).
+     */
+    private function withRequestId(array $context): array
+    {
+        if (array_key_exists('request_id', $context)) {
+            return $context;
+        }
+
+        try {
+            if (! app()->runningInConsole()) {
+                $requestId = Request::instance()->attributes->get('request_id');
+                if ($requestId) {
+                    $context['request_id'] = $requestId;
+                }
+            }
+        } catch (Throwable) {
+            // No request context available — leave it out.
+        }
+
+        return $context;
     }
 
     private function sanitizeContext(array $context): array

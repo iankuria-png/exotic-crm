@@ -16,6 +16,8 @@ import AutoPush from './pages/AutoPush';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
+import NotFound from './pages/NotFound';
+import NetworkCheck from './pages/NetworkCheck';
 import Team from './pages/Team';
 import Kyc from './pages/Kyc';
 import FieldHome from './pages/Field/FieldHome';
@@ -67,6 +69,7 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/auto-push')
             || path.startsWith('/team')
             || path.startsWith('/faq')
+            || path.startsWith('/network-check')
             || path.startsWith('/university');
 
         if (!allowed) {
@@ -96,6 +99,7 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/kyc')
             || path.startsWith('/reports')
             || path.startsWith('/faq')
+            || path.startsWith('/network-check')
             || path.startsWith('/university');
 
         if (path === '/') {
@@ -161,6 +165,8 @@ export default function AppRouter() {
                 <Route path="reports" element={<Reports />} />
                 <Route path="admin/commissions" element={<AdminCommissions />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="network-check" element={<NetworkCheck />} />
+                <Route path="*" element={<NotFound />} />
             </Route>
         </Routes>
     );

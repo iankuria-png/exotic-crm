@@ -28,6 +28,7 @@ use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PaymentExportController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
+use App\Http\Controllers\CRM\ClientErrorController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\FieldSalesController;
@@ -141,6 +142,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/logout', [CrmAuthController::class, 'logout']);
     Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
     Route::get('/team/me', [TeamController::class, 'myStats']);
+
+    // Global error handling: browser-side error ingest + diagnostics helpers.
+    // Available to every authenticated CRM user (not admin-only) and throttled
+    // so a client crash loop can't flood the Error Logs store.
+    Route::post('/client-errors', [ClientErrorController::class, 'store'])->middleware('throttle:60,1');
+    Route::get('/whoami-ip', [ClientErrorController::class, 'whoamiIp']);
 
     Route::middleware('role:field_sales,admin')->prefix('field')->group(function () {
         Route::get('/home', [FieldSalesController::class, 'home']);
@@ -339,6 +346,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/archive', [ClientController::class, 'archive'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/unarchive', [ClientController::class, 'unarchive'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/boost', [ClientController::class, 'boost'])->middleware('role:admin,sub_admin,sales,field_sales');

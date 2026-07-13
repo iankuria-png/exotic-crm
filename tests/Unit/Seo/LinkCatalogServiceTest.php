@@ -21,10 +21,10 @@ class LinkCatalogServiceTest extends TestCase
         $bdsm = collect($catalog)->firstWhere('keyword', 'BDSM');
         $couples = collect($catalog)->firstWhere('keyword', 'Couples');
 
-        $this->assertSame('/bdsm/', $bdsm['url'] ?? null);
-        $this->assertSame('service:bdsm', $bdsm['category'] ?? null);
-        $this->assertSame('/couples/', $couples['url'] ?? null);
-        $this->assertSame('service:couples', $couples['category'] ?? null);
+        $this->assertSame('/bdsm-escorts/', $bdsm['url'] ?? null);
+        $this->assertSame('service:bdsm-escorts', $bdsm['category'] ?? null);
+        $this->assertSame('/couples-escorts/', $couples['url'] ?? null);
+        $this->assertSame('service:couples-escorts', $couples['category'] ?? null);
     }
 
     public function test_includes_conservative_market_relative_attribute_pages(): void
@@ -34,9 +34,9 @@ class LinkCatalogServiceTest extends TestCase
         $black = collect($catalog)->firstWhere('keyword', 'Black');
         $curvy = collect($catalog)->firstWhere('keyword', 'Curvy');
 
-        $this->assertSame('/black/', $black['url'] ?? null);
-        $this->assertSame('attribute:black', $black['category'] ?? null);
-        $this->assertSame('/curvy/', $curvy['url'] ?? null);
-        $this->assertSame('attribute:curvy', $curvy['category'] ?? null);
+        $this->assertSame('/black-escorts/', $black['url'] ?? null);
+        $this->assertSame('attribute:black-escorts', $black['category'] ?? null);
+        $this->assertSame('/curvy-escorts/', $curvy['url'] ?? null);
+        $this->assertSame('attribute:curvy-escorts', $curvy['category'] ?? null);
     }
 }
