@@ -11,6 +11,43 @@ class AfricasTalkingSmsProvider implements SmsProviderInterface
         return 'africastalking';
     }
 
+    public function label(): string
+    {
+        return "Africa's Talking";
+    }
+
+    public function credentialFields(): array
+    {
+        return [
+            [
+                'key' => 'endpoint',
+                'label' => 'Endpoint',
+                'type' => 'url',
+                'required' => false,
+                'default' => 'https://api.africastalking.com/version1/messaging',
+            ],
+            [
+                'key' => 'username',
+                'label' => 'Username',
+                'type' => 'text',
+                'required' => true,
+            ],
+            [
+                'key' => 'api_key',
+                'label' => 'API Key',
+                'type' => 'password',
+                'required' => true,
+                'secret' => true,
+            ],
+            [
+                'key' => 'sender_id',
+                'label' => 'Sender ID',
+                'type' => 'text',
+                'required' => false,
+            ],
+        ];
+    }
+
     public function configured(array $config): bool
     {
         return !empty($config['username']) && !empty($config['api_key']);
@@ -28,6 +65,7 @@ class AfricasTalkingSmsProvider implements SmsProviderInterface
         }
 
         $endpoint = $config['endpoint'] ?? 'https://api.africastalking.com/version1/messaging';
+
         $payload = [
             'username' => $config['username'],
             'to' => $phone,

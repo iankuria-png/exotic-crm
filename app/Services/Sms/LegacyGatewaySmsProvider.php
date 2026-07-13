@@ -11,6 +11,29 @@ class LegacyGatewaySmsProvider implements SmsProviderInterface
         return 'legacy_gateway';
     }
 
+    public function label(): string
+    {
+        return 'Legacy Gateway';
+    }
+
+    public function credentialFields(): array
+    {
+        return [
+            [
+                'key' => 'gateway_url',
+                'label' => 'Gateway URL',
+                'type' => 'url',
+                'required' => true,
+            ],
+            [
+                'key' => 'org_code',
+                'label' => 'Org Code',
+                'type' => 'text',
+                'required' => true,
+            ],
+        ];
+    }
+
     public function configured(array $config): bool
     {
         return !empty($config['gateway_url']) && !empty($config['org_code']);

@@ -19,10 +19,7 @@ import PushRoutingPanel from '../components/settings/PushRoutingPanel';
 import ScraperConfigPanel from '../components/settings/ScraperConfigPanel';
 import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
-import FieldSalesSettingsPanel from '../components/settings/FieldSalesSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
-import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
-import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
@@ -38,14 +35,11 @@ const baseTabs = [
     { id: 'kyc', label: 'KYC' },
     { id: 'billing', label: 'Billing' },
     { id: 'seo-engine', label: 'SEO Engine' },
-    { id: 'auto-optimize', label: 'Auto Optimize' },
-    { id: 'ai', label: 'AI Briefings' },
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'error-logs', label: 'Error Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
-    { id: 'field-sales', label: 'Field Sales' },
     { id: 'security', label: 'Security' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'health', label: 'System Health' },
@@ -296,36 +290,223 @@ function slugDurationKey(label, days) {
     return labelKey || dayKey || 'custom_duration';
 }
 
-function smsProviderLabel(providerId) {
+function smsProviderLabel(providerId, providerOptions = []) {
+    const match = providerOptions.find((provider) => provider.id === providerId);
+
+    if (match) {
+        return match.label;
+    }
+
     if (providerId === 'africastalking') return "Africa's Talking";
     if (providerId === 'legacy_gateway') return 'Legacy Gateway';
-    return 'None';
+    if (providerId === 'briq') return 'Briq (Tanzania)';
+    if (providerId === 'uganda_bulk_sms') return 'Bulk SMS(Uganda)';
+    if (providerId === 'kullsms') return 'KullSMS (Nigeria)';
+    if (providerId === 'ghana_bulk_sms') return 'BulkSMS (Ghana)';
+
+    return providerId?.replaceAll('_', ' ') || 'None';
 }
 
-function defaultSmsProviderForm() {
+const DEFAULT_SMS_PROVIDER_OPTIONS = [
+    {
+        id: 'legacy_gateway',
+        label: 'Legacy Gateway',
+        fields: [
+            { key: 'gateway_url', label: 'Gateway URL', type: 'url', required: true },
+            { key: 'org_code', label: 'Org Code', type: 'text', required: true },
+        ],
+    },
+    {
+        id: 'africastalking',
+        label: "Africa's Talking",
+        fields: [
+            { key: 'endpoint', label: 'Endpoint', type: 'url', required: false, default: 'https://api.africastalking.com/version1/messaging' },
+            { key: 'username', label: 'Username', type: 'text', required: true },
+            { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: false },
+        ],
+    },
+    {
+        id: 'briq',
+        label: 'Briq (Tanzania)',
+        fields: [
+            { key: 'base_url', label: 'Base URL', type: 'url', required: true, default: 'https://karibu.briq.tz' },
+            { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+        ],
+    },
+
+    {
+        id: 'uganda_bulk_sms',
+        label: 'Bulk SMS(Uganda)',
+        fields: [
+            {
+                key: 'base_url',
+                label: 'Gateway URL',
+                type: 'url',
+                required: true,
+                default: 'http://bluesmsuganda.com/api-sub.php',
+            },
+            {
+                key: 'username',
+                label: 'Username',
+                type: 'text',
+                required: true,
+            },
+            {
+                key: 'password',
+                label: 'Password',
+                type: 'password',
+                required: true,
+                secret: true,
+            },
+            {
+                key: 'sender_id',
+                label: 'Sender ID',
+                type: 'text',
+                required: true,
+            },
+            {
+                key: 'success_code',
+                label: 'Success Code',
+                type: 'text',
+                required: false,
+                default: '1701',
+            },
+        ],
+    },
+
+    {
+        id: 'kullsms',
+        label: 'KullSMS (Nigeria)',
+        fields: [
+            {
+                key: 'base_url',
+                label: 'Gateway URL',
+                type: 'url',
+                required: true,
+                default: 'https://kullsms.com/customer/api/',
+            },
+            {
+                key: 'username',
+                label: 'Username / Email Address',
+                type: 'text',
+                required: true,
+            },
+            {
+                key: 'password',
+                label: 'Password',
+                type: 'password',
+                required: true,
+                secret: true,
+            },
+            {
+                key: 'sender_id',
+                label: 'Sender ID',
+                type: 'text',
+                required: true,
+            },
+            {
+                key: 'success_code',
+                label: 'Success Code',
+                type: 'text',
+                required: false,
+                default: '1701',
+            },
+        ],
+    },
+
+    {
+        id: 'ghana_bulk_sms',
+        label: 'BulkSMS (Ghana)',
+        fields: [
+            {
+                key: 'base_url',
+                label: 'Gateway URL',
+                type: 'url',
+                required: true,
+                default: 'https://clientlogin.bulksmsgh.com/smsapi',
+            },
+            {
+                key: 'api_key',
+                label: 'API Key',
+                type: 'password',
+                required: true,
+                secret: true,
+            },
+            {
+                key: 'sender_id',
+                label: 'Sender ID',
+                type: 'text',
+                required: true,
+            },
+            {
+                key: 'success_code',
+                label: 'Success Code',
+                type: 'text',
+                required: false,
+                default: '1000',
+            },
+        ],
+    },
+];
+
+function smsProviderOptionsFromConfig(smsProvider) {
+    return Array.isArray(smsProvider?.provider_options) && smsProvider.provider_options.length
+        ? smsProvider.provider_options
+        : DEFAULT_SMS_PROVIDER_OPTIONS;
+}
+
+function defaultSmsProviderCredentials(provider) {
+    return (provider?.fields || []).reduce((carry, field) => {
+        carry[field.key] = field.default ?? '';
+        if (field.secret || field.type === 'password') {
+            carry[`${field.key}_configured`] = false;
+        }
+        return carry;
+    }, {});
+}
+
+function normalizeSmsProvidersConfig(rawProviders, providerOptions) {
+    const source = rawProviders && typeof rawProviders === 'object' ? rawProviders : {};
+
+    return providerOptions.reduce((carry, provider) => {
+        const oldStyle = source[provider.id] && typeof source[provider.id] === 'object'
+            ? source[provider.id]
+            : {};
+
+        carry[provider.id] = {
+            ...defaultSmsProviderCredentials(provider),
+            ...oldStyle,
+        };
+
+        (provider.fields || []).forEach((field) => {
+            if (field.secret || field.type === 'password') {
+                carry[provider.id][field.key] = '';
+                carry[provider.id][`${field.key}_configured`] = Boolean(oldStyle[`${field.key}_configured`]);
+            }
+        });
+
+        return carry;
+    }, {});
+}
+
+function defaultSmsProviderForm(providerOptions = DEFAULT_SMS_PROVIDER_OPTIONS) {
     return {
         enabled: false,
-        active_provider: 'legacy_gateway',
+        active_provider: providerOptions[0]?.id || 'legacy_gateway',
         fallback_provider: 'none',
         default_prefix: '254',
         reason: 'Updated SMS provider routing settings',
-        legacy_gateway: {
-            gateway_url: '',
-            org_code: '76',
-        },
-        africastalking: {
-            endpoint: 'https://api.africastalking.com/version1/messaging',
-            username: '',
-            api_key: '',
-            api_key_configured: false,
-            sender_id: '',
-        },
+        providers: normalizeSmsProvidersConfig({}, providerOptions),
         markets: {},
     };
 }
 
 function buildSmsProviderForm(smsProvider) {
-    const fallback = defaultSmsProviderForm();
+    const providerOptions = smsProviderOptionsFromConfig(smsProvider);
+    const fallback = defaultSmsProviderForm(providerOptions);
+
     if (!smsProvider) {
         return fallback;
     }
@@ -334,71 +515,93 @@ function buildSmsProviderForm(smsProvider) {
         ? smsProvider.markets
         : {};
 
+    const globalProviderSource = {
+        ...(smsProvider.providers || {}),
+    };
+
+    // Backward compatibility for old saved shape.
+    providerOptions.forEach((provider) => {
+        if (smsProvider[provider.id] && typeof smsProvider[provider.id] === 'object') {
+            globalProviderSource[provider.id] = {
+                ...(globalProviderSource[provider.id] || {}),
+                ...smsProvider[provider.id],
+            };
+        }
+    });
+
     const markets = Object.fromEntries(
-        Object.entries(rawMarkets).map(([platformId, entry]) => [
-            platformId,
-            {
-                active_provider: entry?.active_provider ?? null,
-                fallback_provider: entry?.fallback_provider ?? null,
-                africastalking: {
-                    username: entry?.africastalking?.username ?? '',
-                    api_key: '',
-                    api_key_configured: Boolean(entry?.africastalking?.api_key_configured),
-                    sender_id: entry?.africastalking?.sender_id ?? '',
+        Object.entries(rawMarkets).map(([platformId, entry]) => {
+            const marketProviderSource = {
+                ...(entry?.providers || {}),
+            };
+
+            // Backward compatibility for old saved shape.
+            providerOptions.forEach((provider) => {
+                if (entry?.[provider.id] && typeof entry[provider.id] === 'object') {
+                    marketProviderSource[provider.id] = {
+                        ...(marketProviderSource[provider.id] || {}),
+                        ...entry[provider.id],
+                    };
+                }
+            });
+
+            return [
+                platformId,
+                {
+                    active_provider: entry?.active_provider ?? null,
+                    fallback_provider: entry?.fallback_provider ?? null,
+                    providers: normalizeSmsProvidersConfig(marketProviderSource, providerOptions),
                 },
-                legacy_gateway: {
-                    gateway_url: entry?.legacy_gateway?.gateway_url ?? '',
-                    org_code: entry?.legacy_gateway?.org_code ?? '',
-                },
-            },
-        ])
+            ];
+        })
     );
 
     return {
         ...fallback,
         enabled: Boolean(smsProvider.enabled),
-        active_provider: smsProvider.active_provider || 'legacy_gateway',
+        active_provider: smsProvider.active_provider || fallback.active_provider,
         fallback_provider: smsProvider.fallback_provider || 'none',
         default_prefix: smsProvider.default_prefix || '254',
-        legacy_gateway: {
-            gateway_url: smsProvider.legacy_gateway?.gateway_url || '',
-            org_code: smsProvider.legacy_gateway?.org_code || '76',
-        },
-        africastalking: {
-            endpoint: smsProvider.africastalking?.endpoint || fallback.africastalking.endpoint,
-            username: smsProvider.africastalking?.username || '',
-            api_key: '',
-            api_key_configured: Boolean(smsProvider.africastalking?.api_key_configured),
-            sender_id: smsProvider.africastalking?.sender_id || '',
-        },
+        providers: normalizeSmsProvidersConfig(globalProviderSource, providerOptions),
         markets,
     };
 }
 
-function smsConfigReady(globalForm, marketEntry = null) {
-    const provider = marketEntry?.active_provider || globalForm.active_provider;
+function smsConfigReady(globalForm, marketEntry = null, providerOptions = DEFAULT_SMS_PROVIDER_OPTIONS) {
+    const providerId = marketEntry?.active_provider || globalForm.active_provider;
+    const provider = providerOptions.find((item) => item.id === providerId);
 
-    if (provider === 'africastalking') {
-        const username = marketEntry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
-        const keyConfigured = marketEntry?.africastalking?.api_key_configured
-            || marketEntry?.africastalking?.api_key?.trim()
-            || globalForm.africastalking.api_key_configured
-            || globalForm.africastalking.api_key?.trim();
-
-        return Boolean(username) && Boolean(keyConfigured);
+    if (!provider) {
+        return false;
     }
 
-    const gatewayUrl = marketEntry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
-    const orgCode = marketEntry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
+    const globalCredentials = globalForm.providers?.[providerId] || {};
+    const marketCredentials = marketEntry?.providers?.[providerId] || {};
+    const mergedCredentials = {
+        ...globalCredentials,
+        ...Object.fromEntries(
+            Object.entries(marketCredentials).filter(([, value]) => value !== null && value !== undefined && value !== '')
+        ),
+    };
 
-    return Boolean(gatewayUrl) && Boolean(orgCode);
+    return (provider.fields || [])
+        .filter((field) => field.required)
+        .every((field) => {
+            const value = mergedCredentials[field.key];
+            const configuredFlag = mergedCredentials[`${field.key}_configured`];
+
+            if (field.secret || field.type === 'password') {
+                return Boolean(String(value || '').trim()) || Boolean(configuredFlag);
+            }
+
+            return Boolean(String(value || '').trim());
+        });
 }
 
 function pushProviderLabel(providerId) {
     if (providerId === 'webpushr') return 'WebPushr';
     if (providerId === 'wonderpush') return 'WonderPush';
     if (providerId === 'izooto') return 'iZooto';
-    if (providerId === 'exoticpush') return 'Exotic Push Engine';
     return 'Unknown';
 }
 
@@ -600,13 +803,6 @@ function defaultPushPlatformConfig(defaultProvider = 'webpushr') {
             api_token: '',
             api_token_configured: false,
         },
-        exoticpush: {
-            site_id: '',
-            api_key: '',
-            auth_token: '',
-            api_key_configured: false,
-            auth_token_configured: false,
-        },
     };
 }
 
@@ -617,28 +813,6 @@ function defaultPushProviderForm() {
         reason: 'Updated push provider routing settings',
         platforms: {},
     };
-}
-
-function pushPlatformReady(config, defaultProvider = 'webpushr') {
-    const active = config?.active_provider || defaultProvider || 'webpushr';
-
-    if (active === 'webpushr') {
-        return Boolean((config?.webpushr?.auth_token?.trim?.() || config?.webpushr?.auth_token_configured)
-            && (config?.webpushr?.api_key?.trim?.() || config?.webpushr?.api_key_configured));
-    }
-
-    if (active === 'wonderpush') {
-        return Boolean(config?.wonderpush?.project_id?.trim?.())
-            && Boolean(config?.wonderpush?.access_token?.trim?.() || config?.wonderpush?.access_token_configured);
-    }
-
-    if (active === 'exoticpush') {
-        return Boolean(config?.exoticpush?.site_id?.trim?.())
-            && Boolean(config?.exoticpush?.api_key?.trim?.() || config?.exoticpush?.api_key_configured)
-            && Boolean(config?.exoticpush?.auth_token?.trim?.() || config?.exoticpush?.auth_token_configured);
-    }
-
-    return Boolean(config?.izooto?.api_token?.trim?.() || config?.izooto?.api_token_configured);
 }
 
 function buildPushProviderForm(pushProvider, platformRows = []) {
@@ -686,15 +860,6 @@ function buildPushProviderForm(pushProvider, platformRows = []) {
             ...(next.izooto || {}),
             api_token: '',
             api_token_configured: Boolean(next.izooto?.api_token_configured),
-        };
-        merged.exoticpush = {
-            ...merged.exoticpush,
-            ...(next.exoticpush || {}),
-            site_id: next.exoticpush?.site_id || '',
-            api_key: '',
-            auth_token: '',
-            api_key_configured: Boolean(next.exoticpush?.api_key_configured),
-            auth_token_configured: Boolean(next.exoticpush?.auth_token_configured),
         };
 
         base.platforms[String(platformId)] = merged;
@@ -934,7 +1099,6 @@ function defaultWalletPlatformForm(currency = 'KES') {
         supported_currencies: [currency],
         effective_currencies: [currency],
         multi_currency_wallet_enabled: false,
-        min_single_topup: '100.00',
         max_single_topup: '50000.00',
         max_wallet_balance: '200000.00',
         topup_presets: presets,
@@ -943,7 +1107,6 @@ function defaultWalletPlatformForm(currency = 'KES') {
         },
         limits_by_currency: {
             [currency]: {
-                min_single_topup: '100.00',
                 max_single_topup: '50000.00',
                 max_wallet_balance: '200000.00',
             },
@@ -982,9 +1145,6 @@ function buildWalletPlatformForm(platform) {
     }, {});
     const limitsByCurrency = supportedCurrencies.reduce((carry, currency) => {
         carry[currency] = {
-            min_single_topup: wallet.limits_by_currency?.[currency]?.min_single_topup
-                || (currency === primaryCurrency ? wallet.min_single_topup : '')
-                || fallback.min_single_topup,
             max_single_topup: wallet.limits_by_currency?.[currency]?.max_single_topup
                 || (currency === primaryCurrency ? wallet.max_single_topup : '')
                 || fallback.max_single_topup,
@@ -1005,7 +1165,6 @@ function buildWalletPlatformForm(platform) {
             ? platform.effective_currencies.map((value) => String(value).toUpperCase())
             : [primaryCurrency],
         multi_currency_wallet_enabled: Boolean(platform?.multi_currency_wallet_enabled),
-        min_single_topup: wallet.min_single_topup || fallback.min_single_topup,
         max_single_topup: wallet.max_single_topup || fallback.max_single_topup,
         max_wallet_balance: wallet.max_wallet_balance || fallback.max_wallet_balance,
         topup_presets: Array.isArray(wallet.topup_presets) && wallet.topup_presets.length > 0
@@ -1129,14 +1288,14 @@ function dedupeModeLabel(mode) {
 }
 
 function IntegrationsWorkspace({
-    canCreateMarkets,
-    canEditPaymentLinks,
-    canManageMarkets,
-    canManagePushProviders,
-    canManageWalletSystem,
-    canManageWalletPlatforms,
-    currentUserEmail,
-}) {
+                                   canCreateMarkets,
+                                   canEditPaymentLinks,
+                                   canManageMarkets,
+                                   canManagePushProviders,
+                                   canManageWalletSystem,
+                                   canManageWalletPlatforms,
+                                   currentUserEmail,
+                               }) {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [integrationArea, setIntegrationArea] = useState('overview');
@@ -1242,7 +1401,7 @@ function IntegrationsWorkspace({
     const [freeTrialPinForm, setFreeTrialPinForm] = useState(defaultFreeTrialPinForm());
     const [discountConfigReason, setDiscountConfigReason] = useState('Updated market discount guardrails');
 
-    const { data, isLoading, error: integrationsError } = useQuery({
+    const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
     });
@@ -1255,8 +1414,12 @@ function IntegrationsWorkspace({
     const walletProviderKeys = walletConfig.provider_keys || ['pesapal', 'paystack', 'mpesa_stk'];
     const walletProviderSchemas = walletConfig.provider_schemas || DEFAULT_WALLET_PROVIDER_SCHEMAS;
     const smsProviderConfig = services.sms_provider || null;
+    const smsProviderOptions = smsProviderOptionsFromConfig(smsProviderConfig);
     const pushProviderConfig = services.push_provider || null;
-    const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
+    const activeProviderLabel = smsProviderLabel(
+        smsProviderConfig?.active_provider || smsProviderOptions[0]?.id || 'legacy_gateway',
+        smsProviderOptions
+    );
     const pushDefaultLabel = pushProviderLabel(pushProviderConfig?.default_provider || 'webpushr');
     const pushConfiguredCount = Object.values(pushProviderConfig?.platforms || {}).length;
     const serviceRows = [
@@ -2175,7 +2338,6 @@ function IntegrationsWorkspace({
                 }
                 if (!limitsByCurrency[currency]) {
                     limitsByCurrency[currency] = {
-                        min_single_topup: currency === current.currency_code ? current.min_single_topup : '',
                         max_single_topup: currency === current.currency_code ? current.max_single_topup : '',
                         max_wallet_balance: currency === current.currency_code ? current.max_wallet_balance : '',
                     };
@@ -2226,11 +2388,7 @@ function IntegrationsWorkspace({
                 },
             },
             ...(currency === current.currency_code
-                ? ({
-                    min_single_topup: field === 'min_single_topup' ? value : current.min_single_topup,
-                    max_single_topup: field === 'max_single_topup' ? value : current.max_single_topup,
-                    max_wallet_balance: field === 'max_wallet_balance' ? value : current.max_wallet_balance,
-                })
+                ? (field === 'max_single_topup' ? { max_single_topup: value } : { max_wallet_balance: value })
                 : {}),
         }));
     };
@@ -2332,23 +2490,16 @@ function IntegrationsWorkspace({
                 return;
             }
 
-            const minSingleTopup = String(walletPlatformForm.limits_by_currency?.[currency]?.min_single_topup || '').trim();
             const maxSingleTopup = String(walletPlatformForm.limits_by_currency?.[currency]?.max_single_topup || '').trim();
             const maxWalletBalance = String(walletPlatformForm.limits_by_currency?.[currency]?.max_wallet_balance || '').trim();
 
-            if (!minSingleTopup || !maxSingleTopup || !maxWalletBalance) {
-                toast.error(`${currency} needs min top-up, max single top-up, and max wallet balance.`);
-                return;
-            }
-
-            if (Number(minSingleTopup) > Number(maxSingleTopup)) {
-                toast.error(`${currency} minimum top-up cannot exceed the max single top-up.`);
+            if (!maxSingleTopup || !maxWalletBalance) {
+                toast.error(`${currency} needs both max single top-up and max wallet balance.`);
                 return;
             }
 
             topupPresetsByCurrency[currency] = presets;
             limitsByCurrency[currency] = {
-                min_single_topup: minSingleTopup,
                 max_single_topup: maxSingleTopup,
                 max_wallet_balance: maxWalletBalance,
             };
@@ -2371,7 +2522,6 @@ function IntegrationsWorkspace({
                 currency_code: primaryCurrency,
                 supported_currencies: supportedCurrencies,
                 multi_currency_wallet_enabled: Boolean(walletPlatformForm.multi_currency_wallet_enabled),
-                min_single_topup: limitsByCurrency[primaryCurrency]?.min_single_topup || walletPlatformForm.min_single_topup.trim(),
                 max_single_topup: limitsByCurrency[primaryCurrency]?.max_single_topup || walletPlatformForm.max_single_topup.trim(),
                 max_wallet_balance: limitsByCurrency[primaryCurrency]?.max_wallet_balance || walletPlatformForm.max_wallet_balance.trim(),
                 topup_presets: topupPresetsByCurrency[primaryCurrency] || [],
@@ -2514,54 +2664,73 @@ function IntegrationsWorkspace({
         }));
     };
 
+    function serializeSmsProviderCredentials(credentials = {}, provider) {
+        const payload = {};
+
+        (provider.fields || []).forEach((field) => {
+            const rawValue = credentials?.[field.key];
+            const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
+
+            if (field.secret || field.type === 'password') {
+                if (value) {
+                    payload[field.key] = value;
+                }
+                return;
+            }
+
+            payload[field.key] = value ?? '';
+        });
+
+        return payload;
+    }
+
     const saveSmsProviderConfig = () => {
-        const payload = {
+        const providerPayload = smsProviderOptions.reduce((carry, provider) => {
+            carry[provider.id] = serializeSmsProviderCredentials(
+                smsProviderForm.providers?.[provider.id] || {},
+                provider
+            );
+
+            return carry;
+        }, {});
+
+        const marketPayload = Object.fromEntries(
+            Object.entries(smsProviderForm.markets || {}).map(([platformId, entry]) => {
+                const providers = smsProviderOptions.reduce((carry, provider) => {
+                    carry[provider.id] = serializeSmsProviderCredentials(
+                        entry?.providers?.[provider.id] || {},
+                        provider
+                    );
+
+                    return carry;
+                }, {});
+
+                return [
+                    platformId,
+                    {
+                        active_provider: entry.active_provider ?? null,
+                        fallback_provider: entry.fallback_provider ?? null,
+                        providers,
+                    },
+                ];
+            })
+        );
+
+        saveSmsProviderMutation.mutate({
             enabled: Boolean(smsProviderForm.enabled),
             active_provider: smsProviderForm.active_provider,
             fallback_provider: smsProviderForm.fallback_provider,
             default_prefix: smsProviderForm.default_prefix.trim(),
-            legacy_gateway: {
-                gateway_url: smsProviderForm.legacy_gateway.gateway_url.trim(),
-                org_code: smsProviderForm.legacy_gateway.org_code.trim(),
-            },
-            africastalking: {
-                endpoint: smsProviderForm.africastalking.endpoint.trim(),
-                username: smsProviderForm.africastalking.username.trim(),
-                sender_id: smsProviderForm.africastalking.sender_id.trim(),
-            },
-            markets: Object.fromEntries(
-                Object.entries(smsProviderForm.markets || {}).map(([platformId, entry]) => {
-                    const marketAt = entry.africastalking ?? {};
-                    const marketLegacy = entry.legacy_gateway ?? {};
-                    const atPayload = {
-                        username: (marketAt.username ?? '').trim(),
-                        sender_id: (marketAt.sender_id ?? '').trim(),
-                    };
-                    const rotatedApiKey = (marketAt.api_key ?? '').trim();
-                    if (rotatedApiKey) {
-                        atPayload.api_key = rotatedApiKey;
-                    }
+            providers: providerPayload,
 
-                    return [platformId, {
-                        active_provider: entry.active_provider ?? null,
-                        fallback_provider: entry.fallback_provider ?? null,
-                        africastalking: atPayload,
-                        legacy_gateway: {
-                            gateway_url: (marketLegacy.gateway_url ?? '').trim(),
-                            org_code: (marketLegacy.org_code ?? '').trim(),
-                        },
-                    }];
-                })
-            ),
+            // Backward compatibility while backend transition is happening.
+            legacy_gateway: providerPayload.legacy_gateway || {},
+            africastalking: providerPayload.africastalking || {},
+            briq: providerPayload.briq || {},
+
+            markets: marketPayload,
             reason: smsProviderForm.reason.trim(),
-        };
-
-        const submittedApiKey = smsProviderForm.africastalking.api_key.trim();
-        if (submittedApiKey) {
-            payload.africastalking.api_key = submittedApiKey;
-        }
-
-        saveSmsProviderMutation.mutate(payload);
+        });
     };
 
     const ensurePushPlatformConfig = (platformId, currentForm) => {
@@ -2647,7 +2816,6 @@ function IntegrationsWorkspace({
             const webpushr = config?.webpushr || {};
             const wonderpush = config?.wonderpush || {};
             const izooto = config?.izooto || {};
-            const exoticpush = config?.exoticpush || {};
 
             const platformPayload = {
                 active_provider: activeProvider,
@@ -2663,19 +2831,12 @@ function IntegrationsWorkspace({
                 izooto: {
                     api_token: izooto.api_token?.trim() || undefined,
                 },
-                exoticpush: {
-                    site_id: exoticpush.site_id?.trim() || '',
-                    api_key: exoticpush.api_key?.trim() || undefined,
-                    auth_token: exoticpush.auth_token?.trim() || undefined,
-                },
             };
 
             if (!platformPayload.webpushr.auth_token) delete platformPayload.webpushr.auth_token;
             if (!platformPayload.webpushr.api_key) delete platformPayload.webpushr.api_key;
             if (!platformPayload.wonderpush.access_token) delete platformPayload.wonderpush.access_token;
             if (!platformPayload.izooto.api_token) delete platformPayload.izooto.api_token;
-            if (!platformPayload.exoticpush.api_key) delete platformPayload.exoticpush.api_key;
-            if (!platformPayload.exoticpush.auth_token) delete platformPayload.exoticpush.auth_token;
 
             platformsPayload[String(platformId)] = platformPayload;
         });
@@ -3048,27 +3209,28 @@ function IntegrationsWorkspace({
     const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
     const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
     const packageReadyMarkets = platformRows.filter((item) => item.package_setup?.can_go_live).length;
-    const smsReady = smsConfigReady(smsProviderForm);
+    const smsReady = smsConfigReady(smsProviderForm, null, smsProviderOptions);
     const selectedSmsTestMarket = smsTestForm.market_id
         ? (smsProviderForm.markets?.[String(smsTestForm.market_id)] || null)
         : null;
     const selectedSmsTestPlatform = smsTestForm.market_id
         ? (platformRows.find((platform) => String(platform.platform_id) === String(smsTestForm.market_id)) || null)
         : null;
-    const smsTestReady = smsConfigReady(smsProviderForm, selectedSmsTestMarket);
+    const smsTestReady = smsConfigReady(smsProviderForm, selectedSmsTestMarket, smsProviderOptions);
     const smsTestProvider = selectedSmsTestMarket?.active_provider || smsProviderForm.active_provider;
     const fallbackInvalid = smsProviderForm.fallback_provider !== 'none'
         && smsProviderForm.fallback_provider === smsProviderForm.active_provider;
     const fallbackOptions = [
         { value: 'none', label: 'No fallback' },
-        { value: 'legacy_gateway', label: 'Legacy Gateway' },
-        { value: 'africastalking', label: "Africa's Talking" },
+        ...smsProviderOptions.map((provider) => ({
+            value: provider.id,
+            label: provider.label,
+        })),
     ];
     const pushProviderOptions = [
         { value: 'webpushr', label: 'WebPushr' },
         { value: 'wonderpush', label: 'WonderPush' },
         { value: 'izooto', label: 'iZooto' },
-        { value: 'exoticpush', label: 'Exotic Push Engine' },
     ];
     const pushFallbackOptions = [
         { value: 'none', label: 'No fallback' },
@@ -3079,12 +3241,25 @@ function IntegrationsWorkspace({
         : null;
     const selectedPushPlatform = platformRows.find((platform) => String(platform.platform_id) === String(pushPlatformId)) || null;
     const selectedPushProvider = selectedPushConfig?.active_provider || pushProviderForm.default_provider || 'webpushr';
-    const selectedPushReady = pushPlatformReady(selectedPushConfig, pushProviderForm.default_provider);
+    const selectedPushReady = selectedPushProvider === 'webpushr'
+        ? Boolean(selectedPushConfig?.webpushr?.auth_token?.trim() || selectedPushConfig?.webpushr?.auth_token_configured)
+        && Boolean(selectedPushConfig?.webpushr?.api_key?.trim() || selectedPushConfig?.webpushr?.api_key_configured)
+        : selectedPushProvider === 'wonderpush'
+            ? Boolean(selectedPushConfig?.wonderpush?.project_id?.trim())
+            && Boolean(selectedPushConfig?.wonderpush?.access_token?.trim() || selectedPushConfig?.wonderpush?.access_token_configured)
+            : Boolean(selectedPushConfig?.izooto?.api_token?.trim() || selectedPushConfig?.izooto?.api_token_configured);
     const pushFallbackInvalid = Boolean(selectedPushConfig)
         && selectedPushConfig.fallback_provider !== 'none'
         && selectedPushConfig.fallback_provider === selectedPushConfig.active_provider;
     const pushReadyPlatforms = Object.values(pushProviderForm.platforms || {}).filter((config) => {
-        return pushPlatformReady(config, pushProviderForm.default_provider);
+        const active = config?.active_provider || pushProviderForm.default_provider || 'webpushr';
+        if (active === 'webpushr') {
+            return Boolean((config?.webpushr?.auth_token || config?.webpushr?.auth_token_configured) && (config?.webpushr?.api_key || config?.webpushr?.api_key_configured));
+        }
+        if (active === 'wonderpush') {
+            return Boolean(config?.wonderpush?.project_id) && Boolean(config?.wonderpush?.access_token || config?.wonderpush?.access_token_configured);
+        }
+        return Boolean(config?.izooto?.api_token || config?.izooto?.api_token_configured);
     }).length;
     const pushConfiguredPlatforms = Object.keys(pushProviderForm.platforms || {}).length;
     const walletSystemReadOnly = !canManageWalletSystem;
@@ -3138,7 +3313,6 @@ function IntegrationsWorkspace({
     const clientSyncStatusLabel = latestClientSyncRun?.status
         ? latestClientSyncRun.status.replaceAll('_', ' ')
         : 'idle';
-    const latestClientPruned = Number(latestSyncResult?.clients?.pruned || 0);
     const canPushActiveWalletCredentials = selectedHasCredentials && selectedWalletEffectiveMode !== 'disabled';
     const selectedSupportBoardConfigured = Boolean(
         selectedPlatform?.support_board_api_url
@@ -3240,7 +3414,8 @@ function IntegrationsWorkspace({
                     setSmsTestConfirmOpen={setSmsTestConfirmOpen}
                     setSmsTestForm={setSmsTestForm}
                     smsProviderForm={smsProviderForm}
-                    smsProviderLabel={smsProviderLabel}
+                    smsProviderLabel={(providerId) => smsProviderLabel(providerId, smsProviderOptions)}
+                    smsProviderOptions={smsProviderOptions}
                     smsReady={smsReady}
                     smsTestForm={smsTestForm}
                     smsTestReady={smsTestReady}
@@ -4134,16 +4309,7 @@ function IntegrationsWorkspace({
                                                     <div className="space-y-3">
                                                         {(walletPlatformForm.supported_currencies || [walletPlatformForm.currency_code]).map((currency) => (
                                                             <div key={`wallet-currency-${currency}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                                                <div className="grid gap-3 md:grid-cols-3">
-                                                                    <div>
-                                                                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} min top-up</label>
-                                                                        <input
-                                                                            value={walletPlatformForm.limits_by_currency?.[currency]?.min_single_topup || ''}
-                                                                            onChange={(event) => updateWalletLimitByCurrency(currency, 'min_single_topup', event.target.value)}
-                                                                            className="crm-input"
-                                                                            placeholder="Min top-up"
-                                                                        />
-                                                                    </div>
+                                                                <div className="grid gap-3 md:grid-cols-2">
                                                                     <div>
                                                                         <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} max single top-up</label>
                                                                         <input
@@ -4817,325 +4983,325 @@ function IntegrationsWorkspace({
 
             {integrationArea === 'markets' ? (
                 <section className="crm-surface overflow-hidden">
-                <header className="crm-panel-header">
-                    <div>
-                        <h3 className="crm-panel-title">Market Integration Workspace</h3>
-                        <p className="crm-panel-subtitle">Configure credentials, test connectivity, and run manual sync per market.</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] })}
-                            className="crm-btn-secondary px-3 py-2"
-                        >
-                            Refresh
-                        </button>
-                        {canCreateMarkets ? (
-                            <button type="button" onClick={() => setCreateOpen(true)} className="crm-btn-primary px-3 py-2">
-                                Add market
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Market Integration Workspace</h3>
+                            <p className="crm-panel-subtitle">Configure credentials, test connectivity, and run manual sync per market.</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] })}
+                                className="crm-btn-secondary px-3 py-2"
+                            >
+                                Refresh
                             </button>
-                        ) : null}
-                    </div>
-                </header>
+                            {canCreateMarkets ? (
+                                <button type="button" onClick={() => setCreateOpen(true)} className="crm-btn-primary px-3 py-2">
+                                    Add market
+                                </button>
+                            ) : null}
+                        </div>
+                    </header>
 
-                <div className="grid gap-4 p-4 xl:grid-cols-12">
-                    <div className="xl:col-span-5">
-                        <MarketListPanel
-                            formatDateTime={formatDateTime}
-                            isLoading={isLoading}
-                            platformRows={platformRows}
-                            selectedPlatformId={selectedPlatformId}
-                            setSelectedPlatformId={setSelectedPlatformId}
-                            statusChip={statusChip}
-                        />
-                    </div>
+                    <div className="grid gap-4 p-4 xl:grid-cols-12">
+                        <div className="xl:col-span-5">
+                            <MarketListPanel
+                                formatDateTime={formatDateTime}
+                                isLoading={isLoading}
+                                platformRows={platformRows}
+                                selectedPlatformId={selectedPlatformId}
+                                setSelectedPlatformId={setSelectedPlatformId}
+                                statusChip={statusChip}
+                            />
+                        </div>
 
-                    <div className="xl:col-span-7">
-                        {!selectedPlatform || !editor ? (
-                            <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-8 text-sm text-slate-500">
-                                Select a market to edit integration details.
-                            </p>
-                        ) : (
-                            <div className="space-y-4">
-                                <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                    <h4 className="text-sm font-semibold text-slate-900">Market Profile</h4>
-                                    <p className="mt-1 text-xs text-slate-500">Use this form to update credentials and runtime defaults.</p>
-                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        <input
-                                            value={editor.name}
-                                            onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="Market name"
-                                        />
-                                        <input
-                                            value={editor.domain}
-                                            onChange={(event) => setEditor((current) => ({ ...current, domain: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="Domain"
-                                        />
-                                        <input
-                                            value={editor.country}
-                                            onChange={(event) => setEditor((current) => ({ ...current, country: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="Country"
-                                        />
-                                        <input
-                                            value={editor.phone_prefix}
-                                            onChange={(event) => setEditor((current) => ({ ...current, phone_prefix: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="Phone prefix"
-                                        />
-                                        <input
-                                            value={editor.currency_code}
-                                            onChange={(event) => setEditor((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))}
-                                            className="crm-input"
-                                            placeholder="Currency code"
-                                        />
-                                        <input
-                                            value={editor.timezone}
-                                            onChange={(event) => setEditor((current) => ({ ...current, timezone: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="Timezone"
-                                        />
-                                        <input
-                                            value={editor.wp_api_url}
-                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_url: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            placeholder="WordPress Sync API URL"
-                                        />
-                                        <input
-                                            value={editor.support_chat_url}
-                                            onChange={(event) => setEditor((current) => ({ ...current, support_chat_url: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            placeholder="Support board URL (e.g. https://chat.cloud.board.support/...)"
-                                        />
-                                        <input
-                                            value={editor.support_board_api_url}
-                                            onChange={(event) => setEditor((current) => ({ ...current, support_board_api_url: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            placeholder="https://cloud.board.support/script/include/api.php"
-                                        />
-                                        <div className="space-y-1 md:col-span-2">
+                        <div className="xl:col-span-7">
+                            {!selectedPlatform || !editor ? (
+                                <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-8 text-sm text-slate-500">
+                                    Select a market to edit integration details.
+                                </p>
+                            ) : (
+                                <div className="space-y-4">
+                                    <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Market Profile</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Use this form to update credentials and runtime defaults.</p>
+                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
                                             <input
-                                                value={editor.support_board_token}
-                                                onChange={(event) => setEditor((current) => ({ ...current, support_board_token: event.target.value }))}
+                                                value={editor.name}
+                                                onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))}
                                                 className="crm-input"
-                                                placeholder={editor.support_board_token_configured ? '••••••••' : 'Support Board API token'}
+                                                placeholder="Market name"
+                                            />
+                                            <input
+                                                value={editor.domain}
+                                                onChange={(event) => setEditor((current) => ({ ...current, domain: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Domain"
+                                            />
+                                            <input
+                                                value={editor.country}
+                                                onChange={(event) => setEditor((current) => ({ ...current, country: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Country"
+                                            />
+                                            <input
+                                                value={editor.phone_prefix}
+                                                onChange={(event) => setEditor((current) => ({ ...current, phone_prefix: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Phone prefix"
+                                            />
+                                            <input
+                                                value={editor.currency_code}
+                                                onChange={(event) => setEditor((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))}
+                                                className="crm-input"
+                                                placeholder="Currency code"
+                                            />
+                                            <input
+                                                value={editor.timezone}
+                                                onChange={(event) => setEditor((current) => ({ ...current, timezone: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Timezone"
+                                            />
+                                            <input
+                                                value={editor.wp_api_url}
+                                                onChange={(event) => setEditor((current) => ({ ...current, wp_api_url: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="WordPress Sync API URL"
+                                            />
+                                            <input
+                                                value={editor.support_chat_url}
+                                                onChange={(event) => setEditor((current) => ({ ...current, support_chat_url: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="Support board URL (e.g. https://chat.cloud.board.support/...)"
+                                            />
+                                            <input
+                                                value={editor.support_board_api_url}
+                                                onChange={(event) => setEditor((current) => ({ ...current, support_board_api_url: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="https://cloud.board.support/script/include/api.php"
+                                            />
+                                            <div className="space-y-1 md:col-span-2">
+                                                <input
+                                                    value={editor.support_board_token}
+                                                    onChange={(event) => setEditor((current) => ({ ...current, support_board_token: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder={editor.support_board_token_configured ? '••••••••' : 'Support Board API token'}
+                                                    type="password"
+                                                />
+                                                <p className="text-xs text-slate-500">Leave blank to keep the current Support Board token.</p>
+                                            </div>
+                                            <div className="space-y-1 md:col-span-2">
+                                                <input
+                                                    value={editor.support_board_sender_id}
+                                                    onChange={(event) => setEditor((current) => ({ ...current, support_board_sender_id: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="Default Sender ID"
+                                                    type="number"
+                                                    min="1"
+                                                    inputMode="numeric"
+                                                />
+                                                <p className="text-xs text-slate-500">Fallback SB agent ID for replies. Find in SB admin: Users → agent → ID in URL.</p>
+                                            </div>
+                                            <input
+                                                value={editor.wp_api_user}
+                                                onChange={(event) => setEditor((current) => ({ ...current, wp_api_user: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="WordPress API user"
+                                            />
+                                            <input
+                                                value={editor.wp_api_password}
+                                                onChange={(event) => setEditor((current) => ({ ...current, wp_api_password: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="WordPress API password (leave blank to keep)"
                                                 type="password"
                                             />
-                                            <p className="text-xs text-slate-500">Leave blank to keep the current Support Board token.</p>
-                                        </div>
-                                        <div className="space-y-1 md:col-span-2">
                                             <input
-                                                value={editor.support_board_sender_id}
-                                                onChange={(event) => setEditor((current) => ({ ...current, support_board_sender_id: event.target.value }))}
+                                                value={editor.db_host}
+                                                onChange={(event) => setEditor((current) => ({ ...current, db_host: event.target.value }))}
                                                 className="crm-input"
-                                                placeholder="Default Sender ID"
-                                                type="number"
-                                                min="1"
-                                                inputMode="numeric"
+                                                placeholder="WordPress DB host"
                                             />
-                                            <p className="text-xs text-slate-500">Fallback SB agent ID for replies. Find in SB admin: Users → agent → ID in URL.</p>
-                                        </div>
-                                        <input
-                                            value={editor.wp_api_user}
-                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_user: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="WordPress API user"
-                                        />
-                                        <input
-                                            value={editor.wp_api_password}
-                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_password: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="WordPress API password (leave blank to keep)"
-                                            type="password"
-                                        />
-                                        <input
-                                            value={editor.db_host}
-                                            onChange={(event) => setEditor((current) => ({ ...current, db_host: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="WordPress DB host"
-                                        />
-                                        <input
-                                            value={editor.db_name}
-                                            onChange={(event) => setEditor((current) => ({ ...current, db_name: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="WordPress DB name"
-                                        />
-                                        <input
-                                            value={editor.db_user}
-                                            onChange={(event) => setEditor((current) => ({ ...current, db_user: event.target.value }))}
-                                            className="crm-input"
-                                            placeholder="WordPress DB user"
-                                        />
-                                        <div className="space-y-1">
                                             <input
-                                                value={editor.db_pass}
-                                                onChange={(event) => setEditor((current) => ({ ...current, db_pass: event.target.value }))}
+                                                value={editor.db_name}
+                                                onChange={(event) => setEditor((current) => ({ ...current, db_name: event.target.value }))}
                                                 className="crm-input"
-                                                placeholder={editor.db_pass_configured ? '••••••••' : 'WordPress DB password'}
-                                                type="password"
+                                                placeholder="WordPress DB name"
                                             />
-                                            <p className="text-xs text-slate-500">Leave blank to keep the current WordPress DB password.</p>
-                                        </div>
-                                        <input
-                                            value={editor.db_prefix}
-                                            onChange={(event) => setEditor((current) => ({ ...current, db_prefix: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            placeholder="WordPress table prefix (for example wp_)"
-                                        />
-                                        <p className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
-                                            CRM “Provision in WordPress” uses the database connection from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
-                                        </p>
-                                        <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
                                             <input
-                                                type="checkbox"
-                                                checked={editor.is_active}
-                                                onChange={(event) => setEditor((current) => ({ ...current, is_active: event.target.checked }))}
-                                                disabled={!selectedPackagesReady && !editor.is_active}
-                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                value={editor.db_user}
+                                                onChange={(event) => setEditor((current) => ({ ...current, db_user: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="WordPress DB user"
                                             />
-                                            Market is active
-                                        </label>
-                                        {!selectedPackagesReady ? (
-                                            <p className="md:col-span-2 text-xs text-amber-700">
-                                                Package setup is incomplete. Configure at least one active package with pricing before activating this market.
+                                            <div className="space-y-1">
+                                                <input
+                                                    value={editor.db_pass}
+                                                    onChange={(event) => setEditor((current) => ({ ...current, db_pass: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder={editor.db_pass_configured ? '••••••••' : 'WordPress DB password'}
+                                                    type="password"
+                                                />
+                                                <p className="text-xs text-slate-500">Leave blank to keep the current WordPress DB password.</p>
+                                            </div>
+                                            <input
+                                                value={editor.db_prefix}
+                                                onChange={(event) => setEditor((current) => ({ ...current, db_prefix: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="WordPress table prefix (for example wp_)"
+                                            />
+                                            <p className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                                                CRM “Provision in WordPress” uses the database connection from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
                                             </p>
-                                        ) : null}
-                                    </div>
+                                            <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editor.is_active}
+                                                    onChange={(event) => setEditor((current) => ({ ...current, is_active: event.target.checked }))}
+                                                    disabled={!selectedPackagesReady && !editor.is_active}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Market is active
+                                            </label>
+                                            {!selectedPackagesReady ? (
+                                                <p className="md:col-span-2 text-xs text-amber-700">
+                                                    Package setup is incomplete. Configure at least one active package with pricing before activating this market.
+                                                </p>
+                                            ) : null}
+                                        </div>
 
-                                    <div className="mt-3 flex justify-end">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                const {
-                                                    support_board_token_configured,
-                                                    db_pass_configured,
-                                                    ...editorPayload
-                                                } = editor;
-                                                const payload = {
-                                                    ...editorPayload,
-                                                    reason: 'Integration profile update from settings workspace',
-                                                };
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const {
+                                                        support_board_token_configured,
+                                                        db_pass_configured,
+                                                        ...editorPayload
+                                                    } = editor;
+                                                    const payload = {
+                                                        ...editorPayload,
+                                                        reason: 'Integration profile update from settings workspace',
+                                                    };
 
-                                                if (!payload.wp_api_password?.trim()) {
-                                                    delete payload.wp_api_password;
-                                                }
+                                                    if (!payload.wp_api_password?.trim()) {
+                                                        delete payload.wp_api_password;
+                                                    }
 
-                                                if (!payload.db_pass?.trim()) {
-                                                    delete payload.db_pass;
-                                                }
+                                                    if (!payload.db_pass?.trim()) {
+                                                        delete payload.db_pass;
+                                                    }
 
-                                                updatePlatformMutation.mutate({
-                                                    platformId: selectedPlatform.platform_id,
-                                                    payload,
-                                                });
-                                            }}
-                                            disabled={updatePlatformMutation.isPending || !editor.name.trim() || !editor.domain.trim() || !editor.country.trim()}
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {updatePlatformMutation.isPending ? 'Saving...' : 'Save profile'}
-                                        </button>
-                                    </div>
-                                </section>
+                                                    updatePlatformMutation.mutate({
+                                                        platformId: selectedPlatform.platform_id,
+                                                        payload,
+                                                    });
+                                                }}
+                                                disabled={updatePlatformMutation.isPending || !editor.name.trim() || !editor.domain.trim() || !editor.country.trim()}
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {updatePlatformMutation.isPending ? 'Saving...' : 'Save profile'}
+                                            </button>
+                                        </div>
+                                    </section>
 
-                                <section id="market-package-editor" className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <div>
-                                            <h4 className="text-sm font-semibold text-slate-900">Market Packages</h4>
-                                            <p className="text-xs text-slate-500">
-                                                Configure packages and duration pricing for this market. Supported currencies:
-                                                {' '}
-                                                <span className="font-semibold text-slate-700">
+                                    <section id="market-package-editor" className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div>
+                                                <h4 className="text-sm font-semibold text-slate-900">Market Packages</h4>
+                                                <p className="text-xs text-slate-500">
+                                                    Configure packages and duration pricing for this market. Supported currencies:
+                                                    {' '}
+                                                    <span className="font-semibold text-slate-700">
                                                     {(packageEditor?.supported_currencies || [selectedPackageSetup?.currency || selectedPlatform.currency || 'KES']).join(', ')}
                                                 </span>.
-                                            </p>
-                                        </div>
-                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
-                                            selectedPackageSetup?.can_go_live
-                                                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                                                : 'bg-amber-50 text-amber-700 ring-amber-200'
-                                        }`}>
+                                                </p>
+                                            </div>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                                                selectedPackageSetup?.can_go_live
+                                                    ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                                    : 'bg-amber-50 text-amber-700 ring-amber-200'
+                                            }`}>
                                             {selectedPackageSetup?.can_go_live ? 'Package setup complete' : 'Package setup incomplete'}
                                         </span>
-                                    </div>
-
-                                    {!selectedPackageSetup?.can_go_live ? (
-                                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                            <p className="font-semibold">Configure at least one active package with a priced duration to activate this market.</p>
                                         </div>
-                                    ) : null}
 
-                                    <div className="mt-3 space-y-3">
-                                        {(packageEditor?.rows || []).map((row, rowIndex) => (
-                                            <div key={row.id || `new-${rowIndex}`} className={`rounded-md border p-3 ${row.is_active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50'}`}>
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <input
-                                                        type="text"
-                                                        value={row.name}
-                                                        onChange={(e) => updatePackageRow(rowIndex, 'name', e.target.value.toUpperCase())}
-                                                        placeholder="PACKAGE NAME"
-                                                        className="crm-input w-40 font-semibold uppercase"
-                                                    />
-                                                    <input
-                                                        type="text"
-                                                        value={row.display_name}
-                                                        onChange={(e) => updatePackageRow(rowIndex, 'display_name', e.target.value)}
-                                                        placeholder="Display name"
-                                                        className="crm-input w-40"
-                                                    />
-                                                    <select
-                                                        value={row.tier}
-                                                        onChange={(e) => updatePackageRow(rowIndex, 'tier', e.target.value)}
-                                                        className="crm-select w-28"
-                                                    >
-                                                        <option value="basic">Basic</option>
-                                                        <option value="premium">Premium</option>
-                                                        <option value="vip">VIP</option>
-                                                        <option value="vvip">VVIP</option>
-                                                        <option value="custom">Custom</option>
-                                                    </select>
-                                                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                                        {!selectedPackageSetup?.can_go_live ? (
+                                            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                <p className="font-semibold">Configure at least one active package with a priced duration to activate this market.</p>
+                                            </div>
+                                        ) : null}
+
+                                        <div className="mt-3 space-y-3">
+                                            {(packageEditor?.rows || []).map((row, rowIndex) => (
+                                                <div key={row.id || `new-${rowIndex}`} className={`rounded-md border p-3 ${row.is_active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50'}`}>
+                                                    <div className="flex flex-wrap items-center gap-2">
                                                         <input
-                                                            type="checkbox"
-                                                            checked={row.is_active}
-                                                            onChange={(e) => updatePackageRow(rowIndex, 'is_active', e.target.checked)}
-                                                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            type="text"
+                                                            value={row.name}
+                                                            onChange={(e) => updatePackageRow(rowIndex, 'name', e.target.value.toUpperCase())}
+                                                            placeholder="PACKAGE NAME"
+                                                            className="crm-input w-40 font-semibold uppercase"
                                                         />
-                                                        Active
-                                                    </label>
-                                                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
                                                         <input
-                                                            type="checkbox"
-                                                            checked={row.is_public !== false}
-                                                            onChange={(e) => updatePackageRow(rowIndex, 'is_public', e.target.checked)}
-                                                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            type="text"
+                                                            value={row.display_name}
+                                                            onChange={(e) => updatePackageRow(rowIndex, 'display_name', e.target.value)}
+                                                            placeholder="Display name"
+                                                            className="crm-input w-40"
                                                         />
-                                                        Website
-                                                    </label>
-                                                    {row.is_public === false ? (
-                                                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 ring-1 ring-inset ring-slate-200">
+                                                        <select
+                                                            value={row.tier}
+                                                            onChange={(e) => updatePackageRow(rowIndex, 'tier', e.target.value)}
+                                                            className="crm-select w-28"
+                                                        >
+                                                            <option value="basic">Basic</option>
+                                                            <option value="premium">Premium</option>
+                                                            <option value="vip">VIP</option>
+                                                            <option value="vvip">VVIP</option>
+                                                            <option value="custom">Custom</option>
+                                                        </select>
+                                                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={row.is_active}
+                                                                onChange={(e) => updatePackageRow(rowIndex, 'is_active', e.target.checked)}
+                                                                className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            />
+                                                            Active
+                                                        </label>
+                                                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={row.is_public !== false}
+                                                                onChange={(e) => updatePackageRow(rowIndex, 'is_public', e.target.checked)}
+                                                                className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            />
+                                                            Website
+                                                        </label>
+                                                        {row.is_public === false ? (
+                                                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 ring-1 ring-inset ring-slate-200">
                                                             CRM only
                                                         </span>
-                                                    ) : null}
-                                                    {row.origin === 'sales' ? (
-                                                        <span className="rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-teal-700 ring-1 ring-inset ring-teal-100">
+                                                        ) : null}
+                                                        {row.origin === 'sales' ? (
+                                                            <span className="rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-teal-700 ring-1 ring-inset ring-teal-100">
                                                             Sales-created{row.creator?.name ? ` - ${row.creator.name}` : ''}
                                                         </span>
-                                                    ) : null}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removePackageRow(rowIndex)}
-                                                        className="ml-auto text-xs text-rose-500 hover:text-rose-700"
-                                                        title="Remove package"
-                                                    >
-                                                        Remove
-                                                    </button>
-                                                </div>
+                                                        ) : null}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removePackageRow(rowIndex)}
+                                                            className="ml-auto text-xs text-rose-500 hover:text-rose-700"
+                                                            title="Remove package"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
 
-                                                <div className="mt-2">
-                                                    <table className="w-full text-xs">
-                                                        <thead>
+                                                    <div className="mt-2">
+                                                        <table className="w-full text-xs">
+                                                            <thead>
                                                             <tr className="text-left text-slate-400 uppercase tracking-wider">
                                                                 <th className="px-1 py-1 font-medium">Duration</th>
                                                                 <th className="px-1 py-1 font-medium">Currency</th>
@@ -5144,8 +5310,8 @@ function IntegrationsWorkspace({
                                                                 <th className="px-1 py-1 font-medium">On</th>
                                                                 <th className="px-1 py-1 font-medium"></th>
                                                             </tr>
-                                                        </thead>
-                                                        <tbody>
+                                                            </thead>
+                                                            <tbody>
                                                             {row.prices.map((price, priceIndex) => (
                                                                 <tr key={price.id || `price-${priceIndex}`}>
                                                                     <td className="px-1 py-1">
@@ -5221,553 +5387,544 @@ function IntegrationsWorkspace({
                                                                     </td>
                                                                 </tr>
                                                             ))}
-                                                        </tbody>
-                                                    </table>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => addPriceRow(rowIndex)}
-                                                        className="mt-1 text-xs text-teal-600 hover:text-teal-800"
-                                                    >
-                                                        + Add duration
-                                                    </button>
+                                                            </tbody>
+                                                        </table>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => addPriceRow(rowIndex)}
+                                                            className="mt-1 text-xs text-teal-600 hover:text-teal-800"
+                                                        >
+                                                            + Add duration
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    <button
-                                        type="button"
-                                        onClick={addPackageRow}
-                                        className="mt-3 w-full rounded-md border border-dashed border-slate-300 py-2 text-xs text-slate-500 hover:border-teal-300 hover:text-teal-700"
-                                    >
-                                        + Add package
-                                    </button>
-
-                                    <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
-                                        <input
-                                            value={packageEditor?.reason || ''}
-                                            onChange={(event) => setPackageEditor((current) => (current ? { ...current, reason: event.target.value } : current))}
-                                            className="crm-input"
-                                            placeholder="Reason for package catalog update"
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={savePackageCatalog}
-                                            disabled={savePackageCatalogMutation.isPending || !packageEditor?.reason?.trim()}
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {savePackageCatalogMutation.isPending ? 'Saving...' : 'Save packages'}
-                                        </button>
-                                    </div>
-                                </section>
-
-                                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <h4 className="text-sm font-semibold text-slate-900">Payment Link Providers</h4>
-                                    <p className="mt-1 text-xs text-slate-500">Provider routing is managed in the dedicated Payment Links workspace for faster access from operations.</p>
-                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                                        <p className="text-xs text-slate-500">Selected market: <span className="font-semibold text-slate-700">{selectedPlatform.platform_name}</span></p>
-                                        <button
-                                            type="button"
-                                            onClick={() => setIntegrationArea('payment_links')}
-                                            className="crm-btn-secondary px-3 py-2"
-                                        >
-                                            Open payment links workspace
-                                        </button>
-                                    </div>
-                                </section>
-
-                                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <div>
-                                            <h4 className="text-sm font-semibold text-slate-900">Connection Health</h4>
-                                            <p className="text-xs text-slate-500">Last checked: {formatDateTime(selectedPlatform.wp_sync?.last_checked_at)}</p>
+                                            ))}
                                         </div>
-                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(selectedPlatform.wp_sync?.status || 'pending')}`}>
-                                            {(selectedPlatform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
-                                        </span>
-                                    </div>
-                                    {selectedPlatform.wp_sync?.last_error ? (
-                                        <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                                            {selectedPlatform.wp_sync.last_error}
-                                        </p>
-                                    ) : null}
-                                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                                        <input
-                                            value={testReason}
-                                            onChange={(event) => setTestReason(event.target.value)}
-                                            className="crm-input min-w-[260px] flex-1"
-                                            placeholder="Reason for connection test"
-                                        />
+
                                         <button
                                             type="button"
-                                            onClick={() => testConnectionMutation.mutate({
-                                                platformId: selectedPlatform.platform_id,
-                                                payload: { reason: testReason },
-                                            })}
-                                            disabled={!selectedHasCredentials || testConnectionMutation.isPending || !testReason.trim()}
-                                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={addPackageRow}
+                                            className="mt-3 w-full rounded-md border border-dashed border-slate-300 py-2 text-xs text-slate-500 hover:border-teal-300 hover:text-teal-700"
                                         >
-                                            {testConnectionMutation.isPending ? 'Testing...' : 'Test connection'}
+                                            + Add package
                                         </button>
-                                    </div>
-                                    {!selectedHasCredentials ? (
-                                        <p className="mt-2 text-xs text-amber-700">Add WordPress credentials to enable connection tests.</p>
-                                    ) : null}
-                                </section>
 
-                                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <h4 className="text-sm font-semibold text-slate-900">Manual Sync</h4>
-                                    <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings. Full client syncs reconcile the CRM table to WordPress and remove stale source records.</p>
-                                    {showInitialFullSyncCta ? (
-                                        <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/70 p-3">
-                                            <p className="text-xs font-semibold text-teal-800">New market onboarding</p>
-                                            <p className="mt-1 text-xs text-teal-700">Recommended first step: run a full clients sync to import all profiles before sales starts working this market.</p>
+                                        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                                            <input
+                                                value={packageEditor?.reason || ''}
+                                                onChange={(event) => setPackageEditor((current) => (current ? { ...current, reason: event.target.value } : current))}
+                                                className="crm-input"
+                                                placeholder="Reason for package catalog update"
+                                            />
                                             <button
                                                 type="button"
-                                                onClick={openInitialFullSync}
-                                                disabled={runSyncMutation.isPending}
-                                                className="mt-2 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                                onClick={savePackageCatalog}
+                                                disabled={savePackageCatalogMutation.isPending || !packageEditor?.reason?.trim()}
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                             >
-                                                Run initial full sync
+                                                {savePackageCatalogMutation.isPending ? 'Saving...' : 'Save packages'}
                                             </button>
                                         </div>
-                                    ) : null}
-                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        <select
-                                            value={syncForm.scope}
-                                            onChange={(event) => setSyncForm((current) => ({ ...current, scope: event.target.value }))}
-                                            className="crm-select"
-                                        >
-                                            <option value="leads">Leads only</option>
-                                            <option value="clients">Clients only</option>
-                                        </select>
-                                        <select
-                                            value={syncForm.mode}
-                                            onChange={(event) => setSyncForm((current) => ({ ...current, mode: event.target.value }))}
-                                            className="crm-select"
-                                            disabled={syncForm.scope === 'leads'}
-                                        >
-                                            <option value="delta">Delta</option>
-                                            <option value="full">Full</option>
-                                        </select>
-                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Payment Link Providers</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Provider routing is managed in the dedicated Payment Links workspace for faster access from operations.</p>
+                                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                            <p className="text-xs text-slate-500">Selected market: <span className="font-semibold text-slate-700">{selectedPlatform.platform_name}</span></p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIntegrationArea('payment_links')}
+                                                className="crm-btn-secondary px-3 py-2"
+                                            >
+                                                Open payment links workspace
+                                            </button>
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div>
+                                                <h4 className="text-sm font-semibold text-slate-900">Connection Health</h4>
+                                                <p className="text-xs text-slate-500">Last checked: {formatDateTime(selectedPlatform.wp_sync?.last_checked_at)}</p>
+                                            </div>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(selectedPlatform.wp_sync?.status || 'pending')}`}>
+                                            {(selectedPlatform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
+                                        </span>
+                                        </div>
+                                        {selectedPlatform.wp_sync?.last_error ? (
+                                            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                                                {selectedPlatform.wp_sync.last_error}
+                                            </p>
+                                        ) : null}
+                                        <div className="mt-3 flex flex-wrap items-center gap-2">
                                             <input
-                                                type="checkbox"
-                                                checked={syncForm.dry_run}
-                                                onChange={(event) => setSyncForm((current) => ({ ...current, dry_run: event.target.checked }))}
-                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                value={testReason}
+                                                onChange={(event) => setTestReason(event.target.value)}
+                                                className="crm-input min-w-[260px] flex-1"
+                                                placeholder="Reason for connection test"
                                             />
-                                            Dry run
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min="20"
-                                            max="200"
-                                            value={syncForm.per_page}
-                                            onChange={(event) => setSyncForm((current) => ({ ...current, per_page: Number(event.target.value || 100) }))}
-                                            className="crm-input"
-                                            placeholder="Per page"
-                                        />
-                                        <textarea
-                                            value={syncForm.reason}
-                                            onChange={(event) => setSyncForm((current) => ({ ...current, reason: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            rows={2}
-                                            placeholder="Reason for manual sync"
-                                        />
-                                    </div>
-                                    <div className="mt-3 flex justify-end">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSyncConfirmOpen(true)}
-                                            disabled={
-                                                runSyncMutation.isPending
-                                                || !selectedHasCredentials
-                                                || !syncForm.reason.trim()
-                                                || (syncForm.scope === 'clients' && !clientSyncQueueReady)
-                                            }
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {runSyncMutation.isPending ? 'Running...' : (syncForm.scope === 'clients' ? 'Queue sync' : 'Run sync')}
-                                        </button>
-                                    </div>
-                                    {syncForm.scope === 'clients' && !clientSyncQueueReady ? (
-                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                                            <p className="font-semibold">Background queue not ready</p>
-                                            <p className="mt-1">{clientSyncQueue?.issues?.[0] || 'Background client sync is currently unavailable.'}</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => testConnectionMutation.mutate({
+                                                    platformId: selectedPlatform.platform_id,
+                                                    payload: { reason: testReason },
+                                                })}
+                                                disabled={!selectedHasCredentials || testConnectionMutation.isPending || !testReason.trim()}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {testConnectionMutation.isPending ? 'Testing...' : 'Test connection'}
+                                            </button>
                                         </div>
-                                    ) : null}
-                                    {latestSyncResult ? (
-                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
-                                            <p className="font-semibold text-slate-800">Latest sync summary</p>
-                                            <p className="mt-1">Scope: {latestSyncResult.scope || selectedPlatform.sync?.last_scope || 'unknown'} • Dry run: {latestSyncResult.dry_run ? 'yes' : 'no'}</p>
-                                            {latestSyncResult.clients ? (
-                                                <p>
-                                                    Clients: {latestSyncResult.clients.created || 0} created, {latestSyncResult.clients.updated || 0} updated
-                                                    {Number(latestSyncResult.clients.pruned || 0) > 0 ? `, ${Number(latestSyncResult.clients.pruned || 0).toLocaleString()} stale deleted` : ''}
-                                                </p>
-                                            ) : null}
-                                            {latestSyncResult.leads ? (
-                                                <p>Leads: {latestSyncResult.leads.created || 0} created, {latestSyncResult.leads.updated || 0} updated, {latestSyncResult.leads.errors?.length || 0} errors</p>
-                                            ) : null}
+                                        {!selectedHasCredentials ? (
+                                            <p className="mt-2 text-xs text-amber-700">Add WordPress credentials to enable connection tests.</p>
+                                        ) : null}
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Manual Sync</h4>
+                                        <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings.</p>
+                                        {showInitialFullSyncCta ? (
+                                            <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/70 p-3">
+                                                <p className="text-xs font-semibold text-teal-800">New market onboarding</p>
+                                                <p className="mt-1 text-xs text-teal-700">Recommended first step: run a full clients sync to import all profiles before sales starts working this market.</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={openInitialFullSync}
+                                                    disabled={runSyncMutation.isPending}
+                                                    className="mt-2 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    Run initial full sync
+                                                </button>
+                                            </div>
+                                        ) : null}
+                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                            <select
+                                                value={syncForm.scope}
+                                                onChange={(event) => setSyncForm((current) => ({ ...current, scope: event.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                <option value="leads">Leads only</option>
+                                                <option value="clients">Clients only</option>
+                                            </select>
+                                            <select
+                                                value={syncForm.mode}
+                                                onChange={(event) => setSyncForm((current) => ({ ...current, mode: event.target.value }))}
+                                                className="crm-select"
+                                                disabled={syncForm.scope === 'leads'}
+                                            >
+                                                <option value="delta">Delta</option>
+                                                <option value="full">Full</option>
+                                            </select>
+                                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={syncForm.dry_run}
+                                                    onChange={(event) => setSyncForm((current) => ({ ...current, dry_run: event.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Dry run
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="20"
+                                                max="200"
+                                                value={syncForm.per_page}
+                                                onChange={(event) => setSyncForm((current) => ({ ...current, per_page: Number(event.target.value || 100) }))}
+                                                className="crm-input"
+                                                placeholder="Per page"
+                                            />
+                                            <textarea
+                                                value={syncForm.reason}
+                                                onChange={(event) => setSyncForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                rows={2}
+                                                placeholder="Reason for manual sync"
+                                            />
                                         </div>
-                                    ) : null}
-                                    {latestClientSyncRun ? (
-                                        <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <p className="font-semibold text-slate-800">Client sync run</p>
-                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestClientSyncRun.status)}`}>
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSyncConfirmOpen(true)}
+                                                disabled={
+                                                    runSyncMutation.isPending
+                                                    || !selectedHasCredentials
+                                                    || !syncForm.reason.trim()
+                                                    || (syncForm.scope === 'clients' && !clientSyncQueueReady)
+                                                }
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {runSyncMutation.isPending ? 'Running...' : (syncForm.scope === 'clients' ? 'Queue sync' : 'Run sync')}
+                                            </button>
+                                        </div>
+                                        {syncForm.scope === 'clients' && !clientSyncQueueReady ? (
+                                            <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                                <p className="font-semibold">Background queue not ready</p>
+                                                <p className="mt-1">{clientSyncQueue?.issues?.[0] || 'Background client sync is currently unavailable.'}</p>
+                                            </div>
+                                        ) : null}
+                                        {latestSyncResult ? (
+                                            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                                                <p className="font-semibold text-slate-800">Latest sync summary</p>
+                                                <p className="mt-1">Scope: {latestSyncResult.scope || selectedPlatform.sync?.last_scope || 'unknown'} • Dry run: {latestSyncResult.dry_run ? 'yes' : 'no'}</p>
+                                                {latestSyncResult.clients ? (
+                                                    <p>Clients: {latestSyncResult.clients.created || 0} created, {latestSyncResult.clients.updated || 0} updated</p>
+                                                ) : null}
+                                                {latestSyncResult.leads ? (
+                                                    <p>Leads: {latestSyncResult.leads.created || 0} created, {latestSyncResult.leads.updated || 0} updated, {latestSyncResult.leads.errors?.length || 0} errors</p>
+                                                ) : null}
+                                            </div>
+                                        ) : null}
+                                        {latestClientSyncRun ? (
+                                            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <p className="font-semibold text-slate-800">Client sync run</p>
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestClientSyncRun.status)}`}>
                                                     {clientSyncStatusLabel}
                                                 </span>
-                                            </div>
-                                            <p className="mt-2">
-                                                Protocol: <span className="font-medium text-slate-900">{latestClientSyncRun.protocol || selectedPlatform?.client_sync?.protocol || 'pending'}</span>
-                                                {' • '}
-                                                Processed: <span className="font-medium text-slate-900">{latestClientSyncRun.processed || 0}</span>
-                                                {' • '}
-                                                Created/updated: <span className="font-medium text-slate-900">{latestClientSyncRun.created || 0}/{latestClientSyncRun.updated || 0}</span>
-                                                {latestClientPruned > 0 ? (
-                                                    <>
-                                                        {' • '}
-                                                        Deleted stale: <span className="font-medium text-slate-900">{latestClientPruned.toLocaleString()}</span>
-                                                    </>
-                                                ) : null}
-                                            </p>
-                                            <p className="mt-1">
-                                                Started: <span className="font-medium text-slate-900">{formatDateTime(latestClientSyncRun.started_at || latestClientSyncRun.created_at)}</span>
-                                                {latestClientSyncRun.in_progress ? ' • Sync continues in the background.' : ''}
-                                            </p>
-                                            {selectedPlatform?.client_sync?.legacy_correctness_risk ? (
-                                                <p className="mt-1 text-amber-700">This market is still using the legacy plugin contract, so reconciliation remains best-effort until the v2 plugin is deployed.</p>
-                                            ) : null}
-                                            {latestClientSyncRun.queue?.message ? (
-                                                <p className="mt-1 text-amber-700">{latestClientSyncRun.queue.message}</p>
-                                            ) : null}
-                                            {latestClientSyncRun.error_details?.[0]?.message ? (
-                                                <p className="mt-1 text-rose-700">{latestClientSyncRun.error_details[0].message}</p>
-                                            ) : null}
-                                        </div>
-                                    ) : null}
-                                </section>
-
-                                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <h4 className="text-sm font-semibold text-slate-900">Support Board Link Sync</h4>
-                                    <p className="text-xs text-slate-500">Backfill the local chat-match cache so the Clients filter can find matched profiles without opening each chat tab. Syncs now run in the background and continue even if you leave this page.</p>
-                                    <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
-                                        <p className="font-semibold">How it runs</p>
-                                        <p className="mt-1">
-                                            Incremental mode checks only clients without an existing Support Board link.
-                                            Revalidation mode checks all clients in this market and refreshes stale matches.
-                                        </p>
-                                    </div>
-                                    {!supportBoardSyncQueueReady ? (
-                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                                            <p className="font-semibold">Background queue not ready</p>
-                                            <p className="mt-1">{supportBoardSyncQueue?.issues?.[0] || 'Support Board background sync is currently unavailable.'}</p>
-                                        </div>
-                                    ) : null}
-                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        <label className="flex items-center gap-2 text-sm text-slate-700">
-                                            <input
-                                                type="checkbox"
-                                                checked={supportBoardSyncForm.refresh}
-                                                onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, refresh: event.target.checked }))}
-                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                            />
-                                            Revalidate existing matches
-                                        </label>
-                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                                            Scope:
-                                            {' '}
-                                            <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
-                                        </div>
-                                        <textarea
-                                            value={supportBoardSyncForm.reason}
-                                            onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, reason: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            rows={2}
-                                            placeholder="Reason for Support Board link sync"
-                                        />
-                                    </div>
-                                    <div className="mt-3 flex justify-end">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSupportBoardSyncConfirmOpen(true)}
-                                            disabled={
-                                                !canManageMarkets
-                                                || runSupportBoardSyncMutation.isPending
-                                                || supportBoardSyncActive
-                                                || !supportBoardSyncQueueReady
-                                                || !selectedSupportBoardConfigured
-                                                || !supportBoardSyncForm.reason.trim()
-                                            }
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {runSupportBoardSyncMutation.isPending
-                                                ? 'Starting...'
-                                                : supportBoardSyncActive
-                                                    ? 'Sync in progress'
-                                                    : 'Start Support Board sync'}
-                                        </button>
-                                    </div>
-                                    {!canManageMarkets ? (
-                                        <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board link sync.</p>
-                                    ) : null}
-                                    {!selectedSupportBoardConfigured ? (
-                                        <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the link sync.</p>
-                                    ) : null}
-                                    {latestSupportBoardSyncResult ? (
-                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                                <div>
-                                                    <p className="font-semibold text-slate-800">Latest Support Board sync</p>
-                                                    <p className="mt-1 text-slate-500">
-                                                        Mode: {latestSupportBoardSyncResult.refresh ? 'revalidate all matches' : 'incremental unmatched-only'}
-                                                        {' • '}
-                                                        Started: {formatDateTime(latestSupportBoardSyncResult.started_at || latestSupportBoardSyncResult.created_at)}
-                                                    </p>
                                                 </div>
-                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSupportBoardSyncResult.status)}`}>
+                                                <p className="mt-2">
+                                                    Protocol: <span className="font-medium text-slate-900">{latestClientSyncRun.protocol || selectedPlatform?.client_sync?.protocol || 'pending'}</span>
+                                                    {' • '}
+                                                    Processed: <span className="font-medium text-slate-900">{latestClientSyncRun.processed || 0}</span>
+                                                    {' • '}
+                                                    Created/updated: <span className="font-medium text-slate-900">{latestClientSyncRun.created || 0}/{latestClientSyncRun.updated || 0}</span>
+                                                </p>
+                                                <p className="mt-1">
+                                                    Started: <span className="font-medium text-slate-900">{formatDateTime(latestClientSyncRun.started_at || latestClientSyncRun.created_at)}</span>
+                                                    {latestClientSyncRun.in_progress ? ' • Sync continues in the background.' : ''}
+                                                </p>
+                                                {selectedPlatform?.client_sync?.legacy_correctness_risk ? (
+                                                    <p className="mt-1 text-amber-700">This market is still using the legacy plugin contract, so reconciliation remains best-effort until the v2 plugin is deployed.</p>
+                                                ) : null}
+                                                {latestClientSyncRun.queue?.message ? (
+                                                    <p className="mt-1 text-amber-700">{latestClientSyncRun.queue.message}</p>
+                                                ) : null}
+                                                {latestClientSyncRun.error_details?.[0]?.message ? (
+                                                    <p className="mt-1 text-rose-700">{latestClientSyncRun.error_details[0].message}</p>
+                                                ) : null}
+                                            </div>
+                                        ) : null}
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Support Board Link Sync</h4>
+                                        <p className="text-xs text-slate-500">Backfill the local chat-match cache so the Clients filter can find matched profiles without opening each chat tab. Syncs now run in the background and continue even if you leave this page.</p>
+                                        <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
+                                            <p className="font-semibold">How it runs</p>
+                                            <p className="mt-1">
+                                                Incremental mode checks only clients without an existing Support Board link.
+                                                Revalidation mode checks all clients in this market and refreshes stale matches.
+                                            </p>
+                                        </div>
+                                        {!supportBoardSyncQueueReady ? (
+                                            <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                                <p className="font-semibold">Background queue not ready</p>
+                                                <p className="mt-1">{supportBoardSyncQueue?.issues?.[0] || 'Support Board background sync is currently unavailable.'}</p>
+                                            </div>
+                                        ) : null}
+                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={supportBoardSyncForm.refresh}
+                                                    onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, refresh: event.target.checked }))}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Revalidate existing matches
+                                            </label>
+                                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                                Scope:
+                                                {' '}
+                                                <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
+                                            </div>
+                                            <textarea
+                                                value={supportBoardSyncForm.reason}
+                                                onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                rows={2}
+                                                placeholder="Reason for Support Board link sync"
+                                            />
+                                        </div>
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSupportBoardSyncConfirmOpen(true)}
+                                                disabled={
+                                                    !canManageMarkets
+                                                    || runSupportBoardSyncMutation.isPending
+                                                    || supportBoardSyncActive
+                                                    || !supportBoardSyncQueueReady
+                                                    || !selectedSupportBoardConfigured
+                                                    || !supportBoardSyncForm.reason.trim()
+                                                }
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {runSupportBoardSyncMutation.isPending
+                                                    ? 'Starting...'
+                                                    : supportBoardSyncActive
+                                                        ? 'Sync in progress'
+                                                        : 'Start Support Board sync'}
+                                            </button>
+                                        </div>
+                                        {!canManageMarkets ? (
+                                            <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board link sync.</p>
+                                        ) : null}
+                                        {!selectedSupportBoardConfigured ? (
+                                            <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the link sync.</p>
+                                        ) : null}
+                                        {latestSupportBoardSyncResult ? (
+                                            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="font-semibold text-slate-800">Latest Support Board sync</p>
+                                                        <p className="mt-1 text-slate-500">
+                                                            Mode: {latestSupportBoardSyncResult.refresh ? 'revalidate all matches' : 'incremental unmatched-only'}
+                                                            {' • '}
+                                                            Started: {formatDateTime(latestSupportBoardSyncResult.started_at || latestSupportBoardSyncResult.created_at)}
+                                                        </p>
+                                                    </div>
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSupportBoardSyncResult.status)}`}>
                                                     {supportBoardSyncStatusLabel}
                                                 </span>
-                                            </div>
-
-                                            <div className="mt-3">
-                                                <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
-                                                    <span>Progress</span>
-                                                    <span>{latestSupportBoardSyncResult.progress_percent || 0}%</span>
                                                 </div>
-                                                <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
-                                                    <div
-                                                        className="h-full rounded-full bg-teal-600 transition-all"
-                                                        style={{ width: `${Math.max(0, Math.min(100, latestSupportBoardSyncResult.progress_percent || 0))}%` }}
+
+                                                <div className="mt-3">
+                                                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
+                                                        <span>Progress</span>
+                                                        <span>{latestSupportBoardSyncResult.progress_percent || 0}%</span>
+                                                    </div>
+                                                    <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
+                                                        <div
+                                                            className="h-full rounded-full bg-teal-600 transition-all"
+                                                            style={{ width: `${Math.max(0, Math.min(100, latestSupportBoardSyncResult.progress_percent || 0))}%` }}
+                                                        />
+                                                    </div>
+                                                    <p className="mt-2 text-slate-600">
+                                                        Processed {latestSupportBoardSyncResult.processed || 0} of {latestSupportBoardSyncResult.candidates || 0} candidates.
+                                                        {latestSupportBoardSyncResult.in_progress ? ' You can leave this page while the sync continues.' : ''}
+                                                    </p>
+                                                </div>
+
+                                                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Matched</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.matched || 0}</p>
+                                                    </div>
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated / Cleared</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.updated || 0} / {latestSupportBoardSyncResult.cleared || 0}</p>
+                                                    </div>
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.errors || 0}</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-3 space-y-1 text-slate-600">
+                                                    <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.last_heartbeat_at)}</span></p>
+                                                    {latestSupportBoardSyncResult.last_processed_client_name ? (
+                                                        <p>
+                                                            Last processed: <span className="font-medium text-slate-900">{latestSupportBoardSyncResult.last_processed_client_name}</span>
+                                                            {latestSupportBoardSyncResult.last_processed_client_id ? ` (#${latestSupportBoardSyncResult.last_processed_client_id})` : ''}
+                                                        </p>
+                                                    ) : null}
+                                                    {latestSupportBoardSyncResult.finished_at ? (
+                                                        <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.finished_at)}</span></p>
+                                                    ) : null}
+                                                </div>
+
+                                                {latestSupportBoardSyncResult.queue?.message ? (
+                                                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                        <p className="font-semibold">Queue attention needed</p>
+                                                        <p className="mt-1">{latestSupportBoardSyncResult.queue.message}</p>
+                                                    </div>
+                                                ) : null}
+
+                                                {latestSupportBoardSyncResult.errors_detail?.length ? (
+                                                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                        <p className="font-semibold">Recent error</p>
+                                                        <p className="mt-1">{latestSupportBoardSyncResult.errors_detail[0]?.message || 'Unknown error'}</p>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : (
+                                            <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+                                                No Support Board sync has run for this market yet.
+                                            </div>
+                                        )}
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Support Board Lead Import</h4>
+                                        <p className="text-xs text-slate-500">Import chat-origin contacts from Support Board as CRM leads. Runs in the background and continues even if you leave this page.</p>
+                                        <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
+                                            <p className="font-semibold">How it runs</p>
+                                            <p className="mt-1">
+                                                Bootstrap mode fetches all conversations and imports every unique user.
+                                                Incremental mode imports only users from new conversations since the last run.
+                                            </p>
+                                        </div>
+                                        {!sbLeadImportQueueReady ? (
+                                            <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                                <p className="font-semibold">Background queue not ready</p>
+                                                <p className="mt-1">{sbLeadImportQueue?.issues?.[0] || 'Background lead import is currently unavailable.'}</p>
+                                            </div>
+                                        ) : null}
+                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                            <div className="flex items-center gap-4">
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="radio"
+                                                        name="sb_lead_import_mode"
+                                                        value="bootstrap"
+                                                        checked={sbLeadImportForm.mode === 'bootstrap'}
+                                                        onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'bootstrap' }))}
+                                                        className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
                                                     />
-                                                </div>
-                                                <p className="mt-2 text-slate-600">
-                                                    Processed {latestSupportBoardSyncResult.processed || 0} of {latestSupportBoardSyncResult.candidates || 0} candidates.
-                                                    {latestSupportBoardSyncResult.in_progress ? ' You can leave this page while the sync continues.' : ''}
-                                                </p>
+                                                    Bootstrap (all)
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="radio"
+                                                        name="sb_lead_import_mode"
+                                                        value="incremental"
+                                                        checked={sbLeadImportForm.mode === 'incremental'}
+                                                        onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'incremental' }))}
+                                                        className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Incremental (new only)
+                                                </label>
                                             </div>
-
-                                            <div className="mt-3 grid gap-2 md:grid-cols-3">
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Matched</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.matched || 0}</p>
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated / Cleared</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.updated || 0} / {latestSupportBoardSyncResult.cleared || 0}</p>
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.errors || 0}</p>
-                                                </div>
+                                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                                Scope:
+                                                {' '}
+                                                <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
                                             </div>
-
-                                            <div className="mt-3 space-y-1 text-slate-600">
-                                                <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.last_heartbeat_at)}</span></p>
-                                                {latestSupportBoardSyncResult.last_processed_client_name ? (
-                                                    <p>
-                                                        Last processed: <span className="font-medium text-slate-900">{latestSupportBoardSyncResult.last_processed_client_name}</span>
-                                                        {latestSupportBoardSyncResult.last_processed_client_id ? ` (#${latestSupportBoardSyncResult.last_processed_client_id})` : ''}
-                                                    </p>
-                                                ) : null}
-                                                {latestSupportBoardSyncResult.finished_at ? (
-                                                    <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.finished_at)}</span></p>
-                                                ) : null}
-                                            </div>
-
-                                            {latestSupportBoardSyncResult.queue?.message ? (
-                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                                    <p className="font-semibold">Queue attention needed</p>
-                                                    <p className="mt-1">{latestSupportBoardSyncResult.queue.message}</p>
-                                                </div>
-                                            ) : null}
-
-                                            {latestSupportBoardSyncResult.errors_detail?.length ? (
-                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                                    <p className="font-semibold">Recent error</p>
-                                                    <p className="mt-1">{latestSupportBoardSyncResult.errors_detail[0]?.message || 'Unknown error'}</p>
-                                                </div>
-                                            ) : null}
+                                            <textarea
+                                                value={sbLeadImportForm.reason}
+                                                onChange={(event) => setSbLeadImportForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                rows={2}
+                                                placeholder="Reason for Support Board lead import"
+                                            />
                                         </div>
-                                    ) : (
-                                        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
-                                            No Support Board sync has run for this market yet.
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSbLeadImportConfirmOpen(true)}
+                                                disabled={
+                                                    !canManageMarkets
+                                                    || runSbLeadImportMutation.isPending
+                                                    || sbLeadImportActive
+                                                    || !sbLeadImportQueueReady
+                                                    || !selectedSupportBoardConfigured
+                                                    || !sbLeadImportForm.reason.trim()
+                                                }
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {runSbLeadImportMutation.isPending
+                                                    ? 'Starting...'
+                                                    : sbLeadImportActive
+                                                        ? 'Import in progress'
+                                                        : 'Start Lead Import'}
+                                            </button>
                                         </div>
-                                    )}
-                                </section>
-
-                                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <h4 className="text-sm font-semibold text-slate-900">Support Board Lead Import</h4>
-                                    <p className="text-xs text-slate-500">Import chat-origin contacts from Support Board as CRM leads. Runs in the background and continues even if you leave this page.</p>
-                                    <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
-                                        <p className="font-semibold">How it runs</p>
-                                        <p className="mt-1">
-                                            Bootstrap mode fetches all conversations and imports every unique user.
-                                            Incremental mode imports only users from new conversations since the last run.
-                                        </p>
-                                    </div>
-                                    {!sbLeadImportQueueReady ? (
-                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                                            <p className="font-semibold">Background queue not ready</p>
-                                            <p className="mt-1">{sbLeadImportQueue?.issues?.[0] || 'Background lead import is currently unavailable.'}</p>
-                                        </div>
-                                    ) : null}
-                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                        <div className="flex items-center gap-4">
-                                            <label className="flex items-center gap-2 text-sm text-slate-700">
-                                                <input
-                                                    type="radio"
-                                                    name="sb_lead_import_mode"
-                                                    value="bootstrap"
-                                                    checked={sbLeadImportForm.mode === 'bootstrap'}
-                                                    onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'bootstrap' }))}
-                                                    className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                Bootstrap (all)
-                                            </label>
-                                            <label className="flex items-center gap-2 text-sm text-slate-700">
-                                                <input
-                                                    type="radio"
-                                                    name="sb_lead_import_mode"
-                                                    value="incremental"
-                                                    checked={sbLeadImportForm.mode === 'incremental'}
-                                                    onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'incremental' }))}
-                                                    className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                Incremental (new only)
-                                            </label>
-                                        </div>
-                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                                            Scope:
-                                            {' '}
-                                            <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
-                                        </div>
-                                        <textarea
-                                            value={sbLeadImportForm.reason}
-                                            onChange={(event) => setSbLeadImportForm((current) => ({ ...current, reason: event.target.value }))}
-                                            className="crm-input md:col-span-2"
-                                            rows={2}
-                                            placeholder="Reason for Support Board lead import"
-                                        />
-                                    </div>
-                                    <div className="mt-3 flex justify-end">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSbLeadImportConfirmOpen(true)}
-                                            disabled={
-                                                !canManageMarkets
-                                                || runSbLeadImportMutation.isPending
-                                                || sbLeadImportActive
-                                                || !sbLeadImportQueueReady
-                                                || !selectedSupportBoardConfigured
-                                                || !sbLeadImportForm.reason.trim()
-                                            }
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {runSbLeadImportMutation.isPending
-                                                ? 'Starting...'
-                                                : sbLeadImportActive
-                                                    ? 'Import in progress'
-                                                    : 'Start Lead Import'}
-                                        </button>
-                                    </div>
-                                    {!canManageMarkets ? (
-                                        <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board lead import.</p>
-                                    ) : null}
-                                    {!selectedSupportBoardConfigured ? (
-                                        <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the lead import.</p>
-                                    ) : null}
-                                    {latestSbLeadImportResult ? (
-                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                                <div>
-                                                    <p className="font-semibold text-slate-800">Latest lead import</p>
-                                                    <p className="mt-1 text-slate-500">
-                                                        Mode: {latestSbLeadImportResult.mode === 'bootstrap' ? 'bootstrap (all conversations)' : 'incremental (new only)'}
-                                                        {' \u2022 '}
-                                                        Started: {formatDateTime(latestSbLeadImportResult.started_at || latestSbLeadImportResult.created_at)}
-                                                    </p>
-                                                </div>
-                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSbLeadImportResult.status)}`}>
+                                        {!canManageMarkets ? (
+                                            <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board lead import.</p>
+                                        ) : null}
+                                        {!selectedSupportBoardConfigured ? (
+                                            <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the lead import.</p>
+                                        ) : null}
+                                        {latestSbLeadImportResult ? (
+                                            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="font-semibold text-slate-800">Latest lead import</p>
+                                                        <p className="mt-1 text-slate-500">
+                                                            Mode: {latestSbLeadImportResult.mode === 'bootstrap' ? 'bootstrap (all conversations)' : 'incremental (new only)'}
+                                                            {' \u2022 '}
+                                                            Started: {formatDateTime(latestSbLeadImportResult.started_at || latestSbLeadImportResult.created_at)}
+                                                        </p>
+                                                    </div>
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSbLeadImportResult.status)}`}>
                                                     {sbLeadImportStatusLabel}
                                                 </span>
-                                            </div>
+                                                </div>
 
-                                            <div className="mt-3">
-                                                <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
-                                                    <span>Progress</span>
-                                                    <span>{latestSbLeadImportResult.progress_percent || 0}%</span>
-                                                </div>
-                                                <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
-                                                    <div
-                                                        className="h-full rounded-full bg-teal-600 transition-all"
-                                                        style={{ width: `${Math.max(0, Math.min(100, latestSbLeadImportResult.progress_percent || 0))}%` }}
-                                                    />
-                                                </div>
-                                                <p className="mt-2 text-slate-600">
-                                                    Processed {latestSbLeadImportResult.processed || 0} of {latestSbLeadImportResult.candidates || 0} candidates.
-                                                    {latestSbLeadImportResult.in_progress ? ' You can leave this page while the import continues.' : ''}
-                                                </p>
-                                            </div>
-
-                                            <div className="mt-3 grid gap-2 md:grid-cols-4">
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Created</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.created_leads || 0}</p>
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.updated_leads || 0}</p>
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Skipped</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{(latestSbLeadImportResult.skipped_existing_client || 0) + (latestSbLeadImportResult.skipped_existing_lead || 0)}</p>
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
-                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.errors || 0}</p>
-                                                </div>
-                                            </div>
-
-                                            <div className="mt-3 space-y-1 text-slate-600">
-                                                <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.last_heartbeat_at)}</span></p>
-                                                {latestSbLeadImportResult.last_processed_name ? (
-                                                    <p>
-                                                        Last processed: <span className="font-medium text-slate-900">{latestSbLeadImportResult.last_processed_name}</span>
-                                                        {latestSbLeadImportResult.last_processed_sb_user_id ? ` (SB #${latestSbLeadImportResult.last_processed_sb_user_id})` : ''}
+                                                <div className="mt-3">
+                                                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
+                                                        <span>Progress</span>
+                                                        <span>{latestSbLeadImportResult.progress_percent || 0}%</span>
+                                                    </div>
+                                                    <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
+                                                        <div
+                                                            className="h-full rounded-full bg-teal-600 transition-all"
+                                                            style={{ width: `${Math.max(0, Math.min(100, latestSbLeadImportResult.progress_percent || 0))}%` }}
+                                                        />
+                                                    </div>
+                                                    <p className="mt-2 text-slate-600">
+                                                        Processed {latestSbLeadImportResult.processed || 0} of {latestSbLeadImportResult.candidates || 0} candidates.
+                                                        {latestSbLeadImportResult.in_progress ? ' You can leave this page while the import continues.' : ''}
                                                     </p>
+                                                </div>
+
+                                                <div className="mt-3 grid gap-2 md:grid-cols-4">
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Created</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.created_leads || 0}</p>
+                                                    </div>
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.updated_leads || 0}</p>
+                                                    </div>
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Skipped</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{(latestSbLeadImportResult.skipped_existing_client || 0) + (latestSbLeadImportResult.skipped_existing_lead || 0)}</p>
+                                                    </div>
+                                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.errors || 0}</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-3 space-y-1 text-slate-600">
+                                                    <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.last_heartbeat_at)}</span></p>
+                                                    {latestSbLeadImportResult.last_processed_name ? (
+                                                        <p>
+                                                            Last processed: <span className="font-medium text-slate-900">{latestSbLeadImportResult.last_processed_name}</span>
+                                                            {latestSbLeadImportResult.last_processed_sb_user_id ? ` (SB #${latestSbLeadImportResult.last_processed_sb_user_id})` : ''}
+                                                        </p>
+                                                    ) : null}
+                                                    {latestSbLeadImportResult.finished_at ? (
+                                                        <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.finished_at)}</span></p>
+                                                    ) : null}
+                                                </div>
+
+                                                {latestSbLeadImportResult.queue?.message ? (
+                                                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                        <p className="font-semibold">Queue attention needed</p>
+                                                        <p className="mt-1">{latestSbLeadImportResult.queue.message}</p>
+                                                    </div>
                                                 ) : null}
-                                                {latestSbLeadImportResult.finished_at ? (
-                                                    <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.finished_at)}</span></p>
+
+                                                {latestSbLeadImportResult.error_details?.length ? (
+                                                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                        <p className="font-semibold">Recent error</p>
+                                                        <p className="mt-1">{latestSbLeadImportResult.error_details[0]?.message || 'Unknown error'}</p>
+                                                    </div>
                                                 ) : null}
                                             </div>
-
-                                            {latestSbLeadImportResult.queue?.message ? (
-                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                                    <p className="font-semibold">Queue attention needed</p>
-                                                    <p className="mt-1">{latestSbLeadImportResult.queue.message}</p>
-                                                </div>
-                                            ) : null}
-
-                                            {latestSbLeadImportResult.error_details?.length ? (
-                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                                    <p className="font-semibold">Recent error</p>
-                                                    <p className="mt-1">{latestSbLeadImportResult.error_details[0]?.message || 'Unknown error'}</p>
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    ) : (
-                                        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
-                                            No Support Board lead import has run for this market yet.
-                                        </div>
-                                    )}
-                                </section>
-                            </div>
-                        )}
+                                        ) : (
+                                            <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+                                                No Support Board lead import has run for this market yet.
+                                            </div>
+                                        )}
+                                    </section>
+                                </div>
+                            )}
+                        </div>
                     </div>
-                </div>
                 </section>
             ) : null}
 
@@ -5978,11 +6135,6 @@ function IntegrationsWorkspace({
                     <p><span className="font-semibold text-slate-800">Scope:</span> {syncForm.scope}</p>
                     <p><span className="font-semibold text-slate-800">Mode:</span> {syncForm.mode}</p>
                     <p><span className="font-semibold text-slate-800">Dry run:</span> {syncForm.dry_run ? 'yes' : 'no'}</p>
-                    {syncForm.scope === 'clients' && syncForm.mode === 'full' ? (
-                        <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
-                            Full client sync will delete CRM clients in this market whose WordPress post IDs are no longer returned by the source.
-                        </p>
-                    ) : null}
                 </div>
             </ConfirmDialog>
 
@@ -6103,14 +6255,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
             label: 'Template',
             render: (row) => (
                 <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900">{row.title}</p>
-                        {row.is_quick_reply ? (
-                            <span className="inline-flex items-center rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">
-                                Quick reply
-                            </span>
-                        ) : null}
-                    </div>
+                    <p className="text-sm font-semibold text-slate-900">{row.title}</p>
                     <p className="truncate text-xs text-slate-500">{row.body}</p>
                 </div>
             ),
@@ -6156,7 +6301,6 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                 subject: row.subject || '',
                                 body: row.body || '',
                                 status: row.status || 'draft',
-                                is_quick_reply: Boolean(row.is_quick_reply),
                             });
                         }}
                         className="crm-btn-secondary px-3 py-1.5 text-xs"
@@ -6257,7 +6401,6 @@ function TemplatesWorkspace({ canManageTemplates }) {
                         subject: row.subject || '',
                         body: row.body || '',
                         status: row.status || 'draft',
-                        is_quick_reply: Boolean(row.is_quick_reply),
                     });
                 }}
                 isLoading={isLoading}
@@ -6308,16 +6451,6 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                 className="crm-input"
                                 placeholder="Subject (optional)"
                             />
-
-                            <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                                <input
-                                    type="checkbox"
-                                    checked={Boolean(editorForm.is_quick_reply)}
-                                    onChange={(event) => setEditorForm({ ...editorForm, is_quick_reply: event.target.checked })}
-                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200"
-                                />
-                                <span className="font-medium">Quick reply</span>
-                            </label>
 
                             <textarea
                                 value={editorForm.body}
@@ -6652,7 +6785,6 @@ function errorLogSourceLabel(source) {
         case 'queue_job': return 'Queue job';
         case 'log': return 'Log call';
         case 'exception': return 'Exception';
-        case 'client': return 'Browser';
         default: return source || '—';
     }
 }
@@ -6786,7 +6918,7 @@ function ErrorLogsWorkspace() {
 
     return (
         <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-5">
+            <section className="grid gap-4 md:grid-cols-4">
                 <MetricCard
                     label="Unresolved Critical"
                     value={Number(summary.unresolved_critical || 0).toLocaleString()}
@@ -6857,7 +6989,6 @@ function ErrorLogsWorkspace() {
                         <option value="exception">Exception</option>
                         <option value="log">Log call</option>
                         <option value="queue_job">Queue job</option>
-                        <option value="client">Browser</option>
                     </select>
                     <select
                         value={statusFilter}
@@ -6950,11 +7081,8 @@ function ErrorLogsWorkspace() {
                                                 <li key={occurrence.id} className="py-2 text-xs">
                                                     <p className="font-semibold text-slate-700">{occurrence.occurred_at ? new Date(occurrence.occurred_at).toLocaleString() : '—'}</p>
                                                     <p className="text-slate-600">
-                                                        {occurrence.method ? `${occurrence.method} ` : ''}{occurrence.url || occurrence.context?.client_url || (occurrence.context?.job ? `Job: ${occurrence.context.job}` : 'Console')}
+                                                        {occurrence.method ? `${occurrence.method} ` : ''}{occurrence.url || (occurrence.context?.job ? `Job: ${occurrence.context.job}` : 'Console')}
                                                     </p>
-                                                    {occurrence.context?.request_id ? (
-                                                        <p className="crm-mono text-[11px] text-slate-500">Request ID: {occurrence.context.request_id}</p>
-                                                    ) : null}
                                                     {occurrence.user ? (
                                                         <p className="text-slate-500">User: {occurrence.user.name} ({occurrence.user.email})</p>
                                                     ) : null}
@@ -6995,7 +7123,6 @@ function ErrorLogsWorkspace() {
 function roleClasses(role) {
     if (role === 'admin') return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
     if (role === 'sub_admin') return 'bg-sky-50 text-sky-700 ring-sky-200';
-    if (role === 'field_sales') return 'bg-teal-50 text-teal-700 ring-teal-200';
     if (role === 'marketing') return 'bg-violet-50 text-violet-700 ring-violet-200';
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
@@ -7026,7 +7153,6 @@ function RolesWorkspace() {
         password: '',
         phone: '',
         role: 'sales',
-        is_ceo: false,
         status: 'active',
         assigned_market_ids: [],
         reason: 'New team member onboarding',
@@ -7062,7 +7188,6 @@ function RolesWorkspace() {
                 password: '',
                 phone: '',
                 role: 'sales',
-                is_ceo: false,
                 status: 'active',
                 assigned_market_ids: [],
                 reason: 'New team member onboarding',
@@ -7109,7 +7234,6 @@ function RolesWorkspace() {
         setSelectedUser(user);
         setEditor({
             role: user.role || 'sales',
-            is_ceo: Boolean(user.is_ceo),
             status: user.status || 'active',
             sb_agent_id: user.sb_agent_id ?? '',
             assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
@@ -7146,29 +7270,19 @@ function RolesWorkspace() {
             const selectableMarketIds = assignedMarketIds.length > 0
                 ? assignedMarketIds
                 : (current.role === 'admin' ? availableMarkets.map((market) => Number(market.id)) : []);
-            const paymentScopedMarketIds = current.notification_prefs?.payment_failure_sms?.market_ids;
-            const marketDownScopedMarketIds = current.notification_prefs?.market_down_sms?.market_ids;
-            const nextNotificationPrefs = {
-                ...current.notification_prefs,
-                ...(Array.isArray(paymentScopedMarketIds) ? {
-                    payment_failure_sms: {
-                        enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
-                        market_ids: paymentScopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
-                    },
-                } : {}),
-                ...(Array.isArray(marketDownScopedMarketIds) ? {
-                    market_down_sms: {
-                        enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
-                        market_ids: marketDownScopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
-                    },
-                } : {}),
-            };
+            const scopedMarketIds = current.notification_prefs?.payment_failure_sms?.market_ids;
 
             return {
                 ...current,
                 assigned_market_ids: assignedMarketIds,
-                notification_prefs: Array.isArray(paymentScopedMarketIds) || Array.isArray(marketDownScopedMarketIds)
-                    ? nextNotificationPrefs
+                notification_prefs: Array.isArray(scopedMarketIds)
+                    ? {
+                        ...current.notification_prefs,
+                        payment_failure_sms: {
+                            enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
+                            market_ids: scopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
+                        },
+                    }
                     : current.notification_prefs,
             };
         });
@@ -7189,7 +7303,7 @@ function RolesWorkspace() {
     const getSmsEnabled = () => {
         if (!editor) return false;
         const prefs = editor.notification_prefs;
-        if (!prefs?.payment_failure_sms) return ['sales', 'field_sales'].includes(editor.role);
+        if (!prefs?.payment_failure_sms) return editor.role === 'sales';
         return !!prefs.payment_failure_sms.enabled;
     };
 
@@ -7271,72 +7385,8 @@ function RolesWorkspace() {
 
     const getLiveAlertState = () => {
         if (!editor) return 'disabled';
-        if (!['admin', 'sub_admin', 'sales', 'field_sales'].includes(editor.role)) return 'not_eligible';
+        if (!['admin', 'sub_admin', 'sales'].includes(editor.role)) return 'not_eligible';
         return getSmsEnabled() ? 'enabled' : 'disabled';
-    };
-
-    const getMarketDownSmsEnabled = () => {
-        if (!editor) return false;
-        return !!editor.notification_prefs?.market_down_sms?.enabled;
-    };
-
-    const getMarketDownSmsMarketScope = () => {
-        const ids = editor?.notification_prefs?.market_down_sms?.market_ids;
-        return ids === null || ids === undefined ? 'all' : 'specific';
-    };
-
-    const getMarketDownSmsMarketIds = () => editor?.notification_prefs?.market_down_sms?.market_ids ?? [];
-
-    const setMarketDownSmsEnabled = (enabled) => {
-        setEditor((current) => ({
-            ...current,
-            notification_prefs: {
-                ...current.notification_prefs,
-                market_down_sms: {
-                    enabled,
-                    market_ids: current.notification_prefs?.market_down_sms?.market_ids ?? null,
-                },
-            },
-        }));
-    };
-
-    const setMarketDownSmsMarketScope = (scope) => {
-        setEditor((current) => ({
-            ...current,
-            notification_prefs: {
-                ...current.notification_prefs,
-                market_down_sms: {
-                    enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
-                    market_ids: scope === 'all' ? null : [],
-                },
-            },
-        }));
-    };
-
-    const toggleMarketDownSmsMarket = (marketId) => {
-        setEditor((current) => {
-            const existing = current.notification_prefs?.market_down_sms?.market_ids ?? [];
-            const next = existing.includes(marketId)
-                ? existing.filter((id) => id !== marketId)
-                : [...existing, marketId];
-
-            return {
-                ...current,
-                notification_prefs: {
-                    ...current.notification_prefs,
-                    market_down_sms: {
-                        enabled: current.notification_prefs?.market_down_sms?.enabled ?? false,
-                        market_ids: next,
-                    },
-                },
-            };
-        });
-    };
-
-    const getMarketDownAlertState = () => {
-        if (!editor) return 'disabled';
-        if (!['admin', 'sub_admin'].includes(editor.role)) return 'not_eligible';
-        return getMarketDownSmsEnabled() ? 'enabled' : 'disabled';
     };
 
     return (
@@ -7345,8 +7395,6 @@ function RolesWorkspace() {
                 <MetricCard label="Admins" value={(summary.admins || 0).toLocaleString()} meta="full permissions" tone="accent" />
                 <MetricCard label="Sub-admins" value={(summary.sub_admins || 0).toLocaleString()} meta="market-level controls" tone="default" />
                 <MetricCard label="Sales Agents" value={(summary.sales || 0).toLocaleString()} meta="execution role" tone="success" />
-                <MetricCard label="Field Sales" value={(summary.field_sales || 0).toLocaleString()} meta="field execution" tone="accent" />
-                <MetricCard label="CEO Access" value={(summary.ceos || 0).toLocaleString()} meta="executive dashboard tag" tone="slate" />
                 <MetricCard label="Inactive Users" value={(summary.inactive || 0).toLocaleString()} meta="access suspended" tone="warning" />
             </section>
 
@@ -7373,46 +7421,36 @@ function RolesWorkspace() {
                     ) : (
                         <table className="min-w-full divide-y divide-slate-200">
                             <thead className="bg-slate-50">
-                                <tr>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">User</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Role</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">CEO</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">SMS Alerts</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
-                                </tr>
+                            <tr>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">User</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Role</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Live Alerts</th>
+                                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
+                            </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {users.map((user) => {
-                                    const assignedMarkets = Array.isArray(user.assigned_markets) ? user.assigned_markets : [];
-                                    const marketCount = assignedMarkets.length;
-                                    const marketLabel = marketCount > 0
-                                        ? assignedMarkets.map((market) => market.name).join(', ')
-                                        : 'None';
+                            {users.map((user) => {
+                                const assignedMarkets = Array.isArray(user.assigned_markets) ? user.assigned_markets : [];
+                                const marketCount = assignedMarkets.length;
+                                const marketLabel = marketCount > 0
+                                    ? assignedMarkets.map((market) => market.name).join(', ')
+                                    : 'None';
 
-                                    return (
-                                        <tr key={user.id}>
-                                            <td className="px-4 py-2.5">
-                                                <p className="text-sm font-semibold text-slate-900">{user.name}</p>
-                                                <p className="text-xs text-slate-500">{user.email}</p>
-                                            </td>
-                                            <td className="px-4 py-2.5">
+                                return (
+                                    <tr key={user.id}>
+                                        <td className="px-4 py-2.5">
+                                            <p className="text-sm font-semibold text-slate-900">{user.name}</p>
+                                            <p className="text-xs text-slate-500">{user.email}</p>
+                                        </td>
+                                        <td className="px-4 py-2.5">
                                                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
                                                     {user.role.replace('_', ' ')}
                                                 </span>
-                                            </td>
-                                            <td className="px-4 py-2.5">
-                                                {user.is_ceo ? (
-                                                    <span className="inline-flex items-center rounded-md bg-slate-900 px-2.5 py-0.5 text-xs font-semibold text-white ring-1 ring-inset ring-slate-900">
-                                                        CEO
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-xs text-slate-400">No</span>
-                                                )}
-                                            </td>
-                                            <td className="px-4 py-2.5">
+                                        </td>
+                                        <td className="px-4 py-2.5">
                                                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
                                                     user.status === 'active'
                                                         ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
@@ -7420,48 +7458,43 @@ function RolesWorkspace() {
                                                 }`}>
                                                     {user.status}
                                                 </span>
-                                            </td>
-                                            <td className="px-4 py-2.5">
-                                                <p className="text-sm text-slate-700">{marketCount}</p>
-                                                <p className="truncate text-xs text-slate-500">{marketLabel}</p>
-                                            </td>
-                                            <td className="px-4 py-2.5">
-                                                <p className="font-mono text-xs text-slate-500">{user.phone || '—'}</p>
-                                            </td>
-                                            <td className="px-4 py-2.5">
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.payment_failure_sms_state)}`}>
-                                                        Pay {paymentFailureSmsStateLabel(user.payment_failure_sms_state)}
-                                                    </span>
-                                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.market_down_sms_state)}`}>
-                                                        Market {paymentFailureSmsStateLabel(user.market_down_sms_state)}
-                                                    </span>
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-2.5">
-                                                <div className="flex flex-wrap items-center gap-2">
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <p className="text-sm text-slate-700">{marketCount}</p>
+                                            <p className="truncate text-xs text-slate-500">{marketLabel}</p>
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <p className="font-mono text-xs text-slate-500">{user.phone || '—'}</p>
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.payment_failure_sms_state)}`}>
+                                                    {paymentFailureSmsStateLabel(user.payment_failure_sms_state)}
+                                                </span>
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openEditor(user)}
+                                                    className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                >
+                                                    Edit
+                                                </button>
+                                                {canImpersonateUser(user) ? (
                                                     <button
                                                         type="button"
-                                                        onClick={() => openEditor(user)}
-                                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                        onClick={() => handleImpersonationLaunch(user)}
+                                                        disabled={impersonationLinkMutation.isPending}
+                                                        className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        Edit
+                                                        {impersonationLinkMutation.isPending ? 'Opening...' : 'Log in as user'}
                                                     </button>
-                                                    {canImpersonateUser(user) ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleImpersonationLaunch(user)}
-                                                            disabled={impersonationLinkMutation.isPending}
-                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                                                        >
-                                                            {impersonationLinkMutation.isPending ? 'Opening...' : 'Log in as user'}
-                                                        </button>
-                                                    ) : null}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
+                                                ) : null}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                             </tbody>
                         </table>
                     )}
@@ -7488,17 +7521,12 @@ function RolesWorkspace() {
                                     <select
                                         id="role-select"
                                         value={editor.role}
-                                        onChange={(event) => setEditor((current) => ({
-                                            ...current,
-                                            role: event.target.value,
-                                            is_ceo: event.target.value === 'admin' ? current.is_ceo : false,
-                                        }))}
+                                        onChange={(event) => setEditor((current) => ({ ...current, role: event.target.value }))}
                                         className="crm-select w-full"
                                     >
                                         <option value="admin">Admin</option>
                                         <option value="sub_admin">Sub-admin</option>
                                         <option value="sales">Sales</option>
-                                        <option value="field_sales">Field Sales</option>
                                         <option value="marketing">Marketing</option>
                                     </select>
                                 </div>
@@ -7514,28 +7542,6 @@ function RolesWorkspace() {
                                         <option value="active">Active</option>
                                         <option value="inactive">Inactive</option>
                                     </select>
-                                </div>
-
-                                <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-800">Mark as CEO</p>
-                                            <p className="mt-1 text-xs text-slate-500">Grants the executive dashboard when the user is an active admin.</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            role="switch"
-                                            aria-checked={Boolean(editor.is_ceo)}
-                                            disabled={editor.role !== 'admin'}
-                                            onClick={() => setEditor((current) => ({ ...current, is_ceo: !current.is_ceo }))}
-                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${editor.role !== 'admin' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${editor.is_ceo ? 'bg-slate-900' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${editor.is_ceo ? 'translate-x-6' : 'translate-x-1'}`} />
-                                        </button>
-                                    </div>
-                                    {editor.role !== 'admin' ? (
-                                        <p className="mt-2 text-xs text-amber-700">CEO access is only valid for admin users.</p>
-                                    ) : null}
                                 </div>
 
                                 <div className="md:col-span-2">
@@ -7620,10 +7626,10 @@ function RolesWorkspace() {
                                             <p className="text-sm font-medium text-slate-700">Payment failure SMS alerts</p>
                                             <p className="text-xs text-slate-500">
                                                 {editor.role === 'marketing'
-                                                    ? 'This alert is available for sales, field sales, admin, and sub-admin roles only.'
+                                                    ? 'This alert is available for sales, admin, and sub-admin roles only.'
                                                     : ['admin', 'sub_admin'].includes(editor.role)
-                                                    ? 'Opt in to receive an SMS when a payment fails in your accessible markets.'
-                                                    : 'Receive an SMS when a payment fails in your assigned markets.'}
+                                                        ? 'Opt in to receive an SMS when a payment fails in your accessible markets.'
+                                                        : 'Receive an SMS when a payment fails in your assigned markets.'}
                                             </p>
                                         </div>
                                         <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(getLiveAlertState())}`}>
@@ -7687,69 +7693,6 @@ function RolesWorkspace() {
                                     ) : null}
                                 </div>
 
-                                <div className="md:col-span-2 space-y-3 rounded-md border border-slate-200 bg-slate-50/70 p-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <p className="text-sm font-medium text-slate-700">Market-down SMS alerts</p>
-                                            <p className="text-xs text-slate-500">
-                                                {['admin', 'sub_admin'].includes(editor.role)
-                                                    ? 'Receive one SMS when an accessible market first transitions to down.'
-                                                    : 'This operational alert is available for admin and sub-admin roles only.'}
-                                            </p>
-                                        </div>
-                                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(getMarketDownAlertState())}`}>
-                                            {paymentFailureSmsStateLabel(getMarketDownAlertState())}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            role="switch"
-                                            aria-checked={getMarketDownSmsEnabled()}
-                                            disabled={!['admin', 'sub_admin'].includes(editor.role)}
-                                            onClick={() => setMarketDownSmsEnabled(!getMarketDownSmsEnabled())}
-                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${!['admin', 'sub_admin'].includes(editor.role) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${getMarketDownSmsEnabled() ? 'bg-slate-900' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${getMarketDownSmsEnabled() ? 'translate-x-6' : 'translate-x-1'}`} />
-                                        </button>
-                                    </div>
-
-                                    {getMarketDownSmsEnabled() && ['admin', 'sub_admin'].includes(editor.role) ? (
-                                        <div className="space-y-2 border-t border-slate-200 pt-3">
-                                            <p className="text-xs font-medium text-slate-600">Alert scope</p>
-                                            {['all', 'specific'].map((scope) => (
-                                                <label key={scope} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-                                                    <input
-                                                        type="radio"
-                                                        name="market-down-sms-scope"
-                                                        checked={getMarketDownSmsMarketScope() === scope}
-                                                        onChange={() => setMarketDownSmsMarketScope(scope)}
-                                                        className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                    />
-                                                    {scope === 'all' ? 'All accessible markets' : 'Specific markets only'}
-                                                </label>
-                                            ))}
-                                            {getMarketDownSmsMarketScope() === 'specific' ? (
-                                                <div className="grid gap-1 pl-6 pt-1 sm:grid-cols-2">
-                                                    {getSmsSelectableMarkets().length === 0 ? (
-                                                        <p className="text-xs text-slate-500">Assign markets above first.</p>
-                                                    ) : (
-                                                        getSmsSelectableMarkets().map((market) => (
-                                                            <label key={market.id} className="flex cursor-pointer items-center gap-2 text-xs text-slate-700">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={getMarketDownSmsMarketIds().includes(market.id)}
-                                                                    onChange={() => toggleMarketDownSmsMarket(market.id)}
-                                                                    className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                                />
-                                                                {market.name}
-                                                            </label>
-                                                        ))
-                                                    )}
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    ) : null}
-                                </div>
-
                                 <div className="md:col-span-2">
                                     <label htmlFor="edit-password" className="mb-1 block text-sm font-medium text-slate-700">New Password <span className="font-normal text-slate-400">(leave blank to keep current)</span></label>
                                     <input
@@ -7793,7 +7736,6 @@ function RolesWorkspace() {
                                     userId: selectedUser.id,
                                     payload: {
                                         role: editor.role,
-                                        is_ceo: editor.role === 'admin' && Boolean(editor.is_ceo),
                                         status: editor.status,
                                         sb_agent_id: editor.sb_agent_id === '' ? null : Number(editor.sb_agent_id),
                                         phone: editor.phone.trim() || null,
@@ -7853,17 +7795,12 @@ function RolesWorkspace() {
                             />
                             <select
                                 value={createForm.role}
-                                onChange={(event) => setCreateForm((current) => ({
-                                    ...current,
-                                    role: event.target.value,
-                                    is_ceo: event.target.value === 'admin' ? current.is_ceo : false,
-                                }))}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value }))}
                                 className="crm-select"
                             >
                                 <option value="admin">Admin</option>
                                 <option value="sub_admin">Sub-admin</option>
                                 <option value="sales">Sales</option>
-                                <option value="field_sales">Field Sales</option>
                                 <option value="marketing">Marketing</option>
                             </select>
                             <select
@@ -7874,24 +7811,6 @@ function RolesWorkspace() {
                                 <option value="active">Active</option>
                                 <option value="inactive">Inactive</option>
                             </select>
-                            <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                        <p className="text-sm font-semibold text-slate-800">Mark as CEO</p>
-                                        <p className="mt-1 text-xs text-slate-500">Available for active admin users only.</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        role="switch"
-                                        aria-checked={Boolean(createForm.is_ceo)}
-                                        disabled={createForm.role !== 'admin'}
-                                        onClick={() => setCreateForm((current) => ({ ...current, is_ceo: !current.is_ceo }))}
-                                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${createForm.role !== 'admin' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${createForm.is_ceo ? 'bg-slate-900' : 'bg-slate-200'}`}
-                                    >
-                                        <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${createForm.is_ceo ? 'translate-x-6' : 'translate-x-1'}`} />
-                                    </button>
-                                </div>
-                            </div>
                             <textarea
                                 rows={2}
                                 value={createForm.reason}
@@ -7933,7 +7852,6 @@ function RolesWorkspace() {
                                     email: createForm.email,
                                     phone: createForm.phone.trim() || null,
                                     role: createForm.role,
-                                    is_ceo: createForm.role === 'admin' && Boolean(createForm.is_ceo),
                                     status: createForm.status,
                                     assigned_market_ids: createForm.assigned_market_ids,
                                     reason: createForm.reason,
@@ -8289,32 +8207,32 @@ function ReportingCurrencySettingsPanel() {
                             <label className="space-y-1">
                                 <span className="text-xs font-medium text-slate-500">From</span>
                                 <input type="text" className="crm-input w-20" placeholder="EUR" maxLength={8}
-                                    value={newRate.source_currency}
-                                    onChange={(e) => setNewRate((r) => ({ ...r, source_currency: e.target.value.toUpperCase() }))} />
+                                       value={newRate.source_currency}
+                                       onChange={(e) => setNewRate((r) => ({ ...r, source_currency: e.target.value.toUpperCase() }))} />
                             </label>
                             <label className="space-y-1">
                                 <span className="text-xs font-medium text-slate-500">To</span>
                                 <input type="text" className="crm-input w-20" placeholder="USD" maxLength={8}
-                                    value={newRate.target_currency}
-                                    onChange={(e) => setNewRate((r) => ({ ...r, target_currency: e.target.value.toUpperCase() }))} />
+                                       value={newRate.target_currency}
+                                       onChange={(e) => setNewRate((r) => ({ ...r, target_currency: e.target.value.toUpperCase() }))} />
                             </label>
                             <label className="space-y-1">
                                 <span className="text-xs font-medium text-slate-500">Date</span>
                                 <input type="date" className="crm-input"
-                                    value={newRate.rate_date}
-                                    onChange={(e) => setNewRate((r) => ({ ...r, rate_date: e.target.value }))} />
+                                       value={newRate.rate_date}
+                                       onChange={(e) => setNewRate((r) => ({ ...r, rate_date: e.target.value }))} />
                             </label>
                             <label className="space-y-1">
                                 <span className="text-xs font-medium text-slate-500">Rate</span>
                                 <input type="number" step="any" className="crm-input w-28"
-                                    value={newRate.rate}
-                                    onChange={(e) => setNewRate((r) => ({ ...r, rate: e.target.value }))} />
+                                       value={newRate.rate}
+                                       onChange={(e) => setNewRate((r) => ({ ...r, rate: e.target.value }))} />
                             </label>
                             <label className="flex-1 space-y-1">
                                 <span className="text-xs font-medium text-slate-500">Notes</span>
                                 <input type="text" className="crm-input w-full"
-                                    value={newRate.notes}
-                                    onChange={(e) => setNewRate((r) => ({ ...r, notes: e.target.value }))} />
+                                       value={newRate.notes}
+                                       onChange={(e) => setNewRate((r) => ({ ...r, notes: e.target.value }))} />
                             </label>
                             <button
                                 type="button"
@@ -8733,10 +8651,6 @@ export default function Settings() {
                 return canViewRoles;
             }
 
-            if (tab.id === 'field-sales') {
-                return ['admin', 'sub_admin'].includes(user?.role || '');
-            }
-
             if (tab.id === 'security') {
                 return canManageSecurity;
             }
@@ -8750,14 +8664,6 @@ export default function Settings() {
             }
 
             if (tab.id === 'seo-engine') {
-                return ['admin', 'sub_admin'].includes(user?.role || '');
-            }
-
-            if (tab.id === 'auto-optimize') {
-                return ['admin', 'sub_admin', 'marketing'].includes(user?.role || '');
-            }
-
-            if (tab.id === 'ai') {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
@@ -8828,14 +8734,11 @@ export default function Settings() {
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
-            {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
-            {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'error-logs' && (user?.role || '') === 'admin' ? <ErrorLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
-            {activeTab === 'field-sales' && ['admin', 'sub_admin'].includes(user?.role || '') ? <FieldSalesSettingsPanel /> : null}
             {activeTab === 'security' && canManageSecurity ? <SecuritySettingsWorkspace /> : null}
             {activeTab === 'dashboard' ? (
                 <div className="space-y-4">

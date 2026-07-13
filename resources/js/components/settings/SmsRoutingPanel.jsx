@@ -1,76 +1,271 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
-function hasMarketOverride(entry) {
-    return Boolean(
-        entry?.active_provider
-        || entry?.fallback_provider
-        || entry?.africastalking?.username
-        || entry?.africastalking?.api_key_configured
-        || entry?.africastalking?.api_key
-        || entry?.africastalking?.sender_id
-        || entry?.legacy_gateway?.gateway_url
-        || entry?.legacy_gateway?.org_code
+function getProviderOptions(smsProviderOptions = []) {
+    return Array.isArray(smsProviderOptions) && smsProviderOptions.length
+        ? smsProviderOptions
+        : [
+            {
+                id: 'legacy_gateway',
+                label: 'Legacy Gateway',
+                fields: [
+                    { key: 'gateway_url', label: 'Gateway URL', type: 'url', required: true },
+                    { key: 'org_code', label: 'Org Code', type: 'text', required: true },
+                ],
+            },
+            {
+                id: 'africastalking',
+                label: "Africa's Talking",
+                fields: [
+                    { key: 'endpoint', label: 'Endpoint', type: 'url', required: false, default: 'https://api.africastalking.com/version1/messaging' },
+                    { key: 'username', label: 'Username', type: 'text', required: true },
+                    { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+                    { key: 'sender_id', label: 'Sender ID', type: 'text', required: false },
+                ],
+            },
+            {
+                id: 'briq',
+                label: 'Briq (Tanzania)',
+                fields: [
+                    { key: 'base_url', label: 'Base URL', type: 'url', required: true, default: 'https://karibu.briq.tz' },
+                    { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+                    { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+                ],
+            },
+            {
+                id: 'ghana_bulk_sms',
+                label: 'BulkSMS (Ghana)',
+                fields: [
+                    {
+                        key: 'base_url',
+                        label: 'Gateway URL',
+                        type: 'url',
+                        required: true,
+                        default: 'https://clientlogin.bulksmsgh.com/smsapi',
+                    },
+                    {
+                        key: 'api_key',
+                        label: 'API Key',
+                        type: 'password',
+                        required: true,
+                        secret: true,
+                    },
+                    {
+                        key: 'sender_id',
+                        label: 'Sender ID',
+                        type: 'text',
+                        required: true,
+                    },
+                    {
+                        key: 'success_code',
+                        label: 'Success Code',
+                        type: 'text',
+                        required: false,
+                        default: '1000',
+                    },
+                ],
+            },
+        ];
+}
+
+function isSecretField(field) {
+    return Boolean(field?.secret || field?.type === 'password' || field?.type === 'secret');
+}
+
+function providerCredentials(entry, providerId) {
+    if (!entry || typeof entry !== 'object') {
+        return {};
+    }
+
+    if (entry.providers?.[providerId] && typeof entry.providers[providerId] === 'object') {
+        return entry.providers[providerId];
+    }
+
+    // Backward compatibility for old shape: entry.legacy_gateway / entry.africastalking
+    if (entry[providerId] && typeof entry[providerId] === 'object') {
+        return entry[providerId];
+    }
+
+    return {};
+}
+
+function providerFieldConfigured(config, field) {
+    return Boolean(config?.[`${field.key}_configured`]);
+}
+
+function providerFieldValue(config, field) {
+    const value = config?.[field.key];
+
+    if (value !== null && value !== undefined) {
+        return value;
+    }
+
+    return field.default ?? '';
+}
+
+function providerReady(provider, localConfig = {}, globalConfig = {}) {
+    if (!provider) {
+        return false;
+    }
+
+    return (provider.fields || [])
+        .filter((field) => field.required)
+        .every((field) => {
+            const localValue = localConfig?.[field.key];
+            const globalValue = globalConfig?.[field.key];
+
+            const localConfigured = localConfig?.[`${field.key}_configured`];
+            const globalConfigured = globalConfig?.[`${field.key}_configured`];
+
+            if (isSecretField(field)) {
+                return Boolean(String(localValue || '').trim())
+                    || Boolean(localConfigured)
+                    || Boolean(String(globalValue || '').trim())
+                    || Boolean(globalConfigured);
+            }
+
+            return Boolean(String(localValue || '').trim())
+                || Boolean(String(globalValue || '').trim());
+        });
+}
+
+function hasProviderOverride(entry, providerOptions) {
+    if (!entry) {
+        return false;
+    }
+
+    if (entry.active_provider || entry.fallback_provider) {
+        return true;
+    }
+
+    return providerOptions.some((provider) => {
+        const config = providerCredentials(entry, provider.id);
+
+        return Object.entries(config || {}).some(([key, value]) => {
+            if (key.endsWith('_configured')) {
+                return Boolean(value);
+            }
+
+            return String(value ?? '').trim() !== '';
+        });
+    });
+}
+
+function renderProviderFields({
+                                  provider,
+                                  config,
+                                  globalConfig = {},
+                                  onChange,
+                                  disabled = false,
+                                  inheritGlobal = false,
+                              }) {
+    if (!provider) {
+        return null;
+    }
+
+    return (
+        <div className="grid gap-3 md:grid-cols-2">
+            {(provider.fields || []).map((field) => {
+                const secret = isSecretField(field);
+                const configured = providerFieldConfigured(config, field);
+                const globalConfigured = providerFieldConfigured(globalConfig, field);
+                const inputType = secret ? 'password' : (field.type === 'url' ? 'url' : 'text');
+                const globalValue = globalConfig?.[field.key];
+
+                return (
+                    <div key={`${provider.id}-${field.key}`} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                        <label className="mb-1 block text-xs font-medium text-slate-600">
+                            {field.label}
+                            {field.required ? <span className="ml-1 text-rose-600">*</span> : null}
+                        </label>
+
+                        {field.type === 'textarea' ? (
+                            <textarea
+                                value={providerFieldValue(config, field)}
+                                onChange={(event) => onChange(field.key, event.target.value)}
+                                className="crm-input text-sm"
+                                rows={3}
+                                disabled={disabled}
+                                placeholder={field.placeholder || field.label}
+                            />
+                        ) : (
+                            <input
+                                type={inputType}
+                                value={providerFieldValue(config, field)}
+                                onChange={(event) => onChange(field.key, event.target.value)}
+                                className="crm-input text-sm"
+                                disabled={disabled}
+                                placeholder={
+                                    secret && (configured || globalConfigured)
+                                        ? '••••••••'
+                                        : inheritGlobal && globalValue
+                                            ? `Global: ${globalValue}`
+                                            : (field.placeholder || field.label)
+                                }
+                            />
+                        )}
+
+                        {secret ? (
+                            <p className={`mt-1 text-xs ${configured ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                {configured
+                                    ? 'Secret is already stored. Enter a new value only when rotating it.'
+                                    : inheritGlobal && globalConfigured
+                                        ? 'No custom secret stored. This market will inherit the global secret.'
+                                        : 'No secret stored yet.'}
+                            </p>
+                        ) : inheritGlobal && globalValue ? (
+                            <p className="mt-1 text-xs text-slate-400">Leave blank to inherit global value.</p>
+                        ) : null}
+                    </div>
+                );
+            })}
+        </div>
     );
 }
 
-function marketIsReady(entry, globalForm) {
-    const provider = entry?.active_provider || globalForm.active_provider;
-
-    if (provider === 'africastalking') {
-        const username = entry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
-        const keyConfigured = entry?.africastalking?.api_key_configured
-            || entry?.africastalking?.api_key?.trim()
-            || globalForm.africastalking.api_key_configured
-            || globalForm.africastalking.api_key?.trim();
-
-        return Boolean(username) && Boolean(keyConfigured);
-    }
-
-    if (provider === 'legacy_gateway') {
-        const gatewayUrl = entry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
-        const orgCode = entry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
-
-        return Boolean(gatewayUrl) && Boolean(orgCode);
-    }
-
-    return true;
-}
-
 function MarketSmsRoutingRow({
-    onEntryChange,
-    platform,
-    smsProviderForm,
-    smsProviderLabel,
-    entry = {},
-}) {
+                                 onEntryChange,
+                                 platform,
+                                 smsProviderForm,
+                                 smsProviderLabel,
+                                 smsProviderOptions,
+                                 entry = {},
+                             }) {
     const [expanded, setExpanded] = useState(false);
+    const providerOptions = getProviderOptions(smsProviderOptions);
 
-    const hasOverride = hasMarketOverride(entry);
-    const isReady = marketIsReady(entry, smsProviderForm);
-    const effectiveProvider = entry.active_provider || smsProviderForm.active_provider;
+    const effectiveProviderId = entry.active_provider || smsProviderForm.active_provider || providerOptions[0]?.id;
+    const activeProvider = providerOptions.find((provider) => provider.id === effectiveProviderId) || providerOptions[0];
+
+    const marketConfig = providerCredentials(entry, effectiveProviderId);
+    const globalConfig = providerCredentials(smsProviderForm, effectiveProviderId);
+
+    const hasOverride = hasProviderOverride(entry, providerOptions);
+    const isReady = providerReady(activeProvider, marketConfig, globalConfig);
 
     const patch = (updates) => onEntryChange({ ...entry, ...updates });
-    const patchAt = (field, value) => patch({
-        africastalking: {
-            ...(entry.africastalking ?? {}),
-            [field]: value,
-        },
-    });
-    const patchLegacy = (field, value) => patch({
-        legacy_gateway: {
-            ...(entry.legacy_gateway ?? {}),
-            [field]: value,
-        },
-    });
+
+    const patchProviderField = (providerId, field, value) => {
+        patch({
+            providers: {
+                ...(entry.providers || {}),
+                [providerId]: {
+                    ...(providerCredentials(entry, providerId) || {}),
+                    [field]: value,
+                },
+            },
+        });
+    };
 
     return (
         <div className="py-3">
             <div className="flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-slate-800">{platform.name}</span>
                         {hasOverride ? (
-                            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200">Custom</span>
+                            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200">
+                                Custom
+                            </span>
                         ) : (
                             <span className="text-xs text-slate-400">Using global</span>
                         )}
@@ -78,26 +273,43 @@ function MarketSmsRoutingRow({
                             <span className="text-xs text-amber-600">Provider not ready</span>
                         ) : null}
                     </div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                        Active provider: {smsProviderLabel(effectiveProvider)}{entry.active_provider ? ' (override)' : ' (global)'}
+                    <p className="mt-0.5 text-xs text-slate-500">
+                        Active provider: {smsProviderLabel(effectiveProviderId)}
+                        {entry.active_provider ? ' (override)' : ' (global)'}
                     </p>
                 </div>
 
                 <select
                     value={entry.active_provider ?? ''}
-                    onChange={(event) => patch({ active_provider: event.target.value || null })}
+                    onChange={(event) => {
+                        const nextProviderId = event.target.value || null;
+                        patch({
+                            active_provider: nextProviderId,
+                            providers: nextProviderId
+                                ? {
+                                    ...(entry.providers || {}),
+                                    [nextProviderId]: {
+                                        ...(providerCredentials(entry, nextProviderId) || {}),
+                                    },
+                                }
+                                : (entry.providers || {}),
+                        });
+                    }}
                     className="crm-select text-sm"
                     aria-label={`${platform.name} active provider`}
                 >
                     <option value="">Global default</option>
-                    <option value="legacy_gateway">Legacy Gateway</option>
-                    <option value="africastalking">Africa&apos;s Talking</option>
+                    {providerOptions.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                            {provider.label}
+                        </option>
+                    ))}
                 </select>
 
                 <button
                     type="button"
                     onClick={() => setExpanded((current) => !current)}
-                    className="text-xs text-teal-700 hover:underline whitespace-nowrap"
+                    className="whitespace-nowrap text-xs text-teal-700 hover:underline"
                     aria-expanded={expanded}
                 >
                     {expanded ? 'Less' : 'Configure'}
@@ -105,7 +317,7 @@ function MarketSmsRoutingRow({
             </div>
 
             {expanded ? (
-                <div className="mt-3 space-y-4 border-l-2 border-slate-100 ml-2 pl-3">
+                <div className="mt-3 ml-2 space-y-4 border-l-2 border-slate-100 pl-3">
                     <div>
                         <label htmlFor={`sms-market-fallback-${platform.id}`} className="mb-1 block text-xs font-medium text-slate-600">
                             Fallback provider
@@ -118,79 +330,38 @@ function MarketSmsRoutingRow({
                         >
                             <option value="">Global default</option>
                             <option value="none">None</option>
-                            <option value="legacy_gateway">Legacy Gateway</option>
-                            <option value="africastalking">Africa&apos;s Talking</option>
+                            {providerOptions
+                                .filter((provider) => provider.id !== effectiveProviderId)
+                                .map((provider) => (
+                                    <option key={provider.id} value={provider.id}>
+                                        {provider.label}
+                                    </option>
+                                ))}
                         </select>
                     </div>
 
-                    <div>
-                        <p className="text-xs font-semibold text-slate-700 mb-1">Africa&apos;s Talking</p>
-                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
-                        <div className="grid gap-2 md:grid-cols-2">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                             <div>
-                                <label htmlFor={`sms-market-at-username-${platform.id}`} className="mb-1 block text-xs text-slate-600">Username</label>
-                                <input
-                                    id={`sms-market-at-username-${platform.id}`}
-                                    value={entry.africastalking?.username ?? ''}
-                                    onChange={(event) => patchAt('username', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.africastalking.username || '(not set)'}`}
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor={`sms-market-at-sender-${platform.id}`} className="mb-1 block text-xs text-slate-600">Sender ID</label>
-                                <input
-                                    id={`sms-market-at-sender-${platform.id}`}
-                                    value={entry.africastalking?.sender_id ?? ''}
-                                    onChange={(event) => patchAt('sender_id', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder="Optional sender ID override"
-                                />
-                            </div>
-                            <div className="md:col-span-2">
-                                <label htmlFor={`sms-market-at-key-${platform.id}`} className="mb-1 block text-xs text-slate-600">API key</label>
-                                <input
-                                    id={`sms-market-at-key-${platform.id}`}
-                                    type="password"
-                                    value={entry.africastalking?.api_key ?? ''}
-                                    onChange={(event) => patchAt('api_key', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder="Leave blank to use global API key"
-                                />
-                                <p className={`mt-1 text-xs ${entry.africastalking?.api_key_configured ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                    {entry.africastalking?.api_key_configured
-                                        ? 'Custom key stored. Enter a new value only when rotating it.'
-                                        : 'No custom key stored. This market will inherit the global key.'}
+                                <p className="text-xs font-semibold text-slate-700">
+                                    {activeProvider?.label || 'Provider'} credentials
+                                </p>
+                                <p className="mt-1 text-xs text-slate-400">
+                                    Leave blank to inherit global credentials where available.
                                 </p>
                             </div>
+                            <span className={`rounded px-2 py-0.5 text-xs ${isReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                                {isReady ? 'Ready' : 'Incomplete'}
+                            </span>
                         </div>
-                    </div>
 
-                    <div>
-                        <p className="text-xs font-semibold text-slate-700 mb-1">Legacy Gateway</p>
-                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
-                        <div className="grid gap-2 md:grid-cols-2">
-                            <div className="md:col-span-2">
-                                <label htmlFor={`sms-market-legacy-url-${platform.id}`} className="mb-1 block text-xs text-slate-600">Gateway URL</label>
-                                <input
-                                    id={`sms-market-legacy-url-${platform.id}`}
-                                    value={entry.legacy_gateway?.gateway_url ?? ''}
-                                    onChange={(event) => patchLegacy('gateway_url', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.gateway_url || '(not set)'}`}
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor={`sms-market-legacy-org-${platform.id}`} className="mb-1 block text-xs text-slate-600">Org code</label>
-                                <input
-                                    id={`sms-market-legacy-org-${platform.id}`}
-                                    value={entry.legacy_gateway?.org_code ?? ''}
-                                    onChange={(event) => patchLegacy('org_code', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.org_code || '76'}`}
-                                />
-                            </div>
-                        </div>
+                        {renderProviderFields({
+                            provider: activeProvider,
+                            config: marketConfig,
+                            globalConfig,
+                            inheritGlobal: true,
+                            onChange: (field, value) => patchProviderField(effectiveProviderId, field, value),
+                        })}
                     </div>
 
                     {hasOverride ? (
@@ -214,26 +385,48 @@ function MarketSmsRoutingRow({
 }
 
 export default function SmsRoutingPanel({
-    fallbackInvalid,
-    fallbackOptions,
-    latestSmsTestResult,
-    markets,
-    onMarketsChange,
-    platforms,
-    saveSmsProviderConfig,
-    saveSmsProviderMutation,
-    setSmsProviderForm,
-    setSmsTestConfirmOpen,
-    setSmsTestForm,
-    smsProviderForm,
-    smsProviderLabel,
-    smsReady,
-    smsTestForm,
-    smsTestReady,
-    statusChip,
-    testSmsProviderMutation,
-    updateSmsProviderField,
-}) {
+                                            fallbackInvalid,
+                                            fallbackOptions,
+                                            latestSmsTestResult,
+                                            markets,
+                                            onMarketsChange,
+                                            platforms,
+                                            saveSmsProviderConfig,
+                                            saveSmsProviderMutation,
+                                            setSmsProviderForm,
+                                            setSmsTestConfirmOpen,
+                                            setSmsTestForm,
+                                            smsProviderForm,
+                                            smsProviderLabel,
+                                            smsProviderOptions = [],
+                                            smsReady,
+                                            smsTestForm,
+                                            smsTestReady,
+                                            statusChip,
+                                            testSmsProviderMutation,
+                                        }) {
+    const providerOptions = getProviderOptions(smsProviderOptions);
+
+    const activeGlobalProvider = useMemo(
+        () => providerOptions.find((provider) => provider.id === smsProviderForm.active_provider) || providerOptions[0],
+        [providerOptions, smsProviderForm.active_provider],
+    );
+
+    const activeGlobalProviderConfig = providerCredentials(smsProviderForm, activeGlobalProvider?.id);
+
+    const updateGlobalProviderField = (providerId, field, value) => {
+        setSmsProviderForm((current) => ({
+            ...current,
+            providers: {
+                ...(current.providers || {}),
+                [providerId]: {
+                    ...(providerCredentials(current, providerId) || {}),
+                    [field]: value,
+                },
+            },
+        }));
+    };
+
     return (
         <section className="crm-surface overflow-hidden">
             <header className="crm-panel-header">
@@ -265,11 +458,27 @@ export default function SmsRoutingPanel({
                                 <select
                                     id="sms-active-provider"
                                     value={smsProviderForm.active_provider}
-                                    onChange={(event) => setSmsProviderForm((current) => ({ ...current, active_provider: event.target.value }))}
+                                    onChange={(event) => {
+                                        const nextProviderId = event.target.value;
+
+                                        setSmsProviderForm((current) => ({
+                                            ...current,
+                                            active_provider: nextProviderId,
+                                            providers: {
+                                                ...(current.providers || {}),
+                                                [nextProviderId]: {
+                                                    ...(providerCredentials(current, nextProviderId) || {}),
+                                                },
+                                            },
+                                        }));
+                                    }}
                                     className="crm-select w-full"
                                 >
-                                    <option value="legacy_gateway">Legacy Gateway</option>
-                                    <option value="africastalking">Africa&apos;s Talking</option>
+                                    {providerOptions.map((provider) => (
+                                        <option key={provider.id} value={provider.id}>
+                                            {provider.label}
+                                        </option>
+                                    ))}
                                 </select>
                             </div>
 
@@ -281,7 +490,10 @@ export default function SmsRoutingPanel({
                                     onChange={(event) => setSmsProviderForm((current) => ({ ...current, fallback_provider: event.target.value }))}
                                     className="crm-select w-full"
                                 >
-                                    {fallbackOptions.map((option) => (
+                                    {(fallbackOptions || [
+                                        { value: 'none', label: 'No fallback' },
+                                        ...providerOptions.map((provider) => ({ value: provider.id, label: provider.label })),
+                                    ]).map((option) => (
                                         <option
                                             key={option.value}
                                             value={option.value}
@@ -319,59 +531,25 @@ export default function SmsRoutingPanel({
                     </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
-                        <h4 className="text-sm font-semibold text-slate-900">Legacy Gateway</h4>
-                        <p className="mt-1 text-xs text-slate-500">Existing SMS connector used in current operations.</p>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <input
-                                value={smsProviderForm.legacy_gateway.gateway_url}
-                                onChange={(event) => updateSmsProviderField('legacy_gateway', 'gateway_url', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="Gateway URL"
-                            />
-                            <input
-                                value={smsProviderForm.legacy_gateway.org_code}
-                                onChange={(event) => updateSmsProviderField('legacy_gateway', 'org_code', event.target.value)}
-                                className="crm-input"
-                                placeholder="Org code"
-                            />
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <h4 className="text-sm font-semibold text-slate-900">Global Provider Credentials</h4>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    These credentials are used when a market does not have its own override.
+                                </p>
+                            </div>
+                            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
+                                {smsProviderLabel(activeGlobalProvider?.id)}
+                            </span>
                         </div>
-                    </section>
 
-                    <section className="rounded-lg border border-slate-200 bg-white p-3">
-                        <h4 className="text-sm font-semibold text-slate-900">Africa&apos;s Talking</h4>
-                        <p className="mt-1 text-xs text-slate-500">Use this provider for managed delivery with API-key authentication.</p>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <input
-                                value={smsProviderForm.africastalking.endpoint}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'endpoint', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="API endpoint"
-                            />
-                            <input
-                                value={smsProviderForm.africastalking.username}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'username', event.target.value)}
-                                className="crm-input"
-                                placeholder="Username"
-                            />
-                            <input
-                                value={smsProviderForm.africastalking.sender_id}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'sender_id', event.target.value)}
-                                className="crm-input"
-                                placeholder="Sender ID (optional)"
-                            />
-                            <input
-                                type="password"
-                                value={smsProviderForm.africastalking.api_key}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'api_key', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="API key (leave blank to keep current key)"
-                            />
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                            {renderProviderFields({
+                                provider: activeGlobalProvider,
+                                config: activeGlobalProviderConfig,
+                                onChange: (field, value) => updateGlobalProviderField(activeGlobalProvider.id, field, value),
+                            })}
                         </div>
-                        <p className={`mt-2 text-xs ${smsProviderForm.africastalking.api_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                            {smsProviderForm.africastalking.api_key_configured
-                                ? 'API key is already stored. Add a new value only when rotating credentials.'
-                                : 'No API key is currently configured for Africa\'s Talking.'}
-                        </p>
                     </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
@@ -379,6 +557,7 @@ export default function SmsRoutingPanel({
                         <p className="mt-1 text-xs text-slate-500">
                             Markets inherit global settings by default. Configure overrides to use a different provider or separate credentials per market.
                         </p>
+
                         {(platforms ?? []).length === 0 ? (
                             <p className="mt-3 text-xs text-slate-400">No markets configured.</p>
                         ) : (
@@ -390,8 +569,10 @@ export default function SmsRoutingPanel({
                                         entry={markets?.[String(platform.id)] ?? {}}
                                         smsProviderForm={smsProviderForm}
                                         smsProviderLabel={smsProviderLabel}
+                                        smsProviderOptions={providerOptions}
                                         onEntryChange={(updated) => {
                                             const platformKey = String(platform.id);
+
                                             if (updated === null) {
                                                 const nextMarkets = { ...(markets || {}) };
                                                 delete nextMarkets[platformKey];
@@ -426,7 +607,13 @@ export default function SmsRoutingPanel({
                         <button
                             type="button"
                             onClick={saveSmsProviderConfig}
-                            disabled={saveSmsProviderMutation.isPending || !smsProviderForm.reason.trim() || fallbackInvalid || !smsProviderForm.default_prefix.trim() || (smsProviderForm.enabled && !smsReady)}
+                            disabled={
+                                saveSmsProviderMutation.isPending
+                                || !smsProviderForm.reason.trim()
+                                || fallbackInvalid
+                                || !smsProviderForm.default_prefix.trim()
+                                || (smsProviderForm.enabled && !smsReady)
+                            }
                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {saveSmsProviderMutation.isPending ? 'Saving...' : 'Save SMS settings'}
@@ -438,10 +625,11 @@ export default function SmsRoutingPanel({
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
                         <h4 className="text-sm font-semibold text-slate-900">Test Dispatch</h4>
                         <p className="mt-1 text-xs text-slate-500">Send a controlled SMS to verify routing and provider response in real time.</p>
+
                         <div className="mt-3 space-y-3">
                             <div>
                                 <label htmlFor="sms-test-market" className="mb-1 block text-sm font-medium text-slate-700">
-                                    Test for market <span className="text-slate-400 font-normal">(optional)</span>
+                                    Test for market <span className="font-normal text-slate-400">(optional)</span>
                                 </label>
                                 <select
                                     id="sms-test-market"
@@ -455,12 +643,14 @@ export default function SmsRoutingPanel({
                                     ))}
                                 </select>
                             </div>
+
                             <input
                                 value={smsTestForm.phone}
                                 onChange={(event) => setSmsTestForm((current) => ({ ...current, phone: event.target.value }))}
                                 className="crm-input"
-                                placeholder="Phone (example: +254712000000)"
+                                placeholder="Phone, example: +254712000000"
                             />
+
                             <textarea
                                 rows={4}
                                 value={smsTestForm.message}
@@ -468,6 +658,7 @@ export default function SmsRoutingPanel({
                                 className="crm-input"
                                 placeholder="Test message content"
                             />
+
                             <input
                                 value={smsTestForm.reason}
                                 onChange={(event) => setSmsTestForm((current) => ({ ...current, reason: event.target.value }))}
@@ -475,16 +666,25 @@ export default function SmsRoutingPanel({
                                 placeholder="Reason for test dispatch"
                             />
                         </div>
+
                         <div className="mt-3 flex justify-end">
                             <button
                                 type="button"
                                 onClick={() => setSmsTestConfirmOpen(true)}
-                                disabled={testSmsProviderMutation.isPending || !smsTestReady || !smsProviderForm.enabled || !smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim()}
+                                disabled={
+                                    testSmsProviderMutation.isPending
+                                    || !smsTestReady
+                                    || !smsProviderForm.enabled
+                                    || !smsTestForm.phone.trim()
+                                    || !smsTestForm.message.trim()
+                                    || !smsTestForm.reason.trim()
+                                }
                                 className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {testSmsProviderMutation.isPending ? 'Sending...' : 'Send test SMS'}
                             </button>
                         </div>
+
                         {!smsProviderForm.enabled ? (
                             <p className="mt-2 text-xs text-amber-700">Enable SMS dispatch before sending a provider test message.</p>
                         ) : null}
@@ -498,13 +698,22 @@ export default function SmsRoutingPanel({
                                     {latestSmsTestResult.success ? 'success' : 'failed'}
                                 </span>
                             </div>
+
                             <div className="mt-2 space-y-1 text-xs text-slate-600">
                                 <p><span className="font-semibold text-slate-800">Provider:</span> {smsProviderLabel(latestSmsTestResult.provider)}</p>
                                 <p><span className="font-semibold text-slate-800">Status:</span> {latestSmsTestResult.status || 'unknown'}</p>
                                 <p><span className="font-semibold text-slate-800">Phone:</span> {latestSmsTestResult.phone || '--'}</p>
-                                <p className="break-all"><span className="font-semibold text-slate-800">Response:</span> {latestSmsTestResult.provider_response || 'No provider response message.'}</p>
+                                <p className="break-all">
+                                    <span className="font-semibold text-slate-800">Response:</span>{' '}
+                                    {typeof latestSmsTestResult.provider_response === 'object'
+                                        ? JSON.stringify(latestSmsTestResult.provider_response)
+                                        : (latestSmsTestResult.provider_response || 'No provider response message.')}
+                                </p>
                                 {latestSmsTestResult.fallback_attempted ? (
-                                    <p><span className="font-semibold text-slate-800">Fallback:</span> Attempted from {smsProviderLabel(latestSmsTestResult.fallback_from || smsProviderForm.active_provider)}</p>
+                                    <p>
+                                        <span className="font-semibold text-slate-800">Fallback:</span>{' '}
+                                        Attempted from {smsProviderLabel(latestSmsTestResult.fallback_from || smsProviderForm.active_provider)}
+                                    </p>
                                 ) : null}
                             </div>
                         </section>

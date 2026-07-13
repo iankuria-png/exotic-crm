@@ -106,18 +106,34 @@ return [
         'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),
     ],
 
-    'client_sync' => [
-        'per_page' => (int) env('CRM_CLIENT_SYNC_PER_PAGE', 100),
-        'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 3),
-        'delta_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_DELTA_STAGGER_SECONDS', 120),
-        'reconcile_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_RECONCILE_STAGGER_SECONDS', 180),
-    ],
-
     'africastalking' => [
         'endpoint' => env('AFRICASTALKING_ENDPOINT', 'https://api.africastalking.com/version1/messaging'),
         'username' => env('AFRICASTALKING_USERNAME'),
         'api_key' => env('AFRICASTALKING_API_KEY'),
         'sender_id' => env('AFRICASTALKING_SENDER_ID'),
+    ],
+
+    'uganda_bulk_sms' => [
+        'base_url' => env('UGANDA_BULK_SMS_BASE_URL', 'http://bluesmsuganda.com/api-sub.php'),
+        'username' => env('UGANDA_BULK_SMS_USERNAME', ''),
+        'password' => env('UGANDA_BULK_SMS_PASSWORD', ''),
+        'sender_id' => env('UGANDA_BULK_SMS_SENDER_ID', ''),
+        'success_code' => env('UGANDA_BULK_SMS_SUCCESS_CODE', '1701'),
+    ],
+
+    'kullsms' => [
+        'base_url' => env('KULLSMS_BASE_URL', 'https://kullsms.com/customer/api/'),
+        'username' => env('KULLSMS_USERNAME', ''),
+        'password' => env('KULLSMS_PASSWORD', ''),
+        'sender_id' => env('KULLSMS_SENDER_ID', ''),
+        'success_code' => env('KULLSMS_SUCCESS_CODE', '1701'),
+    ],
+
+    'ghana_bulk_sms' => [
+        'base_url' => env('GHANA_BULK_SMS_BASE_URL', 'https://clientlogin.bulksmsgh.com/smsapi'),
+        'api_key' => env('GHANA_BULK_SMS_API_KEY', ''),
+        'sender_id' => env('GHANA_BULK_SMS_SENDER_ID', ''),
+        'success_code' => env('GHANA_BULK_SMS_SUCCESS_CODE', '1000'),
     ],
 
     'sendgrid' => [

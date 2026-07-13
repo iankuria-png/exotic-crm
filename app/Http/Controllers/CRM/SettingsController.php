@@ -120,7 +120,12 @@ class SettingsController extends Controller
         [$platforms, $platformStatuses, $allowedPlatformIds] = $this->accessiblePlatformsAndStatuses($request);
 
         $smsProvider = $this->scopeSmsConfigForUser(
-            $this->notificationService->currentSmsConfig(masked: true),
+            array_merge(
+                $this->notificationService->currentSmsConfig(masked: true),
+                [
+                    'provider_options' => $this->notificationService->smsProviderOptions(),
+                ]
+            ),
             $request->user()
         );
         $pushProvider = $this->scopePushConfigForUser(
@@ -130,9 +135,9 @@ class SettingsController extends Controller
         $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
         $activeConfigured = match ($activeProvider) {
             'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
-            && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
+                && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
             default => (bool) ($smsProvider['legacy_gateway']['gateway_url'] ?? null)
-            && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
+                && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
         };
         $smsStatus = $activeConfigured
             ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
@@ -711,8 +716,8 @@ class SettingsController extends Controller
 
         $validated = $request->validate([
             'enabled' => 'required|boolean',
-            'active_provider' => 'required|in:legacy_gateway,africastalking',
-            'fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
+            'active_provider' => 'required|string|max:80',
+            'fallback_provider' => 'nullable|string|max:80',
             'default_prefix' => ['nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
             'legacy_gateway' => 'nullable|array',
             'legacy_gateway.gateway_url' => 'nullable|url|max:255',
@@ -724,8 +729,8 @@ class SettingsController extends Controller
             'africastalking.sender_id' => 'nullable|string|max:20',
             'markets' => 'sometimes|array',
             'markets.*' => 'array',
-            'markets.*.active_provider' => 'nullable|in:legacy_gateway,africastalking',
-            'markets.*.fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
+            'markets.*.active_provider' => 'nullable|string|max:80',
+            'markets.*.fallback_provider' => 'nullable|string|max:80',
             'markets.*.legacy_gateway' => 'nullable|array',
             'markets.*.legacy_gateway.gateway_url' => 'nullable|url|max:255',
             'markets.*.legacy_gateway.org_code' => 'nullable|string|max:20',
@@ -734,6 +739,13 @@ class SettingsController extends Controller
             'markets.*.africastalking.api_key' => 'nullable|string|max:255',
             'markets.*.africastalking.sender_id' => 'nullable|string|max:20',
             'reason' => 'nullable|string|max:500',
+            'providers' => 'sometimes|array',
+            'providers.*' => 'nullable|array',
+            'providers.*.*' => 'nullable|string|max:500',
+
+            'markets.*.providers' => 'nullable|array',
+            'markets.*.providers.*' => 'nullable|array',
+            'markets.*.providers.*.*' => 'nullable|string|max:500',
         ]);
 
         if (
@@ -3526,8 +3538,8 @@ class SettingsController extends Controller
                     ],
                 ]),
                 $validated['reason'] ?? ($refresh
-                    ? 'Manual Support Board link revalidation run'
-                    : 'Manual Support Board link sync run')
+                ? 'Manual Support Board link revalidation run'
+                : 'Manual Support Board link sync run')
             );
 
             if (!$started['reused']) {
@@ -5309,7 +5321,7 @@ class SettingsController extends Controller
         }
 
         $normalizedActiveProvider = array_key_exists($activeProvider, $normalizedProviders)
-            && (bool) ($normalizedProviders[$activeProvider]['enabled'] ?? false)
+        && (bool) ($normalizedProviders[$activeProvider]['enabled'] ?? false)
             ? $activeProvider
             : $enabledProviderKeys[0];
 
