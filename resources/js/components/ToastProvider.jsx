@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { registerToast } from '../services/toastBridge';
 
 const ToastContext = createContext(null);
 
@@ -53,6 +54,13 @@ export function ToastProvider({ children }) {
         info: (message, options) => pushToast(message, { ...(options || {}), tone: 'info' }),
         dismiss: dismissToast,
     }), [dismissToast, pushToast]);
+
+    // Expose the imperative toast api to non-React callers (the global query
+    // error bridge lives above this provider in the tree).
+    useEffect(() => {
+        registerToast(api);
+        return () => registerToast(null);
+    }, [api]);
 
     return (
         <ToastContext.Provider value={api}>

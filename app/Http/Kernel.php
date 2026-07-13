@@ -45,6 +45,7 @@ class Kernel extends HttpKernel
             // session lifetime and removes CSRF/419 failures on session expiry.
             // StartSession remains so the login/logout endpoints can still do
             // their session housekeeping, but it never authenticates /api.
+            \App\Http\Middleware\AttachRequestId::class,
             \App\Http\Middleware\EncryptCookies::class,
             \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
             \Illuminate\Session\Middleware\StartSession::class,

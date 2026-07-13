@@ -6,6 +6,7 @@ import axios from 'axios';
 // the first-party session cookie rather than a bearer token.
 const webClient = axios.create({
     baseURL: '/',
+    timeout: 30_000,
     headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',

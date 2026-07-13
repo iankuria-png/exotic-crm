@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Link, Outlet } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
+import ErrorBoundary from '../components/ErrorBoundary';
 import Sidebar from '../components/Sidebar';
 import { useAuth } from '../hooks/useAuth';
 import { useHeartbeat } from '../hooks/useHeartbeat';
@@ -12,6 +13,7 @@ export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
     const { user, impersonation, logout } = useAuth();
+    const location = useLocation();
     const { activeCount, failedCount, uploads, retryUpload, dismissUpload } = useMediaUploads();
     const isMarketing = user?.role === 'marketing';
     const showUploadIndicator = activeCount > 0 || failedCount > 0;
@@ -156,7 +158,10 @@ export default function MainLayout() {
 
                 {/* Page content */}
                 <main className="flex-1 overflow-y-auto p-4 lg:p-6">
-                    <Outlet />
+                    {/* Keyed by path so a page crash resets when the user navigates. */}
+                    <ErrorBoundary variant="inline" label="page" key={location.pathname}>
+                        <Outlet />
+                    </ErrorBoundary>
                 </main>
                 <Walkthrough />
             </div>

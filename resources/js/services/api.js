@@ -5,6 +5,10 @@ import authProbe from './authProbe';
 
 const api = axios.create({
     baseURL: '/api',
+    // A generous ceiling so a hung backend can't leave the UI spinning forever,
+    // while still clearing normal slow calls (AI generation, reports, sync).
+    // Multipart uploads are exempted below — they can legitimately run longer.
+    timeout: 60_000,
     headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -22,6 +26,14 @@ api.interceptors.request.use((config) => {
     const impersonation = readImpersonationSnapshot();
     if (impersonation?.user?.id) {
         config.headers['X-CRM-Impersonate-User'] = String(impersonation.user.id);
+    }
+
+    // Never time out large multipart uploads (50 MB media/video, KYC docs,
+    // lesson media). This covers every current and future upload call site
+    // without threading a per-request override through each one.
+    const contentType = config.headers?.['Content-Type'] || config.headers?.['content-type'];
+    if (typeof contentType === 'string' && contentType.includes('multipart/form-data')) {
+        config.timeout = 0;
     }
 
     return config;

@@ -6,6 +6,8 @@ import axios from 'axios';
 // meant to gate.
 const authProbe = axios.create({
     baseURL: '/api',
+    // Fail fast: this only gates the logout decision, so it must not hang.
+    timeout: 15_000,
     headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
