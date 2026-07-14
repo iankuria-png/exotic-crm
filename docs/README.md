@@ -21,6 +21,13 @@
 
 ### 📚 Phase Documentation
 
+### Operational Runbooks
+
+- **[crm-performance-troubleshooting-runbook.md](crm-performance-troubleshooting-runbook.md)**
+  - IT command checklist for CRM slowness/timeouts
+  - cPanel, network, queue, Pulse, PHP-FPM, and MariaDB triage
+  - Escalation templates and interpretation guide
+
 #### Phase 2: Data Model Foundation ✅
 
 - **[billing-refactor-phase-2-handover-2026-04-04.md](billing-refactor-phase-2-handover-2026-04-04.md)**

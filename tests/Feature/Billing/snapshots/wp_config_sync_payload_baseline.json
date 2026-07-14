@@ -26,6 +26,7 @@
         },
         "limits_by_currency": {
             "KES": {
+                "min_single_topup": "100.00",
                 "max_single_topup": "50000.00",
                 "max_wallet_balance": "200000.00"
             }
@@ -85,8 +86,8 @@
             "enabled": true,
             "percent": 10,
             "label": "Self-service special",
-            "starts_at": "2026-05-18T21:48:08+00:00",
-            "expires_at": "2026-05-19T22:48:08+00:00",
+            "starts_at": "2026-07-13T07:44:01+00:00",
+            "expires_at": "2026-07-14T08:44:01+00:00",
             "sources": [
                 "wallet",
                 "self_checkout",
