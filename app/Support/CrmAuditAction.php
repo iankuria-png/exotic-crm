@@ -16,6 +16,7 @@ final class CrmAuditAction
     public const USER_IMPERSONATION_START = 'user_impersonation_start';
     public const INTEGRATION_PLATFORM_CREATE = 'integration_platform_create';
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
+    public const LIFECYCLE_SETTINGS_UPDATE = 'lifecycle_settings_update';
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
     public const INTEGRATION_SYNC_RUN = 'integration_sync_run';
     public const SYSTEM_DEPLOY_START = 'system_deploy_start';

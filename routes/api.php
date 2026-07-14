@@ -611,6 +611,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/reporting-fx-rates', [SettingsController::class, 'createReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'updateReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'deleteReportingFxRate'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/lifecycle', [SettingsController::class, 'lifecycleSettings'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/lifecycle', [SettingsController::class, 'updateLifecycleSettings'])->middleware('role:admin');
     Route::get('/settings/seo-engine', [SeoSettingsController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/seo-engine', [SeoSettingsController::class, 'update'])->middleware('role:admin');
     Route::post('/settings/seo-engine/test', [SeoSettingsController::class, 'test'])->middleware('role:admin');

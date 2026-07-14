@@ -34,7 +34,7 @@ class ArchiveExpiredProfiles extends Command
         $platformId = $this->option('platform') !== null ? (int) $this->option('platform') : null;
 
         // Global kill switch: with the policy disabled everywhere, there is nothing to archive.
-        if (! config('crm.lifecycle.master_enabled', true)) {
+        if (! \App\Support\LifecyclePolicy::masterEnabled()) {
             $this->info('Profile lifecycle master switch is off — skipping.');
 
             return self::SUCCESS;

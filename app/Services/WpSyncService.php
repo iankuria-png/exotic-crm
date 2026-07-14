@@ -17,12 +17,14 @@ class WpSyncService
     private string $baseUrl;
     private string $authHeader;
     private int $platformId;
+    private bool $sharedKeyEnabled;
     private int $defaultTimeout;
     private int $mediaUploadTimeout;
 
     public function __construct(Platform $platform)
     {
         $this->platformId = (int) $platform->id;
+        $this->sharedKeyEnabled = (bool) $platform->sync_shared_key_enabled;
         $this->baseUrl = rtrim($platform->wp_api_url, '/');
         $this->authHeader = 'Basic ' . base64_encode(
             $platform->wp_api_user . ':' . $platform->wp_api_password
@@ -540,6 +542,13 @@ class WpSyncService
         $sharedKey = trim((string) config('services.exotic_crm_sync.shared_key', ''));
         if ($sharedKey === '' || $this->platformId <= 0) {
             return null;
+        }
+
+        // Preferred: the per-market toggle managed from CRM settings
+        // (platforms.sync_shared_key_enabled). The env allowlist remains as a
+        // fallback so existing deployments keep working without a data change.
+        if ($this->sharedKeyEnabled) {
+            return $sharedKey;
         }
 
         $platformIds = $this->configuredSharedKeyPlatformIds();

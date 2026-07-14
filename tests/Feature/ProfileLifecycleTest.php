@@ -141,6 +141,68 @@ class ProfileLifecycleTest extends TestCase
         $this->assertFalse((bool) $platform->fresh()->lifecycle_policy_enabled);
     }
 
+    public function test_lifecycle_master_switch_is_managed_from_settings(): void
+    {
+        $platform = $this->createPlatform(); // per-market flag ON
+
+        $admin = $this->createAdminUser();
+        \Laravel\Sanctum\Sanctum::actingAs($admin);
+
+        // Default: enabled (config fallback), market flag applies.
+        $this->getJson('/api/crm/settings/lifecycle')
+            ->assertOk()
+            ->assertJsonPath('master_enabled', true);
+        $this->assertTrue($platform->fresh()->lifecycleEnabled());
+
+        // Kill switch OFF from the CRM — every market reverts to legacy.
+        $this->patchJson('/api/crm/settings/lifecycle', [
+            'master_enabled' => false,
+            'reason' => 'Emergency stop for lifecycle pilot',
+        ])
+            ->assertOk()
+            ->assertJsonPath('master_enabled', false);
+
+        $this->assertFalse($platform->fresh()->lifecycleEnabled(), 'master off must override per-market flag');
+        $this->artisan('crm:archive-expired')->expectsOutputToContain('master switch is off')->assertExitCode(0);
+
+        // Back on.
+        $this->patchJson('/api/crm/settings/lifecycle', ['master_enabled' => true])
+            ->assertOk()
+            ->assertJsonPath('master_enabled', true);
+        $this->assertTrue($platform->fresh()->lifecycleEnabled());
+    }
+
+    public function test_sync_shared_key_header_follows_platform_toggle(): void
+    {
+        config()->set('services.exotic_crm_sync.shared_key', 'test-shared-key-123');
+        config()->set('services.exotic_crm_sync.shared_key_platform_ids', ''); // env allowlist empty
+
+        $platform = $this->createPlatform();
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake(["{$base}/clients/900/lifecycle" => Http::response(['ok' => true], 200)]);
+
+        // Toggle OFF (default): no shared key header.
+        (new WpSyncService($platform))->setLifecycleState(900, 'expired');
+        Http::assertSent(fn ($request) => !$request->hasHeader('X-Exotic-CRM-Sync-Key'));
+
+        // Toggle ON via the market settings column: header present.
+        $platform->forceFill(['sync_shared_key_enabled' => true])->save();
+        (new WpSyncService($platform->fresh()))->setLifecycleState(900, 'expired');
+        Http::assertSent(fn ($request) => $request->hasHeader('X-Exotic-CRM-Sync-Key', 'test-shared-key-123'));
+    }
+
+    private function createAdminUser(): \App\Models\User
+    {
+        return \App\Models\User::query()->create([
+            'name' => 'Admin Tester',
+            'email' => 'admin-' . uniqid() . '@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'admin',
+            'status' => 'active',
+            'assigned_market_ids' => [],
+        ]);
+    }
+
     public function test_archive_is_rejected_when_market_has_not_opted_in(): void
     {
         $platform = $this->createPlatform();

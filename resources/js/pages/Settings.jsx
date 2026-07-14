@@ -174,6 +174,7 @@ function buildPlatformEditor(platform) {
         country: platform.country || '',
         is_active: Boolean(platform.is_active),
         lifecycle_policy_enabled: Boolean(platform.lifecycle_policy_enabled),
+        sync_shared_key_enabled: Boolean(platform.sync_shared_key_enabled),
         wp_api_url: platform.wp_sync?.api_url || '',
         wp_api_user: platform.wp_sync?.api_user || '',
         wp_api_password: '',
@@ -1560,6 +1561,26 @@ function IntegrationsWorkspace({
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to update market profile.');
+        },
+    });
+
+    const lifecycleSettingsQuery = useQuery({
+        queryKey: ['settings-lifecycle'],
+        queryFn: () => api.get('/crm/settings/lifecycle').then((response) => response.data),
+        enabled: canManageMarkets && integrationArea === 'markets',
+    });
+
+    const updateLifecycleSettingsMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/lifecycle', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.setQueryData(['settings-lifecycle'], response);
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            toast.success(response?.master_enabled
+                ? 'Profile lifecycle enabled globally (per-market flags apply).'
+                : 'Profile lifecycle disabled everywhere — legacy expiry behaviour active.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update lifecycle settings.');
         },
     });
 
@@ -4839,6 +4860,44 @@ function IntegrationsWorkspace({
                     </div>
                 </header>
 
+                {lifecycleSettingsQuery.data ? (
+                    <div className={`mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 ${lifecycleSettingsQuery.data.master_enabled ? 'border-teal-200 bg-teal-50/60' : 'border-amber-300 bg-amber-50'}`}>
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                                SEO profile lifecycle — global switch
+                                <span className={`ml-2 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${lifecycleSettingsQuery.data.master_enabled ? 'bg-teal-50 text-teal-700 ring-teal-200' : 'bg-amber-50 text-amber-800 ring-amber-300'}`}>
+                                    {lifecycleSettingsQuery.data.master_enabled ? 'Enabled' : 'Disabled everywhere'}
+                                </span>
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                                {lifecycleSettingsQuery.data.master_enabled
+                                    ? `Markets opted in below keep expired profiles published for SEO (${lifecycleSettingsQuery.data.enabled_market_count} market${lifecycleSettingsQuery.data.enabled_market_count === 1 ? '' : 's'} enabled). Auto-archive after ${lifecycleSettingsQuery.data.archive_after_days} days Expired.`
+                                    : 'Emergency kill switch is OFF: every market uses the legacy behaviour (expiry takes the profile offline) regardless of its per-market flag.'}
+                            </p>
+                        </div>
+                        {canCreateMarkets ? (
+                            <button
+                                type="button"
+                                disabled={updateLifecycleSettingsMutation.isPending}
+                                onClick={() => {
+                                    const next = !lifecycleSettingsQuery.data.master_enabled;
+                                    const prompt = next
+                                        ? 'Re-enable the profile lifecycle globally? Markets with the per-market flag resume keeping expired profiles published.'
+                                        : 'Disable the profile lifecycle EVERYWHERE? All markets revert to legacy behaviour (expiry takes profiles offline) until re-enabled.';
+                                    if (window.confirm(prompt)) {
+                                        updateLifecycleSettingsMutation.mutate({ master_enabled: next });
+                                    }
+                                }}
+                                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${lifecycleSettingsQuery.data.master_enabled ? 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50' : 'border-teal-300 bg-teal-600 text-white hover:bg-teal-700'}`}
+                            >
+                                {updateLifecycleSettingsMutation.isPending
+                                    ? 'Saving…'
+                                    : lifecycleSettingsQuery.data.master_enabled ? 'Disable everywhere' : 'Enable lifecycle'}
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
+
                 <div className="grid gap-4 p-4 xl:grid-cols-12">
                     <div className="xl:col-span-5">
                         <MarketListPanel
@@ -5017,6 +5076,32 @@ function IntegrationsWorkspace({
                                                     (Expired → Archived lifecycle) instead of being taken offline. Leave off to keep the legacy behaviour
                                                     where expiry sets the profile to private. Requires the updated sync plugin and theme on this market&apos;s site.
                                                 </span>
+                                            </span>
+                                        </label>
+                                        <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={editor.sync_shared_key_enabled}
+                                                onChange={(event) => setEditor((current) => ({ ...current, sync_shared_key_enabled: event.target.checked }))}
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span>
+                                                <span className="font-medium">Send CRM sync shared key to this market</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    Adds the X-Exotic-CRM-Sync-Key header on WordPress sync calls so this market authenticates even when its
+                                                    Application Password is stale. The same key must be defined in the market site&apos;s wp-config.php.
+                                                    Required for the SEO profile lifecycle toggle above.
+                                                </span>
+                                                {editor.lifecycle_policy_enabled && !editor.sync_shared_key_enabled ? (
+                                                    <span className="mt-1 block text-xs font-medium text-amber-700">
+                                                        The lifecycle policy is on but the shared key is off — lifecycle pushes will fail unless this market&apos;s Application Password is valid.
+                                                    </span>
+                                                ) : null}
+                                                {selectedPlatform?.sync_shared_key_configured === false ? (
+                                                    <span className="mt-1 block text-xs font-medium text-rose-700">
+                                                        No shared key is configured on the CRM server (EXOTIC_CRM_SYNC_SHARED_KEY) — this toggle has no effect until one is set.
+                                                    </span>
+                                                ) : null}
                                             </span>
                                         </label>
                                     </div>

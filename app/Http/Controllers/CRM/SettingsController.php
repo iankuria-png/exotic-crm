@@ -2767,6 +2767,56 @@ class SettingsController extends Controller
         }
     }
 
+    /**
+     * Global profile-lifecycle settings (master kill switch). Per-market opt-in
+     * lives on the platform record and is edited via updateIntegrationPlatform.
+     */
+    public function lifecycleSettings(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can view lifecycle settings.'
+        );
+
+        return response()->json([
+            'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
+            'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
+            'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
+        ]);
+    }
+
+    public function updateLifecycleSettings(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can change lifecycle settings.'
+        );
+
+        $validated = $request->validate([
+            'master_enabled' => 'required|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = ['master_enabled' => \App\Support\LifecyclePolicy::masterEnabled()];
+        \App\Support\LifecyclePolicy::setMasterEnabled((bool) $validated['master_enabled'], (int) $request->user()->id);
+
+        // Global setting — recorded in the activity log (audit_log rows are
+        // platform-scoped and reject platform_id 0), matching auth settings.
+        \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::LIFECYCLE_SETTINGS_UPDATE, $request, [
+            'before' => $before,
+            'after' => ['master_enabled' => (bool) $validated['master_enabled']],
+            'reason' => $validated['reason'] ?? 'Updated profile lifecycle master switch from CRM settings',
+        ]);
+
+        return response()->json([
+            'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
+            'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
+            'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
+        ]);
+    }
+
     public function updateIntegrationPlatform(Request $request, Platform $platform)
     {
         $this->marketAuthorizationService->ensureRole(
@@ -2786,6 +2836,7 @@ class SettingsController extends Controller
             'country' => 'sometimes|string|max:255',
             'is_active' => 'sometimes|boolean',
             'lifecycle_policy_enabled' => 'sometimes|boolean',
+            'sync_shared_key_enabled' => 'sometimes|boolean',
             'wp_api_url' => 'sometimes|nullable|url|max:255',
             'wp_api_user' => 'sometimes|nullable|string|max:100',
             'wp_api_password' => 'sometimes|nullable|string|max:255',
@@ -4923,6 +4974,8 @@ class SettingsController extends Controller
             'lifecycle_policy_enabled' => (bool) $platform->lifecycle_policy_enabled,
             // Per-market flag AND the global master switch — what the reconciler actually applies.
             'lifecycle_policy_effective' => $platform->lifecycleEnabled(),
+            'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
+            'sync_shared_key_configured' => trim((string) config('services.exotic_crm_sync.shared_key', '')) !== '',
             'currency' => $platform->currency_code ?: 'KES',
             'wp_currency_id' => $platform->wp_currency_id,
             'supported_currencies' => $platform->supportedCurrencies(),
@@ -5041,6 +5094,7 @@ class SettingsController extends Controller
             'country' => $platform->country,
             'is_active' => (bool) $platform->is_active,
             'lifecycle_policy_enabled' => (bool) $platform->lifecycle_policy_enabled,
+            'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
             'wp_api_url' => $platform->wp_api_url,
             'wp_api_user' => $platform->wp_api_user,
             'phone_prefix' => $platform->phone_prefix,
