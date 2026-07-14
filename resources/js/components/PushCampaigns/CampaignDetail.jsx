@@ -96,6 +96,40 @@ function canMutateItem(item) {
     return String(item?.status || '') !== 'sent';
 }
 
+// Tailwind classes per severity tier. Red = eng attention (EPE down, auth
+// broken, missing creds); amber = operator attention (validation, rate limit,
+// stale URLs); slate = informational / legacy (unparsed old items).
+const REASON_SEVERITY = {
+    critical: 'bg-rose-100 text-rose-700',
+    warn: 'bg-amber-100 text-amber-700',
+    info: 'bg-slate-100 text-slate-600',
+};
+
+// Each entry: [display label, severity]. Distinct labels split the old
+// "provider error" bucket so 5xx (EPE incident) reads differently from an
+// unclassified HTTP status or a legacy unparsed blob.
+const REASON_META = {
+    // CRM-side URL/match/timing issues
+    redirect_home: ['stale URL', 'warn'],
+    no_post_id: ['unresolved URL', 'warn'],
+    ambiguous_match: ['review match', 'warn'],
+    http_404: ['missing page', 'warn'],
+    wp_payload_invalid: ['profile data issue', 'warn'],
+    missed_window: ['missed send window', 'warn'],
+    // Exotic Push Engine provider errors
+    epe_credentials_missing: ['missing credentials', 'critical'],
+    epe_unauthorized: ['auth failure', 'critical'],
+    epe_forbidden: ['forbidden', 'critical'],
+    epe_not_found: ['site not found', 'critical'],
+    epe_validation: ['validation error', 'warn'],
+    epe_rate_limited: ['rate limited', 'warn'],
+    epe_provider_error: ['EPE 5xx', 'critical'],
+    epe_http_error: ['EPE HTTP', 'warn'],
+    epe_rejected: ['provider rejected', 'warn'],
+    // Job-side fallbacks
+    provider_error: ['provider error', 'warn'],
+};
+
 function extractionReason(item) {
     const message = String(item?.error_message || '').trim();
     if (!message) {
@@ -107,49 +141,32 @@ function extractionReason(item) {
         return {
             code: 'issue',
             kind: 'issue',
+            severityClass: REASON_SEVERITY.warn,
             message,
         };
     }
 
     const normalizedCode = code.trim();
 
-    // Safety net: if the "code" isn't a valid identifier (e.g. a legacy raw JSON
-    // blob like {"status":429,...} that pre-dates structured provider errors),
-    // don't render it as a garbled badge. Show a generic label and keep the full
-    // string in the message so operators can still eyeball it.
+    // Safety net: legacy raw JSON blob (e.g. {"status":429,...}) that pre-dates
+    // the structured error classifier. Show as "unparsed" so it's visually
+    // distinct from a live provider failure.
     if (!/^[a-z][a-z0-9_]*$/i.test(normalizedCode)) {
         return {
-            code: 'provider error',
-            kind: 'provider_error',
+            code: 'unparsed',
+            kind: 'unparsed',
+            severityClass: REASON_SEVERITY.info,
             message,
         };
     }
 
-    const codeLabels = {
-        // CRM-side URL/match/timing issues
-        redirect_home: 'stale URL',
-        no_post_id: 'unresolved URL',
-        ambiguous_match: 'review match',
-        http_404: 'missing page',
-        wp_payload_invalid: 'profile data issue',
-        missed_window: 'missed send window',
-        // Exotic Push Engine provider errors
-        epe_credentials_missing: 'missing credentials',
-        epe_unauthorized: 'auth failure',
-        epe_forbidden: 'forbidden',
-        epe_not_found: 'site not found',
-        epe_validation: 'validation error',
-        epe_rate_limited: 'rate limited',
-        epe_provider_error: 'provider error',
-        epe_rejected: 'provider rejected',
-        epe_http_error: 'provider error',
-        // Generic fallback
-        provider_error: 'provider error',
-    };
+    const [label, severity] = REASON_META[normalizedCode]
+        || [normalizedCode.replaceAll('_', ' '), 'warn'];
 
     return {
-        code: codeLabels[normalizedCode] || normalizedCode.replaceAll('_', ' '),
+        code: label,
         kind: normalizedCode,
+        severityClass: REASON_SEVERITY[severity] || REASON_SEVERITY.warn,
         message: rest.join(':').trim(),
     };
 }
@@ -1090,9 +1107,14 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                             </span>
                                                         ) : null}
                                                         {reason ? (
-                                                            <span className="inline-flex max-w-[250px] truncate rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700" title={reason.message}>
+                                                            <span className={`inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${reason.severityClass}`} title={reason.message}>
                                                                 {reason.code}
                                                             </span>
+                                                        ) : null}
+                                                        {reason?.message ? (
+                                                            <p className="mt-0.5 max-w-[250px] truncate text-[10px] text-slate-500" title={reason.message}>
+                                                                {reason.message}
+                                                            </p>
                                                         ) : null}
                                                         {reason?.kind === 'redirect_home' ? (
                                                             <p className="max-w-[250px] text-[10px] text-amber-700">
