@@ -120,6 +120,38 @@ return [
         'sender_id' => env('AFRICASTALKING_SENDER_ID'),
     ],
 
+    // Regional SMS gateways (Tanzania, Uganda, Nigeria, Ghana). These provide
+    // env-based defaults only; live credentials are stored per-market in the CRM
+    // database (sms_provider_config) and edited from Settings → SMS Routing.
+    'briq' => [
+        'base_url' => env('BRIQ_BASE_URL', 'https://karibu.briq.tz'),
+        'api_key' => env('BRIQ_API_KEY', ''),
+        'sender_id' => env('BRIQ_SENDER_ID', ''),
+    ],
+
+    'uganda_bulk_sms' => [
+        'base_url' => env('UGANDA_BULK_SMS_BASE_URL', 'http://bluesmsuganda.com/api-sub.php'),
+        'username' => env('UGANDA_BULK_SMS_USERNAME', ''),
+        'password' => env('UGANDA_BULK_SMS_PASSWORD', ''),
+        'sender_id' => env('UGANDA_BULK_SMS_SENDER_ID', ''),
+        'success_code' => env('UGANDA_BULK_SMS_SUCCESS_CODE', '1701'),
+    ],
+
+    'kullsms' => [
+        'base_url' => env('KULLSMS_BASE_URL', 'https://kullsms.com/customer/api/'),
+        'username' => env('KULLSMS_USERNAME', ''),
+        'password' => env('KULLSMS_PASSWORD', ''),
+        'sender_id' => env('KULLSMS_SENDER_ID', ''),
+        'success_code' => env('KULLSMS_SUCCESS_CODE', '1701'),
+    ],
+
+    'ghana_bulk_sms' => [
+        'base_url' => env('GHANA_BULK_SMS_BASE_URL', 'https://clientlogin.bulksmsgh.com/smsapi'),
+        'api_key' => env('GHANA_BULK_SMS_API_KEY', ''),
+        'sender_id' => env('GHANA_BULK_SMS_SENDER_ID', ''),
+        'success_code' => env('GHANA_BULK_SMS_SUCCESS_CODE', '1000'),
+    ],
+
     'sendgrid' => [
         'api_key' => env('SENDGRID_API_KEY'),
         'from' => env('SENDGRID_FROM', env('MAIL_FROM_ADDRESS')),

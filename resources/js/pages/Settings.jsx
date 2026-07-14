@@ -298,10 +298,117 @@ function slugDurationKey(label, days) {
     return labelKey || dayKey || 'custom_duration';
 }
 
-function smsProviderLabel(providerId) {
-    if (providerId === 'africastalking') return "Africa's Talking";
-    if (providerId === 'legacy_gateway') return 'Legacy Gateway';
-    return 'None';
+// Fallback provider catalog used before the API returns provider_options, and
+// to render labels. Mirrors each provider's server-side credentialFields().
+const SMS_PROVIDER_OPTIONS_FALLBACK = [
+    {
+        id: 'legacy_gateway',
+        label: 'Legacy Gateway',
+        fields: [
+            { key: 'gateway_url', label: 'Gateway URL', type: 'url', required: true },
+            { key: 'org_code', label: 'Org Code', type: 'text', required: true },
+        ],
+    },
+    {
+        id: 'africastalking',
+        label: "Africa's Talking",
+        fields: [
+            { key: 'endpoint', label: 'Endpoint', type: 'url', required: false, default: 'https://api.africastalking.com/version1/messaging' },
+            { key: 'username', label: 'Username', type: 'text', required: true },
+            { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: false },
+        ],
+    },
+    {
+        id: 'briq',
+        label: 'Briq (Tanzania)',
+        fields: [
+            { key: 'base_url', label: 'Base URL', type: 'url', required: true, default: 'https://karibu.briq.tz' },
+            { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+        ],
+    },
+    {
+        id: 'uganda_bulk_sms',
+        label: 'Bulk SMS (Uganda)',
+        fields: [
+            { key: 'base_url', label: 'Gateway URL', type: 'url', required: true, default: 'http://bluesmsuganda.com/api-sub.php' },
+            { key: 'username', label: 'Username', type: 'text', required: true },
+            { key: 'password', label: 'Password', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+            { key: 'success_code', label: 'Success Code', type: 'text', required: false, default: '1701' },
+        ],
+    },
+    {
+        id: 'kullsms',
+        label: 'KullSMS (Nigeria)',
+        fields: [
+            { key: 'base_url', label: 'Gateway URL', type: 'url', required: true, default: 'https://kullsms.com/customer/api/' },
+            { key: 'username', label: 'Username / Email Address', type: 'text', required: true },
+            { key: 'password', label: 'Password', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+            { key: 'success_code', label: 'Success Code', type: 'text', required: false, default: '1701' },
+        ],
+    },
+    {
+        id: 'ghana_bulk_sms',
+        label: 'BulkSMS (Ghana)',
+        fields: [
+            { key: 'base_url', label: 'Gateway URL', type: 'url', required: true, default: 'https://clientlogin.bulksmsgh.com/smsapi' },
+            { key: 'api_key', label: 'API Key', type: 'password', required: true, secret: true },
+            { key: 'sender_id', label: 'Sender ID', type: 'text', required: true },
+            { key: 'success_code', label: 'Success Code', type: 'text', required: false, default: '1000' },
+        ],
+    },
+];
+
+const SMS_SECRET_MASK = '••••••••';
+
+function resolveSmsProviderOptions(smsProvider) {
+    const options = Array.isArray(smsProvider?.provider_options) ? smsProvider.provider_options : null;
+    return options && options.length ? options : SMS_PROVIDER_OPTIONS_FALLBACK;
+}
+
+function isSmsSecretField(field) {
+    return Boolean(field?.secret) || field?.type === 'password';
+}
+
+function smsProviderLabel(providerId, providerOptions = SMS_PROVIDER_OPTIONS_FALLBACK) {
+    if (!providerId || providerId === 'none') return 'None';
+    const match = (providerOptions || []).find((provider) => provider.id === providerId);
+    if (match) return match.label;
+    return providerId.replaceAll('_', ' ');
+}
+
+// Build a form credentials object for one provider from a (masked) config block.
+// Secrets are never prefilled — only a "*_configured" flag is kept. Non-secret
+// fields are prefilled from the stored value (or the field default at global
+// scope) so an untouched save round-trips them unchanged.
+function buildSmsProviderCreds(source, fields, { useDefaults = false } = {}) {
+    const creds = {};
+    (fields || []).forEach((field) => {
+        const key = field.key;
+        if (isSmsSecretField(field)) {
+            creds[key] = '';
+            creds[`${key}_configured`] = Boolean(
+                source?.[`${key}_configured`]
+                || (source?.[key] && source[key] !== SMS_SECRET_MASK)
+            );
+        } else {
+            const stored = source?.[key];
+            creds[key] = stored ?? (useDefaults ? (field.default ?? '') : '');
+        }
+    });
+    return creds;
+}
+
+function buildSmsProvidersMap(source, providerOptions, opts) {
+    return Object.fromEntries(
+        (providerOptions || []).map((provider) => [
+            provider.id,
+            buildSmsProviderCreds(source?.[provider.id] ?? {}, provider.fields, opts),
+        ])
+    );
 }
 
 function defaultSmsProviderForm() {
@@ -311,25 +418,18 @@ function defaultSmsProviderForm() {
         fallback_provider: 'none',
         default_prefix: '254',
         reason: 'Updated SMS provider routing settings',
-        legacy_gateway: {
-            gateway_url: '',
-            org_code: '76',
-        },
-        africastalking: {
-            endpoint: 'https://api.africastalking.com/version1/messaging',
-            username: '',
-            api_key: '',
-            api_key_configured: false,
-            sender_id: '',
-        },
+        providers: {},
         markets: {},
     };
 }
 
-function buildSmsProviderForm(smsProvider) {
-    const fallback = defaultSmsProviderForm();
+function buildSmsProviderForm(smsProvider, providerOptions = SMS_PROVIDER_OPTIONS_FALLBACK) {
+    const base = defaultSmsProviderForm();
+    const options = providerOptions && providerOptions.length ? providerOptions : SMS_PROVIDER_OPTIONS_FALLBACK;
+
     if (!smsProvider) {
-        return fallback;
+        base.providers = buildSmsProvidersMap({}, options, { useDefaults: true });
+        return base;
     }
 
     const rawMarkets = smsProvider.markets && typeof smsProvider.markets === 'object'
@@ -342,58 +442,65 @@ function buildSmsProviderForm(smsProvider) {
             {
                 active_provider: entry?.active_provider ?? null,
                 fallback_provider: entry?.fallback_provider ?? null,
-                africastalking: {
-                    username: entry?.africastalking?.username ?? '',
-                    api_key: '',
-                    api_key_configured: Boolean(entry?.africastalking?.api_key_configured),
-                    sender_id: entry?.africastalking?.sender_id ?? '',
-                },
-                legacy_gateway: {
-                    gateway_url: entry?.legacy_gateway?.gateway_url ?? '',
-                    org_code: entry?.legacy_gateway?.org_code ?? '',
-                },
+                // Market credential fields default to blank (blank = inherit global).
+                providers: buildSmsProvidersMap(entry ?? {}, options, { useDefaults: false }),
             },
         ])
     );
 
     return {
-        ...fallback,
+        ...base,
         enabled: Boolean(smsProvider.enabled),
         active_provider: smsProvider.active_provider || 'legacy_gateway',
         fallback_provider: smsProvider.fallback_provider || 'none',
         default_prefix: smsProvider.default_prefix || '254',
-        legacy_gateway: {
-            gateway_url: smsProvider.legacy_gateway?.gateway_url || '',
-            org_code: smsProvider.legacy_gateway?.org_code || '76',
-        },
-        africastalking: {
-            endpoint: smsProvider.africastalking?.endpoint || fallback.africastalking.endpoint,
-            username: smsProvider.africastalking?.username || '',
-            api_key: '',
-            api_key_configured: Boolean(smsProvider.africastalking?.api_key_configured),
-            sender_id: smsProvider.africastalking?.sender_id || '',
-        },
+        providers: buildSmsProvidersMap(smsProvider, options, { useDefaults: true }),
         markets,
     };
 }
 
-function smsConfigReady(globalForm, marketEntry = null) {
-    const provider = marketEntry?.active_provider || globalForm.active_provider;
+// Serialize a provider's form credentials to the flat payload shape. Secrets are
+// only included when the operator typed a new value (blank keeps the stored one).
+function serializeSmsProviderCreds(creds, fields) {
+    const out = {};
+    (fields || []).forEach((field) => {
+        const key = field.key;
+        const raw = creds?.[key];
+        const value = typeof raw === 'string' ? raw.trim() : raw;
+        if (isSmsSecretField(field)) {
+            if (value) {
+                out[key] = value;
+            }
+        } else {
+            out[key] = value ?? '';
+        }
+    });
+    return out;
+}
 
-    if (provider === 'africastalking') {
-        const username = marketEntry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
-        const keyConfigured = marketEntry?.africastalking?.api_key_configured
-            || marketEntry?.africastalking?.api_key?.trim()
-            || globalForm.africastalking.api_key_configured
-            || globalForm.africastalking.api_key?.trim();
-
-        return Boolean(username) && Boolean(keyConfigured);
+function smsConfigReady(globalForm, providerOptions = SMS_PROVIDER_OPTIONS_FALLBACK, marketEntry = null) {
+    const providerId = marketEntry?.active_provider || globalForm.active_provider;
+    const option = (providerOptions || []).find((provider) => provider.id === providerId);
+    if (!option) {
+        return true;
     }
 
-    const gatewayUrl = marketEntry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
-    const orgCode = marketEntry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
+    const marketCreds = marketEntry?.providers?.[providerId] || {};
+    const globalCreds = globalForm.providers?.[providerId] || {};
 
-    return Boolean(gatewayUrl) && Boolean(orgCode);
+    const has = (creds, field) => {
+        if (isSmsSecretField(field)) {
+            return Boolean(creds[field.key]?.trim?.() || creds[`${field.key}_configured`]);
+        }
+        return Boolean(creds[field.key]?.trim?.());
+    };
+
+    return (option.fields || []).every((field) => {
+        if (!field.required) {
+            return true;
+        }
+        return has(marketCreds, field) || has(globalCreds, field);
+    });
 }
 
 function pushProviderLabel(providerId) {
@@ -1257,8 +1364,9 @@ function IntegrationsWorkspace({
     const walletProviderKeys = walletConfig.provider_keys || ['pesapal', 'paystack', 'mpesa_stk'];
     const walletProviderSchemas = walletConfig.provider_schemas || DEFAULT_WALLET_PROVIDER_SCHEMAS;
     const smsProviderConfig = services.sms_provider || null;
+    const smsProviderOptions = resolveSmsProviderOptions(smsProviderConfig);
     const pushProviderConfig = services.push_provider || null;
-    const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
+    const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway', smsProviderOptions);
     const pushDefaultLabel = pushProviderLabel(pushProviderConfig?.default_provider || 'webpushr');
     const pushConfiguredCount = Object.values(pushProviderConfig?.platforms || {}).length;
     const serviceRows = [
@@ -1481,7 +1589,7 @@ function IntegrationsWorkspace({
     }, [scraperCreateOpen, scraperCreateForm.platform_id, platformRows]);
 
     useEffect(() => {
-        setSmsProviderForm(buildSmsProviderForm(smsProviderConfig));
+        setSmsProviderForm(buildSmsProviderForm(smsProviderConfig, resolveSmsProviderOptions(smsProviderConfig)));
     }, [smsProviderConfig]);
 
     useEffect(() => {
@@ -1742,7 +1850,7 @@ function IntegrationsWorkspace({
         mutationFn: (payload) => api.patch('/crm/settings/integrations/sms-provider', payload).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            setSmsProviderForm(buildSmsProviderForm(response?.sms_provider || null));
+            setSmsProviderForm(buildSmsProviderForm(response?.sms_provider || null, resolveSmsProviderOptions(response?.sms_provider)));
             toast.success('SMS provider settings saved.');
         },
         onError: (error) => {
@@ -2526,12 +2634,15 @@ function IntegrationsWorkspace({
         },
     });
 
-    const updateSmsProviderField = (section, key, value) => {
+    const updateSmsProviderField = (providerId, key, value) => {
         setSmsProviderForm((current) => ({
             ...current,
-            [section]: {
-                ...current[section],
-                [key]: value,
+            providers: {
+                ...current.providers,
+                [providerId]: {
+                    ...(current.providers?.[providerId] || {}),
+                    [key]: value,
+                },
             },
         }));
     };
@@ -2542,46 +2653,25 @@ function IntegrationsWorkspace({
             active_provider: smsProviderForm.active_provider,
             fallback_provider: smsProviderForm.fallback_provider,
             default_prefix: smsProviderForm.default_prefix.trim(),
-            legacy_gateway: {
-                gateway_url: smsProviderForm.legacy_gateway.gateway_url.trim(),
-                org_code: smsProviderForm.legacy_gateway.org_code.trim(),
-            },
-            africastalking: {
-                endpoint: smsProviderForm.africastalking.endpoint.trim(),
-                username: smsProviderForm.africastalking.username.trim(),
-                sender_id: smsProviderForm.africastalking.sender_id.trim(),
-            },
+            reason: smsProviderForm.reason.trim(),
             markets: Object.fromEntries(
                 Object.entries(smsProviderForm.markets || {}).map(([platformId, entry]) => {
-                    const marketAt = entry.africastalking ?? {};
-                    const marketLegacy = entry.legacy_gateway ?? {};
-                    const atPayload = {
-                        username: (marketAt.username ?? '').trim(),
-                        sender_id: (marketAt.sender_id ?? '').trim(),
-                    };
-                    const rotatedApiKey = (marketAt.api_key ?? '').trim();
-                    if (rotatedApiKey) {
-                        atPayload.api_key = rotatedApiKey;
-                    }
-
-                    return [platformId, {
+                    const marketPayload = {
                         active_provider: entry.active_provider ?? null,
                         fallback_provider: entry.fallback_provider ?? null,
-                        africastalking: atPayload,
-                        legacy_gateway: {
-                            gateway_url: (marketLegacy.gateway_url ?? '').trim(),
-                            org_code: (marketLegacy.org_code ?? '').trim(),
-                        },
-                    }];
+                    };
+                    smsProviderOptions.forEach((option) => {
+                        marketPayload[option.id] = serializeSmsProviderCreds(entry.providers?.[option.id] || {}, option.fields);
+                    });
+                    return [platformId, marketPayload];
                 })
             ),
-            reason: smsProviderForm.reason.trim(),
         };
 
-        const submittedApiKey = smsProviderForm.africastalking.api_key.trim();
-        if (submittedApiKey) {
-            payload.africastalking.api_key = submittedApiKey;
-        }
+        // Flatten each provider's global credentials to a top-level key.
+        smsProviderOptions.forEach((option) => {
+            payload[option.id] = serializeSmsProviderCreds(smsProviderForm.providers?.[option.id] || {}, option.fields);
+        });
 
         saveSmsProviderMutation.mutate(payload);
     };
@@ -3070,21 +3160,20 @@ function IntegrationsWorkspace({
     const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
     const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
     const packageReadyMarkets = platformRows.filter((item) => item.package_setup?.can_go_live).length;
-    const smsReady = smsConfigReady(smsProviderForm);
+    const smsReady = smsConfigReady(smsProviderForm, smsProviderOptions);
     const selectedSmsTestMarket = smsTestForm.market_id
         ? (smsProviderForm.markets?.[String(smsTestForm.market_id)] || null)
         : null;
     const selectedSmsTestPlatform = smsTestForm.market_id
         ? (platformRows.find((platform) => String(platform.platform_id) === String(smsTestForm.market_id)) || null)
         : null;
-    const smsTestReady = smsConfigReady(smsProviderForm, selectedSmsTestMarket);
+    const smsTestReady = smsConfigReady(smsProviderForm, smsProviderOptions, selectedSmsTestMarket);
     const smsTestProvider = selectedSmsTestMarket?.active_provider || smsProviderForm.active_provider;
     const fallbackInvalid = smsProviderForm.fallback_provider !== 'none'
         && smsProviderForm.fallback_provider === smsProviderForm.active_provider;
     const fallbackOptions = [
         { value: 'none', label: 'No fallback' },
-        { value: 'legacy_gateway', label: 'Legacy Gateway' },
-        { value: 'africastalking', label: "Africa's Talking" },
+        ...smsProviderOptions.map((provider) => ({ value: provider.id, label: provider.label })),
     ];
     const pushProviderOptions = [
         { value: 'webpushr', label: 'WebPushr' },
@@ -3262,7 +3351,8 @@ function IntegrationsWorkspace({
                     setSmsTestConfirmOpen={setSmsTestConfirmOpen}
                     setSmsTestForm={setSmsTestForm}
                     smsProviderForm={smsProviderForm}
-                    smsProviderLabel={smsProviderLabel}
+                    smsProviderOptions={smsProviderOptions}
+                    smsProviderLabel={(providerId) => smsProviderLabel(providerId, smsProviderOptions)}
                     smsReady={smsReady}
                     smsTestForm={smsTestForm}
                     smsTestReady={smsTestReady}
@@ -5978,7 +6068,7 @@ function IntegrationsWorkspace({
                 isPending={testSmsProviderMutation.isPending}
             >
                 <div className="space-y-1 text-sm text-slate-600">
-                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsTestProvider)}</p>
+                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsTestProvider, smsProviderOptions)}</p>
                     <p><span className="font-semibold text-slate-800">Market:</span> {selectedSmsTestPlatform?.platform_name || 'Global routing'}</p>
                     <p><span className="font-semibold text-slate-800">Phone:</span> {smsTestForm.phone}</p>
                     <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {smsTestForm.message}</p>

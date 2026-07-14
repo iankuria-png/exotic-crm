@@ -120,7 +120,10 @@ class SettingsController extends Controller
         [$platforms, $platformStatuses, $allowedPlatformIds] = $this->accessiblePlatformsAndStatuses($request);
 
         $smsProvider = $this->scopeSmsConfigForUser(
-            $this->notificationService->currentSmsConfig(masked: true),
+            array_merge(
+                $this->notificationService->currentSmsConfig(masked: true),
+                ['provider_options' => $this->notificationService->smsProviderOptions()]
+            ),
             $request->user()
         );
         $pushProvider = $this->scopePushConfigForUser(
@@ -128,12 +131,7 @@ class SettingsController extends Controller
             $request->user()
         );
         $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
-        $activeConfigured = match ($activeProvider) {
-            'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
-            && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
-            default => (bool) ($smsProvider['legacy_gateway']['gateway_url'] ?? null)
-            && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
-        };
+        $activeConfigured = $this->notificationService->providerConfigured($activeProvider);
         $smsStatus = $activeConfigured
             ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
             : 'pending';
@@ -709,32 +707,46 @@ class SettingsController extends Controller
             'Only admin users can update SMS provider settings.'
         );
 
-        $validated = $request->validate([
+        // Build validation rules from the SMS provider registry so new providers
+        // are covered without touching this method. Provider ids are whitelisted
+        // against the live registry; each credential field is validated by type.
+        $providerIds = $this->notificationService->smsProviderIds();
+        $activeRule = ['required', Rule::in($providerIds)];
+        $fallbackRule = ['nullable', Rule::in(array_merge(['none'], $providerIds))];
+
+        $rules = [
             'enabled' => 'required|boolean',
-            'active_provider' => 'required|in:legacy_gateway,africastalking',
-            'fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
+            'active_provider' => $activeRule,
+            'fallback_provider' => $fallbackRule,
             'default_prefix' => ['nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
-            'legacy_gateway' => 'nullable|array',
-            'legacy_gateway.gateway_url' => 'nullable|url|max:255',
-            'legacy_gateway.org_code' => 'nullable|string|max:20',
-            'africastalking' => 'nullable|array',
-            'africastalking.endpoint' => 'nullable|url|max:255',
-            'africastalking.username' => 'nullable|string|max:100',
-            'africastalking.api_key' => 'nullable|string|max:255',
-            'africastalking.sender_id' => 'nullable|string|max:20',
             'markets' => 'sometimes|array',
             'markets.*' => 'array',
-            'markets.*.active_provider' => 'nullable|in:legacy_gateway,africastalking',
-            'markets.*.fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
-            'markets.*.legacy_gateway' => 'nullable|array',
-            'markets.*.legacy_gateway.gateway_url' => 'nullable|url|max:255',
-            'markets.*.legacy_gateway.org_code' => 'nullable|string|max:20',
-            'markets.*.africastalking' => 'nullable|array',
-            'markets.*.africastalking.username' => 'nullable|string|max:100',
-            'markets.*.africastalking.api_key' => 'nullable|string|max:255',
-            'markets.*.africastalking.sender_id' => 'nullable|string|max:20',
+            'markets.*.active_provider' => ['nullable', Rule::in($providerIds)],
+            'markets.*.fallback_provider' => $fallbackRule,
             'reason' => 'nullable|string|max:500',
-        ]);
+        ];
+
+        foreach ($this->notificationService->smsProviderOptions() as $option) {
+            $providerId = $option['id'];
+            $rules[$providerId] = 'nullable|array';
+            $rules["markets.*.{$providerId}"] = 'nullable|array';
+
+            foreach ($option['fields'] as $field) {
+                $key = $field['key'] ?? null;
+                if (!$key) {
+                    continue;
+                }
+
+                $fieldRule = ($field['type'] ?? 'text') === 'url'
+                    ? 'nullable|url|max:255'
+                    : 'nullable|string|max:255';
+
+                $rules["{$providerId}.{$key}"] = $fieldRule;
+                $rules["markets.*.{$providerId}.{$key}"] = $fieldRule;
+            }
+        }
+
+        $validated = $request->validate($rules);
 
         if (
             !empty($validated['fallback_provider'])

@@ -1,65 +1,120 @@
 import React, { useState } from 'react';
 
-function hasMarketOverride(entry) {
-    return Boolean(
-        entry?.active_provider
-        || entry?.fallback_provider
-        || entry?.africastalking?.username
-        || entry?.africastalking?.api_key_configured
-        || entry?.africastalking?.api_key
-        || entry?.africastalking?.sender_id
-        || entry?.legacy_gateway?.gateway_url
-        || entry?.legacy_gateway?.org_code
-    );
+function isSecretField(field) {
+    return Boolean(field?.secret) || field?.type === 'password';
 }
 
-function marketIsReady(entry, globalForm) {
-    const provider = entry?.active_provider || globalForm.active_provider;
+function providerById(options, id) {
+    return (options || []).find((provider) => provider.id === id) || null;
+}
 
-    if (provider === 'africastalking') {
-        const username = entry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
-        const keyConfigured = entry?.africastalking?.api_key_configured
-            || entry?.africastalking?.api_key?.trim()
-            || globalForm.africastalking.api_key_configured
-            || globalForm.africastalking.api_key?.trim();
-
-        return Boolean(username) && Boolean(keyConfigured);
+function fieldHasValue(creds, field) {
+    if (isSecretField(field)) {
+        return Boolean(creds?.[field.key]?.trim?.() || creds?.[`${field.key}_configured`]);
     }
+    return Boolean(creds?.[field.key]?.trim?.());
+}
 
-    if (provider === 'legacy_gateway') {
-        const gatewayUrl = entry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
-        const orgCode = entry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
-
-        return Boolean(gatewayUrl) && Boolean(orgCode);
+function hasMarketOverride(entry, options) {
+    if (entry?.active_provider || entry?.fallback_provider) {
+        return true;
     }
+    return (options || []).some((provider) => {
+        const creds = entry?.providers?.[provider.id] || {};
+        return (provider.fields || []).some((field) => fieldHasValue(creds, field));
+    });
+}
 
-    return true;
+function providerReady(option, marketCreds, globalCreds) {
+    if (!option) {
+        return true;
+    }
+    return (option.fields || []).every((field) => {
+        if (!field.required) {
+            return true;
+        }
+        return fieldHasValue(marketCreds, field) || fieldHasValue(globalCreds, field);
+    });
+}
+
+// Shared dynamic credential inputs for one provider.
+function ProviderFields({ option, creds, onFieldChange, idPrefix, scope, globalCreds }) {
+    return (
+        <div className="grid gap-2 md:grid-cols-2">
+            {(option.fields || []).map((field) => {
+                const secret = isSecretField(field);
+                const fullWidth = secret || field.type === 'url';
+                const inputId = `${idPrefix}-${option.id}-${field.key}`;
+                const configured = Boolean(creds?.[`${field.key}_configured`]);
+                const globalValue = globalCreds?.[field.key];
+
+                let placeholder = field.default || field.label;
+                if (scope === 'market') {
+                    placeholder = secret
+                        ? 'Leave blank to inherit global'
+                        : (globalValue ? `Global: ${globalValue}` : `Global: (not set)`);
+                } else if (secret) {
+                    placeholder = 'Leave blank to keep current value';
+                }
+
+                return (
+                    <div key={field.key} className={fullWidth ? 'md:col-span-2' : ''}>
+                        <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-slate-600">
+                            {field.label}{field.required ? '' : ' (optional)'}
+                        </label>
+                        <input
+                            id={inputId}
+                            type={secret ? 'password' : 'text'}
+                            value={creds?.[field.key] ?? ''}
+                            onChange={(event) => onFieldChange(field.key, event.target.value)}
+                            className="crm-input text-sm"
+                            placeholder={placeholder}
+                            autoComplete={secret ? 'new-password' : 'off'}
+                        />
+                        {secret ? (
+                            <p className={`mt-1 text-xs ${configured ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                {configured
+                                    ? (scope === 'market'
+                                        ? 'Custom secret stored. Enter a new value only when rotating it.'
+                                        : 'Secret stored. Enter a new value only when rotating it.')
+                                    : (scope === 'market'
+                                        ? 'No custom secret stored. This market inherits the global value.'
+                                        : 'No secret stored yet.')}
+                            </p>
+                        ) : null}
+                    </div>
+                );
+            })}
+        </div>
+    );
 }
 
 function MarketSmsRoutingRow({
     onEntryChange,
     platform,
     smsProviderForm,
+    smsProviderOptions,
     smsProviderLabel,
     entry = {},
 }) {
     const [expanded, setExpanded] = useState(false);
 
-    const hasOverride = hasMarketOverride(entry);
-    const isReady = marketIsReady(entry, smsProviderForm);
-    const effectiveProvider = entry.active_provider || smsProviderForm.active_provider;
+    const hasOverride = hasMarketOverride(entry, smsProviderOptions);
+    const effectiveProviderId = entry.active_provider || smsProviderForm.active_provider;
+    const effectiveOption = providerById(smsProviderOptions, effectiveProviderId);
+
+    const marketCreds = entry.providers?.[effectiveProviderId] || {};
+    const globalCreds = smsProviderForm.providers?.[effectiveProviderId] || {};
+    const isReady = providerReady(effectiveOption, marketCreds, globalCreds);
 
     const patch = (updates) => onEntryChange({ ...entry, ...updates });
-    const patchAt = (field, value) => patch({
-        africastalking: {
-            ...(entry.africastalking ?? {}),
-            [field]: value,
-        },
-    });
-    const patchLegacy = (field, value) => patch({
-        legacy_gateway: {
-            ...(entry.legacy_gateway ?? {}),
-            [field]: value,
+    const patchProviderField = (providerId, key, value) => patch({
+        providers: {
+            ...(entry.providers || {}),
+            [providerId]: {
+                ...(entry.providers?.[providerId] || {}),
+                [key]: value,
+            },
         },
     });
 
@@ -79,7 +134,7 @@ function MarketSmsRoutingRow({
                         ) : null}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
-                        Active provider: {smsProviderLabel(effectiveProvider)}{entry.active_provider ? ' (override)' : ' (global)'}
+                        Active provider: {smsProviderLabel(effectiveProviderId)}{entry.active_provider ? ' (override)' : ' (global)'}
                     </p>
                 </div>
 
@@ -90,8 +145,9 @@ function MarketSmsRoutingRow({
                     aria-label={`${platform.name} active provider`}
                 >
                     <option value="">Global default</option>
-                    <option value="legacy_gateway">Legacy Gateway</option>
-                    <option value="africastalking">Africa&apos;s Talking</option>
+                    {(smsProviderOptions || []).map((provider) => (
+                        <option key={provider.id} value={provider.id}>{provider.label}</option>
+                    ))}
                 </select>
 
                 <button
@@ -118,80 +174,26 @@ function MarketSmsRoutingRow({
                         >
                             <option value="">Global default</option>
                             <option value="none">None</option>
-                            <option value="legacy_gateway">Legacy Gateway</option>
-                            <option value="africastalking">Africa&apos;s Talking</option>
+                            {(smsProviderOptions || []).map((provider) => (
+                                <option key={provider.id} value={provider.id}>{provider.label}</option>
+                            ))}
                         </select>
                     </div>
 
-                    <div>
-                        <p className="text-xs font-semibold text-slate-700 mb-1">Africa&apos;s Talking</p>
-                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
-                        <div className="grid gap-2 md:grid-cols-2">
-                            <div>
-                                <label htmlFor={`sms-market-at-username-${platform.id}`} className="mb-1 block text-xs text-slate-600">Username</label>
-                                <input
-                                    id={`sms-market-at-username-${platform.id}`}
-                                    value={entry.africastalking?.username ?? ''}
-                                    onChange={(event) => patchAt('username', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.africastalking.username || '(not set)'}`}
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor={`sms-market-at-sender-${platform.id}`} className="mb-1 block text-xs text-slate-600">Sender ID</label>
-                                <input
-                                    id={`sms-market-at-sender-${platform.id}`}
-                                    value={entry.africastalking?.sender_id ?? ''}
-                                    onChange={(event) => patchAt('sender_id', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder="Optional sender ID override"
-                                />
-                            </div>
-                            <div className="md:col-span-2">
-                                <label htmlFor={`sms-market-at-key-${platform.id}`} className="mb-1 block text-xs text-slate-600">API key</label>
-                                <input
-                                    id={`sms-market-at-key-${platform.id}`}
-                                    type="password"
-                                    value={entry.africastalking?.api_key ?? ''}
-                                    onChange={(event) => patchAt('api_key', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder="Leave blank to use global API key"
-                                />
-                                <p className={`mt-1 text-xs ${entry.africastalking?.api_key_configured ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                    {entry.africastalking?.api_key_configured
-                                        ? 'Custom key stored. Enter a new value only when rotating it.'
-                                        : 'No custom key stored. This market will inherit the global key.'}
-                                </p>
-                            </div>
+                    {effectiveOption ? (
+                        <div>
+                            <p className="text-xs font-semibold text-slate-700 mb-1">{effectiveOption.label} credentials</p>
+                            <p className="text-xs text-slate-400 mb-2">Leave blank to inherit the global credentials for this provider.</p>
+                            <ProviderFields
+                                option={effectiveOption}
+                                creds={entry.providers?.[effectiveProviderId] || {}}
+                                globalCreds={globalCreds}
+                                scope="market"
+                                idPrefix={`sms-market-${platform.id}`}
+                                onFieldChange={(key, value) => patchProviderField(effectiveProviderId, key, value)}
+                            />
                         </div>
-                    </div>
-
-                    <div>
-                        <p className="text-xs font-semibold text-slate-700 mb-1">Legacy Gateway</p>
-                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
-                        <div className="grid gap-2 md:grid-cols-2">
-                            <div className="md:col-span-2">
-                                <label htmlFor={`sms-market-legacy-url-${platform.id}`} className="mb-1 block text-xs text-slate-600">Gateway URL</label>
-                                <input
-                                    id={`sms-market-legacy-url-${platform.id}`}
-                                    value={entry.legacy_gateway?.gateway_url ?? ''}
-                                    onChange={(event) => patchLegacy('gateway_url', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.gateway_url || '(not set)'}`}
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor={`sms-market-legacy-org-${platform.id}`} className="mb-1 block text-xs text-slate-600">Org code</label>
-                                <input
-                                    id={`sms-market-legacy-org-${platform.id}`}
-                                    value={entry.legacy_gateway?.org_code ?? ''}
-                                    onChange={(event) => patchLegacy('org_code', event.target.value)}
-                                    className="crm-input text-sm"
-                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.org_code || '76'}`}
-                                />
-                            </div>
-                        </div>
-                    </div>
+                    ) : null}
 
                     {hasOverride ? (
                         <div className="flex justify-end pt-1">
@@ -226,6 +228,7 @@ export default function SmsRoutingPanel({
     setSmsTestConfirmOpen,
     setSmsTestForm,
     smsProviderForm,
+    smsProviderOptions,
     smsProviderLabel,
     smsReady,
     smsTestForm,
@@ -234,6 +237,9 @@ export default function SmsRoutingPanel({
     testSmsProviderMutation,
     updateSmsProviderField,
 }) {
+    const options = smsProviderOptions || [];
+    const activeOption = providerById(options, smsProviderForm.active_provider);
+
     return (
         <section className="crm-surface overflow-hidden">
             <header className="crm-panel-header">
@@ -268,8 +274,9 @@ export default function SmsRoutingPanel({
                                     onChange={(event) => setSmsProviderForm((current) => ({ ...current, active_provider: event.target.value }))}
                                     className="crm-select w-full"
                                 >
-                                    <option value="legacy_gateway">Legacy Gateway</option>
-                                    <option value="africastalking">Africa&apos;s Talking</option>
+                                    {options.map((provider) => (
+                                        <option key={provider.id} value={provider.id}>{provider.label}</option>
+                                    ))}
                                 </select>
                             </div>
 
@@ -318,61 +325,29 @@ export default function SmsRoutingPanel({
                         </div>
                     </section>
 
-                    <section className="rounded-lg border border-slate-200 bg-white p-3">
-                        <h4 className="text-sm font-semibold text-slate-900">Legacy Gateway</h4>
-                        <p className="mt-1 text-xs text-slate-500">Existing SMS connector used in current operations.</p>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <input
-                                value={smsProviderForm.legacy_gateway.gateway_url}
-                                onChange={(event) => updateSmsProviderField('legacy_gateway', 'gateway_url', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="Gateway URL"
-                            />
-                            <input
-                                value={smsProviderForm.legacy_gateway.org_code}
-                                onChange={(event) => updateSmsProviderField('legacy_gateway', 'org_code', event.target.value)}
-                                className="crm-input"
-                                placeholder="Org code"
-                            />
-                        </div>
-                    </section>
-
-                    <section className="rounded-lg border border-slate-200 bg-white p-3">
-                        <h4 className="text-sm font-semibold text-slate-900">Africa&apos;s Talking</h4>
-                        <p className="mt-1 text-xs text-slate-500">Use this provider for managed delivery with API-key authentication.</p>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <input
-                                value={smsProviderForm.africastalking.endpoint}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'endpoint', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="API endpoint"
-                            />
-                            <input
-                                value={smsProviderForm.africastalking.username}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'username', event.target.value)}
-                                className="crm-input"
-                                placeholder="Username"
-                            />
-                            <input
-                                value={smsProviderForm.africastalking.sender_id}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'sender_id', event.target.value)}
-                                className="crm-input"
-                                placeholder="Sender ID (optional)"
-                            />
-                            <input
-                                type="password"
-                                value={smsProviderForm.africastalking.api_key}
-                                onChange={(event) => updateSmsProviderField('africastalking', 'api_key', event.target.value)}
-                                className="crm-input md:col-span-2"
-                                placeholder="API key (leave blank to keep current key)"
-                            />
-                        </div>
-                        <p className={`mt-2 text-xs ${smsProviderForm.africastalking.api_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                            {smsProviderForm.africastalking.api_key_configured
-                                ? 'API key is already stored. Add a new value only when rotating credentials.'
-                                : 'No API key is currently configured for Africa\'s Talking.'}
-                        </p>
-                    </section>
+                    {options.map((provider) => {
+                        const isActive = provider.id === smsProviderForm.active_provider;
+                        return (
+                            <section key={provider.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-sm font-semibold text-slate-900">{provider.label}</h4>
+                                    {isActive ? (
+                                        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200">Active</span>
+                                    ) : null}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">Global credentials for {provider.label}. Markets inherit these unless overridden below.</p>
+                                <div className="mt-3">
+                                    <ProviderFields
+                                        option={provider}
+                                        creds={smsProviderForm.providers?.[provider.id] || {}}
+                                        scope="global"
+                                        idPrefix="sms-global"
+                                        onFieldChange={(key, value) => updateSmsProviderField(provider.id, key, value)}
+                                    />
+                                </div>
+                            </section>
+                        );
+                    })}
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
                         <h4 className="text-sm font-semibold text-slate-900">Market Provider Routing</h4>
@@ -389,6 +364,7 @@ export default function SmsRoutingPanel({
                                         platform={platform}
                                         entry={markets?.[String(platform.id)] ?? {}}
                                         smsProviderForm={smsProviderForm}
+                                        smsProviderOptions={options}
                                         smsProviderLabel={smsProviderLabel}
                                         onEntryChange={(updated) => {
                                             const platformKey = String(platform.id);
@@ -418,7 +394,7 @@ export default function SmsRoutingPanel({
 
                     {smsProviderForm.enabled && !smsReady ? (
                         <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-                            Active provider credentials are incomplete. Complete required fields before saving or sending tests.
+                            {activeOption ? `${activeOption.label} credentials are incomplete.` : 'Active provider credentials are incomplete.'} Complete required fields before saving or sending tests.
                         </p>
                     ) : null}
 
