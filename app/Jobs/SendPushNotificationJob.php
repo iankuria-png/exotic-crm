@@ -30,6 +30,19 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
     public int $uniqueFor = 600;
 
+    /**
+     * Provider failure codes that are transient — worth another attempt on the
+     * queue instead of being marked `failed` immediately. Covers upstream 5xx
+     * (provider_error), unclassified non-2xx (http_error), and rate limits
+     * across every provider that emits the structured `{code, message}` shape.
+     */
+    private const RETRIABLE_CODES = [
+        'epe_provider_error', 'epe_http_error', 'epe_rate_limited',
+        'webpushr_provider_error', 'webpushr_http_error', 'webpushr_rate_limited',
+        'wonderpush_provider_error', 'wonderpush_http_error', 'wonderpush_rate_limited',
+        'izooto_provider_error', 'izooto_http_error', 'izooto_rate_limited',
+    ];
+
     public function __construct(public readonly int $pushCampaignItemId)
     {
         $this->onQueue('push');
@@ -202,6 +215,31 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         ]);
 
         $success = (bool) ($result['success'] ?? false);
+
+        // Transient upstream failures (provider 5xx, unclassified HTTP, rate
+        // limits) get another attempt on the queue instead of being marked
+        // `failed`. Laravel's backoff() schedules the retry [30s, 60s, 120s].
+        // The last attempt falls through and marks the item failed as usual.
+        if (!$success) {
+            $providerCode = data_get($result, 'provider_response.code');
+            if (is_string($providerCode)
+                && in_array($providerCode, self::RETRIABLE_CODES, true)
+                && $this->attempts() < $this->tries
+            ) {
+                Log::info('Push send scheduled for retry', [
+                    'item_id' => (int) $item->id,
+                    'campaign_id' => (int) $campaign->id,
+                    'attempt' => $this->attempts(),
+                    'max_attempts' => $this->tries,
+                    'code' => $providerCode,
+                    'idempotency_key' => 'epe-item-' . $item->id,
+                ]);
+
+                // Idempotency-Key on the provider side dedupes the retry so the
+                // subscriber never receives a duplicate on a redriven send.
+                throw new \RuntimeException("Retriable push failure ({$providerCode}) — re-queuing.");
+            }
+        }
 
         $item->forceFill([
             'status' => $success ? 'sent' : 'failed',

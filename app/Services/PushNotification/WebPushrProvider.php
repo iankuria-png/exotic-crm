@@ -2,6 +2,7 @@
 
 namespace App\Services\PushNotification;
 
+use App\Services\PushNotification\Concerns\ClassifiesProviderFailure;
 use Illuminate\Support\Arr;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
@@ -9,6 +10,8 @@ use RuntimeException;
 
 class WebPushrProvider implements PushProviderInterface
 {
+    use ClassifiesProviderFailure;
+
     public function id(): string
     {
         return 'webpushr';
@@ -26,7 +29,10 @@ class WebPushrProvider implements PushProviderInterface
                 'success' => false,
                 'provider' => $this->id(),
                 'provider_notification_id' => null,
-                'provider_response' => 'WebPushr credentials are incomplete.',
+                'provider_response' => [
+                    'code' => 'webpushr_credentials_missing',
+                    'message' => 'WebPushr credentials are incomplete.',
+                ],
             ];
         }
 
@@ -60,11 +66,15 @@ class WebPushrProvider implements PushProviderInterface
             ];
         }
 
+        [$code, $message] = $this->classifyProviderFailure('webpushr', $response->status(), $body);
+
         return [
             'success' => false,
             'provider' => $this->id(),
             'provider_notification_id' => $providerNotificationId,
             'provider_response' => [
+                'code' => $code,
+                'message' => $message,
                 'status' => $response->status(),
                 'body' => $body,
             ],

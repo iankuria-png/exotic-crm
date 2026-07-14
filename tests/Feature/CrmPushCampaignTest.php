@@ -3222,7 +3222,7 @@ HTML,
             ['site-401', 'epe_unauthorized', 'Token invalid'],
             ['site-422', 'epe_validation', 'title is required'],
             ['site-429', 'epe_rate_limited', 'Rate limited (retry after 4s).'],
-            ['site-500', 'epe_provider_error', 'Push Engine internal error (500).'],
+            ['site-500', 'epe_provider_error', 'Provider internal error (500).'],
             ['site-reject', 'epe_rejected', 'No active subscribers for this site.'],
         ];
 
@@ -3312,6 +3312,246 @@ HTML,
             ]);
         $this->app->instance(PushProviderService::class, $mock);
 
+        // Retry logic protects transient failures from being marked failed on
+        // the first try — this test cares about the error_message formatting,
+        // so simulate the last attempt where the retry cap is reached.
+        $job = new class ((int) $item->id) extends SendPushNotificationJob {
+            public function attempts(): int
+            {
+                return 3;
+            }
+        };
+        $job->handle($mock, app(\App\Services\AuditService::class));
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertSame('epe_rate_limited: Rate limited (retry after 4s).', (string) $fresh->error_message);
+    }
+
+    public function test_webpushr_provider_maps_401_to_unauthorized(): void
+    {
+        Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Invalid auth token'], 401)]);
+        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+            ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
+            ['api_key' => 'k', 'auth_token' => 't']
+        );
+        $this->assertSame('webpushr_unauthorized', data_get($result, 'provider_response.code'));
+        $this->assertSame('Invalid auth token', data_get($result, 'provider_response.message'));
+    }
+
+    public function test_webpushr_provider_maps_429_to_rate_limited(): void
+    {
+        Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Rate limit exceeded'], 429)]);
+        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+            ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
+            ['api_key' => 'k', 'auth_token' => 't']
+        );
+        $this->assertSame('webpushr_rate_limited', data_get($result, 'provider_response.code'));
+    }
+
+    public function test_webpushr_provider_maps_5xx_to_provider_error(): void
+    {
+        Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Something broke'], 502)]);
+        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+            ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
+            ['api_key' => 'k', 'auth_token' => 't']
+        );
+        $this->assertSame('webpushr_provider_error', data_get($result, 'provider_response.code'));
+        $this->assertSame('Something broke', data_get($result, 'provider_response.message'));
+    }
+
+    public function test_webpushr_provider_signals_missing_credentials_with_code(): void
+    {
+        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+            ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
+            ['api_key' => '', 'auth_token' => '']
+        );
+        $this->assertFalse((bool) $result['success']);
+        $this->assertSame('webpushr_credentials_missing', data_get($result, 'provider_response.code'));
+        $this->assertSame('WebPushr credentials are incomplete.', data_get($result, 'provider_response.message'));
+    }
+
+    public function test_send_push_job_retries_on_retriable_provider_error_instead_of_marking_failed(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 66601,
+            'name' => 'Rita',
+            'phone_normalized' => '233111000001',
+            'city' => 'Accra',
+        ]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Retry campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-retry',
+            'provider' => 'exoticpush',
+        ]);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 66601,
+            'profile_name' => 'Rita',
+            'profile_city' => 'Accra',
+            'profile_image_url' => 'https://ex.com/i.jpg',
+            'profile_url' => 'https://ghana.example/escort/rita/',
+            'custom_message' => 'Hi',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturn([
+                'success' => false,
+                'provider' => 'exoticpush',
+                'provider_notification_id' => null,
+                'provider_response' => [
+                    'code' => 'epe_provider_error',
+                    'message' => 'Provider internal error (503).',
+                    'status' => 503,
+                    'body' => [],
+                ],
+            ]);
+        $this->app->instance(PushProviderService::class, $mock);
+
+        // Simulate the first attempt: expect the job to throw so Laravel re-queues it.
+        $job = new SendPushNotificationJob((int) $item->id);
+        $threw = false;
+        try {
+            $job->handle($mock, app(\App\Services\AuditService::class));
+        } catch (\RuntimeException $exception) {
+            $threw = true;
+            $this->assertStringContainsString('epe_provider_error', $exception->getMessage());
+        }
+
+        $this->assertTrue($threw, 'Retriable failure should throw to trigger Laravel retry.');
+        $fresh = $item->fresh();
+        // Item stays untouched on a retriable throw — no failed status, no error_message.
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertNull($fresh->error_message);
+    }
+
+    public function test_send_push_job_marks_failed_on_final_attempt_even_for_retriable_code(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 66602,
+            'name' => 'Sara',
+            'phone_normalized' => '233111000002',
+            'city' => 'Accra',
+        ]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Retry exhaustion campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-retry-exhaust',
+            'provider' => 'exoticpush',
+        ]);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 66602,
+            'profile_name' => 'Sara',
+            'profile_city' => 'Accra',
+            'profile_image_url' => 'https://ex.com/i.jpg',
+            'profile_url' => 'https://ghana.example/escort/sara/',
+            'custom_message' => 'Hi',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturn([
+                'success' => false,
+                'provider' => 'exoticpush',
+                'provider_notification_id' => null,
+                'provider_response' => [
+                    'code' => 'epe_provider_error',
+                    'message' => 'Provider internal error (503).',
+                    'status' => 503,
+                    'body' => [],
+                ],
+            ]);
+        $this->app->instance(PushProviderService::class, $mock);
+
+        // Simulate the LAST attempt — Laravel exposes this via the underlying
+        // queue Job's attempts() bumping to $tries. We use a fake job whose
+        // attempts() returns the max so the retriable path is skipped.
+        $job = new class ((int) $item->id) extends SendPushNotificationJob {
+            public function attempts(): int
+            {
+                return 3;
+            }
+        };
+
+        $job->handle($mock, app(\App\Services\AuditService::class));
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertSame('epe_provider_error: Provider internal error (503).', (string) $fresh->error_message);
+    }
+
+    public function test_send_push_job_does_not_retry_non_retriable_codes(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 66603,
+            'name' => 'Tina',
+            'phone_normalized' => '233111000003',
+            'city' => 'Accra',
+        ]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'No-retry campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-no-retry',
+            'provider' => 'exoticpush',
+        ]);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 66603,
+            'profile_name' => 'Tina',
+            'profile_city' => 'Accra',
+            'profile_image_url' => 'https://ex.com/i.jpg',
+            'profile_url' => 'https://ghana.example/escort/tina/',
+            'custom_message' => 'Hi',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')
+            ->once()
+            ->andReturn([
+                'success' => false,
+                'provider' => 'exoticpush',
+                'provider_notification_id' => null,
+                'provider_response' => [
+                    'code' => 'epe_unauthorized',
+                    'message' => 'Auth token invalid.',
+                    'status' => 401,
+                    'body' => [],
+                ],
+            ]);
+        $this->app->instance(PushProviderService::class, $mock);
+
         (new SendPushNotificationJob((int) $item->id))->handle(
             $mock,
             app(\App\Services\AuditService::class)
@@ -3319,7 +3559,7 @@ HTML,
 
         $fresh = $item->fresh();
         $this->assertSame('failed', (string) $fresh->status);
-        $this->assertSame('epe_rate_limited: Rate limited (retry after 4s).', (string) $fresh->error_message);
+        $this->assertSame('epe_unauthorized: Auth token invalid.', (string) $fresh->error_message);
     }
 
     public function test_exotic_push_provider_maps_status_and_subscriber_count(): void

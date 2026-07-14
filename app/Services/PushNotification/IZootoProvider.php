@@ -2,11 +2,14 @@
 
 namespace App\Services\PushNotification;
 
+use App\Services\PushNotification\Concerns\ClassifiesProviderFailure;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class IZootoProvider implements PushProviderInterface
 {
+    use ClassifiesProviderFailure;
+
     public function id(): string
     {
         return 'izooto';
@@ -24,7 +27,10 @@ class IZootoProvider implements PushProviderInterface
                 'success' => false,
                 'provider' => $this->id(),
                 'provider_notification_id' => null,
-                'provider_response' => 'iZooto credentials are incomplete.',
+                'provider_response' => [
+                    'code' => 'izooto_credentials_missing',
+                    'message' => 'iZooto credentials are incomplete.',
+                ],
             ];
         }
 
@@ -77,11 +83,15 @@ class IZootoProvider implements PushProviderInterface
             ];
         }
 
+        [$code, $message] = $this->classifyProviderFailure('izooto', $response->status(), $body);
+
         return [
             'success' => false,
             'provider' => $this->id(),
             'provider_notification_id' => $providerNotificationId,
             'provider_response' => [
+                'code' => $code,
+                'message' => $message,
                 'status' => $response->status(),
                 'body' => $body,
             ],
