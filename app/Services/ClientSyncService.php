@@ -666,6 +666,11 @@ class ClientSyncService
             'notactive' => array_key_exists('notactive', $wpClient)
                 ? (bool) ($wpClient['notactive'] ?? false)
                 : (bool) ($existing?->notactive ?? false),
+            // Mirror the CRM-authored lifecycle back from WordPress. Absent/unknown
+            // values normalise to 'active'; a partial payload preserves the current state.
+            'lifecycle_state' => array_key_exists('crm_lifecycle_state', $wpClient)
+                ? \App\Support\ClientLifecycleState::normalize($wpClient['crm_lifecycle_state'] ?? null)
+                : ($existing?->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE),
             'premium' => (bool) ($wpClient['premium'] ?? false),
             'premium_expire' => $premiumExpire,
             'featured' => (bool) ($wpClient['featured'] ?? false),

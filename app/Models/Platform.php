@@ -30,6 +30,7 @@ class Platform extends Model
         'health_status', 'health_checked_at', 'health_error',
         'health_latency_ms', 'health_consecutive_failures',
         'health_down_since_at', 'health_last_down_notified_at',
+        'lifecycle_policy_enabled',
     ];
 
     protected $hidden = [
@@ -40,6 +41,7 @@ class Platform extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'lifecycle_policy_enabled' => 'boolean',
         'sync_last_checked_at' => 'datetime',
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
@@ -132,6 +134,20 @@ class Platform extends Model
     public function billingRoutingDecisions()
     {
         return $this->hasMany(BillingRoutingDecision::class, 'market_id');
+    }
+
+    /**
+     * Whether the SEO-preserving profile lifecycle policy applies to this market.
+     * Off by default; a global master switch can force it off everywhere in an
+     * emergency without touching per-market flags.
+     */
+    public function lifecycleEnabled(): bool
+    {
+        if (! config('crm.lifecycle.master_enabled', true)) {
+            return false;
+        }
+
+        return (bool) $this->lifecycle_policy_enabled;
     }
 
     public function primaryCurrency(): string

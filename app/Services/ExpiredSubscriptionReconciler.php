@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
+use App\Support\ClientLifecycleState;
 use App\Support\CrmClientChurnReason;
 use App\Support\MarketTimezone;
 use App\Support\SubscriptionExpiry;
@@ -42,6 +43,12 @@ class ExpiredSubscriptionReconciler
         }
 
         if ($client->needs_payment || $client->notactive) {
+            return false;
+        }
+
+        // Only lifecycle=active profiles can transition to Expired. Already-expired
+        // (or archived) profiles stay published but must not be re-processed.
+        if (($client->lifecycle_state ?? ClientLifecycleState::ACTIVE) !== ClientLifecycleState::ACTIVE) {
             return false;
         }
 
@@ -98,7 +105,7 @@ class ExpiredSubscriptionReconciler
                 $row = $this->reconcileClient($client, $actorId, false);
                 $results[] = $row;
 
-                if (($row['action'] ?? null) === 'deactivated') {
+                if (($row['action'] ?? null) === 'expired') {
                     $summary['expired']++;
                 } else {
                     $summary['skipped']++;
@@ -147,7 +154,7 @@ class ExpiredSubscriptionReconciler
         }
 
         if ($dryRun) {
-            $row['action'] = 'would_deactivate';
+            $row['action'] = 'would_expire';
 
             return $row;
         }
@@ -158,14 +165,30 @@ class ExpiredSubscriptionReconciler
         }
 
         $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+        $lifecycleEnabled = $platform->lifecycleEnabled();
 
-        // 1. Authoritative WP deactivation (sets private, clears expiry meta).
-        WpSyncService::forPlatform((int) $client->platform_id)->deactivateClient($wpPostId);
+        if ($lifecycleEnabled) {
+            // NEW policy (opt-in markets only): keep the profile PUBLISHED/indexed for
+            // SEO. The theme hides contacts and locks editing off crm_lifecycle_state.
+            WpSyncService::forPlatform((int) $client->platform_id)->setLifecycleState($wpPostId, ClientLifecycleState::EXPIRED);
 
-        // 2. Refresh the CRM mirror immediately (no 15-min sync lag).
-        $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+            // Refresh the CRM mirror immediately (no 15-min sync lag), then stamp the
+            // lifecycle authoritatively in case an older WP sync payload omits the meta.
+            $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+            Client::withoutRetentionRefresh(function () use ($syncedClient): void {
+                $syncedClient->forceFill([
+                    'lifecycle_state' => ClientLifecycleState::EXPIRED,
+                    'lifecycle_expired_at' => $syncedClient->lifecycle_expired_at ?? now(),
+                ])->save();
+            });
+        } else {
+            // LEGACY policy (default for every market until opted in): take the profile
+            // offline in WordPress (private), exactly as before the lifecycle feature.
+            WpSyncService::forPlatform((int) $client->platform_id)->deactivateClient($wpPostId);
+            $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+        }
 
-        // 3. Flip any still-active deal to expired (natural expiry).
+        // 3. Flip any still-active deal to expired (natural expiry) — both policies.
         $expiredDealIds = Deal::query()
             ->where('client_id', (int) $client->id)
             ->where('status', 'active')
@@ -189,17 +212,20 @@ class ExpiredSubscriptionReconciler
             now(),
         );
 
-        // 4. Audit trail parity with the manual deactivation flow.
+        // 4. Audit trail. profile_expired = SEO-preserving (published, contacts hidden);
+        //    profile_deactivated = legacy offline (private). Both mark natural expiry.
         TimelineEvent::create([
             'platform_id' => (int) $syncedClient->platform_id,
             'entity_type' => 'client',
             'entity_id' => (int) $syncedClient->id,
-            'event_type' => 'profile_deactivated',
+            'event_type' => $lifecycleEnabled ? 'profile_expired' : 'profile_deactivated',
             'actor_id' => $actorId,
             'content' => [
                 'deal_id' => null,
                 'reason' => $actorId ? 'manual_expire_now' : 'auto_expiry_reconciliation',
-                'deactivation_scope' => 'expired_subscription_reconcile',
+                'lifecycle_state' => $lifecycleEnabled ? ClientLifecycleState::EXPIRED : null,
+                'lifecycle_policy' => $lifecycleEnabled ? 'seo_preserved' : 'offline',
+                'scope' => 'expired_subscription_reconcile',
                 'escort_expire' => $escortExpire,
                 'cutoff' => $row['cutoff'],
                 'deals_expired' => $expiredDeals,
@@ -207,7 +233,10 @@ class ExpiredSubscriptionReconciler
             'created_at' => now(),
         ]);
 
-        $row['action'] = 'deactivated';
+        // Keep action 'expired' for both policies so reconcile summaries tally either
+        // outcome as a handled expiry; the policy is recorded for auditing.
+        $row['action'] = 'expired';
+        $row['lifecycle_policy'] = $lifecycleEnabled ? 'seo_preserved' : 'offline';
         $row['deals_expired'] = $expiredDeals;
 
         return $row;

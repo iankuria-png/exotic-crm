@@ -24,7 +24,7 @@ class Client extends Model
 
             ClientRetentionInsightService::scheduleRefreshForClientId((int) $client->id);
 
-            if ($client->wasChanged(['profile_status', 'needs_payment', 'notactive'])) {
+            if ($client->wasChanged(['profile_status', 'needs_payment', 'notactive', 'lifecycle_state'])) {
                 try {
                     app(ClientChurnStamper::class)->syncFromProfileState($client);
                 } catch (\Throwable $exception) {
@@ -57,6 +57,9 @@ class Client extends Model
         'city',
         'region',
         'profile_status',
+        'lifecycle_state',
+        'lifecycle_expired_at',
+        'lifecycle_archived_at',
         'needs_payment',
         'notactive',
         'is_high_risk',
@@ -143,6 +146,8 @@ class Client extends Model
         'seo_score_updated_at' => 'datetime',
         'closed_at' => 'datetime',
         'purge_after' => 'datetime',
+        'lifecycle_expired_at' => 'datetime',
+        'lifecycle_archived_at' => 'datetime',
         'churned_at' => 'datetime',
         'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
@@ -285,14 +290,38 @@ class Client extends Model
             })
             ->where(function ($builder) {
                 $builder->whereNull('notactive')->orWhere('notactive', false);
+            })
+            // A published-but-Expired/Archived profile is reachable for SEO but is
+            // not lead-generating, so it is not "active" in the business sense.
+            ->where(function ($builder) {
+                $builder->whereNull('lifecycle_state')
+                    ->orWhere('lifecycle_state', \App\Support\ClientLifecycleState::ACTIVE);
             });
+    }
+
+    /**
+     * Restrict to a single lifecycle_state.
+     */
+    public function scopeLifecycle($query, string $state)
+    {
+        return $query->where('lifecycle_state', $state);
     }
 
     public function isActiveProfile(): bool
     {
         return (string) $this->profile_status === 'publish'
             && ! (bool) $this->needs_payment
-            && ! (bool) $this->notactive;
+            && ! (bool) $this->notactive
+            && ($this->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE) === \App\Support\ClientLifecycleState::ACTIVE;
+    }
+
+    /**
+     * True when the profile is publicly reachable (published for SEO) but must not
+     * generate leads — contacts hidden and editing disabled on the website.
+     */
+    public function isPubliclyRestricted(): bool
+    {
+        return \App\Support\ClientLifecycleState::isPubliclyRestricted($this->lifecycle_state);
     }
 
     public function scopeNeedsPayment($query)

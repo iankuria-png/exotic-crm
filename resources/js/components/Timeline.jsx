@@ -6,6 +6,9 @@ const eventTones = {
     deal_extended: 'bg-indigo-100 text-indigo-700',
     profile_activated: 'bg-emerald-100 text-emerald-700',
     profile_deactivated: 'bg-rose-100 text-rose-700',
+    profile_expired: 'bg-amber-100 text-amber-800',
+    profile_archived: 'bg-orange-100 text-orange-800',
+    profile_unarchived: 'bg-teal-100 text-teal-700',
     note_added: 'bg-amber-100 text-amber-700',
     payment_received: 'bg-emerald-100 text-emerald-700',
     status_changed: 'bg-teal-100 text-teal-700',
@@ -30,6 +33,12 @@ function formatEventDescription(event) {
             return `Profile activated for ${content.duration_days || 0} days`;
         case 'profile_deactivated':
             return `Profile deactivated${content.reason ? `: ${content.reason}` : ''}`;
+        case 'profile_expired':
+            return 'Profile expired — kept published for SEO, contacts hidden';
+        case 'profile_archived':
+            return 'Profile archived — indexed but removed from listings';
+        case 'profile_unarchived':
+            return 'Profile restored to Expired — returned to listings';
         case 'note_added':
             return `${content.note_type || 'Note'} note added${content.has_follow_up ? ' with follow-up' : ''}`;
         case 'payment_received':

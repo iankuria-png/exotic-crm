@@ -20,6 +20,7 @@ use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientChurnStamper;
 use App\Services\ClientDeletionService;
+use App\Services\ClientLifecycleService;
 use App\Services\ClientFunnelService;
 use App\Services\ClientLifetimeValueService;
 use App\Services\ClientOutreachService;
@@ -44,6 +45,7 @@ use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CityNormalizer;
+use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
 use App\Support\CrmClientChurnReason;
 use App\Support\CrmClientCloseReason;
@@ -90,6 +92,7 @@ class ClientController extends Controller
         private readonly ClientCaseClosureService $clientCaseClosureService,
         private readonly ClientSegmentService $clientSegmentService,
         private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
+        private readonly ClientLifecycleService $clientLifecycleService,
         private readonly ChurnAggregatorService $churnAggregatorService,
         private readonly ClientChurnStamper $clientChurnStamper,
         private readonly ClientLifetimeValueService $clientLifetimeValueService,
@@ -154,13 +157,9 @@ class ClientController extends Controller
 
         if ($request->filled('status')) {
             if ((string) $request->status === 'expired_public') {
-                // Stuck profiles: still publicly active but past their WP expiry.
-                // Raw "escort_expire < now" is intentionally inclusive for a review
-                // queue; the precise per-market cutoff still gates actual deactivation.
-                $query->active()
-                    ->whereNotNull('escort_expire')
-                    ->where('escort_expire', '>', 0)
-                    ->where('escort_expire', '<', now()->timestamp);
+                $this->applyExpiredPublicScope($query);
+            } elseif ((string) $request->status === 'archived') {
+                $query->lifecycle(ClientLifecycleState::ARCHIVED);
             } else {
                 $query->where('profile_status', $request->status);
             }
@@ -302,10 +301,8 @@ class ClientController extends Controller
         if ($request->filled('platform_id')) {
             $expiredPublicBase->where('platform_id', $request->platform_id);
         }
-        $expiredPublicBase->notClosed()->active()
-            ->whereNotNull('escort_expire')
-            ->where('escort_expire', '>', 0)
-            ->where('escort_expire', '<', now()->timestamp);
+        $expiredPublicBase->notClosed();
+        $this->applyExpiredPublicScope($expiredPublicBase);
 
         $stats = [
             'total' => (clone $statsQuery)->count(),
@@ -315,6 +312,7 @@ class ClientController extends Controller
             'high_risk' => (clone $statsQuery)->where('is_high_risk', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
             'expired_public' => $expiredPublicBase->count(),
+            'archived' => (clone $statsQuery)->lifecycle(ClientLifecycleState::ARCHIVED)->count(),
             'with_chat' => (clone $statsQuery)->whereNotNull('sb_user_id')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
             'new_users' => $newUsersStatsQuery->count(),
@@ -780,10 +778,31 @@ class ClientController extends Controller
      */
     private function decorateExpiryState(Client $client): void
     {
-        $client->setAttribute(
-            'expiry_state',
-            $this->expiredSubscriptionReconciler->isStuck($client) ? 'expired_public' : null
-        );
+        // Expired == published-but-restricted, whether it has already transitioned to
+        // the terminal lifecycle=expired state or is a transient stuck profile awaiting
+        // the daily reconcile. Both surface as 'expired_public' for the FE badge/filter.
+        $isExpired = $client->lifecycle_state === ClientLifecycleState::EXPIRED
+            || $this->expiredSubscriptionReconciler->isStuck($client);
+
+        $client->setAttribute('expiry_state', $isExpired ? 'expired_public' : null);
+    }
+
+    /**
+     * Constrain a client query to "Expired (still public)": either the terminal
+     * lifecycle=expired state, or a still-active profile past its raw expiry
+     * timestamp (a transient stuck profile awaiting the daily reconcile).
+     */
+    private function applyExpiredPublicScope($query): void
+    {
+        $query->where(function ($outer) {
+            $outer->where('lifecycle_state', ClientLifecycleState::EXPIRED)
+                ->orWhere(function ($stuck) {
+                    $stuck->active()
+                        ->whereNotNull('escort_expire')
+                        ->where('escort_expire', '>', 0)
+                        ->where('escort_expire', '<', now()->timestamp);
+                });
+        });
     }
 
     private function decorateLifetimeValue($clients): void
@@ -884,9 +903,98 @@ class ClientController extends Controller
         );
 
         return response()->json([
-            'message' => 'Profile expired and set to private.',
+            'message' => 'Profile marked Expired. It stays published for SEO with contact methods hidden.',
             'client' => $fresh,
             'result' => $result,
+        ]);
+    }
+
+    /**
+     * Archive an Expired profile: keeps it published and indexed (SEO retained) but
+     * excludes it from city/category listings and locks editing. Manual counterpart
+     * to the daily crm:archive-expired command.
+     */
+    public function archive(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+        $client->loadMissing('platform');
+
+        $before = ['lifecycle_state' => $client->lifecycle_state];
+
+        try {
+            $fresh = $this->clientLifecycleService->archive($client, (int) $request->user()->id, 'manual');
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            Log::error('Manual archive failed', [
+                'client_id' => $client->id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Failed to archive the profile in WordPress. Please retry.'], 502);
+        }
+
+        $this->decorateExpiryState($fresh);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+            'client',
+            (int) $client->id,
+            $before,
+            ['lifecycle_state' => $fresh->lifecycle_state],
+            'Archived profile (retained for SEO, removed from listings)'
+        );
+
+        return response()->json([
+            'message' => 'Profile archived. It stays indexed but no longer appears in listings.',
+            'client' => $fresh,
+        ]);
+    }
+
+    /**
+     * Restore an Archived profile to Expired (back into listings) without granting
+     * contact access. A full return to Active happens by activating a subscription.
+     */
+    public function unarchive(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+        $client->loadMissing('platform');
+
+        $before = ['lifecycle_state' => $client->lifecycle_state];
+
+        try {
+            $fresh = $this->clientLifecycleService->unarchive($client, (int) $request->user()->id);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            Log::error('Manual unarchive failed', [
+                'client_id' => $client->id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Failed to restore the profile in WordPress. Please retry.'], 502);
+        }
+
+        $this->decorateExpiryState($fresh);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+            'client',
+            (int) $client->id,
+            $before,
+            ['lifecycle_state' => $fresh->lifecycle_state],
+            'Restored profile from Archived to Expired'
+        );
+
+        return response()->json([
+            'message' => 'Profile restored to Expired and returned to listings.',
+            'client' => $fresh,
         ]);
     }
 
@@ -921,7 +1029,7 @@ class ClientController extends Controller
         // Audit each deactivated profile against its own market.
         $byId = $authorized->keyBy('id');
         foreach ($outcome['results'] as $row) {
-            if (($row['action'] ?? null) !== 'deactivated') {
+            if (($row['action'] ?? null) !== 'expired') {
                 continue;
             }
             $client = $byId->get($row['client_id']);

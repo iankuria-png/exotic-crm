@@ -333,6 +333,19 @@ class WpSyncService
         return $this->post("/clients/{$postId}/deactivate");
     }
 
+    /**
+     * Publish a lifecycle state to WordPress ('active' | 'expired' | 'archived').
+     *
+     * Unlike deactivateClient() (which privatises the post), this keeps the profile
+     * published/indexed and lets the theme react to the crm_lifecycle_state meta:
+     * hide contacts, show the inactive notice, disable editing, and — for archived —
+     * exclude it from city/category listings while keeping its URL indexable.
+     */
+    public function setLifecycleState(int $postId, string $state): array
+    {
+        return $this->post("/clients/{$postId}/lifecycle", ['state' => $state]);
+    }
+
     public function deleteClient(int $postId): array
     {
         return $this->delete("/clients/{$postId}/delete");

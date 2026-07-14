@@ -85,6 +85,14 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_purge_closed_clients.log'));
 
+        // Archive long-term Expired profiles (keeps them indexed, removes from listings).
+        $schedule->command('crm:archive-expired')
+            ->name('crm_archive_expired')
+            ->dailyAt('03:20')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_archive_expired.log'));
+
         $schedule->command('crm:close-stale-sessions')
             ->name('crm_close_stale_sessions')
             ->everyMinute()

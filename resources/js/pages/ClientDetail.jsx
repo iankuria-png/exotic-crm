@@ -1041,10 +1041,36 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             queryClient.invalidateQueries({ queryKey: ['clients'] });
-            toast.success(data?.message || 'Profile expired and set to private.');
+            toast.success(data?.message || 'Profile marked Expired (published for SEO, contacts hidden).');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Could not expire this profile.');
+        },
+    });
+
+    const archiveMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/archive`).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success(data?.message || 'Profile archived (kept indexed, removed from listings).');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not archive this profile.');
+        },
+    });
+
+    const unarchiveMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/unarchive`).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success(data?.message || 'Profile restored to Expired and returned to listings.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not restore this profile.');
         },
     });
 
@@ -1564,7 +1590,14 @@ export default function ClientDetail() {
             { key: 'chat', label: 'Chat' },
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
-            { key: 'edit_profile', label: 'Edit Profile' },
+            {
+                key: 'edit_profile',
+                label: 'Edit Profile',
+                // Editing is disabled while the profile is Expired/Archived (contacts
+                // hidden, published for SEO only). Reactivate a subscription to edit.
+                disabled: ['expired', 'archived'].includes(String(client?.lifecycle_state || '').toLowerCase()),
+                disabledTitle: 'Editing is locked while this profile is Expired/Archived. Activate a subscription to re-enable editing.',
+            },
             { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
         ];
 
@@ -1576,7 +1609,7 @@ export default function ClientDetail() {
     }, [client, healthData?.summary?.duplicate_count, isReadOnly]);
 
     useEffect(() => {
-        const allowedTabs = tabLinks.map((tab) => tab.key);
+        const allowedTabs = tabLinks.filter((tab) => !tab.disabled).map((tab) => tab.key);
         const nextTab = allowedTabs.includes(requestedTab) ? requestedTab : 'overview';
         if (nextTab !== activeTab) {
             setActiveTab(nextTab);
@@ -2736,22 +2769,58 @@ export default function ClientDetail() {
                                         Close case
                                     </button>
                                 ) : null}
-                                {!isReadOnly && client?.expiry_state === 'expired_public' ? (
+                                {!isReadOnly && client?.expiry_state === 'expired_public' && client?.lifecycle_state !== 'expired' ? (
                                     <button
                                         type="button"
                                         disabled={expireNowMutation.isPending}
                                         onClick={() => {
-                                            if (window.confirm('This profile is past its expiry but still public. Set it to private now (deactivate in WordPress)?')) {
+                                            if (window.confirm('This profile is past its expiry but still fully active. Mark it Expired now? It stays published for SEO, but contact methods are hidden and editing is locked.')) {
                                                 expireNowMutation.mutate();
                                             }
                                         }}
-                                        title="Force-expire this profile now (past its expiry but still public)"
+                                        title="Mark this profile Expired now (kept published, contacts hidden)"
                                         className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
                                     >
                                         <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                                         </svg>
                                         {expireNowMutation.isPending ? 'Expiring…' : 'Expire now'}
+                                    </button>
+                                ) : null}
+                                {!isReadOnly && client?.lifecycle_state === 'expired' ? (
+                                    <button
+                                        type="button"
+                                        disabled={archiveMutation.isPending}
+                                        onClick={() => {
+                                            if (window.confirm('Archive this Expired profile? It stays indexed for SEO but is removed from city/category listings.')) {
+                                                archiveMutation.mutate();
+                                            }
+                                        }}
+                                        title="Archive this profile (kept indexed, removed from listings)"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-800 transition hover:bg-orange-100 disabled:opacity-60"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v1a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                                        </svg>
+                                        {archiveMutation.isPending ? 'Archiving…' : 'Archive'}
+                                    </button>
+                                ) : null}
+                                {!isReadOnly && client?.lifecycle_state === 'archived' ? (
+                                    <button
+                                        type="button"
+                                        disabled={unarchiveMutation.isPending}
+                                        onClick={() => {
+                                            if (window.confirm('Restore this Archived profile to Expired? It returns to city/category listings (contacts stay hidden until a subscription is activated).')) {
+                                                unarchiveMutation.mutate();
+                                            }
+                                        }}
+                                        title="Restore this profile from Archived to Expired (back into listings)"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 disabled:opacity-60"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>
+                                        {unarchiveMutation.isPending ? 'Restoring…' : 'Restore'}
                                     </button>
                                 ) : null}
                                 {canDeleteClient ? (
@@ -2994,7 +3063,10 @@ export default function ClientDetail() {
                     {tabLinks.map((tab) => (
                         <button
                             key={tab.key}
+                            disabled={tab.disabled}
+                            title={tab.disabled ? tab.disabledTitle : undefined}
                             onClick={() => {
+                                if (tab.disabled) return;
                                 setActiveTab(tab.key);
                                 const next = new URLSearchParams(searchParams);
                                 if (tab.key === 'overview') {
@@ -3004,7 +3076,7 @@ export default function ClientDetail() {
                                 }
                                 setSearchParams(next, { replace: true });
                             }}
-                            className={`rounded-md px-3 py-2 text-sm font-medium transition ${activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+                            className={`rounded-md px-3 py-2 text-sm font-medium transition ${tab.disabled ? 'cursor-not-allowed text-slate-300' : activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
                         >
                             <span className="inline-flex items-center gap-2">
                                 <span>{tab.label}</span>

@@ -33,23 +33,57 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         $this->artisan('crm:reconcile-expired-subscriptions')
             ->assertExitCode(0);
 
+        // Profile stays PUBLISHED for SEO, now flagged Expired (contacts hidden by theme).
         $this->assertDatabaseHas('clients', [
             'id' => $client->id,
-            'profile_status' => 'private',
-            'escort_expire' => null,
+            'profile_status' => 'publish',
+            'lifecycle_state' => 'expired',
         ]);
+        $this->assertNotNull($client->fresh()->lifecycle_expired_at);
         $this->assertSame('expired', $deal->fresh()->status);
 
         $this->assertDatabaseHas('timeline_events', [
             'entity_type' => 'client',
             'entity_id' => $client->id,
-            'event_type' => 'profile_deactivated',
+            'event_type' => 'profile_expired',
         ]);
 
         $run = ExpiryReconciliationRun::query()->latest('id')->firstOrFail();
         $this->assertSame('live', $run->mode);
         $this->assertSame(1, $run->processed);
         $this->assertSame(0, $run->failed);
+    }
+
+    public function test_market_without_lifecycle_policy_takes_profile_offline_on_expiry(): void
+    {
+        // Legacy market (not opted in): expiry must behave exactly as before — the
+        // profile is taken offline in WordPress (private), NOT kept published.
+        $platform = $this->createPlatform(false);
+        $client = $this->createStuckClient($platform, 124900);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+        ]);
+
+        $this->fakeWpLegacyOffline($platform, 124900);
+
+        $this->artisan('crm:reconcile-expired-subscriptions')->assertExitCode(0);
+
+        $fresh = $client->fresh();
+        $this->assertSame('private', $fresh->profile_status);
+        $this->assertSame('active', $fresh->lifecycle_state, 'legacy market never enters the expired lifecycle');
+        $this->assertSame('expired', $deal->fresh()->status);
+
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::assertSent(fn ($request) => $request->url() === "{$base}/clients/124900/deactivate");
+        Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/clients/124900/lifecycle'));
+
+        $this->assertDatabaseHas('timeline_events', [
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => 'profile_deactivated',
+        ]);
     }
 
     public function test_dry_run_changes_nothing_but_records_a_run(): void
@@ -128,13 +162,15 @@ class ExpiredSubscriptionReconcileTest extends TestCase
 
         $this->postJson("/api/crm/clients/{$client->id}/expire-now")
             ->assertOk()
-            ->assertJsonPath('client.profile_status', 'private')
-            ->assertJsonPath('client.expiry_state', null)
-            ->assertJsonPath('result.action', 'deactivated');
+            ->assertJsonPath('client.profile_status', 'publish')
+            ->assertJsonPath('client.lifecycle_state', 'expired')
+            ->assertJsonPath('client.expiry_state', 'expired_public')
+            ->assertJsonPath('result.action', 'expired');
 
         $this->assertDatabaseHas('clients', [
             'id' => $client->id,
-            'profile_status' => 'private',
+            'profile_status' => 'publish',
+            'lifecycle_state' => 'expired',
         ]);
     }
 
@@ -214,9 +250,12 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             ->assertJsonPath('summary.skipped', 1)
             ->assertJsonPath('summary.failed', 0);
 
-        $this->assertSame('private', $stuck->fresh()->profile_status);
+        $stuckFresh = $stuck->fresh();
+        $this->assertSame('publish', $stuckFresh->profile_status);
+        $this->assertSame('expired', $stuckFresh->lifecycle_state);
         $this->assertSame('expired', $deal->fresh()->status);
         $this->assertSame('publish', $active->fresh()->profile_status);
+        $this->assertSame('active', $active->fresh()->lifecycle_state);
     }
 
     public function test_bulk_expire_reports_clients_outside_the_reps_market(): void
@@ -263,10 +302,11 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         ]);
     }
 
-    private function fakeWpDeactivation(Platform $platform, int $wpPostId): void
+    private function fakeWpLegacyOffline(Platform $platform, int $wpPostId): void
     {
         $base = rtrim((string) $platform->wp_api_url, '/');
 
+        // Legacy path: /deactivate privatises the post and clears expiry meta.
         Http::fake([
             "{$base}/clients/{$wpPostId}/deactivate" => Http::response(['success' => true], 200),
             "{$base}/clients/{$wpPostId}" => Http::response([
@@ -274,15 +314,10 @@ class ExpiredSubscriptionReconcileTest extends TestCase
                 'wp_user_id' => $wpPostId + 1000,
                 'name' => 'Judy ' . $wpPostId,
                 'phone' => '+255700000000',
-                'email' => "judy{$wpPostId}@example.test",
                 'city' => 'Kigamboni',
                 'post_status' => 'private',
-                'premium' => false,
-                'premium_expire' => null,
-                'featured' => false,
-                'featured_expire' => null,
+                'crm_lifecycle_state' => 'active',
                 'escort_expire' => null,
-                'verified' => false,
                 'needs_payment' => true,
                 'notactive' => false,
                 'main_image_url' => '',
@@ -291,7 +326,43 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         ]);
     }
 
-    private function createPlatform(): Platform
+    private function fakeWpDeactivation(Platform $platform, int $wpPostId): void
+    {
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        $pastExpire = now()->subDays(3)->timestamp;
+
+        // Expiry now PUBLISHES the Expired lifecycle (contacts hidden by the theme)
+        // instead of privatising the post — the profile stays indexed for SEO.
+        Http::fake([
+            "{$base}/clients/{$wpPostId}/lifecycle" => Http::response([
+                'ok' => true,
+                'crm_lifecycle_state' => 'expired',
+                'post_status' => 'publish',
+            ], 200),
+            "{$base}/clients/{$wpPostId}" => Http::response([
+                'wp_post_id' => $wpPostId,
+                'wp_user_id' => $wpPostId + 1000,
+                'name' => 'Judy ' . $wpPostId,
+                'phone' => '+255700000000',
+                'email' => "judy{$wpPostId}@example.test",
+                'city' => 'Kigamboni',
+                'post_status' => 'publish',
+                'crm_lifecycle_state' => 'expired',
+                'premium' => false,
+                'premium_expire' => null,
+                'featured' => false,
+                'featured_expire' => null,
+                'escort_expire' => $pastExpire,
+                'verified' => false,
+                'needs_payment' => false,
+                'notactive' => false,
+                'main_image_url' => '',
+                'modified_at' => now()->toIso8601String(),
+            ], 200),
+        ]);
+    }
+
+    private function createPlatform(bool $lifecycleEnabled = true): Platform
     {
         return Platform::query()->create([
             'name' => 'Tanzania Market',
@@ -301,6 +372,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'phone_prefix' => '255',
             'currency_code' => 'TZS',
             'is_active' => true,
+            'lifecycle_policy_enabled' => $lifecycleEnabled,
             'wp_api_url' => 'https://tz.example.test/wp-json/exotic-crm-sync/v1',
             'wp_api_user' => 'crm-user',
             'wp_api_password' => 'secret',

@@ -9,8 +9,35 @@ function normalizeBoolean(value) {
 
 export function deriveClientProfileState(client) {
     const profileStatus = String(client?.profile_status || '').trim().toLowerCase();
+    const lifecycleState = String(client?.lifecycle_state || '').trim().toLowerCase();
     const needsPayment = normalizeBoolean(client?.needs_payment);
     const notactive = normalizeBoolean(client?.notactive);
+
+    // Authoritative lifecycle states published to WordPress. Archived is its own
+    // terminal badge; Expired reuses the amber "expired_public" tone below. Both keep
+    // the profile published/indexed for SEO with contact methods hidden on the site.
+    if (lifecycleState === 'archived') {
+        return {
+            status: 'archived',
+            tone: 'archived',
+            label: 'Archived',
+            detail: 'Indexed for SEO, hidden from listings',
+            isConflict: false,
+            isPubliclyActive: false,
+        };
+    }
+
+    if (lifecycleState === 'removed') {
+        return {
+            status: 'removed',
+            tone: 'removed',
+            label: 'Removed',
+            detail: 'Deleted from the website',
+            isConflict: false,
+            isPubliclyActive: false,
+        };
+    }
+
     const isConflict = profileStatus === 'publish' && (needsPayment || notactive);
 
     if (isConflict) {
@@ -49,15 +76,15 @@ export function deriveClientProfileState(client) {
     }
 
     if (profileStatus === 'publish') {
-        // Past expiry but WordPress hasn't deactivated it yet (the server derives
-        // this from the timezone-aware escort_expire cutoff). Still public, but the
-        // green "Active" badge would be misleading — surface it honestly.
-        if (String(client?.expiry_state || '') === 'expired_public') {
+        // Expired lifecycle: published & indexed for SEO, but contacts are hidden and
+        // editing is locked on the website. Either the terminal lifecycle=expired state,
+        // or a transient stuck profile (server-derived expiry_state) awaiting reconcile.
+        if (lifecycleState === 'expired' || String(client?.expiry_state || '') === 'expired_public') {
             return {
                 status: 'expired_public',
                 tone: 'expired_public',
                 label: 'Expired',
-                detail: 'Past expiry — pending deactivation',
+                detail: 'Published for SEO — contact methods hidden',
                 isConflict: false,
                 isPubliclyActive: true,
             };

@@ -173,6 +173,7 @@ function buildPlatformEditor(platform) {
         domain: platform.domain || '',
         country: platform.country || '',
         is_active: Boolean(platform.is_active),
+        lifecycle_policy_enabled: Boolean(platform.lifecycle_policy_enabled),
         wp_api_url: platform.wp_sync?.api_url || '',
         wp_api_user: platform.wp_sync?.api_user || '',
         wp_api_password: '',
@@ -5002,6 +5003,22 @@ function IntegrationsWorkspace({
                                                 Package setup is incomplete. Configure at least one active package with pricing before activating this market.
                                             </p>
                                         ) : null}
+                                        <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={editor.lifecycle_policy_enabled}
+                                                onChange={(event) => setEditor((current) => ({ ...current, lifecycle_policy_enabled: event.target.checked }))}
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span>
+                                                <span className="font-medium">SEO profile lifecycle (Expired stays published)</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    When enabled, expiring profiles on this market stay published and indexed with contact details hidden
+                                                    (Expired → Archived lifecycle) instead of being taken offline. Leave off to keep the legacy behaviour
+                                                    where expiry sets the profile to private. Requires the updated sync plugin and theme on this market&apos;s site.
+                                                </span>
+                                            </span>
+                                        </label>
                                     </div>
 
                                     <div className="mt-3 flex justify-end">
