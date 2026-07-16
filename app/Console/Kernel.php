@@ -37,11 +37,14 @@ class Kernel extends ConsoleKernel
                  ->sendOutputTo(storage_path('logs/subscription_check.log'));
 
         // CRM safety net: force-expire profiles past their WP expiry but still
-        // publicly active, in case the WordPress check_expired() sweep didn't run
-        // (low-traffic markets / wp-cron not firing). Runs after subscriptions:check.
+        // publicly active. Hourly: on SEO-lifecycle markets the WordPress
+        // check_expired() sweep and subscriptions:check both stand down, so this
+        // reconciler is the ONLY actor that transitions lapsed profiles to the
+        // Expired (published, contacts hidden) state — an hourly cadence caps the
+        // window in which a lapsed profile still shows its contact details.
         $schedule->command('crm:reconcile-expired-subscriptions')
                  ->name('crm_reconcile_expired_subscriptions')
-                 ->dailyAt('00:25')
+                 ->hourlyAt(25)
                  ->withoutOverlapping(30)
                  ->onOneServer()
                  ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));

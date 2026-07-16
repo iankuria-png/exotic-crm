@@ -203,6 +203,58 @@ class ProfileLifecycleTest extends TestCase
         ]);
     }
 
+    public function test_subscriptions_check_skips_wp_deactivation_on_lifecycle_markets(): void
+    {
+        // Lifecycle market: the legacy subscriptions:check must NOT touch the
+        // market's WordPress database (its direct-DB privatisation would race the
+        // reconciler and take the profile offline). Payment still flips to expired.
+        // The fake platform has no reachable WP database, so if the gate failed the
+        // command would error on the connection attempt and exit non-zero.
+        Http::fake();
+        $platform = $this->createPlatform(); // lifecycle enabled
+
+        $payment = \App\Models\Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'status' => 'completed',
+            'end_date' => now()->subDay(),
+            'phone' => '254700000001',
+        ]);
+
+        $this->artisan('subscriptions:check')->assertExitCode(0);
+
+        $this->assertSame('expired', $payment->fresh()->status);
+    }
+
+    public function test_market_lifecycle_toggle_pushes_policy_flag_to_wordpress(): void
+    {
+        $platform = $this->createPlatform();
+        $platform->forceFill(['lifecycle_policy_enabled' => false])->save();
+        $base = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake(["{$base}/lifecycle-policy" => Http::response(['ok' => true, 'enabled' => true], 200)]);
+
+        \Laravel\Sanctum\Sanctum::actingAs($this->createAdminUser());
+
+        $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}", [
+            'lifecycle_policy_enabled' => true,
+        ])->assertOk();
+
+        Http::assertSent(function ($request) use ($base) {
+            return $request->url() === "{$base}/lifecycle-policy" && (string) $request['enabled'] === '1';
+        });
+
+        // Master switch off → every opted-in market gets pushed enabled=0.
+        Http::fake(["{$base}/lifecycle-policy" => Http::response(['ok' => true, 'enabled' => false], 200)]);
+        $this->patchJson('/api/crm/settings/lifecycle', ['master_enabled' => false])->assertOk();
+
+        Http::assertSent(function ($request) use ($base) {
+            return $request->url() === "{$base}/lifecycle-policy" && (string) $request['enabled'] === '0';
+        });
+
+        // Restore for other tests sharing the feature_settings row.
+        $this->patchJson('/api/crm/settings/lifecycle', ['master_enabled' => true])->assertOk();
+    }
+
     public function test_archive_is_rejected_when_market_has_not_opted_in(): void
     {
         $platform = $this->createPlatform();

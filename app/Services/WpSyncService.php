@@ -348,6 +348,18 @@ class WpSyncService
         return $this->post("/clients/{$postId}/lifecycle", ['state' => $state]);
     }
 
+    /**
+     * Publish the market-wide lifecycle policy flag to WordPress. The theme's
+     * legacy 5-minute expiry sweep (parent check_expired()) reads the resulting
+     * wp_option and stands down when enabled, leaving the expiry transition to
+     * the CRM reconciler. Pushed automatically when the market's lifecycle
+     * toggle (or the global master switch) changes in CRM settings.
+     */
+    public function setLifecyclePolicy(bool $enabled): array
+    {
+        return $this->post('/lifecycle-policy', ['enabled' => $enabled ? 1 : 0]);
+    }
+
     public function deleteClient(int $postId): array
     {
         return $this->delete("/clients/{$postId}/delete");

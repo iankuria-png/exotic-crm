@@ -95,6 +95,19 @@ class CheckExpiredSubscriptions extends Command
             return 0;
         }
 
+        // SEO lifecycle markets: expiry must NOT privatise profiles. The payment is
+        // still marked expired (and the renewal SMS sent) by the caller, but the
+        // profile transition (Expired: published, contacts hidden) is owned by
+        // crm:reconcile-expired-subscriptions, which this command must not race.
+        if ($payment->platform->lifecycleEnabled()) {
+            Log::info('Skipping WP deactivation: lifecycle policy owns expiry on this market', [
+                'payment_id' => $payment->id,
+                'platform_id' => $payment->platform_id,
+            ]);
+
+            return 0;
+        }
+
         // Use dynamic connection
         $connectionName = 'platform_' . $payment->platform->id;
         

@@ -2822,11 +2822,23 @@ class SettingsController extends Controller
             'reason' => $validated['reason'] ?? 'Updated profile lifecycle master switch from CRM settings',
         ]);
 
-        return response()->json([
+        // The master switch changes the EFFECTIVE policy on every opted-in market —
+        // mirror the new effective state to each of their WordPress sites so the
+        // legacy expiry sweeps stand down / resume accordingly.
+        $pushWarnings = [];
+        Platform::query()->where('lifecycle_policy_enabled', true)->get()->each(function (Platform $platform) use (&$pushWarnings): void {
+            $warning = $this->pushLifecyclePolicyToWordPress($platform);
+            if ($warning !== null) {
+                $pushWarnings[] = $warning;
+            }
+        });
+
+        return response()->json(array_filter([
             'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
             'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
             'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
-        ]);
+            'lifecycle_policy_push_warnings' => $pushWarnings ?: null,
+        ], static fn ($value) => $value !== null));
     }
 
     public function updateIntegrationPlatform(Request $request, Platform $platform)
@@ -2902,9 +2914,42 @@ class SettingsController extends Controller
             $validated['reason'] ?? 'Updated market integration profile from CRM settings'
         );
 
-        return response()->json([
+        // Mirror the lifecycle policy to the market's WordPress so the theme's
+        // legacy 5-minute expiry sweep stands down (or resumes). Non-fatal: the
+        // save sticks either way and the warning surfaces in the response.
+        $lifecyclePushWarning = null;
+        if (array_key_exists('lifecycle_policy_enabled', $validated)) {
+            $lifecyclePushWarning = $this->pushLifecyclePolicyToWordPress($platform);
+        }
+
+        return response()->json(array_filter([
             'platform' => $this->serializePlatformIntegration($platform),
-        ]);
+            'lifecycle_policy_push_warning' => $lifecyclePushWarning,
+        ], static fn ($value) => $value !== null));
+    }
+
+    /**
+     * Push platform->lifecycleEnabled() to the market's WordPress as a wp_option.
+     * Returns a human-readable warning string on failure, null on success.
+     */
+    private function pushLifecyclePolicyToWordPress(Platform $platform): ?string
+    {
+        try {
+            WpSyncService::forPlatform((int) $platform->id)->setLifecyclePolicy($platform->lifecycleEnabled());
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::warning('Failed to push lifecycle policy flag to WordPress', [
+                'platform_id' => $platform->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return sprintf(
+                'Saved, but pushing the lifecycle policy flag to %s failed (%s). The site\'s legacy expiry sweep may not match this setting — ensure the updated sync plugin is installed, then re-save.',
+                $platform->name,
+                $e->getMessage()
+            );
+        }
     }
 
     public function updatePlatformPackages(Request $request, Platform $platform)

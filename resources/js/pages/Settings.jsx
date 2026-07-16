@@ -1666,6 +1666,9 @@ function IntegrationsWorkspace({
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             setEditor(buildPlatformEditor(response?.platform));
             toast.success('Market integration profile updated.');
+            if (response?.lifecycle_policy_push_warning) {
+                toast.error(response.lifecycle_policy_push_warning);
+            }
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to update market profile.');
@@ -1686,6 +1689,7 @@ function IntegrationsWorkspace({
             toast.success(response?.master_enabled
                 ? 'Profile lifecycle enabled globally (per-market flags apply).'
                 : 'Profile lifecycle disabled everywhere — legacy expiry behaviour active.');
+            (response?.lifecycle_policy_push_warnings || []).forEach((warning) => toast.error(warning));
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to update lifecycle settings.');
