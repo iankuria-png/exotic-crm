@@ -187,7 +187,20 @@ class ClientSyncService
             'main_image_url'  => $imageUrl ?: null,
             'last_synced_at'  => now(),
             'wp_modified_at'  => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
+            // Mirror the CRM-authored lifecycle back from WordPress (same rule as
+            // buildBulkClientRow): absent key preserves the current state, unknown
+            // values normalise to 'active'.
+            'lifecycle_state' => array_key_exists('crm_lifecycle_state', $wpClient)
+                ? \App\Support\ClientLifecycleState::normalize($wpClient['crm_lifecycle_state'] ?? null)
+                : ($client->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE),
         ];
+
+        // A profile back in the Active lifecycle sheds its expiry/archive stamps so
+        // stale timestamps can't confuse the auto-archive sweep after a win-back.
+        if (($syncData['lifecycle_state'] ?? null) === \App\Support\ClientLifecycleState::ACTIVE) {
+            $syncData['lifecycle_expired_at'] = null;
+            $syncData['lifecycle_archived_at'] = null;
+        }
 
         if (array_key_exists('needs_payment', $wpClient)) {
             $syncData['needs_payment'] = (bool) ($wpClient['needs_payment'] ?? false);

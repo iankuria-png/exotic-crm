@@ -255,6 +255,45 @@ class ProfileLifecycleTest extends TestCase
         $this->patchJson('/api/crm/settings/lifecycle', ['master_enabled' => true])->assertOk();
     }
 
+    public function test_sync_one_remaps_stale_lifecycle_state_from_wordpress(): void
+    {
+        // Regression (Lala, ssudan pilot): CRM column stuck on 'expired' while
+        // WordPress says 'active' — the single-profile sync (Sync from WP button)
+        // must remap the lifecycle and shed the stale expiry stamp.
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 3178,
+            'profile_status' => 'publish',
+            'lifecycle_state' => 'expired',
+            'lifecycle_expired_at' => now()->subDays(2),
+        ]);
+
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake([
+            "{$base}/clients/3178" => Http::response([
+                'wp_post_id' => 3178,
+                'wp_user_id' => 701,
+                'name' => 'Lala',
+                'phone' => '+211980497725',
+                'city' => 'Atla-Bara',
+                'post_status' => 'publish',
+                'crm_lifecycle_state' => 'active',
+                'escort_expire' => now()->addDay()->timestamp,
+                'needs_payment' => false,
+                'notactive' => false,
+                'main_image_url' => '',
+                'modified_at' => now()->toIso8601String(),
+            ], 200),
+        ]);
+
+        $fresh = (new \App\Services\ClientSyncService($platform))->syncOne(3178);
+
+        $this->assertSame('active', $fresh->lifecycle_state);
+        $this->assertNull($fresh->lifecycle_expired_at);
+        $this->assertSame($client->id, $fresh->id);
+    }
+
     public function test_archive_is_rejected_when_market_has_not_opted_in(): void
     {
         $platform = $this->createPlatform();
