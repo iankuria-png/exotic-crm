@@ -56,7 +56,9 @@ class NotificationService
     public function sendSms(?string $phone, string $message, array $context = []): array
     {
         $smsConfig = $this->resolveSmsConfig();
-        $platformId = isset($context['platform_id']) ? (int) $context['platform_id'] : null;
+        $platformId = isset($context['platform_id'])
+            ? (int) $context['platform_id']
+            : (isset($context['market_id']) ? (int) $context['market_id'] : null);
         $smsConfig = $this->resolveMarketConfig($smsConfig, $platformId);
         $prefix = (string) ($context['phone_prefix'] ?? $smsConfig['default_prefix'] ?? '254');
         $normalizedPhone = $this->normalizePhone($phone, $prefix);
@@ -88,46 +90,32 @@ class NotificationService
             ];
         }
 
-        $activeProviderId = (string) ($context['sms_provider'] ?? $smsConfig['active_provider'] ?? 'legacy_gateway');
+        // Use only the selected provider
+        $activeProviderId = (string) (
+            $context['sms_provider']
+            ?? $context['provider_id']
+            ?? $smsConfig['active_provider']
+            ?? 'legacy_gateway'
+        );
+
+        // Call the provider and assign to $activeResult
         $activeResult = $this->dispatchViaProvider($activeProviderId, $normalizedPhone, $message, $smsConfig, $context);
 
-        if ($activeResult['success']) {
-            return array_merge($activeResult, [
-                'phone' => $normalizedPhone,
-                'fallback_attempted' => false,
+        // Optional debug logging
+        if (!empty($context['debug'])) {
+            \Log::debug('SMS Debug - sendSms', [
+                'provider_id' => $activeProviderId,
+                'provider_result' => $activeResult,
+                'context' => $context,
+                'normalized_phone' => $normalizedPhone,
             ]);
         }
 
-        $fallbackProviderId = (string) ($smsConfig['fallback_provider'] ?? '');
-        $canFallback = $fallbackProviderId !== ''
-            && $fallbackProviderId !== 'none'
-            && $fallbackProviderId !== $activeProviderId;
-
-        if (!$canFallback) {
-            return [
-                ...$activeResult,
-                'phone' => $normalizedPhone,
-                'fallback_attempted' => false,
-            ];
-        }
-
-        $fallbackResult = $this->dispatchViaProvider($fallbackProviderId, $normalizedPhone, $message, $smsConfig, $context);
-
-        if ($fallbackResult['success']) {
-            return array_merge($fallbackResult, [
-                'phone' => $normalizedPhone,
-                'fallback_attempted' => true,
-                'fallback_from' => $activeProviderId,
-            ]);
-        }
-
-        return [
-            ...$activeResult,
+        // Return only the active provider result, ignore fallback
+        return array_merge($activeResult, [
             'phone' => $normalizedPhone,
-            'fallback_attempted' => true,
-            'fallback_provider' => $fallbackProviderId,
-            'fallback_response' => $fallbackResult['provider_response'] ?? 'Fallback failed',
-        ];
+            'fallback_attempted' => false,
+        ]);
     }
 
     public function currentSmsConfig(bool $masked = true): array
@@ -292,8 +280,19 @@ class NotificationService
             ->where('key', self::SMS_SETTINGS_KEY)
             ->value('value');
 
+// Decode JSON if stored as string
+        if (is_string($stored)) {
+            $stored = json_decode($stored, true);
+        }
+
         if (is_array($stored)) {
             return $this->mergeSmsConfig($default, $stored);
+        }
+        if (!empty($context['debug'] ?? true)) {
+            \Log::debug('resolveSmsConfig: decoded stored value', [
+                'type' => gettype($stored),
+                'stored' => $stored,
+            ]);
         }
 
         return $default;
@@ -482,8 +481,23 @@ class NotificationService
         if (array_key_exists('fallback_provider', $market) && $market['fallback_provider'] !== null) {
             $config['fallback_provider'] = (string) $market['fallback_provider'];
         }
+        if (!empty($context['debug'])) {
+            \Log::debug('Market config merging', [
+                'platform_id' => $platformId,
+                'market' => $market ?? null,
+                'config_before_merge' => $config,
+            ]);
+        }
 
         $marketProviders = is_array($market['providers'] ?? null) ? $market['providers'] : [];
+        // Merge the market override for the provider explicitly passed in context
+        if (!empty($context['provider_id']) && isset($market['providers'][$context['provider_id']])) {
+            $pid = $context['provider_id'];
+            $config[$pid] = array_merge(
+                is_array($config[$pid] ?? []) ? $config[$pid] : [],
+                $market['providers'][$pid]
+            );
+        }
 
         foreach ($marketProviders as $providerId => $providerConfig) {
             if (!isset($this->providers[$providerId]) || !is_array($providerConfig)) {
@@ -521,6 +535,15 @@ class NotificationService
             ? $smsConfig[$providerId]
             : [];
 
+        if (!empty($context['debug'])) {
+            \Log::debug('DispatchViaProvider debug - merged provider config', [
+                'provider_id' => $providerId,
+                'providerConfig' => $providerConfig,
+                'context' => $context,
+                'smsConfigActiveProvider' => $smsConfig['active_provider'] ?? null,
+            ]);
+        }
+
         if (!$provider->configured($providerConfig)) {
             return [
                 'success' => false,
@@ -533,7 +556,7 @@ class NotificationService
         try {
             return $provider->send($phone, $message, $providerConfig, $context);
         } catch (\Throwable $exception) {
-            Log::error('SMS dispatch failed', [
+            \Log::error('SMS dispatch failed', [
                 'provider' => $providerId,
                 'phone' => $phone,
                 'context' => $context,
