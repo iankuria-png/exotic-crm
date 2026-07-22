@@ -531,7 +531,9 @@ PROMPT;
             return ['status' => 'failed', 'sms_log_id' => $log->id];
         }
 
-        $context = ['briefing_recipient_id' => $recipientId];
+        // Briefings persist their own sms_logs row (with briefing linkage) below,
+        // so opt out of NotificationService's central dispatch log to avoid dupes.
+        $context = ['briefing_recipient_id' => $recipientId, 'log_dispatch' => false];
         if ($override = $this->settings->smsProviderOverride()) {
             $context['sms_provider'] = $override;
         }

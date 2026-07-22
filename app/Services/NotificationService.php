@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Client;
 use App\Models\IntegrationSetting;
+use App\Models\SmsLog;
 use App\Services\Sms\AfricasTalkingSmsProvider;
 use App\Services\Sms\BriqSmsProvider;
 use App\Services\Sms\GhanaBulkSmsProvider;
@@ -183,7 +184,40 @@ class NotificationService
             ];
         }
 
+        // Record every routed dispatch for the Recent Dispatches surface. Callers
+        // that keep their own sms_logs row (e.g. AI briefings) opt out via
+        // context.log_dispatch=false. Never let logging break a send.
+        if ($context['log_dispatch'] ?? true) {
+            $this->recordDispatch($out, $message, $context, $platformId);
+        }
+
         return $out;
+    }
+
+    private function recordDispatch(array $result, string $message, array $context, ?int $platformId): void
+    {
+        try {
+            $response = $result['provider_response'] ?? null;
+            if (!is_string($response)) {
+                $response = json_encode($response);
+            }
+
+            SmsLog::create([
+                'phone' => $result['phone'] ?? null,
+                'message' => mb_substr($message, 0, 2000),
+                'status' => ($result['success'] ?? false) ? 'sent' : 'failed',
+                'response' => $response !== null ? mb_substr($response, 0, 255) : null,
+                'result_code' => $result['actual_success_code'] ?? null,
+                'provider' => $result['provider'] ?? null,
+                'platform_id' => $platformId,
+                'http_code' => is_numeric($result['http_code'] ?? null) ? (int) $result['http_code'] : null,
+                'purpose' => isset($context['purpose']) ? mb_substr((string) $context['purpose'], 0, 64) : null,
+                'fallback_used' => (bool) ($result['fallback_attempted'] ?? false),
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to record SMS dispatch log', ['error' => $exception->getMessage()]);
+        }
     }
 
     /**

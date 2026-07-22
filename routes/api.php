@@ -689,6 +689,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/integrations/push-provider/test', [SettingsController::class, 'testPushProvider'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/sms-provider', [SettingsController::class, 'updateSmsProvider'])->middleware('role:admin');
     Route::post('/settings/integrations/sms-provider/test', [SettingsController::class, 'testSmsProvider'])->middleware('role:admin');
+    Route::get('/settings/integrations/sms-logs', [SettingsController::class, 'smsLogs'])->middleware('role:admin');
+    Route::get('/settings/integrations/sms-logs/export', [SettingsController::class, 'exportSmsLogs'])->middleware('role:admin');
     Route::post('/settings/integrations/platforms', [SettingsController::class, 'storeIntegrationPlatform'])->middleware('role:admin');
     Route::patch('/settings/integrations/platforms/{platform}', [SettingsController::class, 'updateIntegrationPlatform'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/packages', [SettingsController::class, 'updatePlatformPackages'])->middleware('role:admin,sub_admin');

@@ -295,6 +295,54 @@ class SmsProviderRoutingTest extends TestCase
         $this->assertStringNotContainsString('at-secret', $encoded);
     }
 
+    public function test_dispatch_is_recorded_in_sms_logs_with_routing_fields(): void
+    {
+        Http::fake([
+            'karibu.briq.tz/*' => Http::response(['success' => true, 'job_id' => 'j1'], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'briq',
+            'fallback_provider' => 'none',
+            'briq' => ['base_url' => 'https://karibu.briq.tz', 'api_key' => 'k', 'sender_id' => 'TZ'],
+        ]);
+
+        $service->sendSms('0712345678', 'Logged send', [
+            'platform_id' => 9,
+            'phone_prefix' => '255',
+            'purpose' => 'unit_test',
+        ]);
+
+        $this->assertDatabaseHas('sms_logs', [
+            'provider' => 'briq',
+            'platform_id' => 9,
+            'status' => 'sent',
+            'purpose' => 'unit_test',
+            'http_code' => 200,
+        ]);
+    }
+
+    public function test_log_dispatch_opt_out_skips_central_logging(): void
+    {
+        Http::fake([
+            'karibu.briq.tz/*' => Http::response(['success' => true], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'briq',
+            'fallback_provider' => 'none',
+            'briq' => ['base_url' => 'https://karibu.briq.tz', 'api_key' => 'k', 'sender_id' => 'TZ'],
+        ]);
+
+        $service->sendSms('0712345678', 'No log', ['phone_prefix' => '255', 'log_dispatch' => false]);
+
+        $this->assertDatabaseCount('sms_logs', 0);
+    }
+
     public function test_legacy_flat_market_shape_still_resolves(): void
     {
         // Simulates a market saved under the pre-existing flat provider shape.

@@ -24,6 +24,7 @@ import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
+import SmsDispatchLog from '../components/settings/SmsDispatchLog';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
@@ -3340,6 +3341,7 @@ function IntegrationsWorkspace({
             ) : null}
 
             {integrationArea === 'sms' ? (
+                <div className="space-y-6">
                 <SmsRoutingPanel
                     fallbackInvalid={fallbackInvalid}
                     fallbackOptions={fallbackOptions}
@@ -3366,6 +3368,14 @@ function IntegrationsWorkspace({
                     testSmsProviderMutation={testSmsProviderMutation}
                     updateSmsProviderField={updateSmsProviderField}
                 />
+                <SmsDispatchLog
+                    platforms={platformRows.map((platform) => ({
+                        id: platform.platform_id,
+                        name: platform.platform_name,
+                    }))}
+                    providerOptions={smsProviderOptions}
+                />
+                </div>
             ) : null}
 
             {integrationArea === 'push' ? (

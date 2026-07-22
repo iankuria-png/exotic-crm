@@ -18,6 +18,7 @@ use App\Models\AuditLog;
 use App\Models\ClientSyncRun;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
+use App\Models\SmsLog;
 use App\Models\SbLeadImportRun;
 use App\Models\Product;
 use App\Models\ProductPrice;
@@ -850,6 +851,147 @@ class SettingsController extends Controller
         return response()->json([
             'result' => $result,
         ], ($result['success'] ?? false) ? 200 : 422);
+    }
+
+    public function smsLogs(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can view SMS dispatch logs.'
+        );
+
+        $filters = $this->validateSmsLogFilters($request);
+        $perPage = min(100, max(10, (int) ($filters['per_page'] ?? 25)));
+
+        $logs = $this->smsLogsQuery($filters)
+            ->with('platform:id,name')
+            ->paginate($perPage)
+            ->withQueryString();
+
+        $labels = $this->smsProviderLabelMap();
+
+        return response()->json([
+            'data' => collect($logs->items())
+                ->map(fn (SmsLog $log) => $this->serializeSmsLog($log, $labels))
+                ->all(),
+            'meta' => [
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
+            ],
+            'providers' => $this->notificationService->smsProviderOptions(),
+        ]);
+    }
+
+    public function exportSmsLogs(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can export SMS dispatch logs.'
+        );
+
+        $filters = $this->validateSmsLogFilters($request);
+        $labels = $this->smsProviderLabelMap();
+        $filename = 'sms-dispatches-' . now()->format('Ymd-His') . '.csv';
+
+        return response()->streamDownload(function () use ($filters, $labels) {
+            $handle = fopen('php://output', 'w');
+            fputcsv($handle, ['Sent at', 'Market', 'Provider', 'Phone', 'Status', 'HTTP', 'Result code', 'Fallback used', 'Purpose', 'Response']);
+
+            $this->smsLogsQuery($filters)
+                ->with('platform:id,name')
+                ->chunkById(500, function ($rows) use ($handle, $labels) {
+                    foreach ($rows as $log) {
+                        $row = $this->serializeSmsLog($log, $labels);
+                        fputcsv($handle, [
+                            $row['sent_at'],
+                            $row['market'],
+                            $row['provider_label'],
+                            $row['phone'],
+                            $row['status'],
+                            $row['http_code'],
+                            $row['result_code'],
+                            $row['fallback_used'] ? 'yes' : 'no',
+                            $row['purpose'],
+                            $row['response'],
+                        ]);
+                    }
+                });
+
+            fclose($handle);
+        }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    private function validateSmsLogFilters(Request $request): array
+    {
+        return $request->validate([
+            'market_id' => 'nullable|integer',
+            'provider' => ['nullable', Rule::in($this->notificationService->smsProviderIds())],
+            'status' => 'nullable|in:sent,failed',
+            'search' => 'nullable|string|max:100',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date',
+            'per_page' => 'nullable|integer|min:10|max:100',
+        ]);
+    }
+
+    private function smsLogsQuery(array $filters)
+    {
+        return SmsLog::query()
+            ->when(!empty($filters['market_id']), fn ($q) => $q->where('platform_id', (int) $filters['market_id']))
+            ->when(!empty($filters['provider']), fn ($q) => $q->where('provider', $filters['provider']))
+            ->when(!empty($filters['status']), fn ($q) => $q->where('status', $filters['status']))
+            ->when(!empty($filters['from']), fn ($q) => $q->whereDate('created_at', '>=', $filters['from']))
+            ->when(!empty($filters['to']), fn ($q) => $q->whereDate('created_at', '<=', $filters['to']))
+            ->when(!empty($filters['search']), function ($q) use ($filters) {
+                $term = '%' . $filters['search'] . '%';
+                $q->where(fn ($sub) => $sub->where('phone', 'like', $term)->orWhere('message', 'like', $term));
+            })
+            ->orderByDesc('created_at');
+    }
+
+    private function smsProviderLabelMap(): array
+    {
+        $map = [];
+        foreach ($this->notificationService->smsProviderOptions() as $option) {
+            $map[$option['id']] = $option['label'];
+        }
+
+        return $map;
+    }
+
+    private function serializeSmsLog(SmsLog $log, array $labels): array
+    {
+        $timestamp = $log->sent_at ?? $log->created_at;
+
+        return [
+            'id' => $log->id,
+            'sent_at' => $timestamp ? $timestamp->toDateTimeString() : null,
+            'platform_id' => $log->platform_id,
+            'market' => $log->platform?->name ?? ($log->platform_id ? 'Market #' . $log->platform_id : 'Global'),
+            'provider' => $log->provider,
+            'provider_label' => $log->provider ? ($labels[$log->provider] ?? $log->provider) : '—',
+            'phone' => $this->maskPhone((string) $log->phone),
+            'status' => $log->status,
+            'http_code' => $log->http_code,
+            'result_code' => $log->result_code,
+            'fallback_used' => (bool) $log->fallback_used,
+            'purpose' => $log->purpose,
+            'response' => $log->response,
+        ];
+    }
+
+    private function maskPhone(string $phone): string
+    {
+        $length = strlen($phone);
+        if ($length <= 6) {
+            return $phone;
+        }
+
+        return substr($phone, 0, 4) . str_repeat('*', $length - 6) . substr($phone, -2);
     }
 
     public function pushProviderConfig(Request $request)
