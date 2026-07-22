@@ -971,7 +971,7 @@ class SettingsController extends Controller
             'id' => $log->id,
             'sent_at' => $timestamp ? $timestamp->toDateTimeString() : null,
             'platform_id' => $log->platform_id,
-            'market' => $log->platform?->name ?? ($log->platform_id ? 'Market #' . $log->platform_id : 'Global'),
+            'market' => $log->platform?->name ?? ($log->platform_id ? 'Market #' . $log->platform_id : '—'),
             'provider' => $log->provider,
             'provider_label' => $log->provider ? ($labels[$log->provider] ?? $log->provider) : '—',
             'phone' => $this->maskPhone((string) $log->phone),

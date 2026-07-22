@@ -75,8 +75,12 @@ class SendPaymentSmsJob implements ShouldQueue
                 'phone' => $phone,
                 'message' => $message,
                 'payment_id' => $this->payment->id,
-                'status' => $smsResponse->successful() ? 'success' : 'failed',
-                'response' => $smsResponse->body()
+                'status' => $smsResponse->successful() ? 'sent' : 'failed',
+                'response' => $smsResponse->body(),
+                'provider' => 'legacy_gateway',
+                'platform_id' => $this->payment->platform_id ?? null,
+                'http_code' => $smsResponse->status(),
+                'purpose' => 'payment_notification',
             ]);
 
             if ($smsResponse->successful()) {

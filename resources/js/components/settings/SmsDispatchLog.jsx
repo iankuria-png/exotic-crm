@@ -4,7 +4,10 @@ import api from '../../services/api';
 
 const STATUS_STYLES = {
     sent: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+    success: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
     failed: 'bg-rose-50 text-rose-700 ring-rose-600/20',
+    pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+    disabled: 'bg-slate-100 text-slate-500 ring-slate-500/20',
 };
 
 const EMPTY_FILTERS = {
