@@ -484,6 +484,52 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(3, (int) data_get($kenya, 'target.percentage'));
     }
 
+    public function test_today_view_uses_nairobi_day_same_time_yesterday_prior_and_hourly_trend(): void
+    {
+        // 2026-07-22 11:30 UTC == 14:30 Africa/Nairobi. Current Nairobi hour = 14.
+        \Illuminate\Support\Carbon::setTestNow(\Illuminate\Support\Carbon::parse('2026-07-22 11:30:00', 'UTC'));
+
+        $platform = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya', 'currency_code' => 'USD']);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        Sanctum::actingAs($ceo);
+
+        // Today 08:00 Nairobi (05:00 UTC) — inside today, before "now".
+        $this->payment($platform, $product, ['amount' => 100, 'status' => 'completed', 'created_at' => '2026-07-22 05:00:00', 'completed_at' => '2026-07-22 05:00:00']);
+        // Yesterday 08:00 Nairobi (05:00 UTC) — before the same clock time → counts in same-time-yesterday prior.
+        $this->payment($platform, $product, ['amount' => 50, 'status' => 'completed', 'created_at' => '2026-07-21 05:00:00', 'completed_at' => '2026-07-21 05:00:00']);
+        // Yesterday 20:00 Nairobi (17:00 UTC) — AFTER the same clock time → excluded from summary prior, present in the full-day trend ghost.
+        $this->payment($platform, $product, ['amount' => 999, 'status' => 'completed', 'created_at' => '2026-07-21 17:00:00', 'completed_at' => '2026-07-21 17:00:00']);
+
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=today&reporting_currency=USD')->assertOk()->json();
+
+        $this->assertTrue((bool) data_get($summary, 'window.is_single_day'));
+        $this->assertTrue((bool) data_get($summary, 'window.is_today'));
+        $this->assertSame('2026-07-22', data_get($summary, 'window.day_date'));
+        $this->assertSame(100.0, (float) data_get($summary, 'metrics.collected_revenue.value.normalized_total'));
+        // Same-time-yesterday: excludes the 20:00 payment.
+        $this->assertSame(50.0, (float) data_get($summary, 'metrics.collected_revenue.prior_value.normalized_total'));
+
+        $keys = array_column($summary['insights'], 'key');
+        $this->assertContains('avg_daily', $keys);
+        $this->assertNotContains('cash_velocity', $keys);
+
+        $trend = $this->getJson('/api/crm/dashboard/ceo/revenue-trend?horizon=today&reporting_currency=USD')->assertOk()->json();
+        $this->assertSame('hour', $trend['bucket']);
+        $this->assertCount(24, $trend['points']);
+
+        $byLabel = collect($trend['points'])->keyBy('label');
+        // 08:00 — today value present, prior = yesterday 08:00.
+        $this->assertSame(100.0, (float) $byLabel['08:00']['value']);
+        $this->assertSame(50.0, (float) $byLabel['08:00']['prior_value']);
+        $this->assertFalse((bool) $byLabel['08:00']['future']);
+        // 20:00 — future today (hour 20 > 14), but the prior-day ghost keeps the 20:00 payment.
+        $this->assertTrue((bool) $byLabel['20:00']['future']);
+        $this->assertSame(999.0, (float) $byLabel['20:00']['prior_value']);
+
+        \Illuminate\Support\Carbon::setTestNow();
+    }
+
     private function user(array $overrides = []): User
     {
         return User::query()->create(array_merge([

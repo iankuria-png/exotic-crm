@@ -83,7 +83,7 @@ class CeoDashboardDataService
                 ],
             ],
             'customer_mix' => $currentCustomerMix,
-            'insights' => $this->insights($marketPie, $agentPerformance, $currentRevenue, $priorRevenue, $currentCustomerMix),
+            'insights' => $this->insights($marketPie, $agentPerformance, $currentRevenue, $priorRevenue, $currentCustomerMix, $context),
         ];
     }
 
@@ -218,6 +218,11 @@ class CeoDashboardDataService
     public function revenueTrend(Request $request): array
     {
         $context = $this->context($request);
+
+        if (($context['bucket'] ?? null) === 'hour') {
+            return $this->hourlyRevenueTrend($context);
+        }
+
         $bucket = $this->resolveTrendBucket($request, $context['bucket']);
         $current = $this->bucketedRevenue($context['from'], $context['to'], $context['platform_id'], $context['target_currency'], $bucket);
         $prior = $this->bucketedRevenue($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency'], $bucket);
@@ -524,6 +529,10 @@ class CeoDashboardDataService
         $horizon = (string) $request->query('horizon', '30d');
         $today = now()->endOfDay();
 
+        if (in_array($horizon, ['today', 'day'], true)) {
+            return $this->singleDayContext($request, $targetCurrency);
+        }
+
         if ($horizon === 'custom' && $request->query('from') && $request->query('to')) {
             $from = Carbon::parse((string) $request->query('from'))->startOfDay();
             $to = Carbon::parse((string) $request->query('to'))->endOfDay();
@@ -563,7 +572,76 @@ class CeoDashboardDataService
             'platform_id' => $platform?->id ? (int) $platform->id : null,
             'platform' => $platform,
             'target_currency' => $targetCurrency,
+            'is_single_day' => false,
         ];
+    }
+
+    /**
+     * Single-day ("Today" toggle / date stepper) window.
+     *
+     * The day boundary is anchored to the reporting timezone (Africa/Nairobi) so the CEO
+     * sees a Nairobi calendar day, while the from/to Carbons handed to SQL are converted to
+     * UTC — matching how payment timestamps are stored and how every other window behaves.
+     *
+     * When the selected day is today the day is still in progress, so `to` is capped at "now"
+     * and the prior window is yesterday up to the *same elapsed time* (same-time-yesterday),
+     * never a full yesterday — otherwise every partial day reads as a collapse.
+     */
+    private function singleDayContext(Request $request, string $targetCurrency): array
+    {
+        $tz = $this->reportingTimezone();
+        $nowLocal = now()->setTimezone($tz);
+        $todayLocal = $nowLocal->copy()->startOfDay();
+
+        $requested = trim((string) $request->query('date', ''));
+        $dayLocal = $requested !== ''
+            ? Carbon::parse($requested, $tz)->startOfDay()
+            : $todayLocal->copy();
+
+        if ($dayLocal->gt($todayLocal)) {
+            $dayLocal = $todayLocal->copy();
+        }
+
+        $isToday = $dayLocal->isSameDay($todayLocal);
+        $fromLocal = $dayLocal->copy();
+        $toLocal = $isToday ? $nowLocal->copy() : $dayLocal->copy()->endOfDay();
+        $elapsedSeconds = $fromLocal->diffInSeconds($toLocal);
+
+        $priorFromLocal = $fromLocal->copy()->subDay();
+        $priorToLocal = $priorFromLocal->copy()->addSeconds($elapsedSeconds);
+
+        $platformId = $request->query('platform_id') ? (int) $request->query('platform_id') : null;
+        $platform = $platformId ? Platform::query()->find($platformId) : null;
+
+        return [
+            'horizon' => 'today',
+            // Query bounds in UTC (payment timestamps are stored UTC).
+            'from' => $fromLocal->copy()->utc(),
+            'to' => $toLocal->copy()->utc(),
+            'prior_from' => $priorFromLocal->copy()->utc(),
+            'prior_to' => $priorToLocal->copy()->utc(),
+            'days' => 1,
+            'bucket' => 'hour',
+            'platform_id' => $platform?->id ? (int) $platform->id : null,
+            'platform' => $platform,
+            'target_currency' => $targetCurrency,
+            // Single-day extras consumed by the hourly trend + window serializer.
+            'is_single_day' => true,
+            'is_today' => $isToday,
+            'timezone' => $tz,
+            'day_date' => $dayLocal->toDateString(),
+            'prior_day_date' => $priorFromLocal->toDateString(),
+            'current_hour' => $isToday ? (int) $nowLocal->format('G') : 23,
+            'day_start' => $fromLocal->copy()->utc(),
+            'day_end' => $dayLocal->copy()->endOfDay()->utc(),
+            'prior_day_start' => $priorFromLocal->copy()->utc(),
+            'prior_day_end' => $priorFromLocal->copy()->endOfDay()->utc(),
+        ];
+    }
+
+    private function reportingTimezone(): string
+    {
+        return (string) config('ceo.peak_hours_timezone', 'Africa/Nairobi');
     }
 
     public function deterministicHeadline(array $summary): array
@@ -746,6 +824,113 @@ class CeoDashboardDataService
                 }),
             default => $query,
         };
+    }
+
+    /**
+     * Hourly revenue trend for the single-day view: today's running curve (00:00–now, Nairobi)
+     * overlaid on the *full* prior day as a "pace to beat" ghost. Hours after the current hour
+     * are flagged `future` so the frontend can break the line instead of drawing a drop to zero.
+     */
+    private function hourlyRevenueTrend(array $context): array
+    {
+        $current = $this->hourlyBuckets(
+            $context['day_start'],
+            $context['day_end'],
+            $context['platform_id'],
+            $context['target_currency'],
+            $context['day_date'],
+            (int) ($context['current_hour'] ?? 23)
+        );
+        $prior = $this->hourlyBuckets(
+            $context['prior_day_start'],
+            $context['prior_day_end'],
+            $context['platform_id'],
+            $context['target_currency'],
+            $context['prior_day_date'],
+            23
+        );
+
+        $points = [];
+        for ($hour = 0; $hour < 24; $hour++) {
+            $cur = $current[$hour];
+            $pri = $prior[$hour];
+            $label = sprintf('%02d:00', $hour);
+
+            $points[] = [
+                'label' => $label,
+                'value' => $cur['value'],
+                'payments_count' => $cur['payments_count'],
+                'average_ticket' => $cur['average_ticket'],
+                'source_breakdown' => $cur['source_breakdown'],
+                'future' => $cur['future'],
+                'prior_label' => $label,
+                'prior_value' => $pri['value'],
+                'prior_payments_count' => $pri['payments_count'],
+                'prior_average_ticket' => $pri['average_ticket'],
+                'prior_source_breakdown' => $pri['source_breakdown'],
+                'delta_percent' => $cur['future'] ? null : $this->percentDelta($cur['value'], $pri['value']),
+            ];
+        }
+
+        return [
+            'window' => $this->serializeWindow($context),
+            'bucket' => 'hour',
+            'points' => $points,
+        ];
+    }
+
+    /**
+     * @return array<int,array{value:float,payments_count:int,average_ticket:float,source_breakdown:array,future:bool}>
+     *         Indexed 0–23 by reporting-timezone hour, every hour seeded.
+     */
+    private function hourlyBuckets(Carbon $dayStart, Carbon $dayEnd, ?int $platformId, string $targetCurrency, string $fxDate, int $maxHour): array
+    {
+        $rows = $this->baseCollectedPayments($dayStart, $dayEnd, $platformId)
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->selectRaw($this->hourExpression().' as hour')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->groupByRaw($this->hourExpression())
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+
+        $buckets = [];
+        for ($hour = 0; $hour < 24; $hour++) {
+            $buckets[$hour] = [
+                'value' => 0.0,
+                'payments_count' => 0,
+                'average_ticket' => 0.0,
+                'source_breakdown' => [],
+                'future' => $hour > $maxHour,
+            ];
+        }
+
+        foreach (collect($rows)->groupBy(fn ($row) => (int) $row->hour) as $hour => $hourRows) {
+            $hour = (int) $hour;
+            if ($hour < 0 || $hour > 23) {
+                continue;
+            }
+
+            $eventRows = $hourRows->map(fn ($row) => (object) [
+                'event_date' => $fxDate,
+                'currency' => strtoupper((string) $row->currency),
+                'amount' => (float) $row->amount,
+            ]);
+            $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency, false);
+            $count = (int) $hourRows->sum('payments_count');
+            $value = (float) ($normalized['normalized_total'] ?? 0);
+
+            $buckets[$hour] = [
+                'value' => $value,
+                'payments_count' => $count,
+                'average_ticket' => $count > 0 ? round($value / $count, 2) : 0.0,
+                'source_breakdown' => $normalized['source_breakdown'] ?? [],
+                'future' => $hour > $maxHour,
+            ];
+        }
+
+        return $buckets;
     }
 
     private function bucketedRevenue(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency, string $bucket): array
@@ -1020,13 +1205,13 @@ class CeoDashboardDataService
         };
     }
 
-    private function insights(array $markets, array $agents, array $currentRevenue, array $priorRevenue, array $customerMix): array
+    private function insights(array $markets, array $agents, array $currentRevenue, array $priorRevenue, array $customerMix, array $context): array
     {
         $topMarket = $markets[0] ?? null;
         $topAgent = $agents[0] ?? null;
-        $revenueDelta = $this->percentDelta($currentRevenue['normalized_total'], $priorRevenue['normalized_total']);
         $existingShare = (float) data_get($customerMix, 'buckets.existing_active.share_percent', 0);
         $newShare = (float) data_get($customerMix, 'buckets.new_active.share_percent', 0);
+        $avgDaily = $this->averageDailyInsight($currentRevenue, $priorRevenue, $context);
 
         return array_values(array_filter([
             $topMarket ? [
@@ -1043,14 +1228,7 @@ class CeoDashboardDataService
                 'message' => sprintf('%s leads the floor this period.', $topAgent['name']),
                 'agent_id' => $topAgent['id'],
             ] : null,
-            [
-                'key' => 'cash_velocity',
-                'tone' => ($revenueDelta ?? 0) >= 0 ? 'positive' : 'warning',
-                'label' => 'Cash velocity',
-                'message' => $revenueDelta === null
-                    ? 'No prior-window revenue baseline yet.'
-                    : sprintf('Collected revenue is %s%s%% vs. prior window.', $revenueDelta >= 0 ? '+' : '', number_format($revenueDelta, 1)),
-            ],
+            $avgDaily,
             [
                 'key' => 'customer_mix',
                 'tone' => $existingShare >= $newShare ? 'positive' : 'market',
@@ -1058,6 +1236,59 @@ class CeoDashboardDataService
                 'message' => sprintf('Existing users contribute %s%% vs. %s%% from new users.', number_format($existingShare, 1), number_format($newShare, 1)),
             ],
         ]));
+    }
+
+    /**
+     * Average collected revenue per day — replaces the old "Cash velocity" card, which merely
+     * restated the Collected Revenue delta. Dividing by days normalises for window length, so
+     * a 30d vs 30d comparison is honest even when the two windows differ.
+     *
+     * The current window's in-progress final day is excluded from the divisor (average over
+     * *completed* days); the prior window is fully elapsed so it divides by its full length.
+     */
+    private function averageDailyInsight(array $currentRevenue, array $priorRevenue, array $context): array
+    {
+        $days = max(1, (int) ($context['days'] ?? 1));
+        $isSingleDay = (bool) ($context['is_single_day'] ?? false);
+        $endsToday = $isSingleDay
+            ? (bool) ($context['is_today'] ?? false)
+            : $context['to']->copy()->utc()->isSameDay(now());
+
+        $currentDivisor = max(1, $days - ($endsToday ? 1 : 0));
+        $priorDivisor = $days;
+
+        $currentTotal = (float) ($currentRevenue['normalized_total'] ?? 0);
+        $priorTotal = (float) ($priorRevenue['normalized_total'] ?? 0);
+        $currentAvg = $currentTotal / $currentDivisor;
+        $priorAvg = $priorTotal / $priorDivisor;
+
+        $currency = strtoupper((string) ($context['target_currency'] ?? 'USD'));
+        $delta = $this->percentDelta($currentAvg, $priorAvg);
+        $priorLabel = $isSingleDay ? 'yesterday' : 'prior window';
+
+        if ($currentAvg <= 0) {
+            $message = $isSingleDay
+                ? 'No collected revenue yet today.'
+                : 'No collected revenue to average yet.';
+        } else {
+            $message = $delta === null
+                ? sprintf('Averaging %s %s/day.', $currency, number_format($currentAvg, 0))
+                : sprintf(
+                    'Averaging %s %s/day, %s%s%% vs %s.',
+                    $currency,
+                    number_format($currentAvg, 0),
+                    $delta >= 0 ? '+' : '',
+                    number_format($delta, 1),
+                    $priorLabel
+                );
+        }
+
+        return [
+            'key' => 'avg_daily',
+            'tone' => ($delta ?? 0) >= 0 ? 'positive' : 'warning',
+            'label' => 'Avg daily',
+            'message' => $message,
+        ];
     }
 
     private function summarizeChannels(Collection $rows, string $targetCurrency, float $total): array
@@ -1243,15 +1474,24 @@ class CeoDashboardDataService
 
     private function serializeWindow(array $context): array
     {
+        $isSingleDay = (bool) ($context['is_single_day'] ?? false);
+
         return [
             'horizon' => $context['horizon'],
-            'from' => $context['from']->toDateString(),
-            'to' => $context['to']->toDateString(),
-            'prior_from' => $context['prior_from']->toDateString(),
-            'prior_to' => $context['prior_to']->toDateString(),
+            // For single-day the query bounds are UTC instants of a Nairobi day; surface the
+            // Nairobi calendar date for display so the label doesn't slip to the prior UTC date.
+            'from' => $isSingleDay ? $context['day_date'] : $context['from']->toDateString(),
+            'to' => $isSingleDay ? $context['day_date'] : $context['to']->toDateString(),
+            'prior_from' => $isSingleDay ? $context['prior_day_date'] : $context['prior_from']->toDateString(),
+            'prior_to' => $isSingleDay ? $context['prior_day_date'] : $context['prior_to']->toDateString(),
             'days' => $context['days'],
             'bucket' => $context['bucket'],
             'target_currency' => $context['target_currency'],
+            'is_single_day' => $isSingleDay,
+            'is_today' => (bool) ($context['is_today'] ?? false),
+            'timezone' => $context['timezone'] ?? null,
+            'day_date' => $context['day_date'] ?? null,
+            'prior_day_date' => $context['prior_day_date'] ?? null,
         ];
     }
 

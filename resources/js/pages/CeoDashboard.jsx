@@ -47,6 +47,9 @@ function apiError(error, fallback) {
 
 function compactWindowLabel(window) {
     if (!window?.from || !window?.to) return 'Selected period';
+    if (window.is_single_day || window.from === window.to) {
+        return window.is_today ? `${window.from} (today, so far)` : window.from;
+    }
     return `${window.from} to ${window.to}`;
 }
 
@@ -58,6 +61,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const { config: widgetConfig } = useDashboardWidgets();
     const [horizon, setHorizon] = useState('30d');
     const [customRange, setCustomRange] = useState(defaultCustomRange);
+    const [dayDate, setDayDate] = useState(() => toInputDate(new Date()));
     const [platformFilter, setPlatformFilter] = useState(null);
     const [focusedAgentId, setFocusedAgentId] = useState(null);
     const [trendMetric, setTrendMetric] = useState('revenue');
@@ -71,9 +75,10 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const queryParams = useMemo(() => ({
         horizon,
         ...(horizon === 'custom' ? { from: customRange.from, to: customRange.to } : {}),
+        ...(horizon === 'today' ? { date: dayDate } : {}),
         ...(platformFilter ? { platform_id: platformFilter } : {}),
         ...reporting.queryParams,
-    }), [customRange.from, customRange.to, horizon, platformFilter, reporting.queryParams]);
+    }), [customRange.from, customRange.to, dayDate, horizon, platformFilter, reporting.queryParams]);
 
     const marketsQuery = useQuery({
         queryKey: ['ceo-dashboard', 'markets'],
@@ -263,6 +268,9 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onHorizonChange={setHorizon}
                 customRange={customRange}
                 onCustomRangeChange={setCustomRange}
+                dayDate={dayDate}
+                onDayDateChange={setDayDate}
+                window={window}
                 selectedMarket={selectedMarket}
                 markets={marketOptions}
                 platformFilter={platformFilter}

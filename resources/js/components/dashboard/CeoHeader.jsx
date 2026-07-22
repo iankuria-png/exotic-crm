@@ -3,6 +3,7 @@ import ReportingCurrencyControl from '../ReportingCurrencyControl';
 import { marketLabel } from './ceoFormatters';
 
 const HORIZONS = [
+    { key: 'today', label: 'Today' },
     { key: '7d', label: '7 days' },
     { key: '30d', label: '30 days' },
     { key: '90d', label: '90 days' },
@@ -10,12 +11,41 @@ const HORIZONS = [
     { key: 'custom', label: 'Custom' },
 ];
 
+function todayInput() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function shiftDay(dateStr, delta) {
+    const [year, month, day] = String(dateStr || todayInput()).split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    date.setDate(date.getDate() + delta);
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function humanizeDay(dateStr, isToday) {
+    if (!dateStr) return '';
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    const label = date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    return isToday ? `${label} · today` : label;
+}
+
 export default function CeoHeader({
     user,
     horizon,
     onHorizonChange,
     customRange,
     onCustomRangeChange,
+    dayDate,
+    onDayDateChange,
+    window: windowMeta,
     selectedMarket,
     markets = [],
     platformFilter,
@@ -29,6 +59,11 @@ export default function CeoHeader({
         day: 'numeric',
         year: 'numeric',
     });
+
+    const todayStr = todayInput();
+    const activeDay = dayDate || todayStr;
+    const isToday = activeDay === todayStr;
+    const priorDayLabel = humanizeDay(shiftDay(activeDay, -1), false);
 
     return (
         <header className="-mx-1 space-y-3">
@@ -101,6 +136,52 @@ export default function CeoHeader({
 
                     <ReportingCurrencyControl reporting={reporting} className="justify-start xl:justify-end" />
                 </div>
+
+                {horizon === 'today' ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
+                        <div className="inline-flex items-center rounded-md border border-slate-300 bg-white">
+                            <button
+                                type="button"
+                                onClick={() => onDayDateChange?.(shiftDay(activeDay, -1))}
+                                className="flex h-9 w-9 items-center justify-center rounded-l-md text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                aria-label="Previous day"
+                            >
+                                <span aria-hidden="true">‹</span>
+                            </button>
+                            <input
+                                type="date"
+                                value={activeDay}
+                                max={todayStr}
+                                onChange={(event) => onDayDateChange?.(event.target.value || todayStr)}
+                                className="h-9 w-auto border-x border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                                aria-label="Select day"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => !isToday && onDayDateChange?.(shiftDay(activeDay, 1))}
+                                disabled={isToday}
+                                className="flex h-9 w-9 items-center justify-center rounded-r-md text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                                aria-label="Next day"
+                            >
+                                <span aria-hidden="true">›</span>
+                            </button>
+                        </div>
+                        {!isToday ? (
+                            <button
+                                type="button"
+                                onClick={() => onDayDateChange?.(todayStr)}
+                                className="inline-flex h-9 items-center rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                Jump to today
+                            </button>
+                        ) : null}
+                        <span className="text-xs text-slate-500">
+                            <span className="font-semibold text-slate-700">{humanizeDay(activeDay, isToday)}</span>
+                            {' · vs '}{priorDayLabel}
+                            {isToday && windowMeta?.timezone ? ` · ${windowMeta.timezone}` : ''}
+                        </span>
+                    </div>
+                ) : null}
 
                 {horizon === 'custom' ? (
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">

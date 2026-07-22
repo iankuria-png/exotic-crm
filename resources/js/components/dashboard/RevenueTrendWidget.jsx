@@ -158,18 +158,23 @@ export default function RevenueTrendWidget({
     const [selectedDay, setSelectedDay] = useState(null);
     const rawPoints = data?.points || [];
     const activeBucket = data?.bucket || 'auto';
+    const isHourly = activeBucket === 'hour';
     const points = rawPoints.map((point) => {
         const weekday = weekdayKey(point.label);
+        // In the hourly (single-day) view, hours after "now" have no data yet — null them so the
+        // current line ends at the present hour instead of crashing to zero, while the prior-day
+        // ghost keeps its full curve as the pace to beat.
+        const isFuture = Boolean(point.future);
 
         return {
             ...point,
             weekday,
             is_selected_day: selectedDay === point.label,
-            revenue: Number(point.value || 0),
+            revenue: isFuture ? null : Number(point.value || 0),
             prior_revenue: Number(point.prior_value || 0),
-            payments: Number(point.payments_count || 0),
+            payments: isFuture ? null : Number(point.payments_count || 0),
             prior_payments: Number(point.prior_payments_count || 0),
-            average_ticket: Number(point.average_ticket || 0),
+            average_ticket: isFuture ? null : Number(point.average_ticket || 0),
             prior_average_ticket: Number(point.prior_average_ticket || 0),
         };
     });
@@ -185,8 +190,12 @@ export default function RevenueTrendWidget({
     const priorKey = `prior_${currentKey}`;
     const activeMetric = METRICS.find((item) => item.key === metric)?.label || 'Revenue';
     const activeView = VIEWS.find((item) => item.key === view)?.key || 'trend';
+    const tzLabel = data?.window?.timezone || 'East Africa';
+    const priorToggleLabel = isHourly ? 'Prior day' : 'Prior window';
     const subtitle = activeView === 'trend'
-        ? `${activeMetric} by ${data?.bucket || 'auto'} bucket, with optional prior-window overlay.`
+        ? (isHourly
+            ? `${activeMetric} by hour (${tzLabel}) — ${data?.window?.is_today ? 'today' : 'selected day'} vs the full prior day.`
+            : `${activeMetric} by ${data?.bucket || 'auto'} bucket, with optional prior-window overlay.`)
         : activeView === 'peak'
             ? 'Sales concentration by East Africa hour, normalized to the reporting currency.'
             : 'New vs existing customer revenue, with unmatched revenue separated.';
@@ -240,7 +249,7 @@ export default function RevenueTrendWidget({
                             </button>
                         ))}
                     </div> : null}
-                    {activeView === 'trend' ? <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="group" aria-label="Trend bucket">
+                    {activeView === 'trend' && !isHourly ? <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="group" aria-label="Trend bucket">
                         {BUCKETS.map((item) => (
                             <button
                                 key={item.key}
@@ -259,7 +268,7 @@ export default function RevenueTrendWidget({
                             showComparison ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
                         }`}
                     >
-                        Prior window
+                        {priorToggleLabel}
                     </button> : null}
                 </div>
             )}
