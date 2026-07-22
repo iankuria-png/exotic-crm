@@ -160,6 +160,79 @@ class SmsProviderRoutingTest extends TestCase
         $this->assertSame('briq', $result['fallback_from']);
     }
 
+    public function test_ghana_provider_accepts_json_envelope_response(): void
+    {
+        Http::fake([
+            'clientlogin.bulksmsgh.com/*' => Http::response(['success' => true, 'code' => '1000', 'message' => 'sent'], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'ghana_bulk_sms',
+            'fallback_provider' => 'none',
+            'ghana_bulk_sms' => [
+                'base_url' => 'https://clientlogin.bulksmsgh.com/smsapi',
+                'api_key' => 'gh-key',
+                'sender_id' => 'EXOTICGH',
+            ],
+        ]);
+
+        $result = $service->sendSms('0244123456', 'JSON path', ['phone_prefix' => '233']);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('ghana_bulk_sms', $result['provider']);
+        $this->assertSame('1000', $result['actual_success_code']);
+    }
+
+    public function test_ghana_provider_json_envelope_with_wrong_code_is_failure(): void
+    {
+        Http::fake([
+            'clientlogin.bulksmsgh.com/*' => Http::response(['success' => true, 'code' => '1004'], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'ghana_bulk_sms',
+            'fallback_provider' => 'none',
+            'ghana_bulk_sms' => [
+                'base_url' => 'https://clientlogin.bulksmsgh.com/smsapi',
+                'api_key' => 'gh-key',
+                'sender_id' => 'EXOTICGH',
+            ],
+        ]);
+
+        $result = $service->sendSms('0244123456', 'Wrong code', ['phone_prefix' => '233']);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('1004', $result['actual_success_code']);
+    }
+
+    public function test_ghana_provider_still_accepts_plain_text_code(): void
+    {
+        Http::fake([
+            'clientlogin.bulksmsgh.com/*' => Http::response('1000|msg-id-42', 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'ghana_bulk_sms',
+            'fallback_provider' => 'none',
+            'ghana_bulk_sms' => [
+                'base_url' => 'https://clientlogin.bulksmsgh.com/smsapi',
+                'api_key' => 'gh-key',
+                'sender_id' => 'EXOTICGH',
+            ],
+        ]);
+
+        $result = $service->sendSms('0244123456', 'Plain path', ['phone_prefix' => '233']);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('1000', $result['actual_success_code']);
+    }
+
     public function test_legacy_flat_market_shape_still_resolves(): void
     {
         // Simulates a market saved under the pre-existing flat provider shape.

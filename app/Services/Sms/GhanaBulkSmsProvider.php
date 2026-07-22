@@ -6,7 +6,9 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * BulkSMS Ghana — https://bulksmsghana.com/developer/
- * GET {base_url}?key=&to=&msg=&sender_id=. Success response body starts with "1000".
+ * GET {base_url}?key=&to=&msg=&sender_id=. The gateway answers either with a
+ * plain status code ("1000") or a JSON envelope ({"success":true,"code":"1000"});
+ * both are treated as success when the code matches success_code.
  */
 class GhanaBulkSmsProvider implements SmsProviderInterface
 {
@@ -61,7 +63,22 @@ class GhanaBulkSmsProvider implements SmsProviderInterface
             ]);
 
         $body = trim($response->body());
-        $success = $response->successful() && SmsSuccessCode::matches($body, $successCode);
+        $decoded = json_decode($body, true);
+
+        // A JSON object means the gateway returned an envelope; a bare code like
+        // "1000" decodes to an int (not an array) and takes the plain-text path.
+        if (is_array($decoded)) {
+            $actualCode = isset($decoded['code']) ? trim((string) $decoded['code']) : null;
+            $flag = $decoded['success'] ?? $decoded['status'] ?? null;
+            $flag = is_string($flag) ? strtolower($flag) : $flag;
+            $flagOk = in_array($flag, [true, 1, '1', 'true', 'success'], true);
+
+            $success = $response->successful()
+                && ($actualCode !== null ? $actualCode === $successCode : $flagOk);
+        } else {
+            $success = $response->successful() && SmsSuccessCode::matches($body, $successCode);
+            $actualCode = $success ? $successCode : null;
+        }
 
         return [
             'success' => $success,
@@ -70,6 +87,7 @@ class GhanaBulkSmsProvider implements SmsProviderInterface
             'provider_response' => $body,
             'http_code' => $response->status(),
             'expected_success_code' => $successCode,
+            'actual_success_code' => $actualCode,
         ];
     }
 }
