@@ -431,6 +431,36 @@ export default function SmsRoutingPanel({
                                     ))}
                                 </select>
                             </div>
+                            <div>
+                                <label htmlFor="sms-test-provider" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Provider to test <span className="text-slate-400 font-normal">(optional)</span>
+                                </label>
+                                <select
+                                    id="sms-test-provider"
+                                    value={smsTestForm.provider ?? ''}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, provider: event.target.value || '' }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Market default (active provider)</option>
+                                    {options.map((provider) => (
+                                        <option key={provider.id} value={provider.id}>{provider.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-1 text-xs text-slate-500">Pick a specific gateway to test it directly, bypassing the market's active choice.</p>
+                            </div>
+                            <label htmlFor="sms-test-skip-fallback" className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-2.5">
+                                <input
+                                    id="sms-test-skip-fallback"
+                                    type="checkbox"
+                                    checked={Boolean(smsTestForm.skip_fallback)}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, skip_fallback: event.target.checked }))}
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                                />
+                                <span className="text-xs text-slate-600">
+                                    <span className="font-medium text-slate-800">Skip fallback</span> — send only through the chosen provider so its real
+                                    result isn't masked by a fallback. Recommended when testing a single gateway.
+                                </span>
+                            </label>
                             <input
                                 value={smsTestForm.phone}
                                 onChange={(event) => setSmsTestForm((current) => ({ ...current, phone: event.target.value }))}
@@ -482,7 +512,57 @@ export default function SmsRoutingPanel({
                                 {latestSmsTestResult.fallback_attempted ? (
                                     <p><span className="font-semibold text-slate-800">Fallback:</span> Attempted from {smsProviderLabel(latestSmsTestResult.fallback_from || smsProviderForm.active_provider)}</p>
                                 ) : null}
+                                {latestSmsTestResult.fallback_skipped ? (
+                                    <p><span className="font-semibold text-slate-800">Fallback:</span> Skipped (single-provider test)</p>
+                                ) : null}
                             </div>
+
+                            {Array.isArray(latestSmsTestResult.trace?.attempts) && latestSmsTestResult.trace.attempts.length > 0 ? (
+                                <details className="mt-3 rounded-md border border-slate-200 bg-white">
+                                    <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold text-slate-700">
+                                        Diagnostics ({latestSmsTestResult.trace.attempts.length} attempt{latestSmsTestResult.trace.attempts.length === 1 ? '' : 's'})
+                                    </summary>
+                                    <div className="space-y-2 border-t border-slate-200 p-3">
+                                        {latestSmsTestResult.trace.attempts.map((attempt, index) => (
+                                            <div key={`${attempt.provider}-${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+                                                <div className="mb-1 flex items-center justify-between gap-2">
+                                                    <span className="font-semibold text-slate-800">
+                                                        {attempt.provider_label || attempt.provider}
+                                                        <span className="ml-1 font-normal text-slate-400">({attempt.role})</span>
+                                                    </span>
+                                                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusChip(attempt.success ? 'success' : 'failed')}`}>
+                                                        {attempt.success ? 'sent' : 'failed'}
+                                                    </span>
+                                                </div>
+                                                <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5">
+                                                    <dt className="text-slate-500">Configured</dt>
+                                                    <dd>{attempt.configured ? 'yes' : 'no'}</dd>
+                                                    <dt className="text-slate-500">HTTP</dt>
+                                                    <dd>{attempt.http_code ?? '--'}</dd>
+                                                    {attempt.expected_success_code != null ? (
+                                                        <>
+                                                            <dt className="text-slate-500">Code</dt>
+                                                            <dd>expected {attempt.expected_success_code}, got {attempt.actual_success_code ?? '--'}</dd>
+                                                        </>
+                                                    ) : null}
+                                                    {attempt.request && Object.keys(attempt.request).length > 0 ? (
+                                                        <>
+                                                            <dt className="text-slate-500">Request</dt>
+                                                            <dd className="break-all">
+                                                                {Object.entries(attempt.request).map(([key, value]) => (
+                                                                    <span key={key} className="mr-2 inline-block"><span className="text-slate-500">{key}=</span>{String(value)}</span>
+                                                                ))}
+                                                            </dd>
+                                                        </>
+                                                    ) : null}
+                                                    <dt className="text-slate-500">Response</dt>
+                                                    <dd className="break-all">{attempt.provider_response || '--'}</dd>
+                                                </dl>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </details>
+                            ) : null}
                         </section>
                     ) : null}
                 </div>

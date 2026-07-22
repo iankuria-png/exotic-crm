@@ -233,6 +233,68 @@ class SmsProviderRoutingTest extends TestCase
         $this->assertSame('1000', $result['actual_success_code']);
     }
 
+    public function test_skip_fallback_does_not_invoke_the_fallback_provider(): void
+    {
+        Http::fake([
+            'karibu.briq.tz/*' => Http::response('server error', 500),
+            'api.africastalking.com/*' => Http::response(['ok' => true], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'briq',
+            'fallback_provider' => 'africastalking',
+            'briq' => ['base_url' => 'https://karibu.briq.tz', 'api_key' => 'k', 'sender_id' => 'TZ'],
+            'africastalking' => ['username' => 'sandbox', 'api_key' => 'at-key', 'sender_id' => 'EXOTIC'],
+        ]);
+
+        $result = $service->sendSms('0712345678', 'Isolated test', [
+            'phone_prefix' => '255',
+            'skip_fallback' => true,
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('briq', $result['provider']);
+        $this->assertFalse($result['fallback_attempted']);
+        $this->assertTrue($result['fallback_skipped']);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'africastalking'));
+    }
+
+    public function test_trace_records_attempts_and_never_leaks_secrets(): void
+    {
+        Http::fake([
+            'karibu.briq.tz/*' => Http::response('server error', 500),
+            'api.africastalking.com/*' => Http::response(['ok' => true], 200),
+        ]);
+
+        $service = $this->service();
+        $service->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'briq',
+            'fallback_provider' => 'africastalking',
+            'briq' => ['base_url' => 'https://karibu.briq.tz', 'api_key' => 'top-secret', 'sender_id' => 'TZ'],
+            'africastalking' => ['username' => 'sandbox', 'api_key' => 'at-secret', 'sender_id' => 'EXOTIC'],
+        ]);
+
+        $result = $service->sendSms('0712345678', 'Trace me', [
+            'phone_prefix' => '255',
+            'trace' => true,
+        ]);
+
+        $this->assertArrayHasKey('trace', $result);
+        $this->assertCount(2, $result['trace']['attempts']);
+        $this->assertSame('briq', $result['trace']['attempts'][0]['provider']);
+        $this->assertSame('active', $result['trace']['attempts'][0]['role']);
+        $this->assertSame('fallback', $result['trace']['attempts'][1]['role']);
+
+        // Secret redaction: api_key must be a set/unset flag, never the value.
+        $this->assertSame('set', $result['trace']['attempts'][0]['request']['api_key']);
+        $encoded = json_encode($result['trace']);
+        $this->assertStringNotContainsString('top-secret', $encoded);
+        $this->assertStringNotContainsString('at-secret', $encoded);
+    }
+
     public function test_legacy_flat_market_shape_still_resolves(): void
     {
         // Simulates a market saved under the pre-existing flat provider shape.

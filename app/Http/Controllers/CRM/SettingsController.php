@@ -803,6 +803,8 @@ class SettingsController extends Controller
             'phone' => 'required|string|max:20',
             'message' => 'required|string|max:500',
             'market_id' => 'nullable|integer|exists:platforms,id',
+            'provider' => ['nullable', Rule::in($this->notificationService->smsProviderIds())],
+            'skip_fallback' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -810,14 +812,24 @@ class SettingsController extends Controller
             ? Platform::query()->find((int) $validated['market_id'])
             : null;
 
+        $context = [
+            'platform_id' => $market?->id,
+            'phone_prefix' => $market?->phone_prefix ?: null,
+            'purpose' => 'settings_provider_test',
+            'skip_fallback' => (bool) ($validated['skip_fallback'] ?? false),
+            'trace' => true,
+        ];
+
+        // When testing a specific provider, target it directly so the result
+        // reflects that provider and not the market's active default.
+        if (!empty($validated['provider'])) {
+            $context['sms_provider'] = $validated['provider'];
+        }
+
         $result = $this->notificationService->sendSms(
             $validated['phone'],
             $validated['message'],
-            [
-                'platform_id' => $market?->id,
-                'phone_prefix' => $market?->phone_prefix ?: null,
-                'purpose' => 'settings_provider_test',
-            ]
+            $context
         );
 
         $this->auditService->fromRequest(

@@ -1279,6 +1279,8 @@ function IntegrationsWorkspace({
     const [smsProviderForm, setSmsProviderForm] = useState(defaultSmsProviderForm());
     const [smsTestForm, setSmsTestForm] = useState({
         market_id: null,
+        provider: '',
+        skip_fallback: false,
         phone: '',
         message: 'This is a test message from ExoticCRM settings.',
         reason: 'SMS provider test dispatch',
@@ -6063,6 +6065,8 @@ function IntegrationsWorkspace({
                 onConfirm={() => {
                     testSmsProviderMutation.mutate({
                         market_id: smsTestForm.market_id || null,
+                        provider: smsTestForm.provider || null,
+                        skip_fallback: Boolean(smsTestForm.skip_fallback),
                         phone: smsTestForm.phone.trim(),
                         message: smsTestForm.message.trim(),
                         reason: smsTestForm.reason.trim(),
@@ -6072,8 +6076,9 @@ function IntegrationsWorkspace({
                 isPending={testSmsProviderMutation.isPending}
             >
                 <div className="space-y-1 text-sm text-slate-600">
-                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsTestProvider, smsProviderOptions)}</p>
+                    <p><span className="font-semibold text-slate-800">Provider:</span> {smsTestForm.provider ? smsProviderLabel(smsTestForm.provider, smsProviderOptions) : `${smsProviderLabel(smsTestProvider, smsProviderOptions)} (market default)`}</p>
                     <p><span className="font-semibold text-slate-800">Market:</span> {selectedSmsTestPlatform?.platform_name || 'Global routing'}</p>
+                    <p><span className="font-semibold text-slate-800">Fallback:</span> {smsTestForm.skip_fallback ? 'Skipped (single-provider test)' : 'Enabled if configured'}</p>
                     <p><span className="font-semibold text-slate-800">Phone:</span> {smsTestForm.phone}</p>
                     <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {smsTestForm.message}</p>
                 </div>

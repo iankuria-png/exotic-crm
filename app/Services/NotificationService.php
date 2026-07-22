@@ -121,46 +121,126 @@ class NotificationService
             ];
         }
 
+        // Per-dispatch controls (used mainly by the settings Test Dispatch panel):
+        // skip_fallback runs only the chosen provider; trace attaches a redacted
+        // diagnostics record of each attempt.
+        $skipFallback = (bool) ($context['skip_fallback'] ?? false);
+        $collectTrace = (bool) ($context['trace'] ?? false);
+        $attempts = [];
+
         $activeProviderId = (string) ($context['sms_provider'] ?? $smsConfig['active_provider'] ?? 'legacy_gateway');
         $activeResult = $this->dispatchViaProvider($activeProviderId, $normalizedPhone, $message, $smsConfig, $context);
-
-        if ($activeResult['success']) {
-            return array_merge($activeResult, [
-                'phone' => $normalizedPhone,
-                'fallback_attempted' => false,
-            ]);
+        if ($collectTrace) {
+            $attempts[] = $this->traceAttempt($activeProviderId, 'active', $activeResult, $smsConfig);
         }
 
         $fallbackProviderId = (string) ($smsConfig['fallback_provider'] ?? '');
-        $canFallback = $fallbackProviderId !== ''
+        $fallbackConfigured = $fallbackProviderId !== ''
             && $fallbackProviderId !== 'none'
             && $fallbackProviderId !== $activeProviderId;
 
-        if (!$canFallback) {
-            return [
-                ...$activeResult,
+        if ($activeResult['success']) {
+            $out = array_merge($activeResult, [
                 'phone' => $normalizedPhone,
                 'fallback_attempted' => false,
+            ]);
+        } elseif ($skipFallback || !$fallbackConfigured) {
+            $out = array_merge($activeResult, [
+                'phone' => $normalizedPhone,
+                'fallback_attempted' => false,
+                'fallback_skipped' => $skipFallback && $fallbackConfigured,
+            ]);
+        } else {
+            $fallbackResult = $this->dispatchViaProvider($fallbackProviderId, $normalizedPhone, $message, $smsConfig, $context);
+            if ($collectTrace) {
+                $attempts[] = $this->traceAttempt($fallbackProviderId, 'fallback', $fallbackResult, $smsConfig);
+            }
+
+            if ($fallbackResult['success']) {
+                $out = array_merge($fallbackResult, [
+                    'phone' => $normalizedPhone,
+                    'fallback_attempted' => true,
+                    'fallback_from' => $activeProviderId,
+                ]);
+            } else {
+                $out = array_merge($activeResult, [
+                    'phone' => $normalizedPhone,
+                    'fallback_attempted' => true,
+                    'fallback_provider' => $fallbackProviderId,
+                    'fallback_response' => $fallbackResult['provider_response'] ?? 'Fallback failed',
+                ]);
+            }
+        }
+
+        if ($collectTrace) {
+            $out['trace'] = [
+                'normalized_phone' => $normalizedPhone,
+                'requested_provider' => $activeProviderId,
+                'active_provider' => (string) ($smsConfig['active_provider'] ?? ''),
+                'fallback_provider' => $fallbackProviderId !== '' ? $fallbackProviderId : 'none',
+                'skip_fallback' => $skipFallback,
+                'attempts' => $attempts,
             ];
         }
 
-        $fallbackResult = $this->dispatchViaProvider($fallbackProviderId, $normalizedPhone, $message, $smsConfig, $context);
+        return $out;
+    }
 
-        if ($fallbackResult['success']) {
-            return array_merge($fallbackResult, [
-                'phone' => $normalizedPhone,
-                'fallback_attempted' => true,
-                'fallback_from' => $activeProviderId,
-            ]);
+    /**
+     * Build a redacted, structured record of a single dispatch attempt for the
+     * on-demand diagnostics trace. Secrets are never included.
+     */
+    private function traceAttempt(string $providerId, string $role, array $result, array $smsConfig): array
+    {
+        $provider = $this->providers[$providerId] ?? null;
+        $providerConfig = is_array($smsConfig[$providerId] ?? null) ? $smsConfig[$providerId] : [];
+
+        $response = $result['provider_response'] ?? null;
+        if (is_string($response) && strlen($response) > 500) {
+            $response = substr($response, 0, 500) . '…';
         }
 
         return [
-            ...$activeResult,
-            'phone' => $normalizedPhone,
-            'fallback_attempted' => true,
-            'fallback_provider' => $fallbackProviderId,
-            'fallback_response' => $fallbackResult['provider_response'] ?? 'Fallback failed',
+            'provider' => $providerId,
+            'provider_label' => $provider?->label() ?? $providerId,
+            'role' => $role, // active | fallback
+            'configured' => $provider ? $provider->configured($providerConfig) : false,
+            'request' => $this->redactProviderConfig($providerId, $providerConfig),
+            'success' => (bool) ($result['success'] ?? false),
+            'status' => $result['status'] ?? null,
+            'http_code' => $result['http_code'] ?? null,
+            'expected_success_code' => $result['expected_success_code'] ?? null,
+            'actual_success_code' => $result['actual_success_code'] ?? null,
+            'provider_response' => $response,
         ];
+    }
+
+    /**
+     * A safe echo of the config a provider would use: non-secret fields verbatim,
+     * secret fields reduced to a set/unset flag.
+     */
+    private function redactProviderConfig(string $providerId, array $providerConfig): array
+    {
+        $provider = $this->providers[$providerId] ?? null;
+        if (!$provider) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($provider->credentialFields() as $field) {
+            $key = $field['key'] ?? null;
+            if (!$key) {
+                continue;
+            }
+
+            if ($this->isSecretField($field)) {
+                $out[$key] = !empty($providerConfig[$key]) ? 'set' : 'not set';
+            } else {
+                $out[$key] = $providerConfig[$key] ?? ($field['default'] ?? null);
+            }
+        }
+
+        return $out;
     }
 
     public function currentSmsConfig(bool $masked = true): array
