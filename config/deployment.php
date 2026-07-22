@@ -13,6 +13,7 @@ return [
     'history_path' => env('DEPLOY_HISTORY_PATH', storage_path('app/deployment/history.json')),
     'history_max_entries' => env('DEPLOY_HISTORY_MAX', 20),
     'db_backups_path' => env('DEPLOY_DB_BACKUPS_PATH', storage_path('app/deployment/backups')),
+    'db_backups_retention' => (int) env('DEPLOY_DB_BACKUPS_RETENTION', 10),
     'github' => [
         'owner' => env('GITHUB_REPO_OWNER'),
         'repo' => env('GITHUB_REPO_NAME'),

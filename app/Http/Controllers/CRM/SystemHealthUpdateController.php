@@ -107,6 +107,23 @@ class SystemHealthUpdateController extends Controller
         return response()->json(['message' => 'Backup deleted.']);
     }
 
+    public function deleteBackups(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'filenames' => 'required|array|min:1',
+            'filenames.*' => 'required|string|max:255',
+        ]);
+
+        $deleted = $this->deploymentStatusService->deleteBackups($validated['filenames']);
+
+        return response()->json([
+            'message' => count($deleted) === 1
+                ? '1 backup deleted.'
+                : count($deleted) . ' backups deleted.',
+            'deleted' => $deleted,
+        ]);
+    }
+
     public function rollback(Request $request): JsonResponse
     {
         $validated = $request->validate([

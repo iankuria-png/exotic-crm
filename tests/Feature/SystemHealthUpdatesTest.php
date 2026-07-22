@@ -13,6 +13,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Support\CrmAuditAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -533,5 +534,89 @@ BASH;
         }
 
         $this->fail("Deployment status did not reach [{$expectedState}] in time.");
+    }
+
+    private function configureBackupDir(int $retention = 10): string
+    {
+        $dir = storage_path('app/testing/backups-' . Str::random(10));
+        File::ensureDirectoryExists($dir);
+        $this->cleanupDirectories[] = $dir;
+
+        config([
+            'deployment.db_backups_path' => $dir,
+            'deployment.db_backups_retention' => $retention,
+        ]);
+
+        return $dir;
+    }
+
+    private function seedBackupFiles(string $dir, int $count, int $baseTime = 1_700_000_000): array
+    {
+        $names = [];
+        for ($i = 0; $i < $count; $i++) {
+            $name = sprintf('backup_%02d.sql', $i);
+            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            File::put($path, "-- dump {$i}\n");
+            touch($path, $baseTime + $i); // higher index = newer
+            $names[] = $name;
+        }
+
+        return $names;
+    }
+
+    public function test_uploading_backup_prunes_to_retention_limit(): void
+    {
+        $user = $this->createUser('admin');
+        $dir = $this->configureBackupDir(10);
+
+        // 10 existing (older) backups; the upload becomes the newest.
+        $existing = $this->seedBackupFiles($dir, 10);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/settings/system-health/updates/upload-backup', [
+            'backup' => UploadedFile::fake()->createWithContent('fresh.sql', "-- fresh\n"),
+        ]);
+
+        $response->assertOk();
+
+        $remaining = collect(File::files($dir))->map->getFilename()->all();
+
+        $this->assertCount(10, $remaining, 'Only the 10 most recent backups should be retained.');
+        $this->assertContains('fresh.sql', $remaining, 'The just-uploaded backup must survive pruning.');
+        $this->assertNotContains($existing[0], $remaining, 'The oldest backup should be pruned.');
+    }
+
+    public function test_bulk_delete_removes_selected_backups(): void
+    {
+        $user = $this->createUser('admin');
+        $dir = $this->configureBackupDir(10);
+        $names = $this->seedBackupFiles($dir, 5);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/settings/system-health/updates/backups/bulk-delete', [
+            'filenames' => [$names[0], $names[1], 'does-not-exist.sql'],
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('deleted', [$names[0], $names[1]]);
+
+        $remaining = collect(File::files($dir))->map->getFilename()->all();
+        $this->assertCount(3, $remaining);
+        $this->assertNotContains($names[0], $remaining);
+        $this->assertNotContains($names[1], $remaining);
+    }
+
+    public function test_bulk_delete_requires_admin(): void
+    {
+        $user = $this->createUser('sub_admin');
+        $this->configureBackupDir(10);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/crm/settings/system-health/updates/backups/bulk-delete', [
+            'filenames' => ['backup_00.sql'],
+        ])->assertForbidden();
     }
 }

@@ -4,7 +4,7 @@ import api from '../services/api';
 import { useToast } from './ToastProvider';
 
 function statusChip(status) {
-    if (['connected', 'healthy', 'success', 'complete', 'sent'].includes(status)) {
+    if (['connected', 'healthy', 'success', 'complete', 'completed', 'sent', 'active', 'ok'].includes(status)) {
         return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     }
     if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'processing', 'stale', 'missing', 'missing_credentials', 'skipped', 'running', 'idle', 'rolling_back', 'inactive'].includes(status)) {
@@ -41,6 +41,7 @@ function extractProfileCount(latestResult, platform) {
 }
 
 const BACKUP_PREVIEW_LIMIT = 3;
+const BACKUP_RETENTION_LIMIT = 10;
 
 function CheckRow({ label, ok, detail }) {
     return (
@@ -86,6 +87,7 @@ export default function SystemHealthWorkspace({
     const [selectedBackup, setSelectedBackup] = useState('');
     const [backupUploading, setBackupUploading] = useState(false);
     const [backupsExpanded, setBackupsExpanded] = useState(false);
+    const [selectedBackupFiles, setSelectedBackupFiles] = useState(() => new Set());
 
     const settingsQuery = useQuery({
         queryKey: ['settings-integrations'],
@@ -262,12 +264,30 @@ export default function SystemHealthWorkspace({
 
     const deleteBackupMutation = useMutation({
         mutationFn: (filename) => api.delete(`/crm/settings/system-health/updates/backups/${encodeURIComponent(filename)}`).then((r) => r.data),
-        onSuccess: () => {
+        onSuccess: (_data, filename) => {
             backupsQuery.refetch();
+            setSelectedBackupFiles((prev) => {
+                if (!prev.has(filename)) return prev;
+                const next = new Set(prev);
+                next.delete(filename);
+                return next;
+            });
             toast.success('Backup deleted.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Unable to delete backup.');
+        },
+    });
+
+    const bulkDeleteBackupsMutation = useMutation({
+        mutationFn: (filenames) => api.post('/crm/settings/system-health/updates/backups/bulk-delete', { filenames }).then((r) => r.data),
+        onSuccess: (data) => {
+            backupsQuery.refetch();
+            setSelectedBackupFiles(new Set());
+            toast.success(data?.message || 'Backups deleted.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to delete backups.');
         },
     });
 
@@ -276,6 +296,33 @@ export default function SystemHealthWorkspace({
         ? databaseBackups
         : databaseBackups.slice(0, BACKUP_PREVIEW_LIMIT);
     const hiddenDatabaseBackupCount = Math.max(0, databaseBackups.length - BACKUP_PREVIEW_LIMIT);
+    const selectedBackupCount = selectedBackupFiles.size;
+    const visibleSelectedCount = visibleDatabaseBackups.filter((b) => selectedBackupFiles.has(b.filename)).length;
+    const allVisibleSelected = visibleDatabaseBackups.length > 0 && visibleSelectedCount === visibleDatabaseBackups.length;
+
+    const toggleBackupSelection = (filename) => {
+        setSelectedBackupFiles((prev) => {
+            const next = new Set(prev);
+            if (next.has(filename)) {
+                next.delete(filename);
+            } else {
+                next.add(filename);
+            }
+            return next;
+        });
+    };
+
+    const toggleSelectAllVisibleBackups = () => {
+        setSelectedBackupFiles((prev) => {
+            const next = new Set(prev);
+            if (allVisibleSelected) {
+                visibleDatabaseBackups.forEach((b) => next.delete(b.filename));
+            } else {
+                visibleDatabaseBackups.forEach((b) => next.add(b.filename));
+            }
+            return next;
+        });
+    };
 
     const queueStatusQuery = useQuery({
         queryKey: ['queue-worker-status'],
@@ -1365,7 +1412,7 @@ export default function SystemHealthWorkspace({
                                     <div className="flex items-center justify-between gap-3">
                                         <div>
                                             <p className="text-sm font-semibold text-slate-900">Database Backups</p>
-                                            <p className="mt-1 text-xs text-slate-500">Upload <code className="text-xs">.sql</code> backups from cPanel to use during rollbacks.</p>
+                                            <p className="mt-1 text-xs text-slate-500">Upload <code className="text-xs">.sql</code> backups from cPanel to use during rollbacks. Only the {BACKUP_RETENTION_LIMIT} most recent are kept &mdash; older ones are removed automatically on each upload.</p>
                                         </div>
                                         <label className="crm-btn-secondary px-3 py-2 cursor-pointer">
                                             {backupUploading ? 'Uploading...' : 'Upload .sql'}
@@ -1378,16 +1425,52 @@ export default function SystemHealthWorkspace({
                                             />
                                         </label>
                                     </div>
+                                    {databaseBackups.length > 0 && (
+                                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-600">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={allVisibleSelected}
+                                                    ref={(el) => { if (el) el.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected; }}
+                                                    onChange={toggleSelectAllVisibleBackups}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                                />
+                                                {selectedBackupCount > 0 ? `${selectedBackupCount} selected` : 'Select all'}
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const targets = Array.from(selectedBackupFiles);
+                                                    if (targets.length && window.confirm(`Delete ${targets.length} selected backup${targets.length === 1 ? '' : 's'}? This cannot be undone.`)) {
+                                                        bulkDeleteBackupsMutation.mutate(targets);
+                                                    }
+                                                }}
+                                                disabled={selectedBackupCount === 0 || bulkDeleteBackupsMutation.isPending}
+                                                className="shrink-0 rounded-md border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {bulkDeleteBackupsMutation.isPending ? 'Deleting...' : `Delete selected${selectedBackupCount > 0 ? ` (${selectedBackupCount})` : ''}`}
+                                            </button>
+                                        </div>
+                                    )}
                                     <div id="database-backup-list" className="mt-3 space-y-2">
                                         {backupsQuery.isLoading ? (
                                             <p className="text-xs text-slate-500">Loading backups...</p>
                                         ) : databaseBackups.length ? (
                                             <>
                                                 {visibleDatabaseBackups.map((b) => (
-                                                    <div key={b.filename} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                        <div className="min-w-0">
-                                                            <p className="truncate text-sm font-medium text-slate-900">{b.filename}</p>
-                                                            <p className="text-xs text-slate-500">{b.size_human} &middot; {formatDateTime(b.modified_at)}</p>
+                                                    <div key={b.filename} className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 ${selectedBackupFiles.has(b.filename) ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                                                        <div className="flex min-w-0 items-center gap-3">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedBackupFiles.has(b.filename)}
+                                                                onChange={() => toggleBackupSelection(b.filename)}
+                                                                aria-label={`Select ${b.filename}`}
+                                                                className="h-4 w-4 shrink-0 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                                            />
+                                                            <div className="min-w-0">
+                                                                <p className="truncate text-sm font-medium text-slate-900">{b.filename}</p>
+                                                                <p className="text-xs text-slate-500">{b.size_human} &middot; {formatDateTime(b.modified_at)}</p>
+                                                            </div>
                                                         </div>
                                                         <button
                                                             type="button"

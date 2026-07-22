@@ -625,10 +625,14 @@ class DeploymentStatusService
 
         $fullPath = $dir . DIRECTORY_SEPARATOR . $filename;
 
+        $pruned = $this->pruneBackups($filename);
+
         return [
             'filename' => $filename,
             'size' => filesize($fullPath),
             'size_human' => $this->humanFileSize(filesize($fullPath)),
+            'pruned' => $pruned,
+            'retention' => $this->backupsRetention(),
         ];
     }
 
@@ -644,6 +648,82 @@ class DeploymentStatusService
         }
 
         File::delete($path);
+    }
+
+    /**
+     * Delete multiple backups at once. Missing files are ignored so the
+     * operation is idempotent from the caller's perspective.
+     *
+     * @param  array<int, string>  $filenames
+     * @return array<int, string>  the filenames actually deleted
+     */
+    public function deleteBackups(array $filenames): array
+    {
+        $dir = $this->backupsPath();
+        $deleted = [];
+
+        foreach ($filenames as $filename) {
+            $safe = basename((string) $filename);
+            if ($safe === '' || strtolower(pathinfo($safe, PATHINFO_EXTENSION)) !== 'sql') {
+                continue;
+            }
+
+            $path = $dir . DIRECTORY_SEPARATOR . $safe;
+            if (is_file($path) && File::delete($path)) {
+                $deleted[] = $safe;
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * Enforce the backup retention cap: keep the newest N .sql backups and
+     * delete the rest. Files named in $keepFilenames are always retained
+     * (e.g. the backup that was just uploaded).
+     *
+     * @param  string|array<int, string>  $keepFilenames
+     * @return array<int, string>  the filenames pruned
+     */
+    public function pruneBackups($keepFilenames = []): array
+    {
+        $retention = $this->backupsRetention();
+        if ($retention <= 0) {
+            return [];
+        }
+
+        $dir = $this->backupsPath();
+        if (!is_dir($dir)) {
+            return [];
+        }
+
+        $keep = collect(is_array($keepFilenames) ? $keepFilenames : [$keepFilenames])
+            ->map(fn ($name) => basename((string) $name))
+            ->filter()
+            ->all();
+
+        $files = collect(File::files($dir))
+            ->filter(fn ($file) => strtolower($file->getExtension()) === 'sql')
+            ->sortByDesc(fn ($file) => $file->getMTime())
+            ->values();
+
+        $pruned = [];
+        $retained = 0;
+
+        foreach ($files as $file) {
+            $name = $file->getFilename();
+
+            if (in_array($name, $keep, true) || $retained < $retention) {
+                $retained++;
+                continue;
+            }
+
+            if (File::delete($file->getPathname())) {
+                $pruned[] = $name;
+            }
+        }
+
+        return $pruned;
     }
 
     public function startRollback(string $deploymentId, ?User $user = null, ?string $backupFilename = null): array
@@ -796,6 +876,11 @@ class DeploymentStatusService
     private function backupsPath(): string
     {
         return (string) config('deployment.db_backups_path', storage_path('app/deployment/backups'));
+    }
+
+    private function backupsRetention(): int
+    {
+        return max(0, (int) config('deployment.db_backups_retention', 10));
     }
 
     private function humanFileSize(int $bytes): string
