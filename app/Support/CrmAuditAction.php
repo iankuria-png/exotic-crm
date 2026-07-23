@@ -57,6 +57,9 @@ final class CrmAuditAction
     public const WHATSAPP_SENDER_REPAIR_STARTED = 'whatsapp_sender_repair_started';
     public const WHATSAPP_SENDER_LOGGED_OUT = 'whatsapp_sender_logged_out';
     public const WHATSAPP_AUTH_BLOB_FETCH = 'whatsapp_auth_blob_fetch';
+    public const LIFECYCLE_SMS_SENT = 'lifecycle_sms_sent';
+    public const LIFECYCLE_SMS_FAILED = 'lifecycle_sms_failed';
+    public const LIFECYCLE_SMS_CONFIG_UPDATE = 'lifecycle_sms_config_update';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
     public const RENEWAL_WHATSAPP_SENT = 'renewal_whatsapp_sent';

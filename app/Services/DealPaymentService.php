@@ -493,6 +493,50 @@ class DealPaymentService
         ];
     }
 
+    /**
+     * Request-free payment creation for a link-bearing lifecycle send. Mirrors
+     * the `method = 'link'` payment shape from initiatePaymentForDeal but never
+     * touches the HTTP/STK paths and dispatches nothing itself.
+     *
+     * IMPORTANT: this payment must carry NO payment_data.duration_days —
+     * SubscriptionProvisioningService reads that key FIRST and it would silently
+     * override the (possibly bonus-inflated) deal.duration_days on activation.
+     */
+    public function createLifecycleLinkPayment(Deal $deal, Client $client, array $context = []): Payment
+    {
+        $client->loadMissing('platform');
+
+        $phonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
+        $phone = PhoneNormalizer::normalize($context['phone'] ?? $client->phone_normalized, $phonePrefix);
+        if (!$phone) {
+            throw new \InvalidArgumentException('Client has no valid phone number for a lifecycle payment link.');
+        }
+
+        return Payment::create([
+            'platform_id' => (int) $deal->platform_id,
+            'product_id' => $deal->product_id,
+            'deal_id' => (int) $deal->id,
+            'client_id' => (int) $client->id,
+            'phone' => $phone,
+            'amount' => (float) ($deal->amount ?? 0),
+            'currency' => $deal->currency ?: ($client->platform?->currency_code ?: 'KES'),
+            'transaction_uuid' => 'lifecycle_' . $deal->id . '_' . now()->timestamp,
+            'transaction_reference' => 'LIFECYCLE-' . $deal->id . '-' . now()->format('YmdHis'),
+            'status' => 'initiated',
+            'duration' => $deal->duration,
+            'subscription_lifecycle' => $deal->subscription_lifecycle,
+            'subscription_lifecycle_source' => $deal->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $deal->subscription_lifecycle_reason,
+            'raw_payload' => [
+                'source' => 'crm_lifecycle',
+                'method' => 'link',
+                'deal_id' => (int) $deal->id,
+                'lifecycle_flow' => (string) ($context['flow'] ?? ''),
+                'actor_id' => $context['actor_id'] ?? null,
+            ],
+        ]);
+    }
+
     public function initiatePaymentForDeal(
         Deal $deal,
         Client $client,

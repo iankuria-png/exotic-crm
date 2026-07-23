@@ -69,6 +69,11 @@ class Payment extends Model
 
                 SendPaymentFailureAlertsJob::dispatch($paymentId, $eventKey, 'payment_model_saved')
                     ->onQueue('alerts');
+
+                // Parallel consumer: client-facing recovery SMS (gated per
+                // market inside the job — a disabled market is a silent skip).
+                \App\Jobs\SendLifecycleRecoverySmsJob::dispatch($paymentId, 'payment_model_saved')
+                    ->onQueue('alerts');
             });
         });
         static::deleted($refresh);

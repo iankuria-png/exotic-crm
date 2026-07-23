@@ -194,6 +194,26 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_run_renewals.log'));
 
+        // Lifecycle SMS sweeps (onboarding welcomes, recovery reconcile,
+        // reactivation win-backs). Hourly; the service's dedup + state gates +
+        // quiet hours make repeated runs idempotent, and nothing sends unless
+        // a market is explicitly enabled in Settings → SMS Routing → Lifecycle.
+        $schedule->command('crm:run-lifecycle-sms')
+            ->name('crm_run_lifecycle_sms')
+            ->hourlyAt(35)
+            ->withoutOverlapping(55)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_lifecycle_sms.log'));
+
+        // Per-client analytics snapshot powering dynamic lifecycle copy
+        // ("your profile got 145 views last week") — one bulk call per market.
+        $schedule->command('crm:snapshot-profile-metrics')
+            ->name('crm_snapshot_profile_metrics')
+            ->dailyAt('06:10')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_lifecycle_metrics.log'));
+
         // Push campaign phased dispatcher: activates scheduled campaigns and queues next 24h items.
         $schedule->command('crm:dispatch-scheduled-pushes')
             ->name('crm_dispatch_scheduled_pushes')

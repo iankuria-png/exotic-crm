@@ -122,7 +122,34 @@ function ActionChip({ onClick, variant = 'secondary', disabled = false, children
     );
 }
 
-function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpenChat }) {
+function timeAgoShort(iso) {
+    if (!iso) return '';
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m ago`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+    return `${Math.round(seconds / 86400)}d ago`;
+}
+
+// Automation-state chip: shows whether the lifecycle engine (or a colleague)
+// already messaged this client for a flow, so nobody double-sends.
+function LifecycleBadge({ entry, label }) {
+    if (!entry) return null;
+    const sent = entry.status === 'sent';
+    const tone = sent
+        ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+        : 'bg-amber-50 text-amber-700 ring-amber-600/20';
+    return (
+        <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${tone}`}
+            title={`${label} ${entry.status} ${timeAgoShort(entry.sent_at)} (${entry.source === 'manual' ? 'manual' : 'auto'})`}
+        >
+            <span className={`h-1.5 w-1.5 rounded-full ${sent ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            {label} {sent ? 'sent' : entry.status} {timeAgoShort(entry.sent_at)}
+        </span>
+    );
+}
+
+function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpenChat, onSendWelcome, welcomePending }) {
     return (
         <article className={`flex flex-col gap-2 border-l-4 px-4 py-3 transition hover:bg-slate-50 ${BUCKET_BORDER(row.sla_bucket)}`}>
             <div className="flex items-center justify-between gap-3">
@@ -138,10 +165,22 @@ function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpen
                             {row.platform.name}
                         </span>
                     ) : null}
+                    <LifecycleBadge entry={row.lifecycle?.onboarding} label="Welcome" />
+                    {row.last_online_at ? (
+                        <span className="truncate text-[10px] text-slate-400">online {timeAgoShort(row.last_online_at)}</span>
+                    ) : null}
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
                 <ActionChip variant="primary" onClick={onMarkContacted}>Mark contacted</ActionChip>
+                {row.welcome_eligible ? (
+                    <ActionChip
+                        onClick={onSendWelcome}
+                        disabled={welcomePending || row.lifecycle?.onboarding?.status === 'sent'}
+                    >
+                        {row.lifecycle?.onboarding?.status === 'sent' ? 'Welcome sent' : 'Send welcome'}
+                    </ActionChip>
+                ) : null}
                 {row.sb_user_id ? <ActionChip onClick={onOpenChat}>Open chat</ActionChip> : null}
                 <ActionChip onClick={onOpenClient}>Open client</ActionChip>
                 <ActionChip variant="danger" onClick={onCloseCase}>Close case</ActionChip>
@@ -150,7 +189,7 @@ function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpen
     );
 }
 
-function FailedPaymentCard({ row, onRetryStk, onSendLink, onOpenClient, onClosePayment }) {
+function FailedPaymentCard({ row, onRetryStk, onSendLink, onSendRecovery, recoveryPending, onOpenClient, onClosePayment }) {
     const amount = typeof row.amount === 'number' ? row.amount.toLocaleString() : row.amount;
     return (
         <article className={`flex flex-col gap-2 border-l-4 px-4 py-3 transition hover:bg-slate-50 ${BUCKET_BORDER(row.sla_bucket)}`}>
@@ -169,6 +208,12 @@ function FailedPaymentCard({ row, onRetryStk, onSendLink, onOpenClient, onCloseP
                             {row.client.name}
                         </button>
                     ) : null}
+                    <LifecycleBadge entry={row.lifecycle?.recovery} label="Recovery" />
+                    {row.is_manual_payment ? (
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 ring-1 ring-inset ring-slate-300" title="Manual payment awaiting review — recovery SMS is suppressed for this payment.">
+                            Manual review
+                        </span>
+                    ) : null}
                 </div>
             </div>
             {row.failure_reason ? (
@@ -177,6 +222,14 @@ function FailedPaymentCard({ row, onRetryStk, onSendLink, onOpenClient, onCloseP
             <div className="flex flex-wrap items-center gap-2">
                 <ActionChip variant="primary" onClick={onRetryStk}>Retry STK</ActionChip>
                 <ActionChip onClick={onSendLink}>Send link</ActionChip>
+                {!row.is_manual_payment ? (
+                    <ActionChip
+                        onClick={onSendRecovery}
+                        disabled={recoveryPending || row.lifecycle?.recovery?.status === 'sent'}
+                    >
+                        {row.lifecycle?.recovery?.status === 'sent' ? 'Recovery sent' : 'Recovery SMS'}
+                    </ActionChip>
+                ) : null}
                 {row.client?.id ? <ActionChip onClick={onOpenClient}>Open client</ActionChip> : null}
                 <ActionChip variant="danger" onClick={onClosePayment}>Close payment</ActionChip>
             </div>
@@ -198,6 +251,15 @@ function StalledCard({ row, onMarkContacted, onCloseCase, onOpenClient }) {
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                             {row.assigned_agent.name}
                         </span>
+                    ) : null}
+                    {row.lifecycle ? (
+                        <LifecycleBadge
+                            entry={Object.values(row.lifecycle)[0]}
+                            label={`${Object.keys(row.lifecycle)[0] || 'Lifecycle'}`}
+                        />
+                    ) : null}
+                    {row.last_online_at ? (
+                        <span className="truncate text-[10px] text-slate-400">online {timeAgoShort(row.last_online_at)}</span>
                     ) : null}
                 </div>
             </div>
@@ -310,6 +372,24 @@ export default function ConversionQueueView({ platformId = '' }) {
         onError: (err) => toast?.error?.(err?.response?.data?.message || 'Send link failed.'),
     });
 
+    const sendWelcomeMutation = useMutation({
+        mutationFn: (clientId) => api.post(`/crm/clients/${clientId}/lifecycle-sms`, { flow: 'onboarding' }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            toast?.success?.('Welcome SMS sent.');
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Welcome SMS failed.'),
+    });
+
+    const sendRecoveryMutation = useMutation({
+        mutationFn: (paymentId) => api.post(`/crm/payments/${paymentId}/lifecycle-recovery`).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            toast?.success?.('Recovery SMS sent.');
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Recovery SMS failed.'),
+    });
+
     const closePaymentMutation = useMutation({
         mutationFn: ({ paymentId, reason_code, reason_note, converted_payment_id }) =>
             api.post(`/crm/payments/${paymentId}/manual-close`, {
@@ -412,6 +492,8 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 onOpenClient={() => navigate(`/clients/${row.id}`)}
                                 onOpenChat={() => navigate(`/conversations?client_id=${row.id}`)}
                                 onCloseCase={() => { setCloseError(null); setCloseDialog({ open: true, client: row }); }}
+                                onSendWelcome={() => sendWelcomeMutation.mutate(row.id)}
+                                welcomePending={sendWelcomeMutation.isPending}
                             />
                         ))}
                         <LoadMoreFooter
@@ -442,6 +524,8 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 row={row}
                                 onRetryStk={() => retryStkMutation.mutate(row.id)}
                                 onSendLink={() => sendLinkMutation.mutate(row.id)}
+                                onSendRecovery={() => sendRecoveryMutation.mutate(row.id)}
+                                recoveryPending={sendRecoveryMutation.isPending}
                                 onOpenClient={() => row.client?.id && navigate(`/clients/${row.client.id}`)}
                                 onClosePayment={() => setClosePaymentDialog({
                                     open: true,

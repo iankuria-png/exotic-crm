@@ -5102,6 +5102,18 @@ class ClientController extends Controller
 
         $now = now();
 
+        // Lifecycle cockpit: latest automated/manual lifecycle SMS per client so
+        // agents see automation state inline and never double-send.
+        $lifecycleService = app(\App\Services\LifecycleSmsService::class);
+        $lifecycleStates = $lifecycleService->lastSendsForClients(
+            $newSignups->pluck('id')
+                ->merge($failedPayments->pluck('client_id'))
+                ->merge($stalled->pluck('id'))
+                ->filter()
+                ->unique()
+                ->all()
+        );
+
         return response()->json([
             'new_signups' => $newSignups->map(fn (Client $c) => [
                 'id' => (int) $c->id,
@@ -5115,9 +5127,15 @@ class ClientController extends Controller
                 'sla_bucket' => $c->created_at ? $this->conversionSlaBucket($c->created_at) : 'red',
                 'platform' => $c->platform ? ['id' => $c->platform->id, 'name' => $c->platform->name] : null,
                 'sb_user_id' => $c->sb_user_id,
+                'last_online_at' => $c->last_online_at ? \Carbon\Carbon::createFromTimestamp((int) $c->last_online_at)->toIso8601String() : null,
+                'welcome_eligible' => in_array((string) $c->signup_source, ['fast_signup', 'full_registration'], true),
+                'lifecycle' => $lifecycleStates[(int) $c->id] ?? null,
             ])->values(),
-            'failed_payments' => $failedPayments->map(function (Payment $p) use ($now) {
+            'failed_payments' => $failedPayments->map(function (Payment $p) use ($now, $lifecycleStates) {
                 $product = $p->product?->display_name ?: $p->product?->name;
+                $isManual = $p->manual_payment_bundle_id
+                    || (string) $p->provider_key === 'manual_confirmation'
+                    || (string) $p->reconciliation_state === 'manual_review';
                 return [
                     'id' => (int) $p->id,
                     'phone' => $p->phone,
@@ -5130,6 +5148,8 @@ class ClientController extends Controller
                     'created_at' => optional($p->created_at)?->toIso8601String(),
                     'age_seconds' => $p->created_at ? max(0, $now->diffInSeconds($p->created_at)) : null,
                     'sla_bucket' => $p->created_at ? $this->conversionSlaBucket($p->created_at) : 'red',
+                    'is_manual_payment' => (bool) $isManual,
+                    'lifecycle' => $p->client_id ? ($lifecycleStates[(int) $p->client_id] ?? null) : null,
                     'client' => $p->client ? [
                         'id' => (int) $p->client->id,
                         'name' => $p->client->name,
@@ -5150,6 +5170,8 @@ class ClientController extends Controller
                 'sla_bucket' => $c->last_contact_at ? $this->conversionSlaBucket($c->last_contact_at) : 'red',
                 'platform' => $c->platform ? ['id' => $c->platform->id, 'name' => $c->platform->name] : null,
                 'assigned_agent' => $c->assignedAgent ? ['id' => $c->assignedAgent->id, 'name' => $c->assignedAgent->name] : null,
+                'last_online_at' => $c->last_online_at ? \Carbon\Carbon::createFromTimestamp((int) $c->last_online_at)->toIso8601String() : null,
+                'lifecycle' => $lifecycleStates[(int) $c->id] ?? null,
             ])->values(),
             'counts' => [
                 'new_signups' => $newSignupsTotal,

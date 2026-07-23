@@ -54,14 +54,26 @@ class TemplateService
 
     public function buildClientVariables(Client $client, ?Deal $deal = null, array $extra = []): array
     {
-        $expiresAt = $deal?->expires_at;
-        if ($expiresAt && !($expiresAt instanceof Carbon)) {
-            $expiresAt = Carbon::parse($expiresAt);
+        // Expiry prefers the WP-synced clients.escort_expire mirror (source of
+        // truth, refreshed on sync AND immediately on activation) over the
+        // drift-prone deals.expires_at, so reminder copy and the lifecycle
+        // state gate always agree on whether a client is expired.
+        $expiresAt = null;
+        if (!empty($client->escort_expire) && is_numeric($client->escort_expire)) {
+            $expiresAt = Carbon::createFromTimestamp((int) $client->escort_expire);
+        } elseif ($deal?->expires_at) {
+            $expiresAt = $deal->expires_at instanceof Carbon
+                ? $deal->expires_at
+                : Carbon::parse($deal->expires_at);
         }
+
+        $name = trim((string) ($client->name ?: ''));
+        $firstName = $name !== '' ? (preg_split('/\s+/', $name)[0] ?? $name) : '';
 
         $base = [
             'client_name' => $client->name ?: 'Client',
             'name' => $client->name ?: 'Client',
+            'first_name' => $firstName !== '' ? $firstName : 'there',
             'phone' => $client->phone_normalized ?: '',
             'city' => $client->city ?: '',
             'platform_name' => optional($client->platform)->name ?: '',

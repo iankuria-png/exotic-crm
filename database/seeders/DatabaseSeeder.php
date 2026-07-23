@@ -19,6 +19,7 @@ class DatabaseSeeder extends Seeder
             FollowUpTemplateSeeder::class,
             WelcomeTemplateSeeder::class,
             QuickReplyTemplateSeeder::class,
+            LifecycleSmsTemplateSeeder::class,
             FaqSeeder::class,
         ]);
     }

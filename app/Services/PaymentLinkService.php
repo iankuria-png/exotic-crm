@@ -90,6 +90,73 @@ class PaymentLinkService
         return $this->storeProxyToken($payment, $providerConfig);
     }
 
+    /**
+     * Resolve a TOKENIZED hosted-checkout URL for a payment without dispatching
+     * any message. Used by the lifecycle SMS engine, which embeds the link in
+     * its own template copy. Static pay pages are deliberately NOT supported
+     * here — a market without a tokenized provider skips the link-bearing send.
+     */
+    public function prepareTokenizedUrl(Payment $payment, array $options = []): array
+    {
+        $payment->loadMissing(['platform']);
+        $platform = $payment->platform;
+
+        if (!$platform) {
+            return ['success' => false, 'skip_reason' => 'missing_platform'];
+        }
+
+        $requestedProvider = isset($options['provider']) ? trim((string) $options['provider']) : null;
+        $resolvedProvider = $this->resolveProviderConfig($platform, $requestedProvider);
+
+        if (!is_array($resolvedProvider)) {
+            return ['success' => false, 'skip_reason' => 'market_no_psp'];
+        }
+
+        $mode = (string) ($resolvedProvider['config']['mode'] ?? self::MODE_STATIC_URL);
+        if ($mode !== self::MODE_PROXY_HOSTED_CHECKOUT) {
+            return ['success' => false, 'skip_reason' => 'market_no_psp'];
+        }
+
+        $token = $this->rotateProxyToken($payment, array_merge($resolvedProvider['config'], [
+            'key' => $resolvedProvider['key'],
+        ]));
+        $environment = (string) ($resolvedProvider['config']['environment'] ?? 'sandbox');
+        $paymentUrl = $this->billingModeService->buildAbsoluteUrl(
+            $platform,
+            '/api/payments/link/' . $token,
+            [],
+            $environment
+        );
+
+        if (!$paymentUrl) {
+            return ['success' => false, 'skip_reason' => 'link_url_unresolved'];
+        }
+
+        $this->billingRoutingDecisionRecorder->recordPaymentLink($payment, $resolvedProvider, $paymentUrl, [
+            'requested_provider' => $requestedProvider,
+            'notification_purpose' => $options['notification_purpose'] ?? 'lifecycle_payment_link',
+        ]);
+
+        return [
+            'success' => true,
+            'payment_url' => $paymentUrl,
+            'provider' => $resolvedProvider['key'],
+            'mode' => $mode,
+        ];
+    }
+
+    /**
+     * Whether the market has an enabled TOKENIZED (hosted-checkout) payment-link
+     * provider — the lifecycle "payment provider ready" capability gate.
+     */
+    public function hasTokenizedProvider(?Platform $platform): bool
+    {
+        $resolved = $this->resolveProviderConfig($platform);
+
+        return is_array($resolved)
+            && (string) ($resolved['config']['mode'] ?? self::MODE_STATIC_URL) === self::MODE_PROXY_HOSTED_CHECKOUT;
+    }
+
     public function sendLink(Payment $payment, array $options = []): array
     {
         $payment->loadMissing(['platform', 'product', 'client']);

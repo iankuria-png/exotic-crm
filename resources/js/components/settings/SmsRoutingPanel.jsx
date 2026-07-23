@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import SmsDispatchLog from './SmsDispatchLog';
+import LifecycleSmsPanel from './LifecycleSmsPanel';
 
 const SUB_TABS = [
     { id: 'routing', label: 'Routing' },
     { id: 'providers', label: 'Providers' },
     { id: 'markets', label: 'Markets' },
+    { id: 'lifecycle', label: 'Lifecycle' },
     { id: 'test', label: 'Test & Logs' },
 ];
 
@@ -297,7 +299,7 @@ export default function SmsRoutingPanel({
         [allPlatforms, markets, options, revealedMarkets],
     );
 
-    const showFooter = subTab !== 'test';
+    const showFooter = subTab !== 'test' && subTab !== 'lifecycle';
 
     const saveDisabled = saveSmsProviderMutation.isPending
         || !smsProviderForm.reason.trim()
@@ -542,6 +544,8 @@ export default function SmsRoutingPanel({
                         )}
                     </div>
                 ) : null}
+
+                {subTab === 'lifecycle' ? <LifecycleSmsPanel /> : null}
 
                 {subTab === 'test' ? (
                     <div className="space-y-6">

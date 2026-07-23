@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
+use App\Http\Controllers\CRM\LifecycleSmsController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PaymentExportController;
@@ -446,6 +447,16 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::delete('/renewals/campaigns/{campaign}', [RenewalController::class, 'destroyCampaign']);
             Route::post('/renewals/guard', [RenewalController::class, 'updateGuard']);
         });
+
+        // Lifecycle SMS (onboarding / recovery / renewal links / reactivation)
+        Route::get('/lifecycle-sms/config', [LifecycleSmsController::class, 'config']);
+        Route::patch('/lifecycle-sms/config', [LifecycleSmsController::class, 'updateConfig']);
+        Route::get('/lifecycle-sms/preview', [LifecycleSmsController::class, 'preview']);
+        Route::post('/lifecycle-sms/test-send', [LifecycleSmsController::class, 'testSend']);
+        Route::get('/lifecycle-sms/activity', [LifecycleSmsController::class, 'activity']);
+        Route::post('/lifecycle-sms/run', [LifecycleSmsController::class, 'run']);
+        Route::post('/clients/{client}/lifecycle-sms', [LifecycleSmsController::class, 'sendToClient']);
+        Route::post('/payments/{payment}/lifecycle-recovery', [LifecycleSmsController::class, 'sendRecovery']);
 
         // Reports
         Route::get('/reports/summary', [ReportController::class, 'summary']);

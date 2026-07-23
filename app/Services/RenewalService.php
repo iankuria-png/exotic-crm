@@ -39,8 +39,27 @@ class RenewalService
         private readonly WalletAutoRenewPolicy $walletAutoRenewPolicy,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly ClientSubscriptionActionResolver $clientSubscriptionActionResolver,
-        private readonly MessagingDispatcher $messagingDispatcher
+        private readonly MessagingDispatcher $messagingDispatcher,
+        private readonly LifecycleSmsService $lifecycleSmsService,
+        private readonly ClientProfileMetricsService $profileMetricsService
     ) {
+    }
+
+    /**
+     * Renewal template variables: base client vars + freshness-gated profile
+     * stats + (when the template embeds {{payment_link}} and the market allows
+     * it) a tokenized checkout link on the client's current plan.
+     */
+    private function renewalTemplateVariables(Deal $deal, Template $template, array $extra = [], ?int $actorId = null): array
+    {
+        return array_merge(
+            $this->templateService->buildClientVariables(
+                $deal->client,
+                $deal,
+                array_merge($this->profileMetricsService->templateVariables($deal->client), $extra)
+            ),
+            $this->lifecycleSmsService->renewalLinkVariables($deal, $template, $actorId)
+        );
     }
 
     public function buildOverview(array $filters = [], int $perPage = 50, ?User $viewer = null): array
@@ -995,9 +1014,9 @@ class RenewalService
             ];
         }
 
-        $variables = $this->templateService->buildClientVariables($deal->client, $deal, [
+        $variables = $this->renewalTemplateVariables($deal, $template, [
             'trigger_days' => $this->suggestTriggerDays($deal),
-        ]);
+        ], $actorId);
 
         $rendered = $this->templateService->renderTemplate($template, $variables);
         if (!empty($rendered['missing'])) {
@@ -1288,9 +1307,9 @@ class RenewalService
                 continue;
             }
 
-            $variables = $this->templateService->buildClientVariables($deal->client, $deal, [
+            $variables = $this->renewalTemplateVariables($deal, $campaign->template, [
                 'trigger_days' => $campaign->trigger_days,
-            ]);
+            ], $runnerId);
             $rendered = $this->templateService->renderTemplate($campaign->template, $variables);
 
             if (!empty($rendered['missing'])) {
