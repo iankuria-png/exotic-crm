@@ -635,9 +635,16 @@ function LifecycleReminderDrawer({ open, client, toast, onClose }) {
         enabled: Boolean(clientId) && open,
     });
 
+    const historyQuery = useQuery({
+        queryKey: ['client-lifecycle-history', clientId],
+        queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/history`).then((r) => r.data),
+        enabled: Boolean(clientId) && open,
+    });
+
     const invalidate = () => {
         queryClient.invalidateQueries({ queryKey: ['client-lifecycle-stats', clientId] });
         queryClient.invalidateQueries({ queryKey: ['client-lifecycle-preview', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-lifecycle-history', clientId] });
     };
 
     const sendMutation = useMutation({
@@ -757,6 +764,44 @@ function LifecycleReminderDrawer({ open, client, toast, onClose }) {
                         >
                             {sendMutation.isPending ? 'Sending…' : `Send ${LIFECYCLE_FLOW_LABELS[flow]} SMS`}
                         </button>
+                    </section>
+
+                    {/* History */}
+                    <section>
+                        <h4 className="mb-2 text-sm font-semibold text-slate-900">History</h4>
+                        {historyQuery.isLoading ? (
+                            <div className="py-6 text-center text-xs text-slate-400">Loading history…</div>
+                        ) : (historyQuery.data?.data || []).length === 0 ? (
+                            <div className="rounded-lg border border-dashed border-slate-200 py-6 text-center text-xs text-slate-400">
+                                No reminders sent to this client yet.
+                            </div>
+                        ) : (
+                            <ol className="relative space-y-3 border-l border-slate-200 pl-4">
+                                {(historyQuery.data?.data || []).map((entry) => {
+                                    const ok = entry.status === 'sent';
+                                    return (
+                                        <li key={entry.id} className="relative">
+                                            <span className={`absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                                    {LIFECYCLE_FLOW_LABELS[entry.flow] || entry.flow}
+                                                </span>
+                                                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                                                    {ok ? 'Sent' : 'Failed'}
+                                                </span>
+                                                {entry.provider ? <span className="text-[10px] text-slate-400">via {entry.provider}</span> : null}
+                                                {entry.fallback_used ? <span className="text-[10px] text-amber-600">fallback</span> : null}
+                                                <span className="ml-auto text-[10px] text-slate-400" title={entry.sent_at ? new Date(entry.sent_at).toLocaleString() : ''}>
+                                                    {entry.sent_at ? new Date(entry.sent_at).toLocaleString() : ''}
+                                                </span>
+                                            </div>
+                                            <p className="mt-1 text-xs leading-5 text-slate-600 whitespace-pre-wrap">{entry.message}</p>
+                                        </li>
+                                    );
+                                })}
+                            </ol>
+                        )}
+                        <p className="mt-2 text-[11px] text-slate-400">Status reflects provider acceptance; delivery receipts aren’t tracked.</p>
                     </section>
                 </div>
             </div>

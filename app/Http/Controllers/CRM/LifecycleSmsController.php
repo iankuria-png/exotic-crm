@@ -291,6 +291,16 @@ class LifecycleSmsController extends Controller
         return response()->json($this->lifecycleSmsService->reminderStats($client));
     }
 
+    /** Per-client reminder delivery history (message, status, provider, time). */
+    public function history(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $client->platform_id);
+
+        return response()->json([
+            'data' => $this->lifecycleSmsService->reminderHistory($client, (int) $request->query('limit', 50)),
+        ]);
+    }
+
     /** Pause / resume all automated + manual outreach for one client. */
     public function setPause(Request $request, Client $client)
     {

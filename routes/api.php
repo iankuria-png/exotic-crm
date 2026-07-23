@@ -459,6 +459,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/clients/{client}/lifecycle-sms', [LifecycleSmsController::class, 'sendToClient']);
         Route::get('/clients/{client}/lifecycle-sms/preview', [LifecycleSmsController::class, 'previewClient']);
         Route::get('/clients/{client}/lifecycle-sms/stats', [LifecycleSmsController::class, 'stats']);
+        Route::get('/clients/{client}/lifecycle-sms/history', [LifecycleSmsController::class, 'history']);
         Route::post('/clients/{client}/lifecycle-sms/pause', [LifecycleSmsController::class, 'setPause']);
         Route::post('/payments/{payment}/lifecycle-recovery', [LifecycleSmsController::class, 'sendRecovery']);
 

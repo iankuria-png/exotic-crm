@@ -1035,6 +1035,7 @@ class RenewalService
             'deal_id' => $deal->id,
             'actor_id' => $actorId,
             'mode' => 'manual',
+            'purpose' => 'renewal_reminder',
         ]);
 
         $eventType = $this->renewalEventType($channel, (bool) $delivery['success']);
@@ -1335,6 +1336,7 @@ class RenewalService
                 'run_id' => $run->id,
                 'template_id' => $campaign->template_id,
                 'actor_id' => $runnerId,
+                'purpose' => 'renewal_reminder',
             ]);
 
             if ($delivery['success']) {

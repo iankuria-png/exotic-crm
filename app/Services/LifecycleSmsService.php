@@ -1025,6 +1025,51 @@ class LifecycleSmsService
         ];
     }
 
+    /**
+     * Delivery history for one client: the actual messages sent (with the
+     * resolved link), status, provider, and timestamp — sourced from sms_logs
+     * (phone-scoped) for lifecycle + renewal reminder purposes.
+     */
+    public function reminderHistory(Client $client, int $limit = 50): array
+    {
+        $phone = $client->phone_normalized;
+        if (!$phone) {
+            return [];
+        }
+
+        return \App\Models\SmsLog::query()
+            ->where('phone', $phone)
+            ->where(function (Builder $builder) {
+                $builder->where('purpose', 'like', 'lifecycle_%')
+                    ->orWhere('purpose', 'renewal_reminder');
+            })
+            ->where('purpose', '!=', 'lifecycle_test')
+            ->orderByDesc('sent_at')
+            ->limit(max(1, min(100, $limit)))
+            ->get()
+            ->map(fn ($log) => [
+                'id' => (int) $log->id,
+                'message' => (string) $log->message,
+                'status' => (string) $log->status,
+                'provider' => (string) ($log->provider ?: ''),
+                'flow' => $this->flowFromPurpose((string) ($log->purpose ?: '')),
+                'fallback_used' => (bool) $log->fallback_used,
+                'sent_at' => optional($log->sent_at)?->toIso8601String(),
+            ])
+            ->all();
+    }
+
+    private function flowFromPurpose(string $purpose): string
+    {
+        return match ($purpose) {
+            'lifecycle_onboarding' => 'onboarding',
+            'lifecycle_recovery' => 'recovery',
+            'lifecycle_reactivation' => 'reactivation',
+            'lifecycle_renewal', 'renewal_reminder' => 'renewal',
+            default => str_replace('lifecycle_', '', $purpose) ?: 'reminder',
+        };
+    }
+
     public function inQuietHours(Platform $platform): bool
     {
         try {
