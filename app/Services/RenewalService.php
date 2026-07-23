@@ -1019,6 +1019,7 @@ class RenewalService
         ], $actorId);
 
         $rendered = $this->templateService->renderTemplate($template, $variables);
+        $rendered['body'] = rtrim((string) $rendered['body']);
         if (!empty($rendered['missing'])) {
             return [
                 'success' => false,
@@ -1311,6 +1312,9 @@ class RenewalService
                 'trigger_days' => $campaign->trigger_days,
             ], $runnerId);
             $rendered = $this->templateService->renderTemplate($campaign->template, $variables);
+            // A market that can't carry a link renders {{payment_link}} as '' —
+            // trim so the copy doesn't end on a dangling space.
+            $rendered['body'] = rtrim((string) $rendered['body']);
 
             if (!empty($rendered['missing'])) {
                 $failed++;
@@ -1915,14 +1919,10 @@ class RenewalService
             return $campaign->template;
         }
 
-        // Generic fallback must stay link-free: a {{payment_link}} template only
-        // resolves for markets with a tokenized PSP + renewal links enabled, so
-        // letting it become the default reminder would break sends elsewhere.
         return Template::query()
             ->where('category', 'renewal')
             ->where('channel', $channel)
             ->where('status', 'active')
-            ->where('body', 'not like', '%payment_link%')
             ->orderByDesc('id')
             ->first();
     }

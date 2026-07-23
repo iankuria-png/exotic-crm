@@ -27,16 +27,16 @@ class LifecycleSmsTemplateSeeder extends Seeder
     public function run(): void
     {
         $templates = [
-            // ---- Onboarding (category new_signup) ----
+            // ---- Onboarding (category welcome) ----
             [
                 'title' => 'Lifecycle — Welcome & activate (SMS)',
-                'category' => 'new_signup',
+                'category' => 'welcome',
                 'body' => "Hi {{first_name}}! Your profile is ready — clients are searching right now. Activate {{plan_name}} ({{currency}} {{amount}}) and get seen today 👉 {{payment_link}}",
                 'variables' => ['first_name', 'plan_name', 'currency', 'amount', 'payment_link'],
             ],
             [
                 'title' => 'Lifecycle — Welcome nudge (SMS)',
-                'category' => 'new_signup',
+                'category' => 'welcome',
                 'body' => "Welcome {{first_name}} 🎉 One tap and you're live — activate {{plan_name}} and start getting views today 👉 {{payment_link}}",
                 'variables' => ['first_name', 'plan_name', 'payment_link'],
             ],

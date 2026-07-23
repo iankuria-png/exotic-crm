@@ -184,7 +184,7 @@ function MarketLifecycleRow({ market, overrides, onChange, templates, products, 
                                                 onChange={(value) => patchFlow(flow, { template_id: value })}
                                                 templates={templates}
                                                 platformId={platformId}
-                                                categories={flow === 'onboarding' ? ['new_signup', 'welcome'] : flow === 'recovery' ? ['payment'] : ['win_back']}
+                                                categories={flow === 'onboarding' ? ['welcome'] : flow === 'recovery' ? ['payment'] : ['win_back']}
                                             />
                                         </div>
                                     ) : (

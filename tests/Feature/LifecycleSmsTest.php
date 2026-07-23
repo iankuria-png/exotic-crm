@@ -64,7 +64,7 @@ class LifecycleSmsTest extends TestCase
         return Template::query()->create([
             'platform_id' => null,
             'title' => 'Lifecycle welcome test',
-            'category' => 'new_signup',
+            'category' => 'welcome',
             'channel' => 'sms',
             'body' => 'Hi {{first_name}}! Activate {{plan_name}} here: {{payment_link}}',
             'variables' => [],
@@ -448,7 +448,7 @@ class LifecycleSmsTest extends TestCase
         $this->assertSame(7, $this->service()->reactivationWindowFor($inWindow, [7, 30]));
     }
 
-    public function test_renewal_link_variables_are_empty_without_placeholder_or_flag(): void
+    public function test_renewal_link_variables_degrade_gracefully(): void
     {
         [$platform] = $this->marketWithOffer();
         $client = Client::factory()->create(['platform_id' => $platform->id]);
@@ -470,7 +470,7 @@ class LifecycleSmsTest extends TestCase
             'is_quick_reply' => false,
         ]);
 
-        // No {{payment_link}} in the template → nothing happens (renewal suite
+        // No {{payment_link}} in the template → nothing to do (renewal suite
         // keeps its existing behaviour byte-for-byte).
         $this->assertSame([], $this->service()->renewalLinkVariables($deal, $plainTemplate));
 
@@ -479,16 +479,32 @@ class LifecycleSmsTest extends TestCase
             'title' => 'Link renewal',
             'category' => 'renewal',
             'channel' => 'sms',
-            'body' => 'Hi {{client_name}}, renew: {{payment_link}}',
+            'body' => 'Hi {{client_name}}, renew now to stay visible. {{payment_link}}',
             'variables' => [],
             'status' => 'active',
             'is_quick_reply' => false,
         ]);
 
-        // Placeholder present but renewal payment links not enabled for the
-        // market → still empty, no deals or payments minted.
-        $this->assertSame([], $this->service()->renewalLinkVariables($deal, $linkTemplate));
+        // Placeholder present but renewal links not enabled for this market →
+        // degrade to an empty link (NOT a hard skip) so the reminder still
+        // renders as a clean nudge, and no pro-forma deal/payment is minted.
+        $vars = $this->service()->renewalLinkVariables($deal, $linkTemplate);
+        $this->assertSame(['payment_link' => ''], $vars);
         $this->assertSame(1, Deal::query()->count());
+        $this->assertSame(0, Payment::query()->count());
+
+        // Rendering with the degraded link yields no missing variables and,
+        // after the send path's rtrim, no dangling whitespace or token.
+        $rendered = app(\App\Services\TemplateService::class)->renderTemplate(
+            $linkTemplate,
+            array_merge(
+                app(\App\Services\TemplateService::class)->buildClientVariables($deal->client, $deal),
+                $vars
+            )
+        );
+        $this->assertSame([], $rendered['missing']);
+        $this->assertStringNotContainsString('{{payment_link}}', $rendered['body']);
+        $this->assertSame('Hi ' . $deal->client->name . ', renew now to stay visible.', rtrim($rendered['body']));
     }
 
     public function test_seeded_lifecycle_templates_resolve_and_render_without_missing_variables(): void
@@ -552,23 +568,17 @@ class LifecycleSmsTest extends TestCase
         }
     }
 
-    public function test_manual_renewal_fallback_never_picks_a_link_template(): void
+    public function test_default_renewal_templates_carry_a_payment_link(): void
     {
-        // A link-bearing renewal template must not become the generic
-        // manual-reminder fallback — it would break no-PSP markets.
-        $this->seed(\Database\Seeders\LifecycleSmsTemplateSeeder::class);
+        // The shipped renewal reminders must give clients a one-tap way to pay —
+        // a nudge with no link and no next step doesn't convert.
+        $this->seed(\Database\Seeders\SprintThreeTemplateSeeder::class);
 
-        $fallback = Template::query()
-            ->where('category', 'renewal')
-            ->where('channel', 'sms')
-            ->where('status', 'active')
-            ->where('body', 'not like', '%payment_link%')
-            ->orderByDesc('id')
-            ->first();
+        $day0 = Template::query()->where('title', 'Renewal SMS Day 0')->where('channel', 'sms')->firstOrFail();
+        $this->assertStringContainsString('{{payment_link}}', (string) $day0->body);
 
-        // Only link templates exist from this seeder → the safe fallback query
-        // returns nothing rather than a link template.
-        $this->assertNull($fallback);
+        $winBack = Template::query()->where('title', 'Renewal SMS Day +3')->where('channel', 'sms')->firstOrFail();
+        $this->assertStringContainsString('{{payment_link}}', (string) $winBack->body);
     }
 
     public function test_run_command_dry_run_reports_targets_without_sending(): void

@@ -41,7 +41,7 @@ class LifecycleSmsService
 
     /** Template categories, in preference order, per flow. */
     public const FLOW_TEMPLATE_CATEGORIES = [
-        self::FLOW_ONBOARDING => ['new_signup', 'welcome'],
+        self::FLOW_ONBOARDING => ['welcome'],
         self::FLOW_RECOVERY => ['payment'],
         self::FLOW_REACTIVATION => ['win_back'],
         self::FLOW_RENEWAL => ['renewal'],
@@ -912,8 +912,13 @@ class LifecycleSmsService
      * Renewal payment-link variables for one deal, used by RenewalService when
      * a renewal template embeds {{payment_link}}. Mints (or reuses) a pro-forma
      * deal on the client's current plan so the link auto-activates a genuine
-     * renewal on payment. Returns [] when the template doesn't use the link or
-     * the market can't carry one — existing renewal behaviour is unchanged.
+     * renewal on payment.
+     *
+     * Returns [] when the template has no {{payment_link}} (nothing to do). When
+     * the template DOES use the link but the market can't produce a tokenized one
+     * (no PSP, flow off, no offer), it returns ['payment_link' => ''] so the
+     * reminder still renders as a clean link-free nudge instead of failing on a
+     * missing variable — the link fragment simply drops out of the copy.
      */
     public function renewalLinkVariables(?Deal $deal, Template $template, ?int $actorId = null): array
     {
@@ -922,19 +927,21 @@ class LifecycleSmsService
             return [];
         }
 
+        $blank = ['payment_link' => ''];
+
         $client = $deal?->client;
         if (!$client) {
-            return [];
+            return $blank;
         }
 
         $client->loadMissing('platform');
         $platform = $client->platform;
         if (!$platform || !$this->settings->flowEnabled((int) $platform->id, self::FLOW_RENEWAL)) {
-            return [];
+            return $blank;
         }
 
         if (!$this->paymentLinkService->hasTokenizedProvider($platform)) {
-            return [];
+            return $blank;
         }
 
         $marketConfig = $this->settings->marketConfig((int) $platform->id);
@@ -953,7 +960,7 @@ class LifecycleSmsService
             $flowConfig['product_price_id'] = $fallback['product_price_id'] ?? null;
         }
         if (empty($flowConfig['product_id']) || empty($flowConfig['product_price_id'])) {
-            return [];
+            return $blank;
         }
 
         try {
@@ -974,11 +981,11 @@ class LifecycleSmsService
                 'error' => $exception->getMessage(),
             ]);
 
-            return [];
+            return $blank;
         }
 
         if (!($link['success'] ?? false)) {
-            return [];
+            return $blank;
         }
 
         return ['payment_link' => (string) $link['payment_url']];

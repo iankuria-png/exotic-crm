@@ -17,8 +17,8 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'renewal',
                     'subject' => null,
-                    'body' => 'Hi {{client_name}}, your {{plan_name}} package expires on {{expiry_date}}. Renew early to stay visible and avoid downtime.',
-                    'variables' => ['client_name', 'plan_name', 'expiry_date'],
+                    'body' => 'Hi {{client_name}}, your {{plan_name}} package expires on {{expiry_date}}. Renew early to stay visible and avoid downtime. {{payment_link}}',
+                    'variables' => ['client_name', 'plan_name', 'expiry_date', 'payment_link'],
                     'status' => 'active',
                 ]
             ),
@@ -28,8 +28,8 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'renewal',
                     'subject' => null,
-                    'body' => 'Reminder: your {{plan_name}} expires in 3 days on {{expiry_date}}. Renew now to keep your profile visible.',
-                    'variables' => ['plan_name', 'expiry_date'],
+                    'body' => 'Hi {{client_name}}, your {{plan_name}} expires in 3 days on {{expiry_date}}. Renew now to keep your profile visible. {{payment_link}}',
+                    'variables' => ['client_name', 'plan_name', 'expiry_date', 'payment_link'],
                     'status' => 'active',
                 ]
             ),
@@ -39,8 +39,8 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'renewal',
                     'subject' => null,
-                    'body' => 'Your {{plan_name}} package expires today ({{expiry_date}}). Renew now to avoid any downtime.',
-                    'variables' => ['plan_name', 'expiry_date'],
+                    'body' => 'Hi {{client_name}}, your {{plan_name}} expires today ({{expiry_date}}). Renew now to avoid any downtime. {{payment_link}}',
+                    'variables' => ['client_name', 'plan_name', 'expiry_date', 'payment_link'],
                     'status' => 'active',
                 ]
             ),
@@ -50,8 +50,8 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'win_back',
                     'subject' => null,
-                    'body' => 'Hi {{client_name}}, your listing expired {{days_since_expiry}} days ago. Renew today to get back in front of clients.',
-                    'variables' => ['client_name', 'days_since_expiry', 'plan_name'],
+                    'body' => 'Hi {{client_name}}, your listing expired {{days_since_expiry}} days ago. Renew today to get back in front of clients. {{payment_link}}',
+                    'variables' => ['client_name', 'days_since_expiry', 'plan_name', 'payment_link'],
                     'status' => 'active',
                 ]
             ),
