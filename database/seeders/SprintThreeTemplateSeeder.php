@@ -57,11 +57,21 @@ class SprintThreeTemplateSeeder extends Seeder
             ),
         ];
 
+        // Before-expiry reminders (-7, -3) ship OFF by default globally to keep
+        // short-cycle markets from being spammed; markets opt in per-market. The
+        // on-expiry (0) and post-expiry (+3) reminders stay on. `enabled` is only
+        // set on first creation so an admin's later toggle is never overwritten.
+        $earlyReminderTriggers = [-7, -3];
+
         foreach ($templates as $triggerDays => $template) {
-            RenewalCampaign::updateOrCreate(
-                ['product_id' => null, 'trigger_days' => $triggerDays, 'channel' => 'sms'],
-                ['template_id' => $template->id, 'enabled' => true]
+            $campaign = RenewalCampaign::firstOrNew(
+                ['product_id' => null, 'platform_id' => null, 'trigger_days' => $triggerDays, 'channel' => 'sms']
             );
+            $campaign->template_id = $template->id;
+            if (!$campaign->exists) {
+                $campaign->enabled = !in_array($triggerDays, $earlyReminderTriggers, true);
+            }
+            $campaign->save();
         }
 
         foreach ($templates as $triggerDays => $template) {
@@ -77,10 +87,14 @@ class SprintThreeTemplateSeeder extends Seeder
                 ]
             );
 
-            RenewalCampaign::updateOrCreate(
-                ['product_id' => null, 'trigger_days' => $triggerDays, 'channel' => 'whatsapp'],
-                ['template_id' => $whatsAppTemplate->id, 'enabled' => false]
+            $campaign = RenewalCampaign::firstOrNew(
+                ['product_id' => null, 'platform_id' => null, 'trigger_days' => $triggerDays, 'channel' => 'whatsapp']
             );
+            $campaign->template_id = $whatsAppTemplate->id;
+            if (!$campaign->exists) {
+                $campaign->enabled = false;
+            }
+            $campaign->save();
         }
     }
 }

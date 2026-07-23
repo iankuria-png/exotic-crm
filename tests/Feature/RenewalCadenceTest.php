@@ -194,6 +194,21 @@ class RenewalCadenceTest extends TestCase
         $this->assertFalse((bool) $platform->fresh()->renewal_reminder_guard_enabled);
     }
 
+    public function test_seeder_ships_early_before_expiry_reminders_off_by_default(): void
+    {
+        $this->seed(\Database\Seeders\SprintThreeTemplateSeeder::class);
+
+        $early = RenewalCampaign::query()
+            ->whereNull('platform_id')->where('channel', 'sms')->whereIn('trigger_days', [-7, -3])->get();
+        $this->assertCount(2, $early);
+        $this->assertTrue($early->every(fn ($c) => $c->enabled === false), 'The -7 and -3 day reminders should seed disabled.');
+
+        $rest = RenewalCampaign::query()
+            ->whereNull('platform_id')->where('channel', 'sms')->whereIn('trigger_days', [0, 3])->get();
+        $this->assertCount(2, $rest);
+        $this->assertTrue($rest->every(fn ($c) => $c->enabled === true), 'The on-expiry and post-expiry reminders should stay enabled.');
+    }
+
     public function test_cadence_endpoint_reports_override_state(): void
     {
         $platform = Platform::factory()->create();
