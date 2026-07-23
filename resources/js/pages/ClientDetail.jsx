@@ -615,10 +615,10 @@ function relativeTimeShort(iso) {
     return `${Math.round(s / 86400)}d ago`;
 }
 
-// Client-page lifecycle outreach: reminders-sent metric, per-flow breakdown,
-// pause toggle, and a preview-then-send action routed through the same gated
-// LifecycleSmsService the automation uses (so nothing double-sends).
-function LifecycleReminderCard({ client, toast }) {
+// Client-page lifecycle outreach as a slide-over drawer: reminders-sent metric,
+// per-flow breakdown, pause toggle, and a preview-then-send action routed through
+// the same gated LifecycleSmsService the automation uses (so nothing double-sends).
+function LifecycleReminderDrawer({ open, client, toast, onClose }) {
     const queryClient = useQueryClient();
     const clientId = client?.id;
     const [flow, setFlow] = useState('reactivation');
@@ -626,13 +626,13 @@ function LifecycleReminderCard({ client, toast }) {
     const statsQuery = useQuery({
         queryKey: ['client-lifecycle-stats', clientId],
         queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/stats`).then((r) => r.data),
-        enabled: Boolean(clientId),
+        enabled: Boolean(clientId) && open,
     });
 
     const previewQuery = useQuery({
         queryKey: ['client-lifecycle-preview', clientId, flow],
         queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/preview`, { params: { flow } }).then((r) => r.data),
-        enabled: Boolean(clientId),
+        enabled: Boolean(clientId) && open,
     });
 
     const invalidate = () => {
@@ -652,53 +652,98 @@ function LifecycleReminderCard({ client, toast }) {
         onError: (err) => toast?.error?.(err?.response?.data?.message || 'Update failed.'),
     });
 
+    useEffect(() => {
+        if (!open) return undefined;
+        const onEsc = (e) => { if (e.key === 'Escape') onClose?.(); };
+        window.addEventListener('keydown', onEsc);
+        return () => window.removeEventListener('keydown', onEsc);
+    }, [open, onClose]);
+
+    if (!open) return null;
+
     const stats = statsQuery.data;
     const preview = previewQuery.data;
     const paused = Boolean(stats?.paused);
 
     return (
-        <ProfileInfoCard title="Lifecycle reminders">
-            <div className="space-y-3">
-                <div className="flex items-center justify-between">
+        <div className="fixed inset-0 z-[70] bg-slate-900/45" onClick={onClose}>
+            <div
+                role="dialog"
+                aria-modal="true"
+                className="absolute right-0 top-0 flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-slate-200 bg-white shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
                     <div>
-                        <p className="text-2xl font-semibold text-slate-900">{stats?.reminders_sent ?? '—'}</p>
-                        <p className="text-xs text-slate-500">
-                            reminders sent{stats?.last_sent_at ? ` · last ${relativeTimeShort(stats.last_sent_at)}` : ''}
-                        </p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Lifecycle reminders</p>
+                        <h3 className="text-lg font-semibold text-slate-900">{client?.name || `Client #${clientId}`}</h3>
+                        <p className="text-xs text-slate-500">{client?.phone_normalized || 'No phone'}</p>
                     </div>
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                        <input
-                            type="checkbox"
-                            checked={paused}
-                            disabled={pauseMutation.isPending}
-                            onChange={(e) => pauseMutation.mutate(e.target.checked)}
-                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                        />
-                        {paused ? 'Paused' : 'Pause reminders'}
-                    </label>
-                </div>
+                    <button type="button" onClick={onClose} className="crm-btn-secondary text-xs">Close</button>
+                </header>
 
-                {stats?.by_flow && Object.keys(stats.by_flow).length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                        {Object.entries(stats.by_flow).map(([f, count]) => (
-                            <span key={f} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                {LIFECYCLE_FLOW_LABELS[f] || f}: {count}
-                            </span>
-                        ))}
-                    </div>
-                ) : null}
+                <div className="flex-1 space-y-5 p-5">
+                    {/* Stats */}
+                    <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <p className="text-3xl font-semibold text-slate-900">{stats?.reminders_sent ?? '—'}</p>
+                                <p className="text-xs text-slate-500">reminders sent{stats?.last_sent_at ? ` · last ${relativeTimeShort(stats.last_sent_at)}` : ''}</p>
+                            </div>
+                            <label className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${paused ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-white text-slate-600'}`}>
+                                <input
+                                    type="checkbox"
+                                    checked={paused}
+                                    disabled={pauseMutation.isPending}
+                                    onChange={(e) => pauseMutation.mutate(e.target.checked)}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                {paused ? 'Reminders paused' : 'Pause reminders'}
+                            </label>
+                        </div>
+                        {stats?.by_flow && Object.keys(stats.by_flow).length > 0 ? (
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                                {Object.entries(stats.by_flow).map(([f, count]) => (
+                                    <span key={f} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+                                        {LIFECYCLE_FLOW_LABELS[f] || f}: {count}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : null}
+                    </section>
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <div className="flex items-center gap-2">
-                        <select
-                            value={flow}
-                            onChange={(e) => setFlow(e.target.value)}
-                            className="crm-select flex-1 text-xs"
-                            aria-label="Reminder type"
-                        >
-                            <option value="reactivation">Win-back</option>
-                            <option value="onboarding">Welcome & activate</option>
-                        </select>
+                    {/* Send */}
+                    <section>
+                        <div className="mb-2 flex items-center justify-between">
+                            <h4 className="text-sm font-semibold text-slate-900">Send a reminder</h4>
+                            <select
+                                value={flow}
+                                onChange={(e) => setFlow(e.target.value)}
+                                className="crm-select text-xs"
+                                aria-label="Reminder type"
+                            >
+                                <option value="reactivation">Win-back</option>
+                                <option value="onboarding">Welcome & activate</option>
+                            </select>
+                        </div>
+
+                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Preview</p>
+                        {previewQuery.isLoading ? (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 py-8 text-center text-xs text-slate-400">Rendering preview…</div>
+                        ) : preview?.body ? (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-800 whitespace-pre-wrap">{preview.body}</div>
+                        ) : (
+                            <div className="rounded-lg border border-dashed border-slate-200 py-6 text-center text-xs text-slate-400">No template for this flow / market.</div>
+                        )}
+                        {preview?.body ? (
+                            <p className="mt-1.5 text-[11px] text-slate-400">
+                                ~{preview.segments || 1} SMS segment{(preview.segments || 1) === 1 ? '' : 's'} · the live send carries a real payment link{preview.template_title ? ` · ${preview.template_title}` : ''}
+                            </p>
+                        ) : null}
+                        {preview && !preview.would_send && !paused ? (
+                            <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">Can’t send right now: {lifecycleSkipLabel(preview.skip_reason)}.</p>
+                        ) : null}
+
                         <button
                             type="button"
                             disabled={sendMutation.isPending || paused || !preview?.would_send}
@@ -708,22 +753,14 @@ function LifecycleReminderCard({ client, toast }) {
                                     sendMutation.mutate();
                                 }
                             }}
-                            className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="mt-3 w-full rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {sendMutation.isPending ? 'Sending…' : 'Send'}
+                            {sendMutation.isPending ? 'Sending…' : `Send ${LIFECYCLE_FLOW_LABELS[flow]} SMS`}
                         </button>
-                    </div>
-                    {previewQuery.isLoading ? null : preview?.body ? (
-                        <p className="mt-2 line-clamp-3 text-[11px] leading-5 text-slate-600" title={preview.body}>{preview.body}</p>
-                    ) : (
-                        <p className="mt-2 text-[11px] text-slate-400">No template for this flow / market.</p>
-                    )}
-                    {preview && !preview.would_send && !paused ? (
-                        <p className="mt-1 text-[11px] text-amber-600">Can’t send: {lifecycleSkipLabel(preview.skip_reason)}.</p>
-                    ) : null}
+                    </section>
                 </div>
             </div>
-        </ProfileInfoCard>
+        </div>
     );
 }
 
@@ -797,6 +834,7 @@ export default function ClientDetail() {
     const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
+    const [showRemindersDrawer, setShowRemindersDrawer] = useState(false);
     const [showBoostMenu, setShowBoostMenu] = useState(false);
     const [dealActionDialog, setDealActionDialog] = useState({ type: null, deal: null });
     const [clientDeactivateDialog, setClientDeactivateDialog] = useState({
@@ -881,6 +919,14 @@ export default function ClientDetail() {
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
+
+    // Lightweight stats for the header badge + summary count (drawer refetches
+    // the same key on send/pause, so this stays in sync).
+    const lifecycleStatsQuery = useQuery({
+        queryKey: ['client-lifecycle-stats', client?.id],
+        queryFn: () => api.get(`/crm/clients/${client.id}/lifecycle-sms/stats`).then((r) => r.data),
+        enabled: Boolean(client?.id),
+    });
 
     const { data: timelineData } = useQuery({
         queryKey: ['client-timeline', id],
@@ -2833,6 +2879,27 @@ export default function ClientDetail() {
                                     Client access
                                 </button>
 
+                                {/* Lifecycle reminders */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowRemindersDrawer(true)}
+                                    title="Lifecycle reminders — send SMS, view history, pause"
+                                    className="relative inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                                >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                                    </svg>
+                                    Reminders
+                                    {lifecycleStatsQuery.data?.reminders_sent > 0 ? (
+                                        <span className="ml-0.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-teal-100 px-1.5 text-[10px] font-bold text-teal-700">
+                                            {lifecycleStatsQuery.data.reminders_sent}
+                                        </span>
+                                    ) : null}
+                                    {lifecycleStatsQuery.data?.paused ? (
+                                        <span className="ml-0.5 inline-flex items-center rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">paused</span>
+                                    ) : null}
+                                </button>
+
                                 {/* Payment Link */}
                                 <button
                                     type="button"
@@ -3201,10 +3268,21 @@ export default function ClientDetail() {
                             })()}
                         />
                         <DefinitionRow label="Agent" value={client.assigned_agent?.name || 'Unassigned'} />
+                        <DefinitionRow
+                            label="Reminders sent"
+                            value={(
+                                <button
+                                    type="button"
+                                    onClick={() => setShowRemindersDrawer(true)}
+                                    className="font-semibold text-teal-700 underline-offset-2 hover:underline"
+                                >
+                                    {lifecycleStatsQuery.data?.reminders_sent ?? 0}
+                                    {lifecycleStatsQuery.data?.paused ? ' · paused' : ''}
+                                </button>
+                            )}
+                        />
                     </dl>
                 </ProfileInfoCard>
-
-                <LifecycleReminderCard client={client} toast={toast} />
             </section>
 
             <section className="crm-surface p-2">
@@ -5386,18 +5464,27 @@ export default function ClientDetail() {
                 />
             ) : null}
 
+            <LifecycleReminderDrawer
+                open={showRemindersDrawer}
+                client={client}
+                toast={toast}
+                onClose={() => setShowRemindersDrawer(false)}
+            />
+
             {!isReadOnly ? (
-                <CredentialDispatchDrawer
-                    open={showCredentialDrawer}
-                    client={client}
-                    defaultSource="client_detail"
-                    defaultReason="Client access from client detail"
-                    onClose={() => setShowCredentialDrawer(false)}
-                    onSuccess={() => {
-                        queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
-                        queryClient.invalidateQueries({ queryKey: ['client', id] });
-                    }}
-                />
+                <>
+                    <CredentialDispatchDrawer
+                        open={showCredentialDrawer}
+                        client={client}
+                        defaultSource="client_detail"
+                        defaultReason="Client access from client detail"
+                        onClose={() => setShowCredentialDrawer(false)}
+                        onSuccess={() => {
+                            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+                            queryClient.invalidateQueries({ queryKey: ['client', id] });
+                        }}
+                    />
+                </>
             ) : null}
 
             {/* ── NEW Badge Dialog ─────────────────────────────────────────── */}
