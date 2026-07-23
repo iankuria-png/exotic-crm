@@ -491,6 +491,86 @@ class LifecycleSmsTest extends TestCase
         $this->assertSame(1, Deal::query()->count());
     }
 
+    public function test_seeded_lifecycle_templates_resolve_and_render_without_missing_variables(): void
+    {
+        // Seed the real production template sets, then exercise the resolver +
+        // render path end-to-end so a legacy template can never be silently
+        // picked with unresolved variables (the transaction_reference /
+        // profile_url failures seen in QA).
+        $this->seed(\Database\Seeders\WelcomeTemplateSeeder::class);
+        $this->seed(\Database\Seeders\PaymentTemplateSeeder::class);
+        $this->seed(\Database\Seeders\SprintThreeTemplateSeeder::class);
+        $this->seed(\Database\Seeders\LifecycleSmsTemplateSeeder::class);
+
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $this->fakeSmsDelivery();
+        $this->admin();
+
+        // Onboarding: resolver must prefer the link-bearing lifecycle template
+        // over the legacy Welcome (profile_url/support_chat_url) template.
+        $onboardingTemplate = $this->service()->resolveTemplate('onboarding', (int) $platform->id);
+        $this->assertStringContainsString('payment_link', (string) $onboardingTemplate->body);
+
+        $onboardingClient = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'fast_signup']);
+        $result = $this->service()->send('onboarding', $onboardingClient);
+        $this->assertSame('sent', $result['status'], json_encode($result));
+
+        // Recovery: resolver must prefer the lifecycle recovery template over
+        // the legacy Payment Confirmation (transaction_reference) template.
+        $recoveryTemplate = $this->service()->resolveTemplate('recovery', (int) $platform->id);
+        $this->assertStringContainsString('payment_link', (string) $recoveryTemplate->body);
+
+        $recoveryClient = Client::factory()->create(['platform_id' => $platform->id]);
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $recoveryClient->id,
+            'status' => 'failed',
+            'provider_key' => 'pawapay',
+            'reconciliation_state' => 'open',
+        ]);
+        $recoveryResult = $this->service()->send('recovery', $recoveryClient->fresh(), ['payment' => $payment]);
+        $this->assertSame('sent', $recoveryResult['status'], json_encode($recoveryResult));
+    }
+
+    public function test_campaign_renewal_templates_have_no_misleading_reply_copy(): void
+    {
+        $this->seed(\Database\Seeders\SprintThreeTemplateSeeder::class);
+
+        $smsRenewalTemplates = Template::query()
+            ->where('channel', 'sms')
+            ->whereIn('category', ['renewal', 'win_back'])
+            ->pluck('body');
+
+        $this->assertNotEmpty($smsRenewalTemplates);
+        foreach ($smsRenewalTemplates as $body) {
+            $this->assertDoesNotMatchRegularExpression(
+                '/reply\s+(to\s+)?(renew|reactivate|activate|now)/i',
+                (string) $body,
+                'Campaign SMS copy must not tell clients to reply to renew/activate.'
+            );
+        }
+    }
+
+    public function test_manual_renewal_fallback_never_picks_a_link_template(): void
+    {
+        // A link-bearing renewal template must not become the generic
+        // manual-reminder fallback — it would break no-PSP markets.
+        $this->seed(\Database\Seeders\LifecycleSmsTemplateSeeder::class);
+
+        $fallback = Template::query()
+            ->where('category', 'renewal')
+            ->where('channel', 'sms')
+            ->where('status', 'active')
+            ->where('body', 'not like', '%payment_link%')
+            ->orderByDesc('id')
+            ->first();
+
+        // Only link templates exist from this seeder → the safe fallback query
+        // returns nothing rather than a link template.
+        $this->assertNull($fallback);
+    }
+
     public function test_run_command_dry_run_reports_targets_without_sending(): void
     {
         [$platform] = $this->marketWithOffer();

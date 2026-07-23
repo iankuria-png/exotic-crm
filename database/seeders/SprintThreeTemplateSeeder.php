@@ -28,7 +28,7 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'renewal',
                     'subject' => null,
-                    'body' => 'Reminder: {{plan_name}} expires in 3 days on {{expiry_date}}. Reply to renew today and keep your profile active.',
+                    'body' => 'Reminder: your {{plan_name}} expires in 3 days on {{expiry_date}}. Renew now to keep your profile visible.',
                     'variables' => ['plan_name', 'expiry_date'],
                     'status' => 'active',
                 ]
@@ -39,7 +39,7 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'renewal',
                     'subject' => null,
-                    'body' => 'Action needed: your {{plan_name}} package expires today ({{expiry_date}}). Reply now for immediate extension.',
+                    'body' => 'Your {{plan_name}} package expires today ({{expiry_date}}). Renew now to avoid any downtime.',
                     'variables' => ['plan_name', 'expiry_date'],
                     'status' => 'active',
                 ]
@@ -50,7 +50,7 @@ class SprintThreeTemplateSeeder extends Seeder
                     'platform_id' => null,
                     'category' => 'win_back',
                     'subject' => null,
-                    'body' => 'Hi {{client_name}}, your listing expired {{days_since_expiry}} days ago. Reply to reactivate your {{plan_name}} package today.',
+                    'body' => 'Hi {{client_name}}, your listing expired {{days_since_expiry}} days ago. Renew today to get back in front of clients.',
                     'variables' => ['client_name', 'days_since_expiry', 'plan_name'],
                     'status' => 'active',
                 ]

@@ -1915,10 +1915,14 @@ class RenewalService
             return $campaign->template;
         }
 
+        // Generic fallback must stay link-free: a {{payment_link}} template only
+        // resolves for markets with a tokenized PSP + renewal links enabled, so
+        // letting it become the default reminder would break sends elsewhere.
         return Template::query()
             ->where('category', 'renewal')
             ->where('channel', $channel)
             ->where('status', 'active')
+            ->where('body', 'not like', '%payment_link%')
             ->orderByDesc('id')
             ->first();
     }

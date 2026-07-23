@@ -611,6 +611,15 @@ class LifecycleSmsService
                 'payment_link' => $paymentUrl,
                 'amount' => number_format((float) $payment->amount),
                 'currency' => (string) ($payment->currency ?: ($client->platform?->currency_code ?: 'KES')),
+                // Defensive fallbacks so a send never hard-fails on a legacy
+                // template that references these (e.g. Welcome / Payment
+                // Confirmation copy). Empty strings still "resolve", so the
+                // engine degrades gracefully instead of skipping on a missing
+                // variable — the lifecycle templates themselves don't use them.
+                'profile_url' => (string) ($client->wp_profile_permalink ?: ''),
+                'support_chat_url' => (string) ($client->platform?->support_chat_url ?: ''),
+                'transaction_reference' => (string) ($payment->transaction_reference ?: ''),
+                'agent_name' => 'the team',
             ]
         );
 
