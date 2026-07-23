@@ -79,6 +79,10 @@ function describeWindow(rangeMode, fromDate, toDate) {
         return 'Revenue by market in the selected custom window';
     }
 
+    if (fromDate === toDate) {
+        return `Revenue by market on ${formatDateLabel(fromDate)}`;
+    }
+
     return `Revenue by market from ${formatDateLabel(fromDate)} to ${formatDateLabel(toDate)}`;
 }
 

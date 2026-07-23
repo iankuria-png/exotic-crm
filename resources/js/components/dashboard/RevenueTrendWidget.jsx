@@ -69,6 +69,39 @@ function weekdayKey(label) {
     return Number.isNaN(date.getTime()) ? null : date.getDay();
 }
 
+function parseDayLabel(label) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(label || ''));
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Daily ticks get a subtle weekday under the date ("17 Jul" / "Fri") for faster reading; hourly
+// and week/month labels render unchanged.
+function DayAxisTick({ x, y, payload }) {
+    const label = String(payload?.value ?? '');
+    const date = parseDayLabel(label);
+    if (!date) {
+        return (
+            <text x={x} y={y} dy={12} textAnchor="middle" fontSize={11} fill="#64748b">{label}</text>
+        );
+    }
+    const dateLine = date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    const weekday = date.toLocaleDateString(undefined, { weekday: 'short' });
+    return (
+        <text x={x} y={y} textAnchor="middle">
+            <tspan x={x} dy={12} fontSize={11} fill="#475569" fontWeight={600}>{dateLine}</tspan>
+            <tspan x={x} dy={13} fontSize={10} fill="#94a3b8">{weekday}</tspan>
+        </text>
+    );
+}
+
+function formatTooltipLabel(label) {
+    const date = parseDayLabel(label);
+    if (!date) return label;
+    return date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 function WeekdayBands({ xAxisMap, offset, points, selectedWeekday }) {
     if (selectedWeekday === null || selectedWeekday === undefined) return null;
     const xAxis = Object.values(xAxisMap || {})[0];
@@ -127,7 +160,7 @@ function TrendTooltip({ active, payload, label, currency, metric }) {
 
     return (
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
-            <p className="text-xs font-semibold text-slate-500">{label}</p>
+            <p className="text-xs font-semibold text-slate-500">{formatTooltipLabel(label)}</p>
             <p className="mt-1 text-sm font-semibold text-slate-900">Current: {formatMetricValue(current, metric, currency)}</p>
             <p className="text-sm font-medium text-slate-500">Prior: {formatMetricValue(prior, metric, currency)}</p>
             <p className="mt-2 text-xs text-slate-500">
@@ -331,7 +364,7 @@ export default function RevenueTrendWidget({
                                     />
                                 )}
                                 />
-                                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} minTickGap={20} />
+                                <XAxis dataKey="label" tick={<DayAxisTick />} tickLine={false} axisLine={false} minTickGap={24} height={36} interval="preserveStartEnd" />
                                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} width={72} tickFormatter={(value) => metric === 'payments' ? Number(value || 0).toLocaleString() : formatCurrency(value, currency).replace(`${currency} `, '')} />
                                 <Tooltip content={<TrendTooltip currency={currency} metric={metric} />} />
                                 <Area type="monotone" dataKey={currentKey} stroke="#0f766e" strokeWidth={2.5} fill="url(#ceoRevenueTrend)" name="Current" dot={weekdaySelectionEnabled ? weekdayDot(selectedWeekday) : false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }} />

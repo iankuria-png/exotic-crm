@@ -34,11 +34,11 @@ function defaultCustomRange() {
     return { from: toInputDate(from), to: toInputDate(to) };
 }
 
+// The /country-revenue endpoint only accepts 'week' or 'month' (it selects the goal cadence to
+// compare markets against — the date range itself comes from the explicit from/to window). Short
+// windows map to weekly goals, everything else to monthly. Never send 'custom' — it 422s.
 function countryRangeMode(horizon) {
-    if (horizon === '30d') return 'month';
-    if (horizon === '90d') return 'custom';
-    if (horizon === 'ytd') return 'custom';
-    return 'custom';
+    return (horizon === 'today' || horizon === '7d') ? 'week' : 'month';
 }
 
 function apiError(error, fallback) {
@@ -333,7 +333,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         data={countryRevenueQuery.data || []}
                         fromDate={window?.from || customRange.from}
                         toDate={window?.to || customRange.to}
-                        rangeMode={countryRangeMode(horizon)}
+                        rangeMode="custom"
                         isLoading={countryRevenueQuery.isLoading}
                         errorMessage={countryRevenueQuery.isError ? apiError(countryRevenueQuery.error, 'Top markets could not be loaded.') : null}
                         currencyMode={reporting.displayMode}
