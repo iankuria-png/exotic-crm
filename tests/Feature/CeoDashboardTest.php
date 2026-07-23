@@ -531,6 +531,56 @@ class CeoDashboardTest extends TestCase
         \Illuminate\Support\Carbon::setTestNow();
     }
 
+    public function test_summary_memoizes_fx_lookups_and_still_resolves_leading_market(): void
+    {
+        config(['services.reporting_fx.enabled' => true]);
+
+        $kenya = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya', 'currency_code' => 'KES']);
+        $kenyaProduct = Product::factory()->create(['platform_id' => $kenya->id, 'currency' => 'KES']);
+        $tanzania = Platform::factory()->create(['name' => 'Dar', 'country' => 'Tanzania', 'currency_code' => 'TZS']);
+        $tzProduct = Product::factory()->create(['platform_id' => $tanzania->id, 'currency' => 'TZS']);
+        Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
+
+        // Only 4 distinct (currency, date) pairs exist, but many payment row-groups reference them.
+        foreach (['KES' => 0.0077, 'TZS' => 0.0004] as $currency => $rate) {
+            foreach (['2026-05-10', '2026-05-20'] as $date) {
+                ReportingFxRate::query()->create([
+                    'provider' => 'manual',
+                    'source_currency' => $currency,
+                    'target_currency' => 'USD',
+                    'rate_date' => $date,
+                    'rate' => $rate,
+                    'fetched_at' => now(),
+                ]);
+            }
+        }
+
+        foreach (['2026-05-10 09:00:00', '2026-05-20 09:00:00'] as $ts) {
+            foreach (range(1, 4) as $i) {
+                $this->payment($kenya, $kenyaProduct, ['amount' => 100000, 'currency' => 'KES', 'completed_at' => $ts, 'created_at' => $ts]);
+                $this->payment($tanzania, $tzProduct, ['amount' => 100000, 'currency' => 'TZS', 'completed_at' => $ts, 'created_at' => $ts]);
+            }
+        }
+
+        \Illuminate\Support\Facades\DB::enableQueryLog();
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=custom&from=2026-05-01&to=2026-05-31&reporting_currency=USD')
+            ->assertOk()->json();
+        $fxQueries = collect(\Illuminate\Support\Facades\DB::getQueryLog())
+            ->filter(fn (array $entry) => str_contains($entry['query'], 'reporting_fx_rates'))
+            ->count();
+        \Illuminate\Support\Facades\DB::disableQueryLog();
+
+        // Memoized: at most one lookup per distinct (currency, date) pair (4), not one per
+        // row-group across every aggregation. Without the memo this runs into the dozens.
+        $this->assertLessThanOrEqual(6, $fxQueries, "FX lookups were not memoized: {$fxQueries} queries hit reporting_fx_rates");
+
+        // Kenya (KES @ 0.0077) far outweighs Tanzania (TZS @ 0.0004); the leading-market insight
+        // must still resolve from the lightweight path summary() now uses.
+        $topMarket = collect($summary['insights'])->firstWhere('key', 'top_market');
+        $this->assertNotNull($topMarket);
+        $this->assertStringContainsString('Nairobi', $topMarket['message']);
+    }
+
     public function test_single_day_hourly_trend_reconciles_to_collected_with_cfa_market(): void
     {
         config([

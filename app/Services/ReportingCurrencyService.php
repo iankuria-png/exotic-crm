@@ -19,6 +19,21 @@ class ReportingCurrencyService
     public const MODE_FLAT = 'flat';
     public const DEFAULT_TARGET_CURRENCY = 'USD';
 
+    /**
+     * Per-request memo of the resolved settings array. The dashboard normalises hundreds of
+     * row-groups per load, each of which previously re-read the IntegrationSetting row.
+     */
+    private ?array $settingsCache = null;
+
+    /**
+     * Per-request FX-rate memo keyed by "source|target|date|provider|allowLiveFetch".
+     * resolveRate() runs two DB queries per lookup; without this the trend + market-pie
+     * aggregations fire thousands of identical FX reads per dashboard load.
+     *
+     * @var array<string, ReportingFxRate|null>
+     */
+    private array $fxRateCache = [];
+
     public function __construct(
         private readonly CurrencyCanonicalizer $currencyCanonicalizer
     ) {
@@ -26,6 +41,10 @@ class ReportingCurrencyService
 
     public function settings(): array
     {
+        if ($this->settingsCache !== null) {
+            return $this->settingsCache;
+        }
+
         $stored = IntegrationSetting::query()
             ->where('key', self::SETTINGS_KEY)
             ->value('value');
@@ -39,7 +58,7 @@ class ReportingCurrencyService
 
         $apiKeyConfigured = !empty($stored['api_key_encrypted']) || !empty(config('services.reporting_fx.api_key'));
 
-        return [
+        return $this->settingsCache = [
             'enabled' => (bool) ($stored['enabled'] ?? config('services.reporting_fx.enabled', false)),
             'target_currency' => $targetCurrency,
             'provider' => $provider !== '' ? $provider : 'currencyapi',
@@ -90,6 +109,11 @@ class ReportingCurrencyService
                 'updated_by' => $userId,
             ]
         );
+
+        // Settings changed (target currency, provider, stale window) — drop the request memos so
+        // the returned snapshot and any subsequent rate lookups reflect the new configuration.
+        $this->settingsCache = null;
+        $this->fxRateCache = [];
 
         return $this->settings();
     }
@@ -413,6 +437,15 @@ class ReportingCurrencyService
     private function resolveRate(string $sourceCurrency, string $targetCurrency, string $date, array $settings, bool $allowLiveFetch = true): ?ReportingFxRate
     {
         $provider = (string) ($settings['provider'] ?? 'currencyapi');
+
+        // Per-request memo: the same (currency, date) is resolved once per row-group across the
+        // dashboard's aggregations. allowLiveFetch is part of the key because a false-mode miss
+        // ("no cached rate") differs from a true-mode miss ("live fetch also failed").
+        $cacheKey = "{$sourceCurrency}|{$targetCurrency}|{$date}|{$provider}|" . ($allowLiveFetch ? '1' : '0');
+        if (array_key_exists($cacheKey, $this->fxRateCache)) {
+            return $this->fxRateCache[$cacheKey];
+        }
+
         $staleDays = max(0, (int) ($settings['stale_days'] ?? 7));
         $fromDate = Carbon::parse($date)->subDays($staleDays)->toDateString();
 
@@ -425,7 +458,7 @@ class ReportingCurrencyService
             ->first();
 
         if ($manual) {
-            return $manual;
+            return $this->fxRateCache[$cacheKey] = $manual;
         }
 
         $cached = ReportingFxRate::query()
@@ -438,15 +471,15 @@ class ReportingCurrencyService
             ->first();
 
         if ($cached) {
-            return $cached;
+            return $this->fxRateCache[$cacheKey] = $cached;
         }
 
         // Cache miss: attempt a live fetch from CurrencyAPI if a key is available.
         if ($allowLiveFetch && $provider === 'currencyapi') {
-            return $this->fetchAndCacheLiveRate($sourceCurrency, $targetCurrency, $date);
+            return $this->fxRateCache[$cacheKey] = $this->fetchAndCacheLiveRate($sourceCurrency, $targetCurrency, $date);
         }
 
-        return null;
+        return $this->fxRateCache[$cacheKey] = null;
     }
 
     private function fetchAndCacheLiveRate(string $sourceCurrency, string $targetCurrency, string $date): ?ReportingFxRate

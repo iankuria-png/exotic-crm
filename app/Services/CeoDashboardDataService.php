@@ -39,8 +39,11 @@ class CeoDashboardDataService
         $platformIds = $context['platform_id'] ? [(int) $context['platform_id']] : null;
         $currentRecovery = $this->paymentRecoveryMetricService->compute($platformIds, $context['from'], $context['to']);
         $priorRecovery = $this->paymentRecoveryMetricService->compute($platformIds, $context['prior_from'], $context['prior_to']);
-        $marketPie = $this->marketPie($request)['markets'] ?? [];
-        $agentPerformance = $this->agentPerformance($request)['agents'] ?? [];
+        // Insights only need the single leading market + top producer. Computing the *full*
+        // market-pie and agent-performance here duplicated the two heaviest aggregations, which
+        // the frontend already fetches as their own widgets; derive just the top row instead.
+        $topMarket = $this->topMarketForInsight($context);
+        $topAgent = $this->topAgentForInsight($context);
 
         return [
             'window' => $this->serializeWindow($context),
@@ -83,7 +86,7 @@ class CeoDashboardDataService
                 ],
             ],
             'customer_mix' => $currentCustomerMix,
-            'insights' => $this->insights($marketPie, $agentPerformance, $currentRevenue, $priorRevenue, $currentCustomerMix, $context),
+            'insights' => $this->insights($topMarket, $topAgent, $currentRevenue, $priorRevenue, $currentCustomerMix, $context),
         ];
     }
 
@@ -1227,10 +1230,106 @@ class CeoDashboardDataService
         };
     }
 
-    private function insights(array $markets, array $agents, array $currentRevenue, array $priorRevenue, array $customerMix, array $context): array
+    /**
+     * Leading market for the insight strip — the market with the highest normalized revenue and
+     * its share of the window total. A lightweight cousin of marketPie() with no channel
+     * classification or relation eager-loads, so summary() stops re-running the full pie.
+     *
+     * @return array{platform_id:int,name:string,share_percent:float}|null
+     */
+    private function topMarketForInsight(array $context): ?array
     {
-        $topMarket = $markets[0] ?? null;
-        $topAgent = $agents[0] ?? null;
+        $targetCurrency = $context['target_currency'];
+        $rows = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->selectRaw($this->dateExpression().' as event_date')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->groupByRaw($this->dateExpression())
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return null;
+        }
+
+        $perMarket = $rows
+            ->groupBy('platform_id')
+            ->map(function (Collection $group) use ($targetCurrency) {
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($group, $targetCurrency, false);
+
+                return [
+                    'platform_id' => (int) $group->first()->platform_id,
+                    'name' => (string) ($group->first()->platform_name ?: 'Unassigned market'),
+                    'value' => (float) ($normalized['normalized_total'] ?? 0),
+                ];
+            })
+            ->values();
+
+        $total = (float) $perMarket->sum('value');
+        $top = $perMarket->sortByDesc('value')->first();
+
+        if (! $top || $total <= 0) {
+            return null;
+        }
+
+        return [
+            'platform_id' => (int) $top['platform_id'],
+            'name' => $top['name'],
+            'share_percent' => round(($top['value'] / $total) * 100, 1),
+        ];
+    }
+
+    /**
+     * Top producer for the insight strip — highest normalized revenue by assigned agent. Reuses
+     * agentRevenueRows() but skips the targets/activations/bucketing that agentPerformance() does.
+     *
+     * @return array{id:int,name:string}|null
+     */
+    private function topAgentForInsight(array $context): ?array
+    {
+        $targetCurrency = $context['target_currency'];
+        $rows = $this->agentRevenueRows($context['from'], $context['to'], $context['platform_id'], $targetCurrency);
+
+        if ($rows->isEmpty()) {
+            return null;
+        }
+
+        $top = $rows
+            ->groupBy('agent_id')
+            ->map(function (Collection $group) use ($targetCurrency) {
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($group, $targetCurrency, false);
+
+                return [
+                    'agent_id' => (int) $group->first()->agent_id,
+                    'value' => (float) ($normalized['normalized_total'] ?? 0),
+                ];
+            })
+            ->sortByDesc('value')
+            ->first();
+
+        if (! $top || $top['value'] <= 0) {
+            return null;
+        }
+
+        $name = User::query()->whereKey($top['agent_id'])->value('name');
+
+        if (! $name) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $top['agent_id'],
+            'name' => (string) $name,
+        ];
+    }
+
+    private function insights(?array $topMarket, ?array $topAgent, array $currentRevenue, array $priorRevenue, array $customerMix, array $context): array
+    {
         $existingShare = (float) data_get($customerMix, 'buckets.existing_active.share_percent', 0);
         $newShare = (float) data_get($customerMix, 'buckets.new_active.share_percent', 0);
         $avgDaily = $this->averageDailyInsight($currentRevenue, $priorRevenue, $context);
