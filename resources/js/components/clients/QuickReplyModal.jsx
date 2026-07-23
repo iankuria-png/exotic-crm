@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -13,6 +13,85 @@ function situationLabel(value) {
     };
 
     return labels[value] || 'Check-in';
+}
+
+const LIFECYCLE_FLOW_OPTIONS = [
+    { value: 'reactivation', label: 'Win-back' },
+    { value: 'onboarding', label: 'Welcome & activate' },
+];
+
+function suggestedFlow(situation) {
+    if (situation === 'never_paid') return 'onboarding';
+    return 'reactivation';
+}
+
+// Dynamic, link-bearing lifecycle SMS — routed through the same gated service the
+// automation uses (dedup / state / quiet hours / pause all apply). Preview before
+// send shows exactly what the client will receive.
+function LifecycleSmsBlock({ client, situation, toast }) {
+    const queryClient = useQueryClient();
+    const clientId = client?.id;
+    const [flow, setFlow] = useState(() => suggestedFlow(situation));
+
+    const previewQuery = useQuery({
+        queryKey: ['client-lifecycle-preview', clientId, flow],
+        queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/preview`, { params: { flow } }).then((r) => r.data),
+        enabled: Boolean(clientId),
+    });
+
+    const sendMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${clientId}/lifecycle-sms`, { flow }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client-lifecycle-preview', clientId] });
+            toast?.success?.(data?.message || 'Lifecycle SMS sent.');
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Send failed.'),
+    });
+
+    const preview = previewQuery.data;
+
+    return (
+        <section className="mb-4 rounded-lg border border-teal-200 bg-teal-50/50 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h4 className="text-sm font-semibold text-slate-900">Lifecycle SMS with payment link</h4>
+                    <p className="text-[11px] text-slate-500">Sends a tokenized checkout link. Deduped and counted automatically.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <select value={flow} onChange={(e) => setFlow(e.target.value)} className="crm-select text-xs" aria-label="Lifecycle flow">
+                        {LIFECYCLE_FLOW_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                    <button
+                        type="button"
+                        disabled={sendMutation.isPending || !preview?.would_send}
+                        onClick={() => {
+                            if (window.confirm(`Send the ${flow === 'onboarding' ? 'Welcome & activate' : 'Win-back'} SMS to ${client?.name || 'this client'}?`)) {
+                                sendMutation.mutate();
+                            }
+                        }}
+                        className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {sendMutation.isPending ? 'Sending…' : 'Send SMS'}
+                    </button>
+                </div>
+            </div>
+            {previewQuery.isLoading ? (
+                <p className="text-xs text-slate-400">Loading preview…</p>
+            ) : preview?.body ? (
+                <>
+                    <p className="rounded-md border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-700 whitespace-pre-wrap">{preview.body}</p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                        ~{preview.segments || 1} segment{(preview.segments || 1) === 1 ? '' : 's'}
+                        {!preview.would_send ? ` · would skip: ${preview.skip_reason}` : ' · ready to send'}
+                    </p>
+                </>
+            ) : (
+                <p className="text-xs text-slate-400">No lifecycle template available for this flow / market.</p>
+            )}
+        </section>
+    );
 }
 
 export default function QuickReplyModal({ client, onClose }) {
@@ -104,6 +183,8 @@ export default function QuickReplyModal({ client, onClose }) {
                 </header>
 
                 <div className="min-h-[220px] flex-1 overflow-y-auto p-4">
+                    <LifecycleSmsBlock client={client} situation={payload.situation} toast={toast} />
+
                     {repliesQuery.isLoading ? (
                         <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
                             <div className="h-5 w-5 animate-spin rounded-full border-2 border-teal-600 border-t-transparent" />
