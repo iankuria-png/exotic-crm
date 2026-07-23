@@ -149,11 +149,20 @@ function LifecycleBadge({ entry, label }) {
     );
 }
 
-function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpenChat, onSendWelcome, welcomePending }) {
+function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpenChat, onSendWelcome, welcomePending, onPreview, selected, onToggleSelect, selectable }) {
     return (
-        <article className={`flex flex-col gap-2 border-l-4 px-4 py-3 transition hover:bg-slate-50 ${BUCKET_BORDER(row.sla_bucket)}`}>
+        <article className={`flex flex-col gap-2 border-l-4 px-4 py-3 transition hover:bg-slate-50 ${selected ? 'bg-teal-50/40' : ''} ${BUCKET_BORDER(row.sla_bucket)}`}>
             <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
+                    {selectable ? (
+                        <input
+                            type="checkbox"
+                            checked={Boolean(selected)}
+                            onChange={onToggleSelect}
+                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                            aria-label={`Select ${row.name || 'client'}`}
+                        />
+                    ) : null}
                     <SlaPill bucket={row.sla_bucket} ageSeconds={row.age_seconds} />
                     <button type="button" onClick={onOpenClient} className="truncate text-left text-sm font-semibold text-slate-800 hover:text-teal-700">
                         {row.name || '—'}
@@ -174,12 +183,15 @@ function NewSignupCard({ row, onMarkContacted, onCloseCase, onOpenClient, onOpen
             <div className="flex flex-wrap items-center gap-2">
                 <ActionChip variant="primary" onClick={onMarkContacted}>Mark contacted</ActionChip>
                 {row.welcome_eligible ? (
-                    <ActionChip
-                        onClick={onSendWelcome}
-                        disabled={welcomePending || row.lifecycle?.onboarding?.status === 'sent'}
-                    >
-                        {row.lifecycle?.onboarding?.status === 'sent' ? 'Welcome sent' : 'Send welcome'}
-                    </ActionChip>
+                    <>
+                        <ActionChip
+                            onClick={onSendWelcome}
+                            disabled={welcomePending || row.lifecycle?.onboarding?.status === 'sent'}
+                        >
+                            {row.lifecycle?.onboarding?.status === 'sent' ? 'Welcome sent' : 'Send welcome'}
+                        </ActionChip>
+                        <ActionChip onClick={onPreview}>Preview</ActionChip>
+                    </>
                 ) : null}
                 {row.sb_user_id ? <ActionChip onClick={onOpenChat}>Open chat</ActionChip> : null}
                 <ActionChip onClick={onOpenClient}>Open client</ActionChip>
@@ -272,6 +284,55 @@ function StalledCard({ row, onMarkContacted, onCloseCase, onOpenClient }) {
     );
 }
 
+// Preview what a client will actually receive for a lifecycle flow — no send.
+function LifecyclePreviewDialog({ open, client, flow, onClose }) {
+    const query = useQuery({
+        queryKey: ['lifecycle-preview', client?.id, flow],
+        queryFn: () => api.get(`/crm/clients/${client.id}/lifecycle-sms/preview`, { params: { flow } }).then((r) => r.data),
+        enabled: open && Boolean(client?.id),
+    });
+
+    if (!open) return null;
+    const data = query.data;
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/45 p-4" onClick={onClose}>
+            <div role="dialog" aria-modal="true" className="w-full max-w-lg overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <header className="border-b border-slate-100 px-4 py-3">
+                    <h3 className="text-sm font-semibold text-slate-900">Message preview — {client?.name || 'client'}</h3>
+                    <p className="text-xs text-slate-500">Exactly what this client would receive. Nothing is sent.</p>
+                </header>
+                <div className="p-4">
+                    {query.isLoading ? (
+                        <div className="py-8 text-center text-sm text-slate-400">Rendering preview…</div>
+                    ) : query.isError ? (
+                        <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">Could not load preview.</div>
+                    ) : (
+                        <div className="space-y-3">
+                            {!data?.would_send ? (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                    Would be skipped: <span className="font-semibold">{data?.skip_reason || 'not eligible'}</span>. Preview shown for reference.
+                                </div>
+                            ) : null}
+                            {data?.body ? (
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800 whitespace-pre-wrap">{data.body}</div>
+                            ) : (
+                                <div className="rounded-md border border-dashed border-slate-200 py-6 text-center text-sm text-slate-400">No template available for this flow.</div>
+                            )}
+                            {data?.body ? (
+                                <p className="text-[11px] text-slate-400">{data.body.length} characters · ~{data.segments || 1} SMS segment{(data.segments || 1) === 1 ? '' : 's'}{data.template_title ? ` · ${data.template_title}` : ''}</p>
+                            ) : null}
+                        </div>
+                    )}
+                </div>
+                <footer className="flex items-center justify-end border-t border-slate-100 p-4">
+                    <button type="button" onClick={onClose} className="crm-btn-secondary">Close</button>
+                </footer>
+            </div>
+        </div>
+    );
+}
+
 export default function ConversionQueueView({ platformId = '' }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -286,6 +347,8 @@ export default function ConversionQueueView({ platformId = '' }) {
     const [closeDialog, setCloseDialog] = useState({ open: false, client: null });
     const [closeError, setCloseError] = useState(null);
     const [closePaymentDialog, setClosePaymentDialog] = useState({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
+    const [selectedSignups, setSelectedSignups] = useState(() => new Set());
+    const [preview, setPreview] = useState({ open: false, client: null, flow: 'onboarding' });
 
     const range = useMemo(() => readRangeFromUrl(searchParams), [searchParams]);
 
@@ -390,6 +453,23 @@ export default function ConversionQueueView({ platformId = '' }) {
         onError: (err) => toast?.error?.(err?.response?.data?.message || 'Recovery SMS failed.'),
     });
 
+    const bulkWelcomeMutation = useMutation({
+        mutationFn: (clientIds) => api.post('/crm/lifecycle-sms/bulk', { flow: 'onboarding', client_ids: clientIds }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            setSelectedSignups(new Set());
+            const s = data?.summary || {};
+            toast?.success?.(data?.message || `${s.sent || 0} sent.`);
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Bulk send failed.'),
+    });
+
+    const toggleSignup = (id) => setSelectedSignups((current) => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
+
     const closePaymentMutation = useMutation({
         mutationFn: ({ paymentId, reason_code, reason_note, converted_payment_id }) =>
             api.post(`/crm/payments/${paymentId}/manual-close`, {
@@ -484,16 +564,64 @@ export default function ConversionQueueView({ platformId = '' }) {
                 />
                 {!collapsed.new_signups ? (
                     <div className="divide-y divide-slate-100">
+                        {(() => {
+                            const eligible = (buckets.new_signups || []).filter((r) => r.welcome_eligible && r.lifecycle?.onboarding?.status !== 'sent');
+                            const allSelected = eligible.length > 0 && eligible.every((r) => selectedSignups.has(r.id));
+                            if (eligible.length === 0) return null;
+                            return (
+                                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 px-4 py-2">
+                                    <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                                        <input
+                                            type="checkbox"
+                                            checked={allSelected}
+                                            onChange={(e) => {
+                                                setSelectedSignups(() => e.target.checked ? new Set(eligible.map((r) => r.id)) : new Set());
+                                            }}
+                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                        />
+                                        Select all welcome-eligible ({eligible.length})
+                                    </label>
+                                    {selectedSignups.size > 0 ? (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-slate-500">{selectedSignups.size} selected</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedSignups(new Set())}
+                                                className="text-xs text-slate-500 hover:underline"
+                                            >
+                                                Clear
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={bulkWelcomeMutation.isPending}
+                                                onClick={() => {
+                                                    if (window.confirm(`Send the welcome SMS to ${selectedSignups.size} client${selectedSignups.size === 1 ? '' : 's'}? Real SMS will go out to eligible clients.`)) {
+                                                        bulkWelcomeMutation.mutate([...selectedSignups]);
+                                                    }
+                                                }}
+                                                className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {bulkWelcomeMutation.isPending ? 'Sending…' : `Send welcome to ${selectedSignups.size}`}
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            );
+                        })()}
                         {(buckets.new_signups || []).map((row) => (
                             <NewSignupCard
                                 key={`signup-${row.id}`}
                                 row={row}
+                                selectable={row.welcome_eligible && row.lifecycle?.onboarding?.status !== 'sent'}
+                                selected={selectedSignups.has(row.id)}
+                                onToggleSelect={() => toggleSignup(row.id)}
                                 onMarkContacted={() => markContactedMutation.mutate({ clientId: row.id, channel: 'whatsapp' })}
                                 onOpenClient={() => navigate(`/clients/${row.id}`)}
                                 onOpenChat={() => navigate(`/conversations?client_id=${row.id}`)}
                                 onCloseCase={() => { setCloseError(null); setCloseDialog({ open: true, client: row }); }}
                                 onSendWelcome={() => sendWelcomeMutation.mutate(row.id)}
                                 welcomePending={sendWelcomeMutation.isPending}
+                                onPreview={() => setPreview({ open: true, client: row, flow: 'onboarding' })}
                             />
                         ))}
                         <LoadMoreFooter
@@ -576,6 +704,13 @@ export default function ConversionQueueView({ platformId = '' }) {
                     </div>
                 ) : null}
             </div>
+
+            <LifecyclePreviewDialog
+                open={preview.open}
+                client={preview.client}
+                flow={preview.flow}
+                onClose={() => setPreview({ open: false, client: null, flow: 'onboarding' })}
+            />
 
             <CloseCaseDialog
                 open={closeDialog.open}

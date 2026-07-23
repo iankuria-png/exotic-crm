@@ -1076,18 +1076,26 @@ function ChurnedClientRow({ row, onWinBackSms, onReactivate, onMarkWonBack, onCl
 
 // ─── Win-back SMS dialog ──────────────────────────────────────────────────────
 
-function WinBackSmsDialog({ open, client, onCancel, onConfirm, isPending }) {
+function WinBackSmsDialog({ open, client, onCancel, onSendLifecycle, onSendCustom, isPending }) {
+    const [customOpen, setCustomOpen] = useState(false);
     const [message, setMessage] = useState('');
 
-    const defaultMsg = client
-        ? `Hi ${client.name || 'there'}, we noticed your subscription expired. We'd love to have you back — contact us to reactivate at a special rate!`
-        : '';
+    // Load the seeded win-back template rendered for THIS client (with a real
+    // payment link at send time), so the copy is dynamic — not hardcoded.
+    const preview = useQuery({
+        queryKey: ['churn-winback-preview', client?.id],
+        queryFn: () => api.get(`/crm/clients/${client.id}/lifecycle-sms/preview`, { params: { flow: 'reactivation' } }).then((r) => r.data),
+        enabled: open && Boolean(client?.id),
+    });
 
     React.useEffect(() => {
-        if (open && client) setMessage(defaultMsg);
+        if (open) { setCustomOpen(false); setMessage(''); }
     }, [open, client?.id]);
 
     if (!open) return null;
+
+    const data = preview.data;
+    const eligible = Boolean(data?.would_send);
 
     return (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4" onClick={isPending ? undefined : onCancel}>
@@ -1098,28 +1106,75 @@ function WinBackSmsDialog({ open, client, onCancel, onConfirm, isPending }) {
                         <p className="crm-panel-subtitle">Sending to {client?.phone_normalized}</p>
                     </div>
                 </header>
-                <div className="p-4">
-                    <textarea
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        rows={4}
-                        maxLength={480}
-                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                        placeholder="Type your win-back message…"
-                        disabled={isPending}
-                    />
-                    <p className="mt-1 text-right text-[11px] text-slate-400">{message.length}/480</p>
+                <div className="space-y-3 p-4">
+                    {preview.isLoading ? (
+                        <div className="py-6 text-center text-sm text-slate-400">Loading win-back template…</div>
+                    ) : (
+                        <>
+                            <div>
+                                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Win-back template preview</p>
+                                {data?.body ? (
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800 whitespace-pre-wrap">{data.body}</div>
+                                ) : (
+                                    <div className="rounded-md border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">No win-back template configured yet.</div>
+                                )}
+                                {data?.body ? (
+                                    <p className="mt-1 text-[11px] text-slate-400">~{data.segments || 1} SMS segment{(data.segments || 1) === 1 ? '' : 's'}{data.template_title ? ` · ${data.template_title}` : ''} · the live send carries a real payment link.</p>
+                                ) : null}
+                            </div>
+
+                            {!eligible ? (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                    Automated win-back is unavailable for this client ({data?.skip_reason || 'not eligible'}). You can still send a custom message below.
+                                </div>
+                            ) : null}
+
+                            <button
+                                type="button"
+                                onClick={() => setCustomOpen((v) => !v)}
+                                className="text-xs text-teal-700 hover:underline"
+                            >
+                                {customOpen ? 'Hide custom message' : 'Send a custom message instead'}
+                            </button>
+
+                            {customOpen ? (
+                                <div>
+                                    <textarea
+                                        value={message}
+                                        onChange={(e) => setMessage(e.target.value)}
+                                        rows={4}
+                                        maxLength={480}
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                        placeholder="Type a custom win-back message…"
+                                        disabled={isPending}
+                                    />
+                                    <p className="mt-1 text-right text-[11px] text-slate-400">{message.length}/480</p>
+                                </div>
+                            ) : null}
+                        </>
+                    )}
                 </div>
                 <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
                     <button type="button" onClick={onCancel} disabled={isPending} className="crm-btn-secondary">Cancel</button>
-                    <button
-                        type="button"
-                        disabled={!message.trim() || isPending}
-                        onClick={() => onConfirm({ message: message.trim() })}
-                        className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {isPending ? 'Sending…' : 'Send SMS'}
-                    </button>
+                    {customOpen ? (
+                        <button
+                            type="button"
+                            disabled={!message.trim() || isPending}
+                            onClick={() => onSendCustom({ message: message.trim() })}
+                            className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {isPending ? 'Sending…' : 'Send custom SMS'}
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            disabled={!eligible || isPending}
+                            onClick={onSendLifecycle}
+                            className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {isPending ? 'Sending…' : 'Send win-back SMS'}
+                        </button>
+                    )}
                 </footer>
             </div>
         </div>
@@ -1276,6 +1331,20 @@ export default function ChurnedQueueView({ platformId = '' }) {
         onError: (err) => toast?.error?.(err?.response?.data?.message || 'Failed to mark as won-back.'),
     });
 
+    // Preferred path: the seeded win-back template with a real payment link,
+    // routed through the lifecycle reactivation flow (dedup + counted + gated).
+    const lifecycleWinBackMutation = useMutation({
+        mutationFn: (clientId) =>
+            api.post(`/crm/clients/${clientId}/lifecycle-sms`, { flow: 'reactivation' }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients-churned'] });
+            toast?.success?.('Win-back SMS sent.');
+            setSmsDialog({ open: false, client: null });
+        },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Win-back send failed.'),
+    });
+
+    // Fallback: a custom, agent-typed message via the conversation channel.
     const smsMutation = useMutation({
         mutationFn: ({ clientId, message }) =>
             api.post(`/crm/conversations/clients/${clientId}/send`, {
@@ -1734,9 +1803,10 @@ export default function ChurnedQueueView({ platformId = '' }) {
             <WinBackSmsDialog
                 open={smsDialog.open}
                 client={smsDialog.client}
-                isPending={smsMutation.isPending}
-                onCancel={() => { if (!smsMutation.isPending) setSmsDialog({ open: false, client: null }); }}
-                onConfirm={({ message }) => smsMutation.mutate({ clientId: smsDialog.client?.id, message })}
+                isPending={smsMutation.isPending || lifecycleWinBackMutation.isPending}
+                onCancel={() => { if (!smsMutation.isPending && !lifecycleWinBackMutation.isPending) setSmsDialog({ open: false, client: null }); }}
+                onSendLifecycle={() => lifecycleWinBackMutation.mutate(smsDialog.client?.id)}
+                onSendCustom={({ message }) => smsMutation.mutate({ clientId: smsDialog.client?.id, message })}
             />
 
             <ConfirmDialog

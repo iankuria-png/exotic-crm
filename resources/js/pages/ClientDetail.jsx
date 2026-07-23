@@ -580,6 +580,138 @@ function subsidiaryTrialErrorMessage(code) {
     }
 }
 
+const LIFECYCLE_FLOW_LABELS = {
+    onboarding: 'Welcome & activate',
+    recovery: 'Payment recovery',
+    reactivation: 'Win-back',
+    renewal: 'Renewal',
+};
+
+function relativeTimeShort(iso) {
+    if (!iso) return '';
+    const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+}
+
+// Client-page lifecycle outreach: reminders-sent metric, per-flow breakdown,
+// pause toggle, and a preview-then-send action routed through the same gated
+// LifecycleSmsService the automation uses (so nothing double-sends).
+function LifecycleReminderCard({ client, toast }) {
+    const queryClient = useQueryClient();
+    const clientId = client?.id;
+    const [flow, setFlow] = useState('reactivation');
+
+    const statsQuery = useQuery({
+        queryKey: ['client-lifecycle-stats', clientId],
+        queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/stats`).then((r) => r.data),
+        enabled: Boolean(clientId),
+    });
+
+    const previewQuery = useQuery({
+        queryKey: ['client-lifecycle-preview', clientId, flow],
+        queryFn: () => api.get(`/crm/clients/${clientId}/lifecycle-sms/preview`, { params: { flow } }).then((r) => r.data),
+        enabled: Boolean(clientId),
+    });
+
+    const invalidate = () => {
+        queryClient.invalidateQueries({ queryKey: ['client-lifecycle-stats', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-lifecycle-preview', clientId] });
+    };
+
+    const sendMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${clientId}/lifecycle-sms`, { flow }).then((r) => r.data),
+        onSuccess: (data) => { invalidate(); toast?.success?.(data?.message || 'Reminder sent.'); },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Send failed.'),
+    });
+
+    const pauseMutation = useMutation({
+        mutationFn: (paused) => api.post(`/crm/clients/${clientId}/lifecycle-sms/pause`, { paused }).then((r) => r.data),
+        onSuccess: () => { invalidate(); toast?.success?.('Reminder schedule updated.'); },
+        onError: (err) => toast?.error?.(err?.response?.data?.message || 'Update failed.'),
+    });
+
+    const stats = statsQuery.data;
+    const preview = previewQuery.data;
+    const paused = Boolean(stats?.paused);
+
+    return (
+        <ProfileInfoCard title="Lifecycle reminders">
+            <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <p className="text-2xl font-semibold text-slate-900">{stats?.reminders_sent ?? '—'}</p>
+                        <p className="text-xs text-slate-500">
+                            reminders sent{stats?.last_sent_at ? ` · last ${relativeTimeShort(stats.last_sent_at)}` : ''}
+                        </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                        <input
+                            type="checkbox"
+                            checked={paused}
+                            disabled={pauseMutation.isPending}
+                            onChange={(e) => pauseMutation.mutate(e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                        />
+                        {paused ? 'Paused' : 'Pause reminders'}
+                    </label>
+                </div>
+
+                {stats?.by_flow && Object.keys(stats.by_flow).length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                        {Object.entries(stats.by_flow).map(([f, count]) => (
+                            <span key={f} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                {LIFECYCLE_FLOW_LABELS[f] || f}: {count}
+                            </span>
+                        ))}
+                    </div>
+                ) : null}
+
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                    <div className="mb-2 flex items-center gap-2">
+                        <select
+                            value={flow}
+                            onChange={(e) => setFlow(e.target.value)}
+                            className="crm-select text-xs"
+                            aria-label="Reminder type"
+                        >
+                            <option value="reactivation">Win-back</option>
+                            <option value="onboarding">Welcome & activate</option>
+                            <option value="recovery">Payment recovery</option>
+                        </select>
+                        <button
+                            type="button"
+                            disabled={sendMutation.isPending || paused || !preview?.would_send}
+                            onClick={() => {
+                                if (window.confirm(`Send the ${LIFECYCLE_FLOW_LABELS[flow]} SMS to ${client?.name || 'this client'}?`)) {
+                                    sendMutation.mutate();
+                                }
+                            }}
+                            className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {sendMutation.isPending ? 'Sending…' : 'Send'}
+                        </button>
+                    </div>
+                    {previewQuery.isLoading ? (
+                        <p className="text-xs text-slate-400">Loading preview…</p>
+                    ) : preview?.body ? (
+                        <>
+                            <p className="rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-700 whitespace-pre-wrap">{preview.body}</p>
+                            <p className="mt-1 text-[11px] text-slate-400">
+                                ~{preview.segments || 1} segment{(preview.segments || 1) === 1 ? '' : 's'} · live send carries a real link
+                                {!preview.would_send ? ` · would skip: ${preview.skip_reason}` : ''}
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-xs text-slate-400">{paused ? 'Reminders are paused for this client.' : 'No template available for this flow / market.'}</p>
+                    )}
+                </div>
+            </div>
+        </ProfileInfoCard>
+    );
+}
+
 export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -3056,6 +3188,8 @@ export default function ClientDetail() {
                         <DefinitionRow label="Agent" value={client.assigned_agent?.name || 'Unassigned'} />
                     </dl>
                 </ProfileInfoCard>
+
+                <LifecycleReminderCard client={client} toast={toast} />
             </section>
 
             <section className="crm-surface p-2">

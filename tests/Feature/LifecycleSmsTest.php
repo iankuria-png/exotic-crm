@@ -581,6 +581,66 @@ class LifecycleSmsTest extends TestCase
         $this->assertStringContainsString('{{payment_link}}', (string) $winBack->body);
     }
 
+    public function test_paused_client_is_skipped(): void
+    {
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $this->onboardingTemplate();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'fast_signup',
+            'reminders_paused_until' => now()->addDays(3),
+        ]);
+
+        $result = $this->service()->send('onboarding', $client);
+        $this->assertSame('reminders_paused', $result['skip_reason']);
+    }
+
+    public function test_successful_send_stamps_first_contact_and_counts_in_stats(): void
+    {
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $this->fakeSmsDelivery();
+        $this->onboardingTemplate();
+        $this->admin();
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'fast_signup',
+            'first_contact_at' => null,
+        ]);
+
+        $result = $this->service()->send('onboarding', $client);
+        $this->assertSame('sent', $result['status'], json_encode($result));
+
+        $fresh = $client->fresh();
+        $this->assertNotNull($fresh->first_contact_at, 'a successful send should record first contact');
+        $this->assertNotNull($fresh->last_contact_at);
+
+        $stats = $this->service()->reminderStats($fresh);
+        $this->assertSame(1, $stats['reminders_sent']);
+        $this->assertNotNull($stats['last_sent_at']);
+        $this->assertSame(1, $stats['by_flow']['onboarding'] ?? 0);
+        $this->assertFalse($stats['paused']);
+    }
+
+    public function test_preview_for_client_renders_without_sending(): void
+    {
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $this->onboardingTemplate();
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'fast_signup']);
+
+        $preview = $this->service()->previewForClient('onboarding', $client);
+
+        $this->assertTrue($preview['would_send']);
+        $this->assertNotEmpty($preview['body']);
+        $this->assertGreaterThanOrEqual(1, $preview['segments']);
+        // Preview must not create deals/payments or a timeline record.
+        $this->assertSame(0, Deal::query()->count());
+        $this->assertSame(0, TimelineEvent::query()->where('event_type', LifecycleSmsService::TIMELINE_EVENT_TYPE)->count());
+    }
+
     public function test_run_command_dry_run_reports_targets_without_sending(): void
     {
         [$platform] = $this->marketWithOffer();

@@ -227,6 +227,10 @@ class LifecycleSmsService
             return $this->skipResult($flow, $client, 'missing_phone');
         }
 
+        if ($client->reminders_paused_until && $client->reminders_paused_until->isFuture()) {
+            return $this->skipResult($flow, $client, 'reminders_paused');
+        }
+
         // Payment-provider capability: tokenized only, checked BEFORE any
         // deal/payment is minted so a no-PSP market causes zero churn.
         if (!$this->paymentLinkService->hasTokenizedProvider($platform)) {
@@ -712,6 +716,15 @@ class LifecycleSmsService
                 'follow_up_at' => null,
                 'created_at' => now(),
             ]);
+
+            // A successful reminder counts as contact, so the client naturally
+            // moves out of the "New signups" conversion-queue bucket (which keys
+            // on first_contact_at IS NULL). Never un-set an earlier first contact.
+            $contactUpdates = ['last_contact_at' => now()];
+            if ($client->first_contact_at === null) {
+                $contactUpdates['first_contact_at'] = now();
+            }
+            $client->forceFill($contactUpdates)->saveQuietly();
         }
 
         $this->auditService->record([
@@ -893,6 +906,119 @@ class LifecycleSmsService
             'total_targets' => count($rows),
             'would_send_count' => $wouldSendCount,
             'skipped_count' => count($rows) - $wouldSendCount,
+        ];
+    }
+
+    /**
+     * What a single client would receive for a flow, without sending. Powers the
+     * "preview before send" affordance on the queues and client page.
+     */
+    public function previewForClient(string $flow, Client $client, array $options = []): array
+    {
+        $evaluation = $this->evaluate($flow, $client, $options);
+        $wouldSend = ($evaluation['status'] ?? '') === 'ok';
+
+        $template = $wouldSend
+            ? $evaluation['template']
+            : $this->resolveTemplate($flow, (int) $client->platform_id);
+
+        $body = null;
+        $segments = null;
+        if ($template) {
+            $variables = $this->templateService->buildClientVariables($client, null, array_merge(
+                $this->profileMetricsService->templateVariables($client),
+                [
+                    'payment_link' => '[payment link]',
+                    'amount' => '—',
+                    'currency' => (string) ($client->platform?->currency_code ?: ''),
+                    'profile_url' => (string) ($client->wp_profile_permalink ?: ''),
+                    'support_chat_url' => (string) ($client->platform?->support_chat_url ?: ''),
+                    'transaction_reference' => (string) (($options['payment'] ?? null)?->transaction_reference ?: ''),
+                    'agent_name' => 'the team',
+                ]
+            ));
+            $rendered = $this->templateService->renderTemplate($template, $variables);
+            $body = rtrim((string) $rendered['body']);
+            $segments = (int) max(1, ceil(mb_strlen($body) / 160));
+        }
+
+        return [
+            'flow' => $flow,
+            'client_id' => (int) $client->id,
+            'would_send' => $wouldSend,
+            'skip_reason' => $wouldSend ? null : ($evaluation['skip_reason'] ?? null),
+            'template_id' => $template?->id,
+            'template_title' => $template?->title,
+            'body' => $body,
+            'segments' => $segments,
+        ];
+    }
+
+    /**
+     * Per-client reminder telemetry for the client page: how many reminders
+     * have gone out, the last one, a per-flow breakdown, and pause state.
+     */
+    public function reminderStats(Client $client): array
+    {
+        // Headline count comes from the client-scoped system notes each send
+        // writes (one per successful lifecycle OR renewal reminder). NOTE: the
+        // client_notes table has no reliable created_at, so timestamps for
+        // "last sent" are derived from timeline events instead.
+        $total = ClientNote::query()
+            ->where('client_id', (int) $client->id)
+            ->where('note_type', 'system')
+            ->where(function (Builder $builder) {
+                $builder->where('content', 'like', '[Lifecycle]%')
+                    ->orWhere('content', 'like', '[RC%')
+                    ->orWhere('content', 'like', '[Renewal %');
+            })
+            ->where('content', 'not like', '%Failed%')
+            ->count();
+
+        $lifecycleEvents = TimelineEvent::query()
+            ->where('entity_type', 'client')
+            ->where('entity_id', (int) $client->id)
+            ->where('event_type', self::TIMELINE_EVENT_TYPE)
+            ->get()
+            ->filter(fn (TimelineEvent $event) => (($event->content['status'] ?? null) === 'sent'));
+
+        $byFlow = $lifecycleEvents
+            ->groupBy(fn (TimelineEvent $event) => (string) ($event->content['flow'] ?? 'other'))
+            ->map(fn ($events) => $events->count())
+            ->filter(fn ($count) => $count > 0)
+            ->toArray();
+
+        // Renewal reminders live on the deal (or client, for virtual renewals).
+        $dealIds = $client->deals()->pluck('id')->filter()->all();
+        $renewalTypes = [CrmAuditAction::RENEWAL_SMS_SENT, CrmAuditAction::RENEWAL_WHATSAPP_SENT];
+        $renewalEvents = TimelineEvent::query()
+            ->whereIn('event_type', $renewalTypes)
+            ->where(function (Builder $builder) use ($client, $dealIds) {
+                $builder->where(function (Builder $inner) use ($client) {
+                    $inner->where('entity_type', 'client')->where('entity_id', (int) $client->id);
+                });
+                if ($dealIds !== []) {
+                    $builder->orWhere(function (Builder $inner) use ($dealIds) {
+                        $inner->where('entity_type', 'deal')->whereIn('entity_id', $dealIds);
+                    });
+                }
+            })
+            ->get();
+
+        $lastSent = $lifecycleEvents->concat($renewalEvents)
+            ->map(fn (TimelineEvent $event) => $event->created_at)
+            ->filter()
+            ->max();
+
+        $pausedUntil = $client->reminders_paused_until;
+        $isPaused = $pausedUntil && $pausedUntil->isFuture();
+
+        return [
+            'reminders_sent' => (int) $total,
+            'last_sent_at' => $lastSent ? Carbon::parse($lastSent)->toIso8601String() : null,
+            'by_flow' => $byFlow,
+            'paused' => (bool) $isPaused,
+            'paused_until' => $isPaused ? $pausedUntil->toIso8601String() : null,
         ];
     }
 

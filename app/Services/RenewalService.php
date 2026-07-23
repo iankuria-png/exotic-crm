@@ -1498,6 +1498,10 @@ class RenewalService
                             ->where('renewal_paused_until', '<', now());
                     });
             })
+            // Client-level outreach pause suppresses renewals too.
+            ->whereDoesntHave('client', fn (Builder $builder) => $builder
+                ->whereNotNull('reminders_paused_until')
+                ->where('reminders_paused_until', '>', now()))
             ->when(
                 is_array($platformIds),
                 fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
@@ -1518,6 +1522,10 @@ class RenewalService
                     ->from('deals')
                     ->whereColumn('deals.client_id', 'clients.id')
                     ->whereIn('deals.status', ['active', 'expired']);
+            })
+            ->where(function (Builder $builder) {
+                $builder->whereNull('reminders_paused_until')
+                    ->orWhere('reminders_paused_until', '<', now());
             })
             ->when(
                 is_array($platformIds),

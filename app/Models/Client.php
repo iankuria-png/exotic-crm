@@ -104,6 +104,7 @@ class Client extends Model
         'first_contact_at',
         'last_contact_at',
         'last_online_at',
+        'reminders_paused_until',
         'last_synced_at',
         'wp_modified_at',
         'source_presence_status',
@@ -152,6 +153,7 @@ class Client extends Model
         'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
         'last_contact_at' => 'datetime',
+        'reminders_paused_until' => 'datetime',
     ];
 
     protected $appends = [

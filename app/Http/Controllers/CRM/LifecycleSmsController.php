@@ -271,6 +271,108 @@ class LifecycleSmsController extends Controller
         ]);
     }
 
+    /** What one client would receive for a flow — no send (preview before send). */
+    public function previewClient(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $client->platform_id);
+
+        $validated = $request->validate([
+            'flow' => 'required|string|in:onboarding,recovery,reactivation,renewal',
+        ]);
+
+        return response()->json($this->lifecycleSmsService->previewForClient((string) $validated['flow'], $client));
+    }
+
+    /** Reminder telemetry for the client page (count, last send, per-flow, paused). */
+    public function stats(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $client->platform_id);
+
+        return response()->json($this->lifecycleSmsService->reminderStats($client));
+    }
+
+    /** Pause / resume all automated + manual outreach for one client. */
+    public function setPause(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $client->platform_id);
+
+        $validated = $request->validate([
+            'paused' => 'required|boolean',
+            'days' => 'nullable|integer|min:1|max:365',
+        ]);
+
+        if ($validated['paused']) {
+            $until = !empty($validated['days'])
+                ? now()->addDays((int) $validated['days'])
+                : now()->addYears(5); // indefinite
+            $client->forceFill(['reminders_paused_until' => $until])->save();
+        } else {
+            $client->forceFill(['reminders_paused_until' => null])->save();
+        }
+
+        $this->auditService->record([
+            'platform_id' => (int) $client->platform_id,
+            'actor_id' => (int) $request->user()->id,
+            'action' => CrmAuditAction::LIFECYCLE_SMS_CONFIG_UPDATE,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'after_state' => ['reminders_paused_until' => optional($client->reminders_paused_until)?->toIso8601String()],
+            'reason' => $validated['paused'] ? 'Paused client reminders' : 'Resumed client reminders',
+        ]);
+
+        return response()->json($this->lifecycleSmsService->reminderStats($client->fresh()));
+    }
+
+    /**
+     * Bulk lifecycle send across many clients (conversion-queue multi-select).
+     * Each client routes through the same gated service, so dedup / state / quiet
+     * hours / pause all apply per client. Returns per-client outcomes + a summary.
+     */
+    public function bulkSend(Request $request)
+    {
+        $validated = $request->validate([
+            'flow' => 'required|string|in:onboarding,reactivation',
+            'client_ids' => 'required|array|min:1|max:200',
+            'client_ids.*' => 'integer',
+        ]);
+
+        $clients = Client::query()
+            ->with('platform')
+            ->whereIn('id', $validated['client_ids'])
+            ->get();
+
+        $results = [];
+        $summary = ['sent' => 0, 'skipped' => 0, 'failed' => 0];
+
+        foreach ($clients as $client) {
+            if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
+                $results[] = ['client_id' => (int) $client->id, 'status' => 'skipped', 'skip_reason' => 'no_access'];
+                $summary['skipped']++;
+                continue;
+            }
+
+            $result = $this->lifecycleSmsService->send((string) $validated['flow'], $client, [
+                'actor_id' => (int) $request->user()->id,
+                'source' => 'manual',
+            ]);
+
+            $status = (string) ($result['status'] ?? 'failed');
+            $bucket = $status === 'sent' ? 'sent' : ($status === 'skipped' ? 'skipped' : 'failed');
+            $summary[$bucket]++;
+            $results[] = [
+                'client_id' => (int) $client->id,
+                'status' => $status,
+                'skip_reason' => $result['skip_reason'] ?? null,
+            ];
+        }
+
+        return response()->json([
+            'message' => sprintf('%d sent, %d skipped, %d failed.', $summary['sent'], $summary['skipped'], $summary['failed']),
+            'summary' => $summary,
+            'results' => $results,
+        ]);
+    }
+
     /**
      * Manual lifecycle send for one client (conversion-queue cockpit). Routes
      * through the SAME service, so dedup/state gates prevent double-sends.
