@@ -641,6 +641,22 @@ class LifecycleSmsTest extends TestCase
         $this->assertSame(0, TimelineEvent::query()->where('event_type', LifecycleSmsService::TIMELINE_EVENT_TYPE)->count());
     }
 
+    public function test_client_preview_bypasses_quiet_hours(): void
+    {
+        // 23:00 Nairobi — a manual send (and its preview) must NOT be blocked by
+        // quiet hours; that gate only applies to automated sweeps.
+        Carbon::setTestNow(Carbon::parse('2026-07-23 20:00:00', 'UTC'));
+
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $this->onboardingTemplate();
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'fast_signup']);
+
+        $preview = $this->service()->previewForClient('onboarding', $client);
+        $this->assertTrue($preview['would_send'], 'manual preview should ignore quiet hours');
+        $this->assertNull($preview['skip_reason']);
+    }
+
     public function test_run_command_dry_run_reports_targets_without_sending(): void
     {
         [$platform] = $this->marketWithOffer();

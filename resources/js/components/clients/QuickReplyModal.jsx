@@ -20,6 +20,26 @@ const LIFECYCLE_FLOW_OPTIONS = [
     { value: 'onboarding', label: 'Welcome & activate' },
 ];
 
+const LIFECYCLE_SKIP_LABELS = {
+    disabled_global: 'Lifecycle SMS is switched off globally',
+    market_sms_disabled: 'Lifecycle SMS is off for this market',
+    flow_disabled: 'This flow is off for this market',
+    market_no_psp: 'This market has no payment provider',
+    client_already_active: 'Client already has an active subscription',
+    already_sent: 'Already sent recently',
+    rate_capped: 'Client hit the reminder cap',
+    no_template: 'No template configured for this flow',
+    no_offer_configured: 'No offer plan set for this market',
+    missing_phone: 'No phone number on file',
+    reminders_paused: 'Reminders are paused for this client',
+    signup_source_excluded: 'Not an eligible signup source',
+    quiet_hours: 'Market is in quiet hours',
+};
+
+function lifecycleSkipLabel(reason) {
+    return LIFECYCLE_SKIP_LABELS[reason] || reason || 'Not eligible right now';
+}
+
 function suggestedFlow(situation) {
     if (situation === 'never_paid') return 'onboarding';
     return 'reactivation';
@@ -51,13 +71,10 @@ function LifecycleSmsBlock({ client, situation, toast }) {
     const preview = previewQuery.data;
 
     return (
-        <section className="mb-4 rounded-lg border border-teal-200 bg-teal-50/50 p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                    <h4 className="text-sm font-semibold text-slate-900">Lifecycle SMS with payment link</h4>
-                    <p className="text-[11px] text-slate-500">Sends a tokenized checkout link. Deduped and counted automatically.</p>
-                </div>
-                <div className="flex items-center gap-2">
+        <section className="mb-3 rounded-lg border border-teal-200 bg-teal-50/40 px-3 py-2">
+            <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-teal-800">SMS with pay link</span>
+                <div className="ml-auto flex items-center gap-2">
                     <select value={flow} onChange={(e) => setFlow(e.target.value)} className="crm-select text-xs" aria-label="Lifecycle flow">
                         {LIFECYCLE_FLOW_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -66,6 +83,7 @@ function LifecycleSmsBlock({ client, situation, toast }) {
                     <button
                         type="button"
                         disabled={sendMutation.isPending || !preview?.would_send}
+                        title={!preview?.would_send ? lifecycleSkipLabel(preview?.skip_reason) : 'Send SMS with payment link'}
                         onClick={() => {
                             if (window.confirm(`Send the ${flow === 'onboarding' ? 'Welcome & activate' : 'Win-back'} SMS to ${client?.name || 'this client'}?`)) {
                                 sendMutation.mutate();
@@ -73,23 +91,18 @@ function LifecycleSmsBlock({ client, situation, toast }) {
                         }}
                         className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                        {sendMutation.isPending ? 'Sending…' : 'Send SMS'}
+                        {sendMutation.isPending ? 'Sending…' : 'Send'}
                     </button>
                 </div>
             </div>
-            {previewQuery.isLoading ? (
-                <p className="text-xs text-slate-400">Loading preview…</p>
-            ) : preview?.body ? (
-                <>
-                    <p className="rounded-md border border-slate-200 bg-white p-2 text-xs leading-5 text-slate-700 whitespace-pre-wrap">{preview.body}</p>
-                    <p className="mt-1 text-[11px] text-slate-400">
-                        ~{preview.segments || 1} segment{(preview.segments || 1) === 1 ? '' : 's'}
-                        {!preview.would_send ? ` · would skip: ${preview.skip_reason}` : ' · ready to send'}
-                    </p>
-                </>
+            {previewQuery.isLoading ? null : preview?.body ? (
+                <p className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-slate-600" title={preview.body}>{preview.body}</p>
             ) : (
-                <p className="text-xs text-slate-400">No lifecycle template available for this flow / market.</p>
+                <p className="mt-1.5 text-[11px] text-slate-400">No lifecycle template for this flow / market.</p>
             )}
+            {preview && !preview.would_send ? (
+                <p className="mt-1 text-[11px] text-amber-600">Can’t send: {lifecycleSkipLabel(preview.skip_reason)}.</p>
+            ) : null}
         </section>
     );
 }

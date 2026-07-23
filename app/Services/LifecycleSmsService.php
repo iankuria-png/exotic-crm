@@ -915,6 +915,9 @@ class LifecycleSmsService
      */
     public function previewForClient(string $flow, Client $client, array $options = []): array
     {
+        // Preview reflects the MANUAL send path these surfaces use, so quiet
+        // hours (which only gate automated sweeps) don't show as a blocker.
+        $options = array_merge(['source' => 'manual'], $options);
         $evaluation = $this->evaluate($flow, $client, $options);
         $wouldSend = ($evaluation['status'] ?? '') === 'ok';
 

@@ -587,6 +587,26 @@ const LIFECYCLE_FLOW_LABELS = {
     renewal: 'Renewal',
 };
 
+const LIFECYCLE_SKIP_LABELS = {
+    disabled_global: 'Lifecycle SMS is switched off globally',
+    market_sms_disabled: 'Lifecycle SMS is off for this market',
+    flow_disabled: 'This flow is off for this market',
+    market_no_psp: 'This market has no payment provider',
+    client_already_active: 'Client already has an active subscription',
+    already_sent: 'Already sent recently',
+    rate_capped: 'Client hit the reminder cap',
+    no_template: 'No template configured for this flow',
+    no_offer_configured: 'No offer plan set for this market',
+    missing_phone: 'No phone number on file',
+    reminders_paused: 'Reminders are paused for this client',
+    signup_source_excluded: 'Not an eligible signup source',
+    quiet_hours: 'Market is in quiet hours',
+};
+
+function lifecycleSkipLabel(reason) {
+    return LIFECYCLE_SKIP_LABELS[reason] || reason || 'Not eligible right now';
+}
+
 function relativeTimeShort(iso) {
     if (!iso) return '';
     const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -668,21 +688,21 @@ function LifecycleReminderCard({ client, toast }) {
                     </div>
                 ) : null}
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                    <div className="mb-2 flex items-center gap-2">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    <div className="flex items-center gap-2">
                         <select
                             value={flow}
                             onChange={(e) => setFlow(e.target.value)}
-                            className="crm-select text-xs"
+                            className="crm-select flex-1 text-xs"
                             aria-label="Reminder type"
                         >
                             <option value="reactivation">Win-back</option>
                             <option value="onboarding">Welcome & activate</option>
-                            <option value="recovery">Payment recovery</option>
                         </select>
                         <button
                             type="button"
                             disabled={sendMutation.isPending || paused || !preview?.would_send}
+                            title={paused ? 'Reminders paused' : (!preview?.would_send ? lifecycleSkipLabel(preview?.skip_reason) : `Send ${LIFECYCLE_FLOW_LABELS[flow]} SMS`)}
                             onClick={() => {
                                 if (window.confirm(`Send the ${LIFECYCLE_FLOW_LABELS[flow]} SMS to ${client?.name || 'this client'}?`)) {
                                     sendMutation.mutate();
@@ -693,19 +713,14 @@ function LifecycleReminderCard({ client, toast }) {
                             {sendMutation.isPending ? 'Sending…' : 'Send'}
                         </button>
                     </div>
-                    {previewQuery.isLoading ? (
-                        <p className="text-xs text-slate-400">Loading preview…</p>
-                    ) : preview?.body ? (
-                        <>
-                            <p className="rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-700 whitespace-pre-wrap">{preview.body}</p>
-                            <p className="mt-1 text-[11px] text-slate-400">
-                                ~{preview.segments || 1} segment{(preview.segments || 1) === 1 ? '' : 's'} · live send carries a real link
-                                {!preview.would_send ? ` · would skip: ${preview.skip_reason}` : ''}
-                            </p>
-                        </>
+                    {previewQuery.isLoading ? null : preview?.body ? (
+                        <p className="mt-2 line-clamp-3 text-[11px] leading-5 text-slate-600" title={preview.body}>{preview.body}</p>
                     ) : (
-                        <p className="text-xs text-slate-400">{paused ? 'Reminders are paused for this client.' : 'No template available for this flow / market.'}</p>
+                        <p className="mt-2 text-[11px] text-slate-400">No template for this flow / market.</p>
                     )}
+                    {preview && !preview.would_send && !paused ? (
+                        <p className="mt-1 text-[11px] text-amber-600">Can’t send: {lifecycleSkipLabel(preview.skip_reason)}.</p>
+                    ) : null}
                 </div>
             </div>
         </ProfileInfoCard>
