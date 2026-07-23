@@ -10,6 +10,7 @@ use App\Models\MarketRevenueTarget;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\ReportingFxRate;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -528,6 +529,42 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(999.0, (float) $byLabel['20:00']['prior_value']);
 
         \Illuminate\Support\Carbon::setTestNow();
+    }
+
+    public function test_single_day_hourly_trend_reconciles_to_collected_with_cfa_market(): void
+    {
+        config([
+            'ceo.peak_hours_timezone' => 'Africa/Nairobi',
+            'services.reporting_fx.enabled' => true,
+        ]);
+
+        $kenya = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya', 'currency_code' => 'USD']);
+        $kenyaProduct = Product::factory()->create(['platform_id' => $kenya->id, 'currency' => 'USD']);
+        $senegal = Platform::factory()->create(['name' => 'Dakar', 'country' => 'Senegal', 'currency_code' => 'XOF']);
+        $senegalProduct = Product::factory()->create(['platform_id' => $senegal->id, 'currency' => 'XOF']);
+        Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
+
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => '2026-06-10',
+            'rate' => 0.002,
+            'fetched_at' => now(),
+        ]);
+
+        // Past complete Nairobi day via the date stepper. 07:00 UTC = 10:00 Nairobi, 09:00 UTC = 12:00 Nairobi.
+        $this->payment($kenya, $kenyaProduct, ['amount' => 100, 'currency' => 'USD', 'status' => 'completed', 'created_at' => '2026-06-10 07:00:00', 'completed_at' => '2026-06-10 07:00:00']);
+        $this->payment($senegal, $senegalProduct, ['amount' => 1000, 'currency' => 'CFA', 'status' => 'completed', 'created_at' => '2026-06-10 09:00:00', 'completed_at' => '2026-06-10 09:00:00']);
+
+        $params = 'horizon=today&date=2026-06-10&reporting_currency=USD';
+        $collected = (float) $this->getJson("/api/crm/dashboard/ceo/summary?{$params}")
+            ->assertOk()->json('metrics.collected_revenue.value.normalized_total');
+        $trend = $this->getJson("/api/crm/dashboard/ceo/revenue-trend?{$params}")->assertOk()->json();
+
+        $this->assertEqualsWithDelta(102.0, $collected, 0.001); // 100 USD + 1000 CFA * 0.002
+        $hourlySum = collect($trend['points'])->sum(fn (array $point) => (float) $point['value']);
+        $this->assertEqualsWithDelta($collected, $hourlySum, 0.001);
     }
 
     private function user(array $overrides = []): User

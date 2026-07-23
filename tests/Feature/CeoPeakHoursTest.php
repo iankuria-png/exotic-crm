@@ -93,6 +93,48 @@ class CeoPeakHoursTest extends TestCase
         );
     }
 
+    public function test_peak_hours_reconciles_when_market_uses_ambiguous_cfa_currency(): void
+    {
+        config([
+            'ceo.peak_hours_timezone' => 'Africa/Nairobi',
+            'services.reporting_fx.enabled' => true,
+        ]);
+
+        $kenya = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya', 'currency_code' => 'USD']);
+        $kenyaProduct = Product::factory()->create(['platform_id' => $kenya->id, 'currency' => 'USD']);
+        $senegal = Platform::factory()->create(['name' => 'Dakar', 'country' => 'Senegal', 'currency_code' => 'XOF']);
+        $senegalProduct = Product::factory()->create(['platform_id' => $senegal->id, 'currency' => 'XOF']);
+
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => '2026-06-10',
+            'rate' => 0.002,
+            'fetched_at' => now(),
+        ]);
+
+        $this->payment($kenya, $kenyaProduct, ['amount' => 100, 'currency' => 'USD', 'completed_at' => '2026-06-10 07:00:00']);
+        // 'CFA' is ambiguous — resolvable to XOF only via the Senegal platform country context.
+        $this->payment($senegal, $senegalProduct, ['amount' => 1000, 'currency' => 'CFA', 'completed_at' => '2026-06-10 09:00:00']);
+
+        Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
+
+        $peak = $this->getJson('/api/crm/dashboard/ceo/peak-hours?horizon=custom&from=2026-06-10&to=2026-06-10&reporting_currency=USD')
+            ->assertOk()->json();
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=custom&from=2026-06-10&to=2026-06-10&reporting_currency=USD')
+            ->assertOk()->json();
+
+        $collected = (float) data_get($summary, 'metrics.collected_revenue.value.normalized_total');
+        $this->assertEqualsWithDelta(102.0, $collected, 0.001); // 100 USD + 1000 CFA * 0.002
+        $this->assertEqualsWithDelta($collected, (float) $peak['total_normalized'], 0.001);
+
+        // The CFA cell must carry its converted revenue, not collapse to zero.
+        $cfaCell = collect($peak['cells'])->first(fn (array $cell) => abs((float) $cell['value'] - 2.0) < 0.001);
+        $this->assertNotNull($cfaCell, 'CFA cell should carry non-zero normalized revenue');
+        $this->assertSame(1, (int) $cfaCell['payments_count']);
+    }
+
     public function test_peak_hours_route_requires_ceo_access(): void
     {
         Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => false]));

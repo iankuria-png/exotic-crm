@@ -259,11 +259,17 @@ class CeoDashboardDataService
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
             ->selectRaw($this->dowExpressionRaw().' as dow_raw')
             ->selectRaw($this->hourExpression().' as hour')
+            ->selectRaw($this->dateExpression().' as event_date')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
             ->groupByRaw($this->dowExpressionRaw())
             ->groupByRaw($this->hourExpression())
+            ->groupByRaw($this->dateExpression())
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
             ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
             ->get();
 
@@ -291,12 +297,17 @@ class CeoDashboardDataService
 
         foreach ($groups as $key => $groupRows) {
             [$dow, $hour] = array_map('intval', explode('-', (string) $key, 2));
-            $eventRows = $groupRows->map(function ($row) use ($context) {
+            $eventRows = $groupRows->map(function ($row) {
+                // Carry platform context + the payment's own UTC event date so context-dependent
+                // currencies (e.g. CFA → XOF/XAF) resolve and FX matches the Collected Revenue
+                // card; otherwise any cell containing such a payment normalises to zero.
                 return (object) [
-                    // Peak-hours is a window-level view; use the window end date for FX lookup.
-                    'event_date' => $context['to']->toDateString(),
+                    'event_date' => (string) $row->event_date,
                     'currency' => strtoupper((string) $row->currency),
                     'amount' => (float) $row->amount,
+                    'platform_id' => $row->platform_id,
+                    'platform_country' => $row->platform_country,
+                    'platform_name' => $row->platform_name,
                 ];
             });
             $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency, false);
@@ -838,7 +849,6 @@ class CeoDashboardDataService
             $context['day_end'],
             $context['platform_id'],
             $context['target_currency'],
-            $context['day_date'],
             (int) ($context['current_hour'] ?? 23)
         );
         $prior = $this->hourlyBuckets(
@@ -846,7 +856,6 @@ class CeoDashboardDataService
             $context['prior_day_end'],
             $context['platform_id'],
             $context['target_currency'],
-            $context['prior_day_date'],
             23
         );
 
@@ -883,15 +892,21 @@ class CeoDashboardDataService
      * @return array<int,array{value:float,payments_count:int,average_ticket:float,source_breakdown:array,future:bool}>
      *         Indexed 0–23 by reporting-timezone hour, every hour seeded.
      */
-    private function hourlyBuckets(Carbon $dayStart, Carbon $dayEnd, ?int $platformId, string $targetCurrency, string $fxDate, int $maxHour): array
+    private function hourlyBuckets(Carbon $dayStart, Carbon $dayEnd, ?int $platformId, string $targetCurrency, int $maxHour): array
     {
         $rows = $this->baseCollectedPayments($dayStart, $dayEnd, $platformId)
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
             ->selectRaw($this->hourExpression().' as hour')
+            ->selectRaw($this->dateExpression().' as event_date')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
             ->groupByRaw($this->hourExpression())
+            ->groupByRaw($this->dateExpression())
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
             ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
             ->get();
 
@@ -912,10 +927,17 @@ class CeoDashboardDataService
                 continue;
             }
 
+            // Carry platform context + the payment's own UTC event date so the currency
+            // canonicaliser can disambiguate context-dependent codes (e.g. CFA → XOF/XAF) and
+            // FX resolves on the same date basis as the Collected Revenue card. Without this the
+            // whole hour normalises to null (partial) and collapses to zero.
             $eventRows = $hourRows->map(fn ($row) => (object) [
-                'event_date' => $fxDate,
+                'event_date' => (string) $row->event_date,
                 'currency' => strtoupper((string) $row->currency),
                 'amount' => (float) $row->amount,
+                'platform_id' => $row->platform_id,
+                'platform_country' => $row->platform_country,
+                'platform_name' => $row->platform_name,
             ]);
             $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency, false);
             $count = (int) $hourRows->sum('payments_count');
