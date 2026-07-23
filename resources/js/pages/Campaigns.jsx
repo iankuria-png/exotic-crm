@@ -8,6 +8,8 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import ConfirmDialog from '../components/ConfirmDialog';
+import RenewalCadenceModal from '../components/campaigns/RenewalCadenceModal';
+import { useAuth } from '../hooks/useAuth';
 import { flaggedPlatformLabel, platformOptionsWithFlags } from '../utils/flags';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -43,6 +45,9 @@ export default function Campaigns() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const queryClient = useQueryClient();
+    const { user } = useAuth();
+    const canManageCadence = ['admin', 'sub_admin'].includes(user?.role);
+    const [cadenceOpen, setCadenceOpen] = useState(false);
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -649,15 +654,36 @@ export default function Campaigns() {
                 title="Campaigns"
                 subtitle={data?.targets?.total ? `${data.targets.total.toLocaleString()} campaign targets in scope` : 'Configure outreach campaigns and manage reminder automation.'}
                 actions={(
-                    <button
-                        type="button"
-                        onClick={openRunConfigDialog}
-                        className="crm-btn-primary"
-                    >
-                        Run Campaigns
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {canManageCadence ? (
+                            <button
+                                type="button"
+                                onClick={() => setCadenceOpen(true)}
+                                className="crm-btn-secondary"
+                            >
+                                Reminder cadence
+                            </button>
+                        ) : null}
+                        <button
+                            type="button"
+                            onClick={openRunConfigDialog}
+                            className="crm-btn-primary"
+                        >
+                            Run Campaigns
+                        </button>
+                    </div>
                 )}
             />
+
+            {canManageCadence ? (
+                <RenewalCadenceModal
+                    open={cadenceOpen}
+                    onClose={() => setCadenceOpen(false)}
+                    platformOptions={platformOptions}
+                    defaultPlatformId={platformFilter || ''}
+                    onChanged={() => queryClient.invalidateQueries({ queryKey: ['renewals-overview'] })}
+                />
+            ) : null}
 
             <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
                 <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" onClick={() => applyMetricFilter('risk')} active={bucketFilter === 'risk'} />
@@ -687,7 +713,7 @@ export default function Campaigns() {
                         <div>
                             <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Dry-Run Preview</p>
                             <p className="mt-1 text-sm font-semibold text-slate-900">
-                                Targeted: {runPreview?.totals?.targeted || 0} • Sent: {runPreview?.totals?.sent || 0} • Failed: {runPreview?.totals?.failed || 0}
+                                Targeted: {runPreview?.totals?.targeted || 0} • Sendable: {Math.max(0, (runPreview?.totals?.targeted || 0) - (runPreview?.totals?.skipped || 0))} • Skipped by guard: {runPreview?.totals?.skipped || 0}
                             </p>
                         </div>
                         <button
@@ -701,10 +727,13 @@ export default function Campaigns() {
                     {previewTargets.length ? (
                         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                             {previewTargets.map((target, index) => (
-                                <div key={`${target.client_id || target.deal_id || 'target'}_${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs">
+                                <div key={`${target.client_id || target.deal_id || 'target'}_${index}`} className={`rounded-md border p-2.5 text-xs ${target.suppressed ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
                                     <p className="font-semibold text-slate-900">{target.client_name || target.phone || `Client #${target.client_id || 'N/A'}`}</p>
                                     <p className="text-slate-600">{target.phone || 'No phone'}</p>
                                     <p className="text-slate-500">Campaign: {target.campaign_name || target.campaign_id || 'N/A'}</p>
+                                    {target.suppressed ? (
+                                        <p className="mt-1 font-medium text-amber-700">Skipped — reminder longer than the {target.cycle_days ? `${target.cycle_days}-day ` : ''}subscription</p>
+                                    ) : null}
                                 </div>
                             ))}
                         </div>

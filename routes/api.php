@@ -438,6 +438,15 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/renewals/pause', [RenewalController::class, 'pause']);
         Route::post('/renewals/resume', [RenewalController::class, 'resume']);
 
+        // Per-market reminder cadence configuration (admin-managed)
+        Route::get('/renewals/cadence', [RenewalController::class, 'cadence']);
+        Route::middleware('role:admin,sub_admin')->group(function () {
+            Route::post('/renewals/campaigns', [RenewalController::class, 'storeCampaign']);
+            Route::patch('/renewals/campaigns/{campaign}', [RenewalController::class, 'updateCampaign']);
+            Route::delete('/renewals/campaigns/{campaign}', [RenewalController::class, 'destroyCampaign']);
+            Route::post('/renewals/guard', [RenewalController::class, 'updateGuard']);
+        });
+
         // Reports
         Route::get('/reports/summary', [ReportController::class, 'summary']);
         Route::get('/reports/expiry-reconciliation', [ReportController::class, 'expiryReconciliation']);

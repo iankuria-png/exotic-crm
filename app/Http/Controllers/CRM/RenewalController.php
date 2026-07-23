@@ -4,7 +4,10 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use App\Models\Deal;
+use App\Models\Platform;
+use App\Models\RenewalCampaign;
 use App\Models\RenewalRun;
+use App\Models\Template;
 use App\Services\AuditService;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
@@ -315,5 +318,202 @@ class RenewalController extends Controller
             ->paginate((int) ($validated['per_page'] ?? 25));
 
         return response()->json($runs);
+    }
+
+    /**
+     * Read the reminder cadence config for a market (or the global default set when
+     * no platform_id is supplied).
+     */
+    public function cadence(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+        ]);
+
+        $platformId = !empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
+        if ($platformId !== null && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), $platformId)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        return response()->json($this->renewalService->cadenceConfig($platformId));
+    }
+
+    public function storeCampaign(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'trigger_days' => 'required|integer|min:-60|max:60',
+            'template_id' => 'required|integer|exists:templates,id',
+            'enabled' => 'nullable|boolean',
+        ]);
+
+        $platformId = !empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
+        if ($platformId !== null && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), $platformId)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $template = Template::query()->findOrFail((int) $validated['template_id']);
+        $channel = $this->campaignChannel($template->channel);
+
+        // Guard against duplicate reminder points in the same scope+channel, which
+        // would double-send at that offset (each campaign is deduped independently).
+        $duplicate = RenewalCampaign::query()
+            ->when($platformId === null, fn($q) => $q->whereNull('platform_id'), fn($q) => $q->where('platform_id', $platformId))
+            ->where('trigger_days', (int) $validated['trigger_days'])
+            ->where('channel', $channel)
+            ->exists();
+        if ($duplicate) {
+            return response()->json([
+                'message' => 'A reminder already exists at this offset for this market and channel.',
+            ], 422);
+        }
+
+        $campaign = RenewalCampaign::create([
+            'platform_id' => $platformId,
+            'trigger_days' => (int) $validated['trigger_days'],
+            'channel' => $channel,
+            'template_id' => (int) $validated['template_id'],
+            'enabled' => (bool) ($validated['enabled'] ?? true),
+        ]);
+
+        $this->auditService->record([
+            'platform_id' => $platformId ?? 0,
+            'actor_id' => $request->user()->id,
+            'action' => CrmAuditAction::RENEWAL_CAMPAIGN_CREATE,
+            'entity_type' => 'renewal_campaign',
+            'entity_id' => $campaign->id,
+            'after_state' => $campaign->only(['platform_id', 'trigger_days', 'channel', 'template_id', 'enabled']),
+            'reason' => 'Renewal cadence updated',
+        ]);
+
+        return response()->json($campaign->load('template:id,title,channel,status,platform_id'), 201);
+    }
+
+    public function updateCampaign(Request $request, RenewalCampaign $campaign)
+    {
+        $validated = $request->validate([
+            'trigger_days' => 'nullable|integer|min:-60|max:60',
+            'template_id' => 'nullable|integer|exists:templates,id',
+            'enabled' => 'nullable|boolean',
+        ]);
+
+        if ($campaign->platform_id !== null && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $campaign->platform_id)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $before = $campaign->only(['platform_id', 'trigger_days', 'channel', 'template_id', 'enabled']);
+
+        if (array_key_exists('template_id', $validated) && $validated['template_id'] !== null) {
+            $template = Template::query()->findOrFail((int) $validated['template_id']);
+            $campaign->template_id = (int) $validated['template_id'];
+            $campaign->channel = $this->campaignChannel($template->channel);
+        }
+        if (array_key_exists('trigger_days', $validated) && $validated['trigger_days'] !== null) {
+            $campaign->trigger_days = (int) $validated['trigger_days'];
+        }
+        if (array_key_exists('enabled', $validated) && $validated['enabled'] !== null) {
+            $campaign->enabled = (bool) $validated['enabled'];
+        }
+
+        $duplicate = RenewalCampaign::query()
+            ->whereKeyNot($campaign->id)
+            ->when($campaign->platform_id === null, fn($q) => $q->whereNull('platform_id'), fn($q) => $q->where('platform_id', $campaign->platform_id))
+            ->where('trigger_days', $campaign->trigger_days)
+            ->where('channel', $campaign->channel)
+            ->exists();
+        if ($duplicate) {
+            return response()->json([
+                'message' => 'A reminder already exists at this offset for this market and channel.',
+            ], 422);
+        }
+
+        $campaign->save();
+
+        $this->auditService->record([
+            'platform_id' => $campaign->platform_id ?? 0,
+            'actor_id' => $request->user()->id,
+            'action' => CrmAuditAction::RENEWAL_CAMPAIGN_UPDATE,
+            'entity_type' => 'renewal_campaign',
+            'entity_id' => $campaign->id,
+            'before_state' => $before,
+            'after_state' => $campaign->only(['platform_id', 'trigger_days', 'channel', 'template_id', 'enabled']),
+            'reason' => 'Renewal cadence updated',
+        ]);
+
+        return response()->json($campaign->load('template:id,title,channel,status,platform_id'));
+    }
+
+    public function destroyCampaign(Request $request, RenewalCampaign $campaign)
+    {
+        if ($campaign->platform_id !== null && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $campaign->platform_id)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $before = $campaign->only(['platform_id', 'trigger_days', 'channel', 'template_id', 'enabled']);
+        $campaignId = $campaign->id;
+        $platformId = $campaign->platform_id;
+        $campaign->delete();
+
+        $this->auditService->record([
+            'platform_id' => $platformId ?? 0,
+            'actor_id' => $request->user()->id,
+            'action' => CrmAuditAction::RENEWAL_CAMPAIGN_DELETE,
+            'entity_type' => 'renewal_campaign',
+            'entity_id' => $campaignId,
+            'before_state' => $before,
+            'reason' => 'Renewal cadence updated',
+        ]);
+
+        return response()->json(['success' => true]);
+    }
+
+    /**
+     * Toggle the per-market short-cycle guard (auto-suppress reminders whose lead time
+     * is >= the client's subscription length).
+     */
+    public function updateGuard(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'enabled' => 'required|boolean',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), $platformId)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $platform = Platform::query()->findOrFail($platformId);
+        $before = ['renewal_reminder_guard_enabled' => (bool) $platform->renewal_reminder_guard_enabled];
+        $platform->renewal_reminder_guard_enabled = (bool) $validated['enabled'];
+        $platform->save();
+
+        $this->auditService->record([
+            'platform_id' => $platformId,
+            'actor_id' => $request->user()->id,
+            'action' => CrmAuditAction::RENEWAL_GUARD_UPDATE,
+            'entity_type' => 'platform',
+            'entity_id' => $platformId,
+            'before_state' => $before,
+            'after_state' => ['renewal_reminder_guard_enabled' => (bool) $validated['enabled']],
+            'reason' => 'Short-cycle reminder guard updated',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'platform_id' => $platformId,
+            'guard_enabled' => (bool) $validated['enabled'],
+        ]);
+    }
+
+    /**
+     * Map a template channel (email/sms/whatsapp) onto the renewal_campaigns channel
+     * enum, which accepts email/sms/both/whatsapp.
+     */
+    private function campaignChannel(?string $templateChannel): string
+    {
+        $channel = strtolower(trim((string) $templateChannel));
+
+        return in_array($channel, ['email', 'sms', 'whatsapp'], true) ? $channel : 'sms';
     }
 }

@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\Platform;
 use App\Models\Product;
 use App\Models\RenewalCampaign;
 use App\Models\RenewalRun;
@@ -27,6 +28,9 @@ use Illuminate\Support\Facades\DB;
 
 class RenewalService
 {
+    /** @var array<int, bool> Per-platform short-cycle guard flag, cached per run. */
+    private array $guardEnabledCache = [];
+
     public function __construct(
         private readonly NotificationService $notificationService,
         private readonly TemplateService $templateService,
@@ -532,6 +536,60 @@ class RenewalService
         ];
     }
 
+    /**
+     * Configuration payload for the per-market reminder cadence editor: the market's
+     * own campaigns (if any), the global default set it would otherwise inherit,
+     * the short-cycle guard flag, and the renewal templates available to pick from.
+     */
+    public function cadenceConfig(?int $platformId): array
+    {
+        $marketCampaigns = $platformId !== null
+            ? RenewalCampaign::query()
+                ->with('template:id,title,channel,status,platform_id')
+                ->where('platform_id', $platformId)
+                ->orderBy('trigger_days')
+                ->get()
+            : collect();
+
+        $globalCampaigns = RenewalCampaign::query()
+            ->with('template:id,title,channel,status,platform_id')
+            ->whereNull('platform_id')
+            ->orderBy('trigger_days')
+            ->get();
+
+        $hasOverride = $platformId !== null && $marketCampaigns->isNotEmpty();
+
+        $templates = Template::query()
+            ->where('category', 'renewal')
+            ->where('status', 'active')
+            ->when(
+                $platformId !== null,
+                fn(Builder $q) => $q->where(
+                    fn(Builder $qq) => $qq->whereNull('platform_id')->orWhere('platform_id', $platformId)
+                ),
+                fn(Builder $q) => $q->whereNull('platform_id')
+            )
+            ->orderByDesc('id')
+            ->get(['id', 'title', 'channel', 'platform_id']);
+
+        $guardEnabled = true;
+        if ($platformId !== null) {
+            $flag = Platform::query()->whereKey($platformId)->value('renewal_reminder_guard_enabled');
+            $guardEnabled = $flag === null ? true : (bool) $flag;
+        }
+
+        return [
+            'platform_id' => $platformId,
+            'has_market_override' => $hasOverride,
+            'effective_source' => $hasOverride ? 'market' : 'global',
+            'guard_enabled' => $guardEnabled,
+            'market_campaigns' => $marketCampaigns->values(),
+            'global_campaigns' => $globalCampaigns->values(),
+            'effective_campaigns' => ($hasOverride ? $marketCampaigns : $globalCampaigns)->values(),
+            'templates' => $templates,
+        ];
+    }
+
     private function estimateLegacySubscription(?string $planType, Collection $activeProductCatalog, string $fallbackCurrency = 'KES'): array
     {
         if (empty($planType)) {
@@ -728,32 +786,23 @@ class RenewalService
 
         $channel = trim(strtolower((string) ($options['channel'] ?? '')));
 
-        $campaigns = RenewalCampaign::query()
-            ->with('template')
-            ->where('enabled', true)
-            ->when(
-                is_array($campaignIds) && !empty($campaignIds),
-                fn(Builder $builder) => $builder->whereIn('id', $campaignIds)
-            )
-            ->when(
-                $channel !== '',
-                fn(Builder $builder) => $builder->whereHas('template', fn(Builder $templateQuery) => $templateQuery->where('channel', $channel))
-            )
-            ->orderBy('trigger_days')
-            ->get();
+        // Resolve which campaigns run against which markets. Each market runs its own
+        // cadence when it has campaigns of its own, otherwise the global default set.
+        $runPlan = $this->buildCampaignRunPlan($campaignIds, $platformIds, $channel, $options);
 
-        if ($campaigns->isEmpty()) {
+        if (empty($runPlan)) {
             return [
                 'campaigns' => [],
                 'totals' => ['sent' => 0, 'failed' => 0, 'skipped' => 0, 'targeted' => 0],
+                'dry_run' => (bool) ($options['dry_run'] ?? false),
             ];
         }
 
         $results = [];
         $totals = ['sent' => 0, 'failed' => 0, 'skipped' => 0, 'targeted' => 0];
 
-        foreach ($campaigns as $campaign) {
-            $result = $this->runSingleCampaign($campaign, $actorId, $platformIds, $options);
+        foreach ($runPlan as $planItem) {
+            $result = $this->runSingleCampaign($planItem['campaign'], $actorId, $planItem['platform_ids'], $options);
             $results[] = $result;
 
             $totals['sent'] += $result['sent_count'];
@@ -767,6 +816,93 @@ class RenewalService
             'totals' => $totals,
             'dry_run' => (bool) ($options['dry_run'] ?? false),
         ];
+    }
+
+    /**
+     * Build the list of (campaign, platform scope) pairs to execute.
+     *
+     * - When specific campaign IDs or a manual target list are supplied, those exact
+     *   campaigns run against the requested market scope (operator-driven path).
+     * - Otherwise this is an automated full run: each market executes its own
+     *   campaigns when it has any, and every other market falls back to the global
+     *   default campaigns (platform_id = NULL). Global campaigns run once against the
+     *   grouped set of fallback markets to keep the query count low.
+     *
+     * @return array<int, array{campaign: RenewalCampaign, platform_ids: ?array<int, int>}>
+     */
+    private function buildCampaignRunPlan(?array $campaignIds, ?array $platformIds, string $channel, array $options): array
+    {
+        $applyChannel = fn(Builder $builder) => $builder->when(
+            $channel !== '',
+            fn(Builder $q) => $q->whereHas('template', fn(Builder $t) => $t->where('channel', $channel))
+        );
+
+        // Operator-driven path: explicit campaign selection or a manual target list.
+        if ((is_array($campaignIds) && !empty($campaignIds)) || !empty($options['targets'])) {
+            $campaigns = $applyChannel(
+                RenewalCampaign::query()
+                    ->with('template')
+                    ->where('enabled', true)
+                    ->when(
+                        is_array($campaignIds) && !empty($campaignIds),
+                        fn(Builder $builder) => $builder->whereIn('id', $campaignIds)
+                    )
+            )
+                ->orderBy('trigger_days')
+                ->get();
+
+            return $campaigns->map(fn(RenewalCampaign $campaign) => [
+                'campaign' => $campaign,
+                'platform_ids' => $platformIds,
+            ])->all();
+        }
+
+        $allCampaigns = $applyChannel(
+            RenewalCampaign::query()
+                ->with('template')
+                ->where('enabled', true)
+        )
+            ->orderBy('trigger_days')
+            ->get();
+
+        $globalCampaigns = $allCampaigns->whereNull('platform_id')->values();
+        $marketCampaigns = $allCampaigns->whereNotNull('platform_id')->groupBy('platform_id');
+
+        // No market has its own cadence yet -> preserve the exact legacy behaviour of
+        // running the global set across the requested scope in a single pass.
+        if ($marketCampaigns->isEmpty()) {
+            return $globalCampaigns->map(fn(RenewalCampaign $campaign) => [
+                'campaign' => $campaign,
+                'platform_ids' => $platformIds,
+            ])->all();
+        }
+
+        $scopePlatformIds = is_array($platformIds)
+            ? array_values(array_unique(array_map('intval', $platformIds)))
+            : Platform::query()->pluck('id')->map(fn($id) => (int) $id)->all();
+
+        $plan = [];
+        $marketsWithOwn = [];
+
+        foreach ($marketCampaigns as $platformId => $campaigns) {
+            $platformId = (int) $platformId;
+            if (!in_array($platformId, $scopePlatformIds, true)) {
+                continue;
+            }
+            $marketsWithOwn[] = $platformId;
+            foreach ($campaigns as $campaign) {
+                $plan[] = ['campaign' => $campaign, 'platform_ids' => [$platformId]];
+            }
+        }
+
+        $marketsUsingGlobal = array_values(array_diff($scopePlatformIds, $marketsWithOwn));
+        if (!empty($marketsUsingGlobal) && $globalCampaigns->isNotEmpty()) {
+            foreach ($globalCampaigns as $campaign) {
+                $plan[] = ['campaign' => $campaign, 'platform_ids' => $marketsUsingGlobal];
+            }
+        }
+
+        return $plan;
     }
 
     public function runAutomatedRenewals(?int $actorId = null, ?array $platformIds = null, array $options = []): array
@@ -1056,6 +1192,37 @@ class RenewalService
 
         $dryRun = (bool) ($options['dry_run'] ?? false);
         if ($dryRun) {
+            $preview = $deals->map(function ($deal) use ($campaign) {
+                $client = $deal->client ?? null;
+                $expiresAt = $deal->expires_at;
+                if ($expiresAt instanceof Carbon) {
+                    $expiresAt = $expiresAt->toDateTimeString();
+                } elseif (is_numeric($expiresAt)) {
+                    $expiresAt = Carbon::createFromTimestamp((int) $expiresAt)->toDateTimeString();
+                } elseif ($expiresAt) {
+                    $expiresAt = Carbon::parse($expiresAt)->toDateTimeString();
+                } else {
+                    $expiresAt = null;
+                }
+
+                $suppressed = $this->shouldSuppressForShortCycle($deal, $campaign);
+
+                return [
+                    'deal_id' => $deal->id ?: null,
+                    'client_id' => $deal->client_id ?: ($client?->id),
+                    'client_name' => $client?->name,
+                    'phone' => $client?->phone_normalized,
+                    'platform_id' => $deal->platform_id ?: ($client?->platform_id),
+                    'is_virtual' => empty($deal->id),
+                    'expires_at' => $expiresAt,
+                    'cycle_days' => $this->cycleLengthDays($deal),
+                    'suppressed' => $suppressed,
+                    'suppressed_reason' => $suppressed ? 'short_cycle_guard' : null,
+                ];
+            })->values();
+
+            $suppressedCount = $preview->where('suppressed', true)->count();
+
             return [
                 'campaign_id' => $campaign->id,
                 'trigger_days' => $campaign->trigger_days,
@@ -1063,31 +1230,10 @@ class RenewalService
                 'total_targeted' => $deals->count(),
                 'sent_count' => 0,
                 'failed_count' => 0,
-                'skipped_count' => 0,
+                'skipped_count' => $suppressedCount,
+                'suppressed_count' => $suppressedCount,
                 'status' => 'dry_run',
-                'targets_preview' => $deals->take(100)->map(function ($deal) {
-                    $client = $deal->client ?? null;
-                    $expiresAt = $deal->expires_at;
-                    if ($expiresAt instanceof Carbon) {
-                        $expiresAt = $expiresAt->toDateTimeString();
-                    } elseif (is_numeric($expiresAt)) {
-                        $expiresAt = Carbon::createFromTimestamp((int) $expiresAt)->toDateTimeString();
-                    } elseif ($expiresAt) {
-                        $expiresAt = Carbon::parse($expiresAt)->toDateTimeString();
-                    } else {
-                        $expiresAt = null;
-                    }
-
-                    return [
-                        'deal_id' => $deal->id ?: null,
-                        'client_id' => $deal->client_id ?: ($client?->id),
-                        'client_name' => $client?->name,
-                        'phone' => $client?->phone_normalized,
-                        'platform_id' => $deal->platform_id ?: ($client?->platform_id),
-                        'is_virtual' => empty($deal->id),
-                        'expires_at' => $expiresAt,
-                    ];
-                })->values()->all(),
+                'targets_preview' => $preview->take(100)->all(),
             ];
         }
 
@@ -1123,6 +1269,14 @@ class RenewalService
             }
 
             if ($this->alreadyAttemptedToday($entityType, $entityId, $campaign->id)) {
+                $skipped++;
+                continue;
+            }
+
+            // Short-cycle guard: never fire a pre-expiry reminder whose lead time is
+            // longer than the client's own subscription (e.g. a -7d reminder on a
+            // 7-day plan). Suppressed targets are counted as skipped, not sent.
+            if ($this->shouldSuppressForShortCycle($deal, $campaign)) {
                 $skipped++;
                 continue;
             }
@@ -1748,6 +1902,90 @@ class RenewalService
             ->where('status', 'active')
             ->orderByDesc('id')
             ->first();
+    }
+
+    /**
+     * Short-cycle guard: suppress a pre-expiry reminder whose lead time is at least
+     * as long as the client's own subscription. A campaign with trigger_days = -7
+     * fires "7 days before expiry"; on a 7-day plan that lands on the purchase day,
+     * which reads as premature spam. Expiry-day (0) and post-expiry (positive) offsets
+     * are never suppressed. When the cycle length can't be determined (legacy/virtual
+     * renewals) the guard fails open so genuine reminders still go out.
+     */
+    private function shouldSuppressForShortCycle(Deal $deal, RenewalCampaign $campaign): bool
+    {
+        $triggerDays = (int) $campaign->trigger_days;
+        $leadDaysBeforeExpiry = $triggerDays < 0 ? -$triggerDays : 0;
+
+        if ($leadDaysBeforeExpiry <= 0) {
+            return false;
+        }
+
+        $platformId = $deal->platform_id !== null ? (int) $deal->platform_id : null;
+        if (!$this->guardEnabledForPlatform($platformId)) {
+            return false;
+        }
+
+        $cycleDays = $this->cycleLengthDays($deal);
+        if ($cycleDays === null || $cycleDays <= 0) {
+            return false;
+        }
+
+        return $leadDaysBeforeExpiry >= $cycleDays;
+    }
+
+    private function guardEnabledForPlatform(?int $platformId): bool
+    {
+        if ($platformId === null) {
+            return true;
+        }
+
+        if (!array_key_exists($platformId, $this->guardEnabledCache)) {
+            $flag = Platform::query()->whereKey($platformId)->value('renewal_reminder_guard_enabled');
+            // Default ON when the market row or column value is absent.
+            $this->guardEnabledCache[$platformId] = $flag === null ? true : (bool) $flag;
+        }
+
+        return $this->guardEnabledCache[$platformId];
+    }
+
+    /**
+     * Best-effort subscription length in days: prefer the explicit duration_days,
+     * then a known duration keyword, then the activated_at → expires_at span.
+     */
+    private function cycleLengthDays(Deal $deal): ?int
+    {
+        if (is_numeric($deal->duration_days) && (int) $deal->duration_days > 0) {
+            return (int) $deal->duration_days;
+        }
+
+        $duration = strtolower(trim((string) ($deal->duration ?? '')));
+        $keywordMap = [
+            'daily' => 1,
+            'weekly' => 7,
+            'biweekly' => 14,
+            'bi-weekly' => 14,
+            'fortnightly' => 14,
+            'monthly' => 30,
+            'quarterly' => 90,
+            'yearly' => 365,
+            'annual' => 365,
+            'annually' => 365,
+        ];
+        if ($duration !== '' && isset($keywordMap[$duration])) {
+            return $keywordMap[$duration];
+        }
+
+        if ($deal->activated_at && $deal->expires_at) {
+            $start = $deal->activated_at instanceof Carbon ? $deal->activated_at : Carbon::parse($deal->activated_at);
+            $end = $deal->expires_at instanceof Carbon ? $deal->expires_at : Carbon::parse($deal->expires_at);
+            $span = $start->diffInDays($end, false);
+            if ($span > 0) {
+                return (int) $span;
+            }
+        }
+
+        return null;
     }
 
     private function suggestTriggerDays(Deal $deal): int

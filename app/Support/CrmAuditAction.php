@@ -64,6 +64,10 @@ final class CrmAuditAction
     public const RENEWAL_PAUSE = 'renewal_pause';
     public const RENEWAL_RESUME = 'renewal_resume';
     public const CAMPAIGN_RUN_CONFIGURED = 'campaign_run_configured';
+    public const RENEWAL_CAMPAIGN_CREATE = 'renewal_campaign_create';
+    public const RENEWAL_CAMPAIGN_UPDATE = 'renewal_campaign_update';
+    public const RENEWAL_CAMPAIGN_DELETE = 'renewal_campaign_delete';
+    public const RENEWAL_GUARD_UPDATE = 'renewal_guard_update';
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
     public const PAYMENT_MATCH_CONFIRM = 'payment_match_confirm';
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';

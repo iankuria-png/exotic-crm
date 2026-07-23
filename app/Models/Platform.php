@@ -32,6 +32,7 @@ class Platform extends Model
         'health_down_since_at', 'health_last_down_notified_at',
         'lifecycle_policy_enabled',
         'sync_shared_key_enabled',
+        'renewal_reminder_guard_enabled',
     ];
 
     protected $hidden = [
@@ -44,6 +45,7 @@ class Platform extends Model
         'is_active' => 'boolean',
         'lifecycle_policy_enabled' => 'boolean',
         'sync_shared_key_enabled' => 'boolean',
+        'renewal_reminder_guard_enabled' => 'boolean',
         'sync_last_checked_at' => 'datetime',
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
