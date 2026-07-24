@@ -1,6 +1,14 @@
 import React, { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import api from '../../services/api';
 import SmsDispatchLog from './SmsDispatchLog';
 import LifecycleSmsPanel from './LifecycleSmsPanel';
+
+function formatMoney(amount, currency) {
+    if (amount === null || amount === undefined) return '—';
+    const n = Number(amount).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return currency ? `${currency} ${n}` : n;
+}
 
 const SUB_TABS = [
     { id: 'routing', label: 'Routing' },
@@ -273,6 +281,18 @@ export default function SmsRoutingPanel({
     const [revealedMarkets, setRevealedMarkets] = useState([]);
     const [addMarketId, setAddMarketId] = useState('');
 
+    const balancesQuery = useQuery({
+        queryKey: ['sms-provider-balances'],
+        queryFn: () => api.get('/crm/settings/integrations/sms-provider/balances').then((r) => r.data),
+        enabled: subTab === 'providers',
+        staleTime: 300_000,
+        refetchOnWindowFocus: false,
+    });
+    const balanceById = useMemo(
+        () => Object.fromEntries((balancesQuery.data?.providers || []).map((p) => [p.id, p])),
+        [balancesQuery.data],
+    );
+
     const globalCredsFor = (providerId) => smsProviderForm.providers?.[providerId] || {};
     const providerConfigured = (provider) => (provider.fields || [])
         .every((field) => !field.required || fieldHasValue(globalCredsFor(provider.id), field));
@@ -423,11 +443,13 @@ export default function SmsRoutingPanel({
 
                 {subTab === 'providers' ? (
                     <div className="space-y-2">
-                        <p className="text-xs text-slate-500">Global credentials per provider. Markets inherit these unless overridden. Click a provider to edit.</p>
+                        <p className="text-xs text-slate-500">Global credentials per provider. Markets inherit these unless overridden. Balance is fetched live where the provider exposes an API; spend is estimated from the last 30 days of sends × your cost per SMS.</p>
                         {options.map((provider) => {
                             const isActive = provider.id === smsProviderForm.active_provider;
                             const configured = providerConfigured(provider);
                             const open = expandedProvider === provider.id;
+                            const bal = balanceById[provider.id];
+                            const creds = globalCredsFor(provider.id);
                             return (
                                 <div key={provider.id} className="rounded-lg border border-slate-200 bg-white">
                                     <button
@@ -443,6 +465,15 @@ export default function SmsRoutingPanel({
                                             ) : null}
                                         </span>
                                         <span className="flex items-center gap-3">
+                                            {bal ? (
+                                                bal.balance ? (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700" title="Live account balance">
+                                                        {formatMoney(bal.balance.amount, bal.balance.currency)}
+                                                    </span>
+                                                ) : bal.balance_supported ? (
+                                                    <span className="text-[11px] text-slate-400" title="Balance API configured but unavailable right now">balance n/a</span>
+                                                ) : null
+                                            ) : (balancesQuery.isFetching ? <span className="text-[11px] text-slate-300">…</span> : null)}
                                             <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${configured ? 'text-emerald-700' : 'text-slate-400'}`}>
                                                 <span className={`h-1.5 w-1.5 rounded-full ${configured ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                                                 {configured ? 'Configured' : 'Incomplete'}
@@ -451,14 +482,45 @@ export default function SmsRoutingPanel({
                                         </span>
                                     </button>
                                     {open ? (
-                                        <div className="border-t border-slate-100 p-3">
+                                        <div className="space-y-3 border-t border-slate-100 p-3">
                                             <ProviderFields
                                                 option={provider}
-                                                creds={globalCredsFor(provider.id)}
+                                                creds={creds}
                                                 scope="global"
                                                 idPrefix="sms-global"
                                                 onFieldChange={(key, value) => updateSmsProviderField(provider.id, key, value)}
                                             />
+                                            <div className="grid gap-3 rounded-md bg-slate-50 p-2.5 sm:grid-cols-3">
+                                                <div>
+                                                    <label htmlFor={`sms-cost-${provider.id}`} className="mb-1 block text-xs font-medium text-slate-600">Cost per SMS</label>
+                                                    <input
+                                                        id={`sms-cost-${provider.id}`}
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.01"
+                                                        value={creds.unit_cost ?? ''}
+                                                        onChange={(e) => updateSmsProviderField(provider.id, 'unit_cost', e.target.value)}
+                                                        className="crm-input text-sm"
+                                                        placeholder="e.g. 0.80"
+                                                    />
+                                                    <p className="mt-1 text-[10px] text-slate-400">Your per-message rate, for the spend estimate.</p>
+                                                </div>
+                                                <div>
+                                                    <p className="mb-1 text-xs font-medium text-slate-600">Sent (30d)</p>
+                                                    <p className="text-sm font-semibold text-slate-800">{bal ? Number(bal.sent_count || 0).toLocaleString() : '—'}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="mb-1 text-xs font-medium text-slate-600">Est. spend (30d)</p>
+                                                    <p className="text-sm font-semibold text-slate-800">
+                                                        {bal && bal.estimated_spend !== null && bal.estimated_spend !== undefined
+                                                            ? formatMoney(bal.estimated_spend, bal.balance?.currency || '')
+                                                            : <span className="text-slate-400">set a cost</span>}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            {bal && !bal.balance_supported ? (
+                                                <p className="text-[11px] text-slate-400">This provider has no balance API — check remaining credit on the provider portal.</p>
+                                            ) : null}
                                         </div>
                                     ) : null}
                                 </div>

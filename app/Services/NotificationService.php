@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\IntegrationSetting;
 use App\Models\SmsLog;
 use App\Services\Sms\AfricasTalkingSmsProvider;
+use App\Services\Sms\BalanceAwareSmsProvider;
 use App\Services\Sms\BriqSmsProvider;
 use App\Services\Sms\GhanaBulkSmsProvider;
 use App\Services\Sms\KullSmsProvider;
@@ -13,6 +14,7 @@ use App\Services\Sms\LegacyGatewaySmsProvider;
 use App\Services\Sms\SmsProviderInterface;
 use App\Services\Sms\UgandaBulkSmsProvider;
 use App\Support\PhoneNormalizer;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class NotificationService
@@ -537,7 +539,65 @@ class NotificationService
             $merged[$key] = $value;
         }
 
+        // Non-credential per-provider config: cost per SMS, used to estimate
+        // spend in the Providers tab. Stored alongside the credentials block.
+        if (array_key_exists('unit_cost', $incoming)) {
+            $unitCost = $incoming['unit_cost'];
+            if ($unitCost === null || $unitCost === '' || !is_numeric($unitCost)) {
+                unset($merged['unit_cost']);
+            } else {
+                $merged['unit_cost'] = round((float) $unitCost, 4);
+            }
+        }
+
         return $merged;
+    }
+
+    /**
+     * Per-provider balance + estimated spend for the Providers tab. Live balance
+     * is fetched only for providers that expose an API (others → null, "check
+     * portal"); spend is estimated from sms_logs volume × the configured unit
+     * cost. All defensive: a provider failure never breaks the response.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function providerBalancesAndCosts(int $days = 30): array
+    {
+        $config = $this->resolveSmsConfig();
+        $since = now()->subDays(max(1, $days));
+
+        return collect($this->providers)->map(function (SmsProviderInterface $provider, string $providerId) use ($config, $since, $days) {
+            $providerConfig = is_array($config[$providerId] ?? null) ? $config[$providerId] : [];
+            $unitCost = isset($providerConfig['unit_cost']) && is_numeric($providerConfig['unit_cost'])
+                ? (float) $providerConfig['unit_cost']
+                : null;
+
+            $balance = null;
+            if ($provider instanceof BalanceAwareSmsProvider && $provider->configured($providerConfig)) {
+                $balance = Cache::remember(
+                    'sms_balance:' . $providerId . ':' . md5(json_encode($providerConfig)),
+                    300,
+                    fn () => $provider->fetchBalance($providerConfig)
+                );
+            }
+
+            $sentCount = (int) SmsLog::query()
+                ->where('provider', $providerId)
+                ->where('status', 'sent')
+                ->where('sent_at', '>=', $since)
+                ->count();
+
+            return [
+                'id' => $providerId,
+                'label' => $provider->label(),
+                'balance_supported' => $provider instanceof BalanceAwareSmsProvider,
+                'balance' => $balance,
+                'unit_cost' => $unitCost,
+                'sent_count' => $sentCount,
+                'window_days' => $days,
+                'estimated_spend' => $unitCost !== null ? round($unitCost * $sentCount, 2) : null,
+            ];
+        })->values()->all();
     }
 
     private function resolveMarketConfig(array $config, ?int $platformId): array

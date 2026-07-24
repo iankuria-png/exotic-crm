@@ -700,6 +700,23 @@ class SettingsController extends Controller
         ]);
     }
 
+    /** Per-provider live balance + estimated spend for the Providers tab. */
+    public function smsProviderBalances(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can view SMS provider balances.'
+        );
+
+        $days = (int) $request->query('days', 30);
+
+        return response()->json([
+            'providers' => $this->notificationService->providerBalancesAndCosts($days),
+            'window_days' => max(1, $days),
+        ]);
+    }
+
     public function updateSmsProvider(Request $request)
     {
         $this->marketAuthorizationService->ensureRole(
@@ -731,6 +748,8 @@ class SettingsController extends Controller
             $providerId = $option['id'];
             $rules[$providerId] = 'nullable|array';
             $rules["markets.*.{$providerId}"] = 'nullable|array';
+            // Per-provider cost per SMS (drives the spend estimate).
+            $rules["{$providerId}.unit_cost"] = 'nullable|numeric|min:0';
 
             foreach ($option['fields'] as $field) {
                 $key = $field['key'] ?? null;

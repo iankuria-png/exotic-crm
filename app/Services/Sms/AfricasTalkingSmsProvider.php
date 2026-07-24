@@ -4,11 +4,56 @@ namespace App\Services\Sms;
 
 use Illuminate\Support\Facades\Http;
 
-class AfricasTalkingSmsProvider implements SmsProviderInterface
+class AfricasTalkingSmsProvider implements SmsProviderInterface, BalanceAwareSmsProvider
 {
     public function id(): string
     {
         return 'africastalking';
+    }
+
+    /**
+     * Africa's Talking exposes the account balance via the user data endpoint:
+     * GET /version1/user?username=… → { UserData: { balance: "KES 1234.5000" } }.
+     */
+    public function fetchBalance(array $config): ?array
+    {
+        if (!$this->configured($config)) {
+            return null;
+        }
+
+        $messagingEndpoint = (string) ($config['endpoint'] ?? 'https://api.africastalking.com/version1/messaging');
+        $userEndpoint = preg_replace('#/messaging/?$#', '/user', $messagingEndpoint) ?: 'https://api.africastalking.com/version1/user';
+
+        try {
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'apiKey' => (string) $config['api_key'],
+            ])
+                ->timeout(10)
+                ->get($userEndpoint, ['username' => (string) $config['username']]);
+
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $raw = trim((string) data_get($response->json(), 'UserData.balance', ''));
+            if ($raw === '') {
+                return null;
+            }
+
+            // e.g. "KES 1234.5000" → currency + amount.
+            if (preg_match('/([A-Z]{3})\s*([\d.,]+)/', $raw, $m)) {
+                return [
+                    'amount' => (float) str_replace(',', '', $m[2]),
+                    'currency' => $m[1],
+                    'raw' => $raw,
+                ];
+            }
+
+            return ['amount' => (float) preg_replace('/[^\d.]/', '', $raw), 'currency' => '', 'raw' => $raw];
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function label(): string
