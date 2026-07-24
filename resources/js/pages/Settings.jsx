@@ -7213,6 +7213,292 @@ function paymentFailureSmsStateLabel(state) {
     return 'Off';
 }
 
+const AUDIT_PER_PAGE = 25;
+
+function humanizeAuditAction(action) {
+    return String(action || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Action';
+}
+
+function auditActionTone(action) {
+    const value = String(action || '');
+    if (value === 'auth_login') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    if (value === 'auth_logout') return 'bg-slate-100 text-slate-600 ring-slate-200';
+    if (value === 'auth_login_failed' || value.includes('failed') || value.includes('delete') || value.includes('deactivate')) {
+        return 'bg-rose-50 text-rose-700 ring-rose-200';
+    }
+    return 'bg-slate-100 text-slate-700 ring-slate-200';
+}
+
+function auditCsvCell(value) {
+    const text = value === null || value === undefined ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadAuditCsv(filename, rows) {
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.setAttribute('download', filename);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+}
+
+const EMPTY_AUDIT_FILTERS = { search: '', action: '', from: '', to: '' };
+
+function UserAuditDrawer({ user, onClose }) {
+    const toast = useToast();
+    const [filters, setFilters] = useState(EMPTY_AUDIT_FILTERS);
+    const [appliedFilters, setAppliedFilters] = useState(EMPTY_AUDIT_FILTERS);
+    const [page, setPage] = useState(1);
+    const [exporting, setExporting] = useState(false);
+
+    const queryParams = useMemo(() => {
+        const params = { page, per_page: AUDIT_PER_PAGE };
+        if (appliedFilters.search) params.search = appliedFilters.search;
+        if (appliedFilters.action) params.action = appliedFilters.action;
+        if (appliedFilters.from) params.from = appliedFilters.from;
+        if (appliedFilters.to) params.to = appliedFilters.to;
+        return params;
+    }, [page, appliedFilters]);
+
+    const { data, isLoading, isError, isFetching, refetch } = useQuery({
+        queryKey: ['user-audit', user.id, queryParams],
+        queryFn: () => api.get(`/crm/settings/roles/${user.id}/audit`, { params: queryParams }).then((response) => response.data),
+        placeholderData: (previous) => previous,
+    });
+
+    const rows = data?.data || [];
+    const meta = data?.meta || { current_page: 1, last_page: 1, total: 0 };
+    const summary = data?.summary || {};
+    const actionOptions = data?.actions || [];
+    const filtersActive = Boolean(appliedFilters.search || appliedFilters.action || appliedFilters.from || appliedFilters.to);
+
+    const applyFilters = () => {
+        setPage(1);
+        setAppliedFilters(filters);
+    };
+
+    const resetFilters = () => {
+        setFilters(EMPTY_AUDIT_FILTERS);
+        setAppliedFilters(EMPTY_AUDIT_FILTERS);
+        setPage(1);
+    };
+
+    const handleExport = async () => {
+        if (exporting) return;
+        setExporting(true);
+        try {
+            const header = ['Timestamp', 'Action', 'Entity type', 'Entity ID', 'Market', 'IP address', 'Reason'];
+            const csvRows = [header.map(auditCsvCell).join(',')];
+            let current = 1;
+            let lastPage = 1;
+
+            do {
+                const response = await api.get(`/crm/settings/roles/${user.id}/audit`, {
+                    params: { ...queryParams, page: current, per_page: 100 },
+                });
+                (response.data?.data || []).forEach((row) => {
+                    csvRows.push([
+                        row.created_at ? new Date(row.created_at).toLocaleString() : '',
+                        humanizeAuditAction(row.action),
+                        row.entity_type || '',
+                        row.entity_id ?? '',
+                        row.platform_name || '',
+                        row.ip_address || '',
+                        row.reason || '',
+                    ].map(auditCsvCell).join(','));
+                });
+                lastPage = response.data?.meta?.last_page || 1;
+                current += 1;
+            } while (current <= lastPage);
+
+            if (csvRows.length <= 1) {
+                toast.warning('No audit rows matched the current filters.');
+                return;
+            }
+
+            downloadAuditCsv(`audit-${user.email || user.id}.csv`, csvRows);
+            toast.success('Audit trail exported.');
+        } catch (error) {
+            toast.error(error?.response?.data?.message || 'We could not export this audit trail.');
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/45" onClick={onClose}>
+            <div className="flex h-full w-full max-w-3xl flex-col bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Audit trail</p>
+                        <h3 className="mt-0.5 text-lg font-semibold text-slate-900">{user.name}</h3>
+                        <p className="text-xs text-slate-500">{user.email}</p>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
+                                {String(user.role || '').replace('_', ' ')}
+                            </span>
+                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
+                                user.status === 'active'
+                                    ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                    : 'bg-slate-200 text-slate-700 ring-slate-300'
+                            }`}>
+                                {user.status || 'active'}
+                            </span>
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} className="crm-btn-secondary px-3 py-1.5 text-xs">Close</button>
+                </header>
+
+                <div className="grid grid-cols-2 gap-3 border-b border-slate-200 bg-slate-50 px-5 py-3 sm:grid-cols-4">
+                    <div>
+                        <p className="text-[11px] uppercase tracking-[0.1em] text-slate-400">Total actions</p>
+                        <p className="text-sm font-semibold text-slate-900">{Number(summary.total || 0).toLocaleString()}</p>
+                    </div>
+                    <div>
+                        <p className="text-[11px] uppercase tracking-[0.1em] text-slate-400">Distinct IPs</p>
+                        <p className="text-sm font-semibold text-slate-900">{Number(summary.distinct_ips || 0).toLocaleString()}</p>
+                    </div>
+                    <div>
+                        <p className="text-[11px] uppercase tracking-[0.1em] text-slate-400">First seen</p>
+                        <p className="text-xs font-medium text-slate-700">{summary.first_seen ? formatDateTime(summary.first_seen) : '—'}</p>
+                    </div>
+                    <div>
+                        <p className="text-[11px] uppercase tracking-[0.1em] text-slate-400">Last seen</p>
+                        <p className="text-xs font-medium text-slate-700">{summary.last_seen ? formatDateTime(summary.last_seen) : '—'}</p>
+                    </div>
+                </div>
+
+                <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 px-5 py-3">
+                    <div className="flex-1 min-w-[180px]">
+                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">Search</label>
+                        <input
+                            type="text"
+                            value={filters.search}
+                            onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+                            onKeyDown={(event) => { if (event.key === 'Enter') applyFilters(); }}
+                            placeholder="Action, reason, IP, entity id…"
+                            className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm"
+                        />
+                    </div>
+                    <div className="min-w-[150px]">
+                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">Action</label>
+                        <select
+                            value={filters.action}
+                            onChange={(event) => setFilters((current) => ({ ...current, action: event.target.value }))}
+                            className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm"
+                        >
+                            <option value="">All actions</option>
+                            {actionOptions.map((action) => (
+                                <option key={action} value={action}>{humanizeAuditAction(action)}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">From</label>
+                        <input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-sm" />
+                    </div>
+                    <div>
+                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">To</label>
+                        <input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-sm" />
+                    </div>
+                    <button type="button" onClick={applyFilters} className="crm-btn-primary px-3 py-1.5 text-xs">Apply</button>
+                    {filtersActive ? (
+                        <button type="button" onClick={resetFilters} className="crm-btn-secondary px-3 py-1.5 text-xs">Reset</button>
+                    ) : null}
+                    <button
+                        type="button"
+                        onClick={handleExport}
+                        disabled={exporting || Number(summary.total || 0) === 0}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {exporting ? 'Exporting…' : 'Export CSV'}
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-auto px-5 py-3">
+                    {isLoading ? (
+                        <p className="p-4 text-sm text-slate-500">Loading audit trail…</p>
+                    ) : isError ? (
+                        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-4">
+                            <p className="text-sm font-semibold text-rose-800">We couldn’t load this audit trail.</p>
+                            <button type="button" onClick={() => refetch()} className="mt-3 crm-btn-secondary px-3 py-1.5 text-xs">Try again</button>
+                        </div>
+                    ) : rows.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+                            <p className="text-sm font-semibold text-slate-700">No recorded actions</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                {filtersActive ? 'No actions match these filters.' : 'This user has no audited actions yet. Sign-ins are recorded going forward.'}
+                            </p>
+                        </div>
+                    ) : (
+                        <table className="min-w-full divide-y divide-slate-200">
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">When</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Action</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Entity</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">IP</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {rows.map((row) => (
+                                    <tr key={row.id}>
+                                        <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-600">{row.created_at ? formatDateTime(row.created_at) : '—'}</td>
+                                        <td className="px-3 py-2">
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${auditActionTone(row.action)}`}>
+                                                {humanizeAuditAction(row.action)}
+                                            </span>
+                                        </td>
+                                        <td className="px-3 py-2 text-xs text-slate-600">
+                                            {row.entity_type ? `${row.entity_type}${row.entity_id ? ` #${row.entity_id}` : ''}` : '—'}
+                                            {row.platform_name ? <span className="block text-[11px] text-slate-400">{row.platform_name}</span> : null}
+                                        </td>
+                                        <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-slate-500">{row.ip_address || '—'}</td>
+                                        <td className="px-3 py-2 text-xs text-slate-600">{row.reason || '—'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+
+                <footer className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+                    <p className="text-xs text-slate-500">
+                        {Number(meta.total || 0).toLocaleString()} action{Number(meta.total || 0) === 1 ? '' : 's'}
+                        {isFetching ? ' · refreshing…' : ''}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setPage((current) => Math.max(1, current - 1))}
+                            disabled={meta.current_page <= 1}
+                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Previous
+                        </button>
+                        <span className="text-xs text-slate-500">Page {meta.current_page} of {meta.last_page}</span>
+                        <button
+                            type="button"
+                            onClick={() => setPage((current) => Math.min(meta.last_page, current + 1))}
+                            disabled={meta.current_page >= meta.last_page}
+                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Next
+                        </button>
+                    </div>
+                </footer>
+            </div>
+        </div>
+    );
+}
+
 function RolesWorkspace() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -7220,6 +7506,7 @@ function RolesWorkspace() {
     const { user: currentUser } = useAuth();
     const [selectedUser, setSelectedUser] = useState(null);
     const [editor, setEditor] = useState(null);
+    const [auditUser, setAuditUser] = useState(null);
     const [createOpen, setCreateOpen] = useState(false);
     const [createForm, setCreateForm] = useState({
         name: '',
@@ -7648,6 +7935,13 @@ function RolesWorkspace() {
                                                     >
                                                         Edit
                                                     </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setAuditUser(user)}
+                                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                    >
+                                                        Audit
+                                                    </button>
                                                     {canImpersonateUser(user) ? (
                                                         <button
                                                             type="button"
@@ -7668,6 +7962,10 @@ function RolesWorkspace() {
                     )}
                 </div>
             </section>
+
+            {auditUser ? (
+                <UserAuditDrawer user={auditUser} onClose={() => setAuditUser(null)} />
+            ) : null}
 
             {selectedUser && editor ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => {

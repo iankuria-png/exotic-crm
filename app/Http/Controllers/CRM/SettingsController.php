@@ -4381,6 +4381,109 @@ class SettingsController extends Controller
         return response()->json($logs);
     }
 
+    /**
+     * Full audit trail for a single user (admin-only, not platform-scoped) —
+     * every action the user is the actor of, including sign-in / sign-out
+     * events. This is the security surface for auditing any account, including
+     * suspended or non-team accounts that never appear on the Team page.
+     */
+    public function userAuditTrail(Request $request, User $user)
+    {
+        $validated = $request->validate([
+            'search' => 'nullable|string|max:120',
+            'action' => 'nullable|string|max:100',
+            'entity_type' => 'nullable|string|max:50',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:5|max:100',
+        ]);
+
+        $applyFilters = function ($query) use ($validated) {
+            if (!empty($validated['action'])) {
+                $query->where('action', $validated['action']);
+            }
+
+            if (!empty($validated['entity_type'])) {
+                $query->where('entity_type', $validated['entity_type']);
+            }
+
+            if (!empty($validated['from'])) {
+                $query->where('created_at', '>=', now()->parse($validated['from'])->startOfDay());
+            }
+
+            if (!empty($validated['to'])) {
+                $query->where('created_at', '<', now()->parse($validated['to'])->addDay()->startOfDay());
+            }
+
+            if (!empty($validated['search'])) {
+                $search = $validated['search'];
+                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $query->where(function ($builder) use ($like, $search) {
+                    $builder->where('action', 'like', $like)
+                        ->orWhere('reason', 'like', $like)
+                        ->orWhere('entity_type', 'like', $like)
+                        ->orWhere('ip_address', 'like', $like);
+
+                    if (ctype_digit($search)) {
+                        $builder->orWhere('entity_id', (int) $search);
+                    }
+                });
+            }
+
+            return $query;
+        };
+
+        $query = AuditLog::query()->where('actor_id', $user->id)->with('platform:id,name');
+        $applyFilters($query);
+
+        $logs = $query->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate($request->integer('per_page', 25));
+
+        $logs->getCollection()->transform(function (AuditLog $log) {
+            return [
+                'id' => $log->id,
+                'created_at' => optional($log->created_at)->toIso8601String(),
+                'action' => $log->action,
+                'entity_type' => $log->entity_type,
+                'entity_id' => $log->entity_id,
+                'platform_id' => $log->platform_id,
+                'platform_name' => $log->platform?->name,
+                'ip_address' => $log->ip_address,
+                'reason' => $log->reason,
+            ];
+        });
+
+        $summaryBase = AuditLog::query()->where('actor_id', $user->id);
+        $firstSeen = (clone $summaryBase)->min('created_at');
+        $lastSeen = (clone $summaryBase)->max('created_at');
+
+        return response()->json([
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role,
+                'status' => $user->status ?? 'active',
+            ],
+            'summary' => [
+                'total' => (clone $summaryBase)->count(),
+                'first_seen' => $firstSeen ? (string) $firstSeen : null,
+                'last_seen' => $lastSeen ? (string) $lastSeen : null,
+                'distinct_ips' => (clone $summaryBase)->whereNotNull('ip_address')->distinct()->count('ip_address'),
+            ],
+            'actions' => (clone $summaryBase)->select('action')->distinct()->orderBy('action')->pluck('action'),
+            'data' => $logs->items(),
+            'meta' => [
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
+            ],
+        ]);
+    }
+
     public function roles()
     {
         $platformMap = Platform::query()

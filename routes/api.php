@@ -772,6 +772,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/settings/error-logs/{group}/reopen', [ErrorLogController::class, 'reopen']);
     });
     Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
+    Route::get('/settings/roles/{user}/audit', [SettingsController::class, 'userAuditTrail'])->middleware('role:admin');
     Route::post('/settings/roles/users', [SettingsController::class, 'storeUser'])->middleware('role:admin');
     Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
     Route::post('/settings/roles/{user}/impersonation-link', [SettingsController::class, 'impersonationLink'])->middleware('role:admin');

@@ -5,10 +5,12 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Services\AuthSettingsService;
 use App\Services\TeamActivityService;
+use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use App\Models\AuditLog;
 use App\Models\User;
 
 class AuthController extends Controller
@@ -28,15 +30,22 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (!$user) {
+            return response()->json(['message' => 'Invalid credentials'], 401);
+        }
+
+        if (!Hash::check($request->password, $user->password)) {
+            $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN_FAILED, 'Incorrect password.', $request, 'password');
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
         if (!$this->authSettingsService->passwordLoginAllowedFor((string) $user->role)) {
+            $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN_FAILED, 'Password login is disabled for this role.', $request, 'password');
             return response()->json(['message' => 'Password login is not enabled for this account. Use Google SSO.'], 403);
         }
 
         if (($user->status ?? 'active') !== 'active') {
+            $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN_FAILED, 'Account is inactive.', $request, 'password');
             return response()->json(['message' => 'Account is inactive. Contact your administrator.'], 403);
         }
 
@@ -45,10 +54,39 @@ class AuthController extends Controller
 
         $token = $user->createToken('crm-session')->plainTextToken;
 
+        $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN, 'Signed in with password.', $request, 'password');
+
         return response()->json([
             'token' => $token,
             'user' => $this->serializeUser($user),
         ]);
+    }
+
+    /**
+     * Record a sign-in / sign-out event to the audit log. Auditing must never
+     * break authentication, so all failures here are swallowed.
+     */
+    private function recordAuthEvent(User $user, string $action, string $reason, Request $request, string $method): void
+    {
+        try {
+            AuditLog::create([
+                'platform_id' => null,
+                'actor_id' => $user->id,
+                'action' => $action,
+                'entity_type' => 'user',
+                'entity_id' => $user->id,
+                'after_state' => [
+                    'method' => $method,
+                    'email' => $user->email,
+                    'user_agent' => substr((string) $request->userAgent(), 0, 500),
+                ],
+                'reason' => $reason,
+                'ip_address' => $request->ip(),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
     }
 
     public function me(Request $request)
@@ -78,11 +116,14 @@ class AuthController extends Controller
         }
 
         if (($user->status ?? 'active') !== 'active') {
+            $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN_FAILED, 'Account is inactive.', $request, 'sso');
             Auth::guard('web')->logout();
             return response()->json(['message' => 'Account is inactive. Contact your administrator.'], 403);
         }
 
         $token = $user->createToken('crm-session')->plainTextToken;
+
+        $this->recordAuthEvent($user, CrmAuditAction::AUTH_LOGIN, 'Signed in with Google SSO.', $request, 'sso');
 
         return response()->json([
             'token' => $token,
@@ -129,6 +170,8 @@ class AuthController extends Controller
                 (string) $validated['session_token']
             );
         }
+
+        $this->recordAuthEvent($request->user(), CrmAuditAction::AUTH_LOGOUT, 'Signed out.', $request, 'session');
 
         $request->user()->currentAccessToken()?->delete();
         Auth::guard('web')->logout();
