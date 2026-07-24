@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
 use App\Models\RenewalCampaign;
@@ -66,6 +67,37 @@ class RenewalCadenceTest extends TestCase
             'assigned_market_ids' => $assignedMarketIds,
             'status' => 'active',
         ]);
+    }
+
+    public function test_renewal_skips_client_who_already_renewed_to_a_later_subscription(): void
+    {
+        $platform = Platform::factory()->create();
+        $template = $this->renewalTemplate();
+        $campaign = $this->campaign(null, 3, $template->id); // +3 win-back, post-expiry
+
+        // Client whose OLD deal matches the +3 window, but whose live subscription
+        // (WP escort_expire) runs a month out — she has already renewed.
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'escort_expire' => now()->addMonth()->timestamp,
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'expired',
+            'duration' => 'biweekly',
+            'duration_days' => 14,
+            'activated_at' => now()->subDays(17),
+            'expires_at' => now()->subDays(3)->startOfDay()->addHours(9),
+            'renewal_reminders_paused' => false,
+        ]);
+
+        $result = app(RenewalService::class)->runCampaigns($campaign->id, null, [$platform->id], ['dry_run' => true]);
+        $row = $result['campaigns'][0];
+
+        $this->assertSame(1, $row['total_targeted']);
+        $this->assertSame(1, $row['suppressed_count']);
+        $this->assertSame('already_renewed', $row['targets_preview'][0]['suppressed_reason']);
     }
 
     public function test_guard_suppresses_reminder_whose_lead_time_reaches_cycle_length(): void

@@ -1002,6 +1002,15 @@ class RenewalService
             ];
         }
 
+        $deal->loadMissing('client');
+        if ($this->clientHasRenewedBeyond($deal)) {
+            return [
+                'success' => false,
+                'status' => 'skipped',
+                'reason' => 'This client has already renewed to a later subscription — no expiry reminder needed.',
+            ];
+        }
+
         $template = $templateId
             ? Template::query()->where('id', $templateId)->where('channel', $channel)->first()
             : $this->resolveDefaultRenewalTemplate($deal, $channel);
@@ -1226,7 +1235,9 @@ class RenewalService
                     $expiresAt = null;
                 }
 
-                $suppressed = $this->shouldSuppressForShortCycle($deal, $campaign);
+                $shortCycle = $this->shouldSuppressForShortCycle($deal, $campaign);
+                $renewed = !$shortCycle && $this->clientHasRenewedBeyond($deal);
+                $suppressed = $shortCycle || $renewed;
 
                 return [
                     'deal_id' => $deal->id ?: null,
@@ -1238,7 +1249,7 @@ class RenewalService
                     'expires_at' => $expiresAt,
                     'cycle_days' => $this->cycleLengthDays($deal),
                     'suppressed' => $suppressed,
-                    'suppressed_reason' => $suppressed ? 'short_cycle_guard' : null,
+                    'suppressed_reason' => $shortCycle ? 'short_cycle_guard' : ($renewed ? 'already_renewed' : null),
                 ];
             })->values();
 
@@ -1306,6 +1317,15 @@ class RenewalService
             if (!$deal->client || !$campaign->template) {
                 $failed++;
                 $this->writeRenewalTimeline($deal, $campaign, $run, false, 'Missing client or template', $channel);
+                continue;
+            }
+
+            // Already-renewed guard: never remind a client whose live subscription
+            // (WP escort_expire, or another active deal) extends beyond the deal
+            // being reminded. Clients with multiple subscriptions otherwise get an
+            // "expired" win-back on a stale old deal while a newer one is active.
+            if ($this->clientHasRenewedBeyond($deal)) {
+                $skipped++;
                 continue;
             }
 
@@ -1965,6 +1985,60 @@ class RenewalService
         }
 
         return $leadDaysBeforeExpiry >= $cycleDays;
+    }
+
+    /**
+     * True when the client's live subscription extends meaningfully beyond the
+     * deal being reminded — i.e. they've already renewed. Prevents an "expired"
+     * win-back firing on a stale old deal while a newer subscription is active
+     * (the multi-subscription drift case). A 2-day buffer avoids treating
+     * same-cycle sync jitter as a renewal.
+     */
+    private function clientHasRenewedBeyond(Deal $deal): bool
+    {
+        $client = $deal->client;
+        if (!$client) {
+            return false;
+        }
+
+        $dealExpiry = $this->normalizeExpiryCarbon($deal->expires_at);
+        if (!$dealExpiry) {
+            return false;
+        }
+
+        $threshold = $dealExpiry->copy()->addDays(2);
+
+        // 1) WP source-of-truth expiry (escort_expire) reaches beyond this deal.
+        $escortExpiry = $this->normalizeExpiryCarbon($client->escort_expire);
+        if ($escortExpiry && $escortExpiry->isFuture() && $escortExpiry->gt($threshold)) {
+            return true;
+        }
+
+        // 2) A different active/paid/renewed deal reaches beyond this one.
+        return $client->deals()
+            ->when($deal->id, fn (Builder $builder) => $builder->where('id', '!=', $deal->id))
+            ->whereIn('status', ['active', 'paid', 'renewed'])
+            ->where('expires_at', '>', $threshold)
+            ->exists();
+    }
+
+    private function normalizeExpiryCarbon($value): ?Carbon
+    {
+        if (!$value) {
+            return null;
+        }
+        if ($value instanceof Carbon) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return Carbon::createFromTimestamp((int) $value);
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function guardEnabledForPlatform(?int $platformId): bool
