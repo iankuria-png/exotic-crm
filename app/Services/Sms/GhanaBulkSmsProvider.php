@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Http;
  * plain status code ("1000") or a JSON envelope ({"success":true,"code":"1000"});
  * both are treated as success when the code matches success_code.
  */
-class GhanaBulkSmsProvider implements SmsProviderInterface
+class GhanaBulkSmsProvider implements SmsProviderInterface, BalanceAwareSmsProvider
 {
     public function id(): string
     {
@@ -20,6 +20,47 @@ class GhanaBulkSmsProvider implements SmsProviderInterface
     public function label(): string
     {
         return 'BulkSMS (Ghana)';
+    }
+
+    /**
+     * BulkSMS Ghana balance: GET {host}/api/smsapibalance?key=API_KEY, returning
+     * a plain-text amount (GHS). "1004" means an invalid key.
+     * Docs: https://bulksmsghana.com/developer/
+     */
+    public function fetchBalance(array $config): ?array
+    {
+        if (empty($config['base_url']) || empty($config['api_key'])) {
+            return null;
+        }
+
+        // The balance endpoint lives at the host root, not under the /smsapi
+        // send path — derive scheme://host from the configured gateway URL.
+        $parts = parse_url(trim((string) $config['base_url']));
+        if (empty($parts['host'])) {
+            return null;
+        }
+        $endpoint = ($parts['scheme'] ?? 'https') . '://' . $parts['host'] . '/api/smsapibalance';
+
+        try {
+            $response = Http::timeout(10)->get($endpoint, ['key' => (string) $config['api_key']]);
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $raw = trim($response->body());
+            // Invalid-key / error codes rather than a balance.
+            if ($raw === '' || $raw === '1004' || !is_numeric(str_replace(',', '', $raw))) {
+                return null;
+            }
+
+            return [
+                'amount' => (float) str_replace(',', '', $raw),
+                'currency' => 'GHS',
+                'raw' => $raw,
+            ];
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function credentialFields(): array
