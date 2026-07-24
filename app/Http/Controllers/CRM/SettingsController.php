@@ -4248,7 +4248,7 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'platform_id' => 'nullable|exists:platforms,id',
             'title' => 'required|string|max:255',
-            'category' => 'required|in:payment,renewal,follow_up,welcome,win_back,credential_setup_link,credential_temp_password',
+            'category' => 'required|in:payment,renewal,follow_up,welcome,new_signup,win_back,credential_setup_link,credential_temp_password',
             'channel' => 'required|in:email,sms,whatsapp',
             'subject' => 'nullable|string|max:255',
             'body' => 'required|string|max:10000',
@@ -4275,7 +4275,7 @@ class SettingsController extends Controller
 
         $validated = $request->validate([
             'title' => 'sometimes|string|max:255',
-            'category' => 'sometimes|in:payment,renewal,follow_up,welcome,win_back,credential_setup_link,credential_temp_password',
+            'category' => 'sometimes|in:payment,renewal,follow_up,welcome,new_signup,win_back,credential_setup_link,credential_temp_password',
             'channel' => 'sometimes|in:email,sms,whatsapp',
             'subject' => 'nullable|string|max:255',
             'body' => 'sometimes|string|max:10000',

@@ -657,6 +657,66 @@ class LifecycleSmsTest extends TestCase
         $this->assertNull($preview['skip_reason']);
     }
 
+    public function test_onboarding_resolver_never_picks_a_legacy_no_link_welcome(): void
+    {
+        [$platform] = $this->marketWithOffer();
+
+        // Legacy post-activation welcome (no link, wrong for an unpaid client).
+        Template::query()->create([
+            'platform_id' => null,
+            'title' => 'Welcome — SMS',
+            'category' => 'welcome',
+            'channel' => 'sms',
+            'body' => 'Welcome {{client_name}}! Your {{plan_name}} subscription is now active.',
+            'variables' => [],
+            'status' => 'active',
+            'is_quick_reply' => false,
+        ]);
+
+        // With only the legacy welcome present, onboarding must resolve to NOTHING
+        // (requires a payment link) rather than send the "now active" copy.
+        $this->assertNull($this->service()->resolveTemplate('onboarding', (int) $platform->id));
+
+        // Add a link-bearing lifecycle welcome (as category new_signup, like prod).
+        $lifecycle = Template::query()->create([
+            'platform_id' => null,
+            'title' => 'Lifecycle — Welcome & activate (SMS)',
+            'category' => 'new_signup',
+            'channel' => 'sms',
+            'body' => 'Hi {{first_name}}! Activate {{plan_name}}: {{payment_link}}',
+            'variables' => [],
+            'status' => 'active',
+            'is_quick_reply' => false,
+        ]);
+
+        $resolved = $this->service()->resolveTemplate('onboarding', (int) $platform->id);
+        $this->assertSame($lifecycle->id, $resolved->id);
+    }
+
+    public function test_in_flight_claim_blocks_a_concurrent_onboarding_send(): void
+    {
+        [$platform] = $this->marketWithOffer();
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'fast_signup']);
+
+        // Simulate a claim written by an in-progress dispatch (the anti-race
+        // anchor). A second evaluation must treat the client as already handled.
+        TimelineEvent::create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => LifecycleSmsService::TIMELINE_EVENT_TYPE,
+            'actor_id' => null,
+            'content' => ['flow' => 'onboarding', 'reference' => 'onboarding', 'status' => 'sending'],
+            'created_at' => now(),
+        ]);
+
+        $this->assertTrue($this->service()->alreadySent($client->fresh(), 'onboarding', 'onboarding'));
+
+        // A stale claim (crashed mid-dispatch) expires so the send can retry.
+        TimelineEvent::query()->where('entity_id', $client->id)->update(['created_at' => now()->subMinutes(20)]);
+        $this->assertFalse($this->service()->alreadySent($client->fresh(), 'onboarding', 'onboarding'));
+    }
+
     public function test_run_command_dry_run_reports_targets_without_sending(): void
     {
         [$platform] = $this->marketWithOffer();

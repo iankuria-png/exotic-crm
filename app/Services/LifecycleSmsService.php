@@ -41,7 +41,7 @@ class LifecycleSmsService
 
     /** Template categories, in preference order, per flow. */
     public const FLOW_TEMPLATE_CATEGORIES = [
-        self::FLOW_ONBOARDING => ['welcome'],
+        self::FLOW_ONBOARDING => ['new_signup', 'welcome'],
         self::FLOW_RECOVERY => ['payment'],
         self::FLOW_REACTIVATION => ['win_back'],
         self::FLOW_RENEWAL => ['renewal'],
@@ -151,6 +151,19 @@ class LifecycleSmsService
             ], $actorId);
         }
 
+        // Claim the dedup anchor BEFORE dispatching. The SMS gateway can take tens
+        // of seconds; without an up-front claim, a second send (a re-click, a
+        // bulk row, or the hourly sweep) evaluates during that window, finds no
+        // record yet, and fires a duplicate. The claim closes that race.
+        $anchor = $this->claimAnchor($flow, $client, $reference, $actorId, [
+            'template_id' => (int) $template->id,
+            'deal_id' => $deal?->id,
+            'payment_id' => (int) $payment->id,
+            'payment_url' => (string) $link['payment_url'],
+            'channel' => (string) $marketConfig['channel'],
+            'source' => (string) ($options['source'] ?? 'automated'),
+        ]);
+
         $delivery = $this->dispatchMessage($client, (string) $rendered['body'], (string) $marketConfig['channel'], [
             'purpose' => 'lifecycle_' . $flow,
             'phone_prefix' => (string) ($platform?->phone_prefix ?: '254'),
@@ -159,6 +172,7 @@ class LifecycleSmsService
         ]);
 
         if (($delivery['status'] ?? '') === 'disabled') {
+            $anchor->delete(); // nothing was sent — release the claim
             return $this->skip($flow, $client, 'sms_dispatch_disabled');
         }
 
@@ -176,7 +190,7 @@ class LifecycleSmsService
             'created_by' => $actorId,
         ]);
 
-        return $this->recordOutcome($flow, $client, $success ? 'sent' : 'failed', [
+        return $this->finalizeAnchor($anchor, $flow, $client, $success ? 'sent' : 'failed', [
             'reference' => $reference,
             'template_id' => (int) $template->id,
             'deal_id' => $deal?->id,
@@ -392,10 +406,21 @@ class LifecycleSmsService
         return $this->recentLifecycleEvents($client, $this->dedupWindowDays($flow))
             ->contains(function (TimelineEvent $event) use ($flow, $reference) {
                 $content = is_array($event->content) ? $event->content : [];
+                if (($content['flow'] ?? null) !== $flow || ($content['reference'] ?? null) !== $reference) {
+                    return false;
+                }
 
-                return ($content['flow'] ?? null) === $flow
-                    && ($content['reference'] ?? null) === $reference
-                    && in_array($content['status'] ?? null, ['sent'], true);
+                $status = $content['status'] ?? null;
+                if ($status === 'sent') {
+                    return true;
+                }
+
+                // A fresh in-flight claim (dispatch in progress) blocks a
+                // concurrent send; a stale one (process crashed mid-dispatch)
+                // expires after 10 min so the reminder can be retried.
+                return $status === 'sending'
+                    && $event->created_at
+                    && $event->created_at->gt(now()->subMinutes(10));
             });
     }
 
@@ -591,9 +616,16 @@ class LifecycleSmsService
             ->map(fn ($category, $index) => "WHEN '" . $category . "' THEN " . $index)
             ->implode(' ');
 
+        // Onboarding / recovery / reactivation MUST carry a payment link — the
+        // whole point is a one-tap checkout. Requiring {{payment_link}} here also
+        // prevents auto-falling-back to a legacy welcome template (e.g. "your
+        // subscription is now active"), which is wrong for an unpaid client.
+        $requiresLink = in_array($flow, [self::FLOW_ONBOARDING, self::FLOW_RECOVERY, self::FLOW_REACTIVATION], true);
+
         return Template::query()
             ->active()
             ->whereIn('category', $categories)
+            ->when($requiresLink, fn (Builder $builder) => $builder->where('body', 'like', '%payment_link%'))
             ->where(function (Builder $builder) {
                 $builder->where('channel', 'sms')->orWhereNull('channel');
             })
@@ -681,6 +713,48 @@ class LifecycleSmsService
         ];
     }
 
+    /** Write the pre-dispatch dedup claim (status 'sending'). */
+    private function claimAnchor(string $flow, Client $client, string $reference, int $actorId, array $extra = []): TimelineEvent
+    {
+        return TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => self::TIMELINE_EVENT_TYPE,
+            'actor_id' => $actorId,
+            'content' => array_filter(array_merge([
+                'flow' => $flow,
+                'status' => 'sending',
+                'reference' => $reference,
+            ], $extra), static fn ($value) => $value !== null),
+            'created_at' => now(),
+        ]);
+    }
+
+    /** Finalize a claimed anchor to 'sent'/'failed' + notes/contact/audit. */
+    private function finalizeAnchor(TimelineEvent $anchor, string $flow, Client $client, string $status, array $details, int $actorId): array
+    {
+        $content = array_filter(array_merge(is_array($anchor->content) ? $anchor->content : [], [
+            'flow' => $flow,
+            'status' => $status,
+            'reference' => $details['reference'] ?? null,
+            'template_id' => $details['template_id'] ?? null,
+            'deal_id' => $details['deal_id'] ?? null,
+            'payment_id' => $details['payment_id'] ?? null,
+            'payment_url' => $details['payment_url'] ?? null,
+            'channel' => $details['channel'] ?? null,
+            'delivered_channel' => $details['delivered_channel'] ?? null,
+            'source' => $details['source'] ?? 'automated',
+            'error' => $details['error'] ?? null,
+        ]), static fn ($value) => $value !== null);
+
+        $anchor->forceFill(['content' => $content])->save();
+
+        $this->afterRecord($flow, $client, $status, $content, $details, $actorId);
+
+        return array_merge(['status' => $status, 'flow' => $flow, 'client_id' => (int) $client->id], $details);
+    }
+
     private function recordOutcome(string $flow, Client $client, string $status, array $details, int $actorId): array
     {
         $content = array_filter([
@@ -707,6 +781,18 @@ class LifecycleSmsService
             'created_at' => now(),
         ]);
 
+        $this->afterRecord($flow, $client, $status, $content, $details, $actorId);
+
+        return array_merge([
+            'status' => $status,
+            'flow' => $flow,
+            'client_id' => (int) $client->id,
+        ], $details);
+    }
+
+    /** ClientNote + contact stamp (on sent) + audit + log, shared by both paths. */
+    private function afterRecord(string $flow, Client $client, string $status, array $content, array $details, int $actorId): void
+    {
         if ($status === 'sent') {
             ClientNote::create([
                 'client_id' => (int) $client->id,
@@ -741,12 +827,6 @@ class LifecycleSmsService
             'client_id' => (int) $client->id,
             'platform_id' => (int) $client->platform_id,
         ]));
-
-        return array_merge([
-            'status' => $status,
-            'flow' => $flow,
-            'client_id' => (int) $client->id,
-        ], $details);
     }
 
     // ---------------------------------------------------------------
