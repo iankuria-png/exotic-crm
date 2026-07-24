@@ -59,10 +59,11 @@ const LEADERBOARD_ROLE_FILTER_OPTIONS = [
     { value: 'admin', label: 'Admin' },
     { value: 'sub_admin', label: 'Sub-admin' },
     { value: 'sales', label: 'Sales' },
+    { value: 'field_sales', label: 'Field Sales' },
     { value: 'marketing', label: 'Marketing' },
 ];
 const SUB_ADMIN_LEADERBOARD_ROLE_FILTER_OPTIONS = LEADERBOARD_ROLE_FILTER_OPTIONS.filter(
-    (option) => ['all', 'sales', 'marketing'].includes(option.value),
+    (option) => ['all', 'sales', 'field_sales', 'marketing'].includes(option.value),
 );
 
 function asNumber(value) {

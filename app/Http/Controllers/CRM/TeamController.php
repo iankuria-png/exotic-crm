@@ -56,7 +56,7 @@ class TeamController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
-            'role_filter' => 'nullable|in:all,admin,sub_admin,sales,marketing',
+            'role_filter' => 'nullable|in:all,admin,sub_admin,sales,field_sales,marketing',
             'currency_mode' => 'nullable|in:native,flat',
             'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);

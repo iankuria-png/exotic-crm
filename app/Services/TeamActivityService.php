@@ -32,6 +32,7 @@ class TeamActivityService
     public const AGENT_ROLES = [
         MarketAuthorizationService::ROLE_SUB_ADMIN,
         MarketAuthorizationService::ROLE_SALES,
+        MarketAuthorizationService::ROLE_FIELD_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
     ];
 
@@ -42,6 +43,7 @@ class TeamActivityService
         MarketAuthorizationService::ROLE_ADMIN,
         MarketAuthorizationService::ROLE_SUB_ADMIN,
         MarketAuthorizationService::ROLE_SALES,
+        MarketAuthorizationService::ROLE_FIELD_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
     ];
 
@@ -49,6 +51,7 @@ class TeamActivityService
         MarketAuthorizationService::ROLE_ADMIN,
         MarketAuthorizationService::ROLE_SUB_ADMIN,
         MarketAuthorizationService::ROLE_SALES,
+        MarketAuthorizationService::ROLE_FIELD_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
     ];
 
