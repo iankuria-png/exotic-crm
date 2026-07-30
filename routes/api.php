@@ -720,6 +720,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/settings/integrations/sms-logs/export', [SettingsController::class, 'exportSmsLogs'])->middleware('role:admin');
     Route::post('/settings/integrations/platforms', [SettingsController::class, 'storeIntegrationPlatform'])->middleware('role:admin');
     Route::patch('/settings/integrations/platforms/{platform}', [SettingsController::class, 'updateIntegrationPlatform'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/scrub-bios', [SettingsController::class, 'scrubMarketBios'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/packages', [SettingsController::class, 'updatePlatformPackages'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/payment-link-providers', [SettingsController::class, 'updatePaymentLinkProviders'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/wallet', [SettingsController::class, 'updatePlatformWallet'])->middleware('role:admin,sub_admin');

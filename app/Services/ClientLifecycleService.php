@@ -105,7 +105,17 @@ class ClientLifecycleService
             $synced->forceFill(array_merge(['lifecycle_state' => $state], $columns))->save();
         });
 
-        // 3. Audit trail.
+        // 3. Keep the bio in step with the new state: scrub contact details when
+        //    the profile is restricted, restore the original when it is not.
+        //    Non-fatal so a bio failure never leaves the transition half-done.
+        $scrubber = app(ProfileBioScrubService::class);
+        if ($synced->isPubliclyRestricted()) {
+            $scrubber->scrubQuietly($synced, $actorId);
+        } else {
+            $scrubber->restoreQuietly($synced, $actorId);
+        }
+
+        // 4. Audit trail.
         TimelineEvent::create([
             'platform_id' => (int) $synced->platform_id,
             'entity_type' => 'client',

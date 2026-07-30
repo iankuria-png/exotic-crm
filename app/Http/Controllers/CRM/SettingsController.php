@@ -15,6 +15,7 @@ use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunClientSyncJob;
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
+use App\Models\Client;
 use App\Models\ClientSyncRun;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
@@ -52,6 +53,7 @@ use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
 use App\Services\WordPressSyncKeyService;
 use App\Services\WpSyncService;
+use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
 use App\Support\MarketTimezone;
 use Illuminate\Http\Request;
@@ -3014,6 +3016,55 @@ class SettingsController extends Controller
         ], static fn ($value) => $value !== null));
     }
 
+    /**
+     * Queue a bio contact-scrub sweep over this market's Expired/Archived
+     * profiles — the backfill for everything that lapsed before the scrubber
+     * existed. Dry-run reports what would be redacted without writing.
+     */
+    public function scrubMarketBios(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run a bio scrub.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'dry_run' => 'sometimes|boolean',
+            'limit' => 'sometimes|integer|min:1|max:5000',
+        ]);
+
+        if (! $platform->lifecycleEnabled()) {
+            return response()->json([
+                'message' => 'The profile lifecycle policy is not enabled for this market.',
+            ], 422);
+        }
+
+        $dryRun = (bool) ($validated['dry_run'] ?? true);
+        $limit = (int) ($validated['limit'] ?? 500);
+
+        \App\Jobs\ScrubProfileBiosJob::dispatch(
+            (int) $platform->id,
+            $dryRun,
+            $limit,
+            (int) $request->user()->id
+        );
+
+        return response()->json([
+            'queued' => true,
+            'dry_run' => $dryRun,
+            'limit' => $limit,
+            'message' => $dryRun
+                ? 'Dry run queued — refresh in a moment to see what would be redacted.'
+                : 'Bio scrub queued — refresh in a moment to see the result.',
+        ], 202);
+    }
+
     public function updateIntegrationPlatform(Request $request, Platform $platform)
     {
         $this->marketAuthorizationService->ensureRole(
@@ -5309,6 +5360,23 @@ class SettingsController extends Controller
             'lifecycle_policy_effective' => $platform->lifecycleEnabled(),
             'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
             'sync_shared_key_configured' => trim((string) config('services.exotic_crm_sync.shared_key', '')) !== '',
+            'bio_scrub' => [
+                'pending_count' => $platform->lifecycle_policy_enabled
+                    ? Client::query()
+                        ->forPlatform((int) $platform->id)
+                        ->whereIn('lifecycle_state', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED])
+                        ->whereNull('bio_scrubbed_at')
+                        ->count()
+                    : 0,
+                'scrubbed_count' => $platform->lifecycle_policy_enabled
+                    ? Client::query()
+                        ->forPlatform((int) $platform->id)
+                        ->whereNotNull('bio_scrubbed_at')
+                        ->count()
+                    : 0,
+                'last_run' => app(\App\Services\FeatureSettingsService::class)
+                    ->get(\App\Jobs\ScrubProfileBiosJob::settingsKey((int) $platform->id)),
+            ],
             'currency' => $platform->currency_code ?: 'KES',
             'wp_currency_id' => $platform->wp_currency_id,
             'supported_currencies' => $platform->supportedCurrencies(),

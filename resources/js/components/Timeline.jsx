@@ -9,6 +9,8 @@ const eventTones = {
     profile_expired: 'bg-amber-100 text-amber-800',
     profile_archived: 'bg-orange-100 text-orange-800',
     profile_unarchived: 'bg-teal-100 text-teal-700',
+    profile_bio_scrubbed: 'bg-amber-100 text-amber-800',
+    profile_bio_restored: 'bg-emerald-100 text-emerald-700',
     note_added: 'bg-amber-100 text-amber-700',
     payment_received: 'bg-emerald-100 text-emerald-700',
     status_changed: 'bg-teal-100 text-teal-700',
@@ -39,6 +41,10 @@ function formatEventDescription(event) {
             return 'Profile archived — indexed but removed from listings';
         case 'profile_unarchived':
             return 'Profile restored to Expired — returned to listings';
+        case 'profile_bio_scrubbed':
+            return `Contact details redacted from bio (${content.redactions || 0}${content.kinds ? ': ' + Object.keys(content.kinds).join(', ') : ''}) — original kept for renewal`;
+        case 'profile_bio_restored':
+            return 'Original bio restored after renewal';
         case 'note_added':
             return `${content.note_type || 'Note'} note added${content.has_follow_up ? ' with follow-up' : ''}`;
         case 'payment_received':

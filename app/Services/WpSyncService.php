@@ -5,7 +5,9 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use App\Models\Client;
 use App\Models\Platform;
+use App\Support\BioContactScrubber;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
@@ -219,11 +221,63 @@ class WpSyncService
     /**
      * Update editable profile fields on WordPress.
      */
-    public function updateClientProfile(int $postId, array $fields): array
+    public function updateClientProfile(int $postId, array $fields, bool $bypassBioGuard = false): array
     {
+        if (! $bypassBioGuard) {
+            $fields = $this->guardBioContent($postId, $fields);
+        }
+
         return $this->post("/clients/{$postId}/update", [
             'fields' => $fields,
         ]);
+    }
+
+    /**
+     * Single gate for bio writes: if this profile is lifecycle-restricted
+     * (Expired/Archived) on a lifecycle market, redact contact details before
+     * they reach WordPress. Every bio-writing path — SEO generation, bulk bios,
+     * Auto Optimize, manual profile edits — funnels through updateClientProfile,
+     * so none of them can reintroduce a working advert on a lapsed profile.
+     *
+     * Pass $bypassBioGuard to ProfileBioScrubService's own writes, which manage
+     * redaction and restoration explicitly.
+     */
+    private function guardBioContent(int $postId, array $fields): array
+    {
+        $key = array_key_exists('content', $fields)
+            ? 'content'
+            : (array_key_exists('post_content', $fields) ? 'post_content' : null);
+
+        if ($key === null || ! is_string($fields[$key]) || $fields[$key] === '') {
+            return $fields;
+        }
+
+        $client = Client::query()
+            ->where('platform_id', $this->platformId)
+            ->where('wp_post_id', $postId)
+            ->first();
+
+        if (! $client || ! $client->isPubliclyRestricted()) {
+            return $fields;
+        }
+
+        $platform = $client->platform ?? Platform::query()->find($this->platformId);
+        if (! $platform || ! $platform->lifecycleEnabled()) {
+            return $fields;
+        }
+
+        $result = BioContactScrubber::scrub($fields[$key]);
+        if ($result['redactions'] > 0) {
+            Log::info('Redacted contact details from a bio write to a restricted profile', [
+                'platform_id' => $this->platformId,
+                'wp_post_id' => $postId,
+                'redactions' => $result['redactions'],
+            ]);
+
+            $fields[$key] = $result['clean'];
+        }
+
+        return $fields;
     }
 
     /**

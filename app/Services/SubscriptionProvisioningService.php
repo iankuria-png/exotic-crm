@@ -98,6 +98,11 @@ class SubscriptionProvisioningService
             $deal->setRelation('client', $syncedClient);
         }
 
+        // The profile is live again, so put back the bio exactly as the advertiser
+        // wrote it if a previous expiry had redacted contact details from it.
+        // No-op unless an original was stored. Non-fatal: never block activation.
+        app(ProfileBioScrubService::class)->restoreQuietly($syncedClient ?? $client, $actorId);
+
         $timelineContext = is_array($options['timeline_context'] ?? null)
             ? $options['timeline_context']
             : [];

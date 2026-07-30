@@ -1677,6 +1677,17 @@ function IntegrationsWorkspace({
         },
     });
 
+    const scrubBiosMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/scrub-bios`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'Bio scrub queued.');
+            setTimeout(() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] }), 4000);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to queue the bio scrub.');
+        },
+    });
+
     const lifecycleSettingsQuery = useQuery({
         queryKey: ['settings-lifecycle'],
         queryFn: () => api.get('/crm/settings/lifecycle').then((response) => response.data),
@@ -5200,6 +5211,61 @@ function IntegrationsWorkspace({
                                                 ) : null}
                                             </span>
                                         </label>
+                                        {selectedPlatform?.lifecycle_policy_effective ? (
+                                            <div className="md:col-span-2 rounded-lg border border-slate-200 bg-white p-3">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-900">Expired profile bios</p>
+                                                        <p className="mt-0.5 text-xs text-slate-500">
+                                                            Contact details pasted into bio text are redacted automatically when a profile expires. Run this once to
+                                                            cover profiles that expired before the feature existed. Originals are kept and restored on renewal.
+                                                        </p>
+                                                        <p className="mt-1 text-xs text-slate-600">
+                                                            <span className="font-semibold">{selectedPlatform.bio_scrub?.pending_count ?? 0}</span> expired/archived profile(s) not yet checked
+                                                            {' · '}
+                                                            <span className="font-semibold">{selectedPlatform.bio_scrub?.scrubbed_count ?? 0}</span> scrubbed so far
+                                                        </p>
+                                                        {selectedPlatform.bio_scrub?.last_run ? (
+                                                            <p className="mt-1 text-xs text-slate-500">
+                                                                Last run ({selectedPlatform.bio_scrub.last_run.dry_run ? 'dry run' : 'live'}) at {selectedPlatform.bio_scrub.last_run.finished_at}:
+                                                                {' '}processed {selectedPlatform.bio_scrub.last_run.processed ?? 0},
+                                                                {' '}{selectedPlatform.bio_scrub.last_run.dry_run ? 'would scrub' : 'scrubbed'} {selectedPlatform.bio_scrub.last_run.dry_run ? (selectedPlatform.bio_scrub.last_run.would_scrub ?? 0) : (selectedPlatform.bio_scrub.last_run.scrubbed ?? 0)},
+                                                                {' '}{selectedPlatform.bio_scrub.last_run.redactions ?? 0} redaction(s)
+                                                                {selectedPlatform.bio_scrub.last_run.error ? ` — error: ${selectedPlatform.bio_scrub.last_run.error}` : ''}
+                                                            </p>
+                                                        ) : null}
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            disabled={scrubBiosMutation.isPending}
+                                                            onClick={() => scrubBiosMutation.mutate({
+                                                                platformId: selectedPlatform.platform_id,
+                                                                payload: { dry_run: true, limit: 500 },
+                                                            })}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
+                                                        >
+                                                            Dry run
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            disabled={scrubBiosMutation.isPending}
+                                                            onClick={() => {
+                                                                if (window.confirm('Redact contact details from the bios of this market\'s expired and archived profiles? Originals are stored and restored automatically when a profile is renewed.')) {
+                                                                    scrubBiosMutation.mutate({
+                                                                        platformId: selectedPlatform.platform_id,
+                                                                        payload: { dry_run: false, limit: 500 },
+                                                                    });
+                                                                }
+                                                            }}
+                                                            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+                                                        >
+                                                            {scrubBiosMutation.isPending ? 'Queueing…' : 'Scrub expired bios'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : null}
                                     </div>
 
                                     <div className="mt-3 flex justify-end">

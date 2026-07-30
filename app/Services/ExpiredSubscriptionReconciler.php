@@ -181,6 +181,11 @@ class ExpiredSubscriptionReconciler
                     'lifecycle_expired_at' => $syncedClient->lifecycle_expired_at ?? now(),
                 ])->save();
             });
+
+            // Contact buttons are now hidden by the theme; redact any contact
+            // details pasted into the bio text so the advert stops working too.
+            // Non-fatal — a scrub failure must not leave the expiry half-done.
+            app(ProfileBioScrubService::class)->scrubQuietly($syncedClient, $actorId);
         } else {
             // LEGACY policy (default for every market until opted in): take the profile
             // offline in WordPress (private), exactly as before the lifecycle feature.
