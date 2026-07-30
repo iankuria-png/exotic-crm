@@ -1675,7 +1675,7 @@ export default function ClientDetail() {
                 force,
                 reason: profileReason,
             }).then((response) => response.data),
-        onSuccess: (_, variables) => {
+        onSuccess: (data, variables) => {
             initialProfileFieldsRef.current = {
                 ...(initialProfileFieldsRef.current || {}),
                 ...(variables?.fields || {}),
@@ -1685,6 +1685,10 @@ export default function ClientDetail() {
             setProfileConflict(null);
             setProfileForce(false);
             toast.success('Profile synced to WordPress successfully.');
+            // Be explicit rather than letting a typed number silently vanish.
+            if (data?.bio_redactions > 0) {
+                toast.error(`${data.bio_redactions} contact detail${data.bio_redactions === 1 ? '' : 's'} removed from the bio because this profile is inactive. They return automatically when the subscription is renewed.`);
+            }
         },
         onError: (error) => {
             if (error?.response?.status === 409) {
@@ -1828,14 +1832,10 @@ export default function ClientDetail() {
             { key: 'chat', label: 'Chat' },
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
-            {
-                key: 'edit_profile',
-                label: 'Edit Profile',
-                // Editing is disabled while the profile is Expired/Archived (contacts
-                // hidden, published for SEO only). Reactivate a subscription to edit.
-                disabled: ['expired', 'archived'].includes(String(client?.lifecycle_state || '').toLowerCase()),
-                disabledTitle: 'Editing is locked while this profile is Expired/Archived. Activate a subscription to re-enable editing.',
-            },
+            // Staff can edit Expired/Archived profiles — the front-end edit lock
+            // applies to the advertiser on the website, not to the CRM team, who
+            // still need to work these accounts during a win-back.
+            { key: 'edit_profile', label: 'Edit Profile' },
             { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
         ];
 
@@ -4284,6 +4284,14 @@ export default function ClientDetail() {
                         <p className="text-sm text-slate-500">This is a CRM-only client record and does not support WordPress profile editing.</p>
                     ) : (
                         <div className="space-y-4">
+                            {['expired', 'archived'].includes(String(client?.lifecycle_state || '').toLowerCase()) ? (
+                                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                    <span className="font-semibold">This profile is inactive ({String(client.lifecycle_state).toLowerCase()}).</span>
+                                    {' '}You can still edit it — the page stays published for SEO. Contact details typed into the bio are
+                                    removed on save while the subscription is lapsed, and your version is restored automatically when the
+                                    client renews. Phone, WhatsApp and email fields stay saved but are hidden on the website until renewal.
+                                </div>
+                            ) : null}
                             <div className="flex flex-wrap items-center gap-2">
                                 {profileSections.map((section) => (
                                     <button

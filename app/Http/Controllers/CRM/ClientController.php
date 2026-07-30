@@ -2297,6 +2297,20 @@ class ClientController extends Controller
                 'fields' => $this->snapshotWpFieldValues($fields, $currentProfile),
             ];
 
+            // Staff editing a restricted (Expired/Archived) profile: the bio they
+            // submit becomes the new baseline, so a later renewal restores their
+            // work rather than the pre-expiry original. Captured before the write,
+            // because WpSyncService redacts contact details on the way out.
+            $bioRedactions = 0;
+            $submittedBio = $fields['content'] ?? $fields['post_content'] ?? null;
+            if (is_string($submittedBio) && $submittedBio !== '' && $client->isPubliclyRestricted()) {
+                $bioRedactions = \App\Support\BioContactScrubber::detect($submittedBio)['redactions'];
+
+                Client::withoutRetentionRefresh(function () use ($client, $submittedBio): void {
+                    $client->forceFill(['bio_original_html' => $submittedBio])->save();
+                });
+            }
+
             $updatedProfile = $wpSync->updateClientProfile((int) $client->wp_post_id, $fields);
 
             $syncService = new \App\Services\ClientSyncService($platform);
@@ -2315,6 +2329,9 @@ class ClientController extends Controller
                 [
                     'fields' => $fields,
                     'wp_profile_updated' => true,
+                    // Makes "edited while the profile was inactive" greppable in audit.
+                    'lifecycle_state' => (string) $client->lifecycle_state,
+                    'bio_redactions' => $bioRedactions,
                 ],
                 (string) $validated['reason']
             );
@@ -2341,6 +2358,9 @@ class ClientController extends Controller
                     'activeDeal.product',
                 ]),
                 'wp_profile' => $updatedProfile,
+                // Lets the UI explain why a number the agent typed is not on the
+                // page, instead of it silently disappearing.
+                'bio_redactions' => $bioRedactions,
             ]);
         } catch (ValidationException $exception) {
             $errors = $exception->errors();

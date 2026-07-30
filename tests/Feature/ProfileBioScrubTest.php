@@ -172,6 +172,87 @@ class ProfileBioScrubTest extends TestCase
         $this->assertNotNull($old->fresh()->bio_scrubbed_at);
     }
 
+    public function test_sales_can_edit_an_expired_profile_and_their_bio_survives_renewal(): void
+    {
+        // Regression: the scrubber stores the pre-expiry bio for restoration. A
+        // staff edit made while expired must become the new baseline, otherwise
+        // renewal silently overwrites the agent's work with the old original.
+        $platform = $this->createPlatform();
+        $client = $this->createRestrictedClient($platform, 5009);
+        $client->forceFill([
+            'bio_original_html' => '<p>Advertiser original. Call +254794305988.</p>',
+            'bio_scrubbed_at' => now()->subDay(),
+            'bio_redactions' => 1,
+        ])->save();
+
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake([
+            "{$base}/clients/5009" => Http::response([
+                'wp_post_id' => 5009,
+                'post_status' => 'publish',
+                'crm_lifecycle_state' => 'expired',
+                'post' => ['id' => 5009, 'content' => '<p>[contact hidden]</p>'],
+                'modified_at' => now()->subYear()->toIso8601String(),
+            ], 200),
+            "{$base}/clients/5009/update" => Http::response(['ok' => true], 200),
+        ]);
+
+        $admin = \App\Models\User::query()->create([
+            'name' => 'Sales Tester',
+            'email' => 'sales-' . uniqid() . '@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        \Laravel\Sanctum\Sanctum::actingAs($admin);
+
+        $agentBio = '<p>Rewritten by sales during win-back. Ring 0712 345 678.</p>';
+        $response = $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => ['content' => $agentBio],
+            'reason' => 'Win-back rewrite while expired',
+        ]);
+
+        $response->assertOk()->assertJsonPath('bio_redactions', 1);
+
+        // What reached WordPress is redacted...
+        Http::assertSent(function ($request) use ($base) {
+            if ($request->url() !== "{$base}/clients/5009/update") {
+                return false;
+            }
+            $content = (string) data_get($request->data(), 'fields.content');
+
+            return $content !== '' && ! str_contains($content, '0712 345 678') && str_contains($content, '[contact hidden]');
+        });
+
+        // ...but the agent's text is now the baseline restored on renewal.
+        $this->assertSame($agentBio, $client->fresh()->bio_original_html);
+    }
+
+    public function test_staff_edit_cannot_revive_an_expired_profile(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createRestrictedClient($platform, 5010);
+        Http::fake();
+
+        $admin = \App\Models\User::query()->create([
+            'name' => 'Sales Tester',
+            'email' => 'sales-' . uniqid() . '@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        \Laravel\Sanctum\Sanctum::actingAs($admin);
+
+        $this->patchJson("/api/crm/clients/{$client->id}/wp-profile", [
+            'fields' => ['escort_expire' => now()->addYear()->timestamp, 'profile_status' => 'publish'],
+            'reason' => 'Attempt to self-serve a renewal',
+        ])->assertStatus(422);
+
+        Http::assertNothingSent();
+    }
+
     private function createRestrictedClient(Platform $platform, int $wpPostId): Client
     {
         return Client::factory()->create([
