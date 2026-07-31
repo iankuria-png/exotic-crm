@@ -767,6 +767,7 @@ class ClientController extends Controller
                 ->where('kill_switch_enabled', false))
             ->exists());
         $this->decorateExpiryState($client);
+        $this->decorateLifetimeValue(collect([$client]));
 
         return response()->json($client);
     }

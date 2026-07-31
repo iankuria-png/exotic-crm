@@ -365,6 +365,21 @@ function formatProfileDate(date) {
     return date.toLocaleDateString();
 }
 
+function formatJoinedAge(value) {
+    const date = parseDateValue(value);
+    if (!date) return 'Date unavailable';
+
+    const diffDays = Math.max(0, Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24)));
+    if (diffDays === 0) return 'Joined today';
+    if (diffDays < 30) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+
+    const months = Math.floor(diffDays / 30);
+    if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
+
+    const years = Math.floor(months / 12);
+    return `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
 function parseDateValue(value) {
     if (!value) return null;
     const date = new Date(value);
@@ -558,6 +573,28 @@ function DefinitionRow({ label, value, mono = false }) {
             <dd className={`text-right font-medium text-slate-900 ${mono ? 'crm-mono text-xs' : ''}`}>{value}</dd>
         </div>
     );
+}
+
+function SummaryMetric({ label, value, detail, title, tone = 'slate' }) {
+    const toneClassName = tone === 'teal' ? 'text-teal-700' : 'text-slate-950';
+
+    return (
+        <div title={title} className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+            <p className={`mt-1 truncate text-lg font-semibold leading-tight ${toneClassName}`}>{value}</p>
+            <p className="mt-1 truncate text-xs text-slate-500">{detail}</p>
+        </div>
+    );
+}
+
+function formatLifetimeBreakdown(breakdown = {}) {
+    return Object.entries(breakdown || {})
+        .map(([currency, amount]) => formatCurrency(amount, currency))
+        .join(' · ');
+}
+
+function pluralizePayments(count) {
+    return `${Number(count || 0).toLocaleString()} payment${Number(count || 0) === 1 ? '' : 's'}`;
 }
 
 function subsidiaryTrialErrorMessage(code) {
@@ -2072,6 +2109,23 @@ export default function ClientDetail() {
     const profileExpiryMessage = buildSubscriptionExpiryMessage(client, isUntrackedForeverPlan);
     const profileCopyMessage = buildProfileCopyMessage(client, isUntrackedForeverPlan);
     const hasProfileUrl = Boolean(profilePrimaryUrl);
+    const joinedDate = parseDateValue(client.created_at);
+    const joinedDateLabel = joinedDate ? formatProfileDate(joinedDate) : '—';
+    const joinedAgeLabel = formatJoinedAge(client.created_at);
+    const lifetimePaymentCount = Number(client.lifetime_payment_count || 0);
+    const lifetimeSourceBreakdown = formatLifetimeBreakdown(client.lifetime_source_breakdown);
+    const lifetimeValueIsPartial = Boolean(client.lifetime_value_partial);
+    const lifetimeValueAmount = Number(client.lifetime_value_usd || 0);
+    const lifetimeValueLabel = lifetimePaymentCount === 0
+        ? 'USD 0'
+        : lifetimeValueIsPartial
+            ? 'FX partial'
+            : formatCurrency(lifetimeValueAmount, client.lifetime_value_currency || 'USD');
+    const lifetimeValueDetail = lifetimePaymentCount === 0
+        ? 'No successful payments yet'
+        : lifetimeValueIsPartial
+            ? (lifetimeSourceBreakdown || pluralizePayments(lifetimePaymentCount))
+            : pluralizePayments(lifetimePaymentCount);
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
@@ -3284,6 +3338,21 @@ export default function ClientDetail() {
                 </ProfileInfoCard>
 
                 <ProfileInfoCard title="Summary">
+                    <div className="mb-4 grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
+                        <SummaryMetric
+                            label="Joined us"
+                            value={joinedDateLabel}
+                            detail={joinedAgeLabel}
+                            title={joinedDate ? joinedDate.toLocaleString() : 'Join date unavailable'}
+                        />
+                        <SummaryMetric
+                            label="Lifetime value"
+                            value={lifetimeValueLabel}
+                            detail={lifetimeValueDetail}
+                            title={lifetimeValueIsPartial && lifetimeSourceBreakdown ? lifetimeSourceBreakdown : lifetimeValueDetail}
+                            tone={lifetimePaymentCount > 0 && !lifetimeValueIsPartial ? 'teal' : 'slate'}
+                        />
+                    </div>
                     <dl className="space-y-2.5">
                         <DefinitionRow
                             label="Total Subscriptions"
