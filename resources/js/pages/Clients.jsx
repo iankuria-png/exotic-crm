@@ -660,6 +660,27 @@ export default function Clients() {
         (platform) => String(platform.platform_id) === String(createForm.platform_id),
     ) || null;
     const createPhonePrefix = selectedCreatePlatform?.phone_prefix || platformOptions[0]?.phone_prefix || '254';
+    const createRequested = searchParams.get('create') === '1';
+
+    const openCreateModal = (initialPlatformId = preferredPlatformId) => {
+        setCreateModalInitialPlatformId(initialPlatformId || '');
+        setShowCreateModal(true);
+    };
+
+    const clearCreateRequest = () => {
+        if (!createRequested) {
+            return;
+        }
+
+        const params = new URLSearchParams(searchParams);
+        params.delete('create');
+        setSearchParams(params, { replace: true });
+    };
+
+    const closeCreateModal = () => {
+        setShowCreateModal(false);
+        clearCreateRequest();
+    };
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -688,6 +709,14 @@ export default function Clients() {
             setPage(1);
         }
     }, [platformFilter, platformOptions]);
+
+    useEffect(() => {
+        if (!createRequested || isReadOnly) {
+            return;
+        }
+
+        openCreateModal(preferredPlatformId);
+    }, [createRequested, isReadOnly, preferredPlatformId]);
 
     useEffect(() => {
         if (!showCreateModal) {
@@ -1985,8 +2014,7 @@ export default function Clients() {
                         <button
                             type="button"
                             onClick={() => {
-                                setCreateModalInitialPlatformId(preferredPlatformId);
-                                setShowCreateModal(true);
+                                openCreateModal(preferredPlatformId);
                             }}
                             className="crm-btn-primary"
                         >
@@ -2570,11 +2598,12 @@ export default function Clients() {
 
             <ClientCreateModal
                 open={showCreateModal}
-                onClose={() => setShowCreateModal(false)}
+                onClose={closeCreateModal}
                 initialPlatformId={createModalInitialPlatformId || preferredPlatformId}
                 reason="Client create from clients page"
                 onCreated={(createdClient, meta) => {
                     setShowCreateModal(false);
+                    clearCreateRequest();
                     setCreateForm(createDefaultClientForm(preferredPlatformId));
 
                     if (meta?.onboardingMode === 'wp_provision' && createdClient?.id) {

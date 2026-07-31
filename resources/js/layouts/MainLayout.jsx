@@ -9,6 +9,14 @@ import FeedbackButton from '../components/faq/FeedbackButton';
 import Walkthrough from '../components/faq/Walkthrough';
 import { useMediaUploads } from '../components/MediaUploadProvider';
 
+function WorkspaceActionIcon({ children, className = '' }) {
+    return (
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${className}`} aria-hidden="true">
+            {children}
+        </span>
+    );
+}
+
 export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
@@ -128,12 +136,37 @@ export default function MainLayout() {
                         </div>
                         {!isMarketing ? (
                             <div className="hidden items-center gap-2 sm:flex">
-                            <Link to="/leads" className="crm-btn-secondary px-3 py-1.5 text-xs">
-                                New lead
-                            </Link>
-                            <Link to="/clients" data-tour="nav-new-client" className="crm-btn-primary px-3 py-1.5 text-xs">
-                                New client
-                            </Link>
+                                <Link
+                                    to="/network-check"
+                                    title="Run a browser and CRM connectivity check"
+                                    className="group inline-flex h-10 min-w-[8.75rem] items-center gap-2 rounded-lg border border-sky-200 bg-sky-50/80 px-2.5 text-left text-sky-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                                >
+                                    <WorkspaceActionIcon className="bg-white text-sky-700 ring-1 ring-sky-200 transition group-hover:text-sky-800">
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 19.5h16.5M6.75 15.75l2.5-2.5 2.25 2.25 5.75-6.25M16.5 9.25h-4.25M16.5 9.25v4.25" />
+                                        </svg>
+                                    </WorkspaceActionIcon>
+                                    <span className="min-w-0">
+                                        <span className="block text-xs font-semibold leading-4">Network Check</span>
+                                        <span className="hidden truncate text-[10px] font-medium leading-3 text-sky-600 xl:block">Run diagnostics</span>
+                                    </span>
+                                </Link>
+                                <Link
+                                    to="/clients?create=1"
+                                    data-tour="nav-new-client"
+                                    title="Open the client creation form"
+                                    className="group inline-flex h-10 min-w-[8.25rem] items-center gap-2 rounded-lg bg-teal-700 px-2.5 text-left text-white shadow-sm shadow-teal-900/10 transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                >
+                                    <WorkspaceActionIcon className="bg-white/15 text-white ring-1 ring-white/25 transition group-hover:bg-white/20">
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.25a7.5 7.5 0 0 1 15 0M19.5 8.25v4.5M21.75 10.5h-4.5" />
+                                        </svg>
+                                    </WorkspaceActionIcon>
+                                    <span className="min-w-0">
+                                        <span className="block text-xs font-semibold leading-4">New client</span>
+                                        <span className="hidden truncate text-[10px] font-medium leading-3 text-teal-100 xl:block">Create profile</span>
+                                    </span>
+                                </Link>
                             </div>
                         ) : null}
                     </div>
