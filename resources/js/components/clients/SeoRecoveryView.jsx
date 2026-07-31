@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import ConfirmDialog from '../ConfirmDialog';
@@ -177,6 +178,7 @@ function SkeletonRows({ rows = 4, cols = 5 }) {
 
 export default function SeoRecoveryView({ platformId, platforms = [], marketName }) {
     const toast = useToast();
+    const navigate = useNavigate();
     const queryClient = useQueryClient();
 
     const [selectedPlatform, setSelectedPlatform] = useState(platformId ? String(platformId) : '');
@@ -853,12 +855,27 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                     <th className="px-3 py-2 font-semibold">Expired</th>
                                     <th className="px-3 py-2 font-semibold">Recovered</th>
                                     <th className="px-3 py-2 font-semibold">Run</th>
+                                    <th className="px-3 py-2 text-right font-semibold">Live page</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {(cohortQuery.data?.data ?? []).map((row) => (
                                     <tr key={row.id} className="hover:bg-slate-50/60">
-                                        <td className="px-3 py-2 font-medium text-slate-800">{row.name || `Profile ${row.id}`}</td>
+                                        <td className="px-3 py-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => navigate(`/clients/${row.id}`)}
+                                                className="text-left"
+                                                title="Open this client in the CRM"
+                                            >
+                                                <span className="block text-sm font-medium text-slate-800 hover:text-teal-700">
+                                                    {row.name || `Profile ${row.id}`}
+                                                </span>
+                                                {row.phone_normalized ? (
+                                                    <span className="crm-mono block text-xs text-slate-500">{row.phone_normalized}</span>
+                                                ) : null}
+                                            </button>
+                                        </td>
                                         <td className="px-3 py-2 text-slate-600">{row.city || '—'}</td>
                                         <td className="px-3 py-2">
                                             <Pill tone={STATE_TONE[row.lifecycle_state]}>
@@ -868,6 +885,21 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                         <td className="px-3 py-2 tabular-nums text-slate-600">{row.lifecycle_expired_at ?? '—'}</td>
                                         <td className="px-3 py-2 text-xs text-slate-500">{row.lifecycle_restored_at ?? '—'}</td>
                                         <td className="px-3 py-2 text-xs text-slate-500">#{row.lifecycle_restore_run_id}</td>
+                                        <td className="px-3 py-2 text-right">
+                                            {row.profile_url ? (
+                                                <a
+                                                    href={row.profile_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                                                    title={row.profile_url}
+                                                >
+                                                    View ↗
+                                                </a>
+                                            ) : (
+                                                <span className="text-xs text-slate-300" title="No permalink synced from WordPress yet">—</span>
+                                            )}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

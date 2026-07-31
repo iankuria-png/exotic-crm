@@ -203,6 +203,10 @@ class LifecycleRestoreController extends Controller
             'name' => $client->name,
             'city' => $client->city,
             'wp_post_id' => (int) $client->wp_post_id,
+            // The live URL is the whole point of the recovery — surfaced so a
+            // restored profile can be spot-checked on the market site.
+            'profile_url' => $client->wp_profile_permalink,
+            'phone_normalized' => $client->phone_normalized,
             'lifecycle_state' => $client->lifecycle_state,
             'lifecycle_expired_at' => optional($client->lifecycle_expired_at)->toDateString(),
             'lifecycle_restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
