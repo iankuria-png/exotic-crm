@@ -19,25 +19,30 @@ class PaymentImportService
 
     public function __construct(
         private readonly PaymentImportParserService $parserService,
+        private readonly PaymentPasteParserService $pasteParserService,
         private readonly PaymentReconciliationConfidenceService $confidenceService,
         private readonly PaymentMatchingService $matchingService
-    ) {
-    }
+    ) {}
 
     public function previewImport(
-        UploadedFile $file,
+        UploadedFile|string $input,
         Platform $platform,
         int $actorId,
         bool $hasHeader = true,
         ?string $reason = null,
         ?string $defaultCurrency = null,
         ?string $dateFrom = null,
-        ?string $dateTo = null
+        ?string $dateTo = null,
+        string $mode = 'file',
+        ?string $sourceOwner = null
     ): array {
         $dateFromCarbon = $dateFrom ? Carbon::parse($dateFrom)->startOfDay() : null;
         $dateToCarbon = $dateTo ? Carbon::parse($dateTo)->endOfDay() : null;
 
-        $parsed = $this->parserService->parseUploadedFile($file, $hasHeader, $dateFromCarbon, $dateToCarbon);
+        $isOrphanPaste = $mode === 'orphan_paste';
+        $parsed = $isOrphanPaste
+            ? $this->pasteParserService->parse((string) $input, $dateFrom)
+            : $this->parserService->parseUploadedFile($input, $hasHeader, $dateFromCarbon, $dateToCarbon);
         $rows = $parsed['rows'] ?? [];
 
         if (count($rows) === 0) {
@@ -45,26 +50,32 @@ class PaymentImportService
         }
 
         if (count($rows) > self::MAX_ROWS_PER_IMPORT) {
-            throw new InvalidArgumentException('Import preview supports up to ' . self::MAX_ROWS_PER_IMPORT . ' rows per file.');
+            throw new InvalidArgumentException('Import preview supports up to '.self::MAX_ROWS_PER_IMPORT.' rows per file.');
         }
 
-        $extension = strtolower((string) ($file->getClientOriginalExtension() ?: $file->extension()));
+        $extension = $input instanceof UploadedFile
+            ? strtolower((string) ($input->getClientOriginalExtension() ?: $input->extension()))
+            : 'txt';
         $isMpesaXml = $extension === 'xml';
         $parseMeta = $parsed['meta'] ?? null;
+        $sourceType = $isOrphanPaste ? 'orphan_paste' : ($isMpesaXml ? 'mpesa_xml' : 'spreadsheet');
 
         $currency = $this->parseCurrency($defaultCurrency, $platform->currency_code ?: 'KES');
         $batch = PaymentImportBatch::query()->create([
             'platform_id' => $platform->id,
             'uploaded_by' => $actorId,
-            'file_name' => $file->getClientOriginalName(),
-            'file_mime' => $file->getClientMimeType(),
+            'file_name' => $input instanceof UploadedFile
+                ? $input->getClientOriginalName()
+                : 'pasted-orphans-'.now()->format('Ymd-His').'.txt',
+            'file_mime' => $input instanceof UploadedFile ? $input->getClientMimeType() : 'text/plain',
             'status' => 'previewed',
             'reason' => $reason ? trim($reason) : null,
             'metadata' => [
                 'has_header' => $hasHeader,
                 'columns' => $parsed['headers'] ?? [],
                 'default_currency' => $currency,
-                'source_type' => $isMpesaXml ? 'mpesa_xml' : 'spreadsheet',
+                'source_type' => $sourceType,
+                'source_owner' => $sourceOwner ? trim($sourceOwner) : null,
                 ...($parseMeta ? ['parse_meta' => $parseMeta] : []),
             ],
         ]);
@@ -77,7 +88,8 @@ class PaymentImportService
             $normalized = $this->normalizeImportRow(
                 $row['values'] ?? [],
                 $platform,
-                $currency
+                $currency,
+                $sourceType
             );
 
             $reference = $normalized['normalized_row']['transaction_reference'] ?? null;
@@ -92,12 +104,16 @@ class PaymentImportService
 
             $draftRows[] = [
                 'row_number' => (int) ($row['row_number'] ?? 0),
-                'raw_row' => $row['values'] ?? [],
+                'raw_row' => [
+                    'values' => $row['values'] ?? [],
+                    'raw' => $row['raw'] ?? [],
+                ],
                 'normalized_row' => $normalized['normalized_row'],
                 'errors' => $normalized['errors'],
+                'initial_status' => $normalized['status'] ?? 'valid',
                 'transaction_reference_norm' => $reference,
                 'legacy_hash' => $legacyHash,
-                'status' => 'valid',
+                'status' => $normalized['status'] ?? 'valid',
                 'duplicate_type' => null,
                 'duplicate_payment_id' => null,
                 'suggested_match' => null,
@@ -119,14 +135,20 @@ class PaymentImportService
             $reference = $draft['transaction_reference_norm'];
             $legacyHash = $draft['legacy_hash'];
 
-            if (!empty($errors)) {
+            if ($draft['status'] === 'needs_match') {
+                continue;
+            }
+
+            if (! empty($errors)) {
                 $draftRows[$index]['status'] = 'invalid';
+
                 continue;
             }
 
             if ($reference && isset($seenReferenceInFile[$reference])) {
                 $draftRows[$index]['status'] = 'duplicate';
                 $draftRows[$index]['duplicate_type'] = 'duplicate_in_file_reference';
+
                 continue;
             }
 
@@ -134,12 +156,14 @@ class PaymentImportService
                 $draftRows[$index]['status'] = 'duplicate';
                 $draftRows[$index]['duplicate_type'] = 'duplicate_existing_reference';
                 $draftRows[$index]['duplicate_payment_id'] = $existingByReference[$reference];
+
                 continue;
             }
 
             if ($legacyHash && isset($seenHashInFile[$legacyHash])) {
                 $draftRows[$index]['status'] = 'duplicate';
                 $draftRows[$index]['duplicate_type'] = 'duplicate_in_file_hash';
+
                 continue;
             }
 
@@ -147,6 +171,7 @@ class PaymentImportService
                 $draftRows[$index]['status'] = 'duplicate';
                 $draftRows[$index]['duplicate_type'] = 'duplicate_existing_hash';
                 $draftRows[$index]['duplicate_payment_id'] = $existingByHash[$legacyHash];
+
                 continue;
             }
 
@@ -171,6 +196,7 @@ class PaymentImportService
         $totals = [
             'total_rows' => count($draftRows),
             'valid_rows' => 0,
+            'needs_match_rows' => 0,
             'invalid_rows' => 0,
             'duplicate_rows' => 0,
         ];
@@ -180,16 +206,15 @@ class PaymentImportService
             $status = $draft['status'];
             if ($status === 'valid') {
                 $totals['valid_rows'] += 1;
+            } elseif ($status === 'needs_match') {
+                $totals['needs_match_rows'] += 1;
             } elseif ($status === 'invalid') {
                 $totals['invalid_rows'] += 1;
             } else {
                 $totals['duplicate_rows'] += 1;
             }
 
-            $phone = (string) ($draft['normalized_row']['phone'] ?? '');
-            $suggestedMatch = $status === 'valid' && $phone !== ''
-                ? ($suggestedByPhone[$phone] ?? null)
-                : null;
+            $suggestedMatch = $this->resolveImportSuggestion($draft, $suggestedByPhone, (int) $platform->id, $sourceType);
 
             $rowModel = PaymentImportRow::query()->create([
                 'batch_id' => $batch->id,
@@ -216,7 +241,7 @@ class PaymentImportService
                 'suggested_match' => $rowModel->suggested_match,
             ];
 
-            if ($isMpesaXml && $rowModel->status === 'valid') {
+            if (($isMpesaXml || $isOrphanPaste) && in_array($rowModel->status, ['valid', 'needs_match'], true)) {
                 $rowAmount = isset($rowModel->normalized_row['amount'])
                     ? (float) $rowModel->normalized_row['amount']
                     : 0;
@@ -239,7 +264,7 @@ class PaymentImportService
         return [
             'batch_id' => $batch->id,
             'status' => $batch->status,
-            'source_type' => $isMpesaXml ? 'mpesa_xml' : 'spreadsheet',
+            'source_type' => $sourceType,
             'summary' => $totals,
             'headers' => $parsed['headers'] ?? [],
             'rows' => $responseRows,
@@ -263,6 +288,7 @@ class PaymentImportService
                     'summary' => [
                         'total_rows' => (int) $lockedBatch->total_rows,
                         'valid_rows' => (int) $lockedBatch->valid_rows,
+                        'needs_match_rows' => $this->countRowsByStatus($lockedBatch->id, 'needs_match'),
                         'invalid_rows' => (int) $lockedBatch->invalid_rows,
                         'duplicate_rows' => (int) $lockedBatch->duplicate_rows,
                         'committed_rows' => (int) $lockedBatch->committed_rows,
@@ -281,12 +307,12 @@ class PaymentImportService
 
             $referenceValues = $rows
                 ->pluck('transaction_reference_norm')
-                ->filter(fn($value) => is_string($value) && $value !== '')
+                ->filter(fn ($value) => is_string($value) && $value !== '')
                 ->values()
                 ->all();
             $legacyHashes = $rows
                 ->pluck('legacy_hash')
-                ->filter(fn($value) => is_string($value) && $value !== '')
+                ->filter(fn ($value) => is_string($value) && $value !== '')
                 ->values()
                 ->all();
 
@@ -310,6 +336,7 @@ class PaymentImportService
                         'duplicate_type' => 'duplicate_existing_reference',
                         'duplicate_payment_id' => $existingByReference[$reference],
                     ]);
+
                     continue;
                 }
 
@@ -319,6 +346,7 @@ class PaymentImportService
                         'duplicate_type' => 'duplicate_existing_hash',
                         'duplicate_payment_id' => $existingByHash[$legacyHash],
                     ]);
+
                     continue;
                 }
 
@@ -328,9 +356,13 @@ class PaymentImportService
                 $paidAt = $this->parseDate($normalized['paid_at'] ?? null);
 
                 $batchMeta = is_array($lockedBatch->metadata) ? $lockedBatch->metadata : [];
-                $sourceType = ($batchMeta['source_type'] ?? '') === 'mpesa_xml'
-                    ? 'mpesa_xml_import'
-                    : 'excel_import';
+                $batchSourceType = (string) ($batchMeta['source_type'] ?? 'spreadsheet');
+                $sourceType = match ($batchSourceType) {
+                    'mpesa_xml' => 'mpesa_xml_import',
+                    'orphan_paste' => 'orphan_manual_import',
+                    default => 'excel_import',
+                };
+                $status = $batchSourceType === 'orphan_paste' ? 'completed' : $status;
 
                 $rawPayload = [
                     'source' => $sourceType,
@@ -341,6 +373,7 @@ class PaymentImportService
                         'file_name' => $lockedBatch->file_name,
                         'actor_id' => $actorId,
                         'reason' => $reason ? trim($reason) : ($lockedBatch->reason ?: null),
+                        'source_owner' => $batchMeta['source_owner'] ?? null,
                     ],
                     'normalized_row' => $normalized,
                     'raw_row' => is_array($row->raw_row) ? $row->raw_row : [],
@@ -368,19 +401,20 @@ class PaymentImportService
                     : 'open';
 
                 $suggestedMatch = is_array($row->suggested_match) ? $row->suggested_match : null;
-                if ($suggestedMatch && !empty($suggestedMatch['client_id'])) {
+                if ($suggestedMatch && ! empty($suggestedMatch['client_id'])) {
                     $payload['client_id'] = (int) $suggestedMatch['client_id'];
                     $payload['match_confidence'] = $suggestedMatch['confidence'] ?? 'manual';
                     $payload['confirmed_by'] = $actorId;
                     $payload['confirmed_at'] = now();
                 }
 
-                if (!empty($normalized['product_id']) && is_numeric($normalized['product_id'])) {
+                if (! empty($normalized['product_id']) && is_numeric($normalized['product_id'])) {
                     $payload['product_id'] = (int) $normalized['product_id'];
                 }
 
                 if ($paidAt) {
                     $payload['created_at'] = $paidAt;
+                    $payload['completed_at'] = $paidAt;
                     $payload['updated_at'] = now();
                 }
 
@@ -406,6 +440,7 @@ class PaymentImportService
 
             $totalRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->count();
             $validRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->where('status', 'valid')->count();
+            $needsMatchRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->where('status', 'needs_match')->count();
             $invalidRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->where('status', 'invalid')->count();
             $duplicateRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->where('status', 'duplicate')->count();
             $committedRows = PaymentImportRow::query()->where('batch_id', $lockedBatch->id)->where('status', 'committed')->count();
@@ -427,6 +462,7 @@ class PaymentImportService
                 'summary' => [
                     'total_rows' => $totalRows,
                     'valid_rows' => $validRows,
+                    'needs_match_rows' => $needsMatchRows,
                     'invalid_rows' => $invalidRows,
                     'duplicate_rows' => $duplicateRows,
                     'committed_rows' => $committedRows,
@@ -437,7 +473,7 @@ class PaymentImportService
         });
     }
 
-    private function normalizeImportRow(array $row, Platform $platform, string $defaultCurrency): array
+    private function normalizeImportRow(array $row, Platform $platform, string $defaultCurrency, string $sourceType = 'spreadsheet'): array
     {
         $phonePrefix = (string) ($platform->phone_prefix ?: '254');
 
@@ -480,11 +516,26 @@ class PaymentImportService
 
         $errors = [];
 
+        $parserError = $this->firstNonEmpty($row, ['parse_error']);
+        if ($parserError !== null) {
+            $errors[] = $parserError;
+        }
+
         if ($amount === null || $amount <= 0) {
             $errors[] = 'Amount is required and must be greater than zero.';
         }
 
-        if ($phone === null && $reference === null && $profileUrl === '') {
+        $rawClientName = $this->firstNonEmpty($row, ['client_name', 'name', 'client']);
+        $clientName = $rawClientName !== null ? trim($rawClientName) : '';
+        $needsMatch = $sourceType === 'orphan_paste'
+            && $phone === null
+            && $reference === null
+            && $profileUrl === ''
+            && $clientName !== ''
+            && $amount !== null
+            && $amount > 0;
+
+        if ($phone === null && $reference === null && $profileUrl === '' && ! $needsMatch) {
             $errors[] = 'At least one identifier is required: phone, transaction reference, or profile URL.';
         }
 
@@ -504,6 +555,7 @@ class PaymentImportService
             'profile_url' => $profileUrl !== '' ? $profileUrl : null,
             'subscription_type' => $subscriptionType !== '' ? $subscriptionType : null,
             'sender_name' => $rawSenderName,
+            'client_name' => $clientName !== '' ? $clientName : null,
         ];
 
         if ($rawProductId !== null && trim((string) $rawProductId) !== '' && is_numeric($rawProductId)) {
@@ -525,19 +577,20 @@ class PaymentImportService
             'normalized_row' => $normalizedRow,
             'legacy_hash' => $legacyHash,
             'errors' => $errors,
+            'status' => empty($errors) && $needsMatch ? 'needs_match' : 'valid',
         ];
     }
 
     private function resolveExistingDuplicates(int $platformId, array $references, array $legacyHashes): array
     {
         $referenceSet = collect($references)
-            ->filter(fn($value) => is_string($value) && $value !== '')
+            ->filter(fn ($value) => is_string($value) && $value !== '')
             ->unique()
             ->values()
             ->all();
 
         $hashSet = collect($legacyHashes)
-            ->filter(fn($value) => is_string($value) && $value !== '')
+            ->filter(fn ($value) => is_string($value) && $value !== '')
             ->unique()
             ->values()
             ->all();
@@ -549,7 +602,7 @@ class PaymentImportService
         $payments = Payment::query()
             ->where('platform_id', $platformId)
             ->where(function ($query) use ($hashSet) {
-                if (!empty($hashSet)) {
+                if (! empty($hashSet)) {
                     $query->whereIn('import_legacy_hash', $hashSet);
                 } else {
                     $query->whereRaw('1 = 0');
@@ -606,6 +659,7 @@ class PaymentImportService
                     'client_id' => $matches[0]['client_id'],
                     'client_name' => $matches[0]['client_name'],
                 ];
+
                 continue;
             }
 
@@ -620,10 +674,77 @@ class PaymentImportService
         return $suggestions;
     }
 
+    private function resolveImportSuggestion(array $draft, array $suggestedByPhone, int $platformId, string $sourceType): ?array
+    {
+        $phone = (string) ($draft['normalized_row']['phone'] ?? '');
+        if ($draft['status'] === 'valid' && $phone !== '' && isset($suggestedByPhone[$phone])) {
+            return $suggestedByPhone[$phone];
+        }
+
+        if ($sourceType !== 'orphan_paste') {
+            return null;
+        }
+
+        $clientName = trim((string) ($draft['normalized_row']['client_name'] ?? ''));
+        if ($clientName === '') {
+            return null;
+        }
+
+        $normalizedName = $this->normalizeName($clientName);
+        $clients = Client::query()
+            ->where('platform_id', $platformId)
+            ->whereNotNull('name')
+            ->get(['id', 'name', 'phone_normalized'])
+            ->filter(fn (Client $client) => $this->normalizeName((string) $client->name) === $normalizedName)
+            ->values();
+
+        if ($clients->count() === 1 && $draft['status'] === 'valid') {
+            $client = $clients->first();
+
+            return [
+                'confidence' => 'auto_low',
+                'basis' => 'client_name_exact',
+                'client_id' => $client->id,
+                'client_name' => $client->name,
+            ];
+        }
+
+        if ($clients->isNotEmpty()) {
+            return [
+                'confidence' => 'manual_required',
+                'basis' => $clients->count() === 1 ? 'client_name_exact_needs_confirmation' : 'client_name_collision',
+                'candidate_count' => $clients->count(),
+                'candidates' => $clients->take(5)->map(fn (Client $client) => [
+                    'client_id' => $client->id,
+                    'client_name' => $client->name,
+                    'phone' => $client->phone_normalized,
+                ])->values()->all(),
+            ];
+        }
+
+        return null;
+    }
+
+    private function normalizeName(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+    }
+
+    private function countRowsByStatus(int $batchId, string $status): int
+    {
+        return PaymentImportRow::query()
+            ->where('batch_id', $batchId)
+            ->where('status', $status)
+            ->count();
+    }
+
     private function firstNonEmpty(array $row, array $keys): ?string
     {
         foreach ($keys as $key) {
-            if (!array_key_exists($key, $row)) {
+            if (! array_key_exists($key, $row)) {
                 continue;
             }
 
@@ -648,7 +769,7 @@ class PaymentImportService
         }
 
         $normalized = str_replace(' ', '', $normalized);
-        if (str_contains($normalized, ',') && !str_contains($normalized, '.')) {
+        if (str_contains($normalized, ',') && ! str_contains($normalized, '.')) {
             $normalized = str_replace(',', '.', $normalized);
         } elseif (str_contains($normalized, ',') && str_contains($normalized, '.')) {
             $normalized = str_replace(',', '', $normalized);
@@ -660,7 +781,7 @@ class PaymentImportService
         }
 
         $amount = (float) $normalized;
-        if (!is_finite($amount)) {
+        if (! is_finite($amount)) {
             return null;
         }
 

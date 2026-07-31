@@ -17,9 +17,12 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     const toast = useToast();
 
     const [step, setStep] = useState('upload');
+    const [inputMode, setInputMode] = useState('paste');
     const [file, setFile] = useState(null);
+    const [pastedText, setPastedText] = useState('');
     const [platformId, setPlatformId] = useState('');
     const [reason, setReason] = useState('Payment import from CRM');
+    const [sourceOwner, setSourceOwner] = useState('');
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
     const [preview, setPreview] = useState(null);
@@ -43,9 +46,12 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     useEffect(() => {
         if (open) {
             setStep('upload');
+            setInputMode('paste');
             setFile(null);
+            setPastedText('');
             setPlatformId('');
             setReason('Payment import from CRM');
+            setSourceOwner('');
             setDateFrom('');
             setDateTo('');
             setPreview(null);
@@ -71,10 +77,16 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     const importPreviewMutation = useMutation({
         mutationFn: async (params) => {
             const formData = new FormData();
-            formData.append('file', params.file);
+            formData.append('mode', params.inputMode === 'paste' ? 'orphan_paste' : 'file');
+            if (params.inputMode === 'paste') {
+                formData.append('pasted_text', params.pastedText);
+            } else {
+                formData.append('file', params.file);
+            }
             formData.append('platform_id', params.platformId);
             formData.append('reason', params.reason);
             formData.append('has_header', '1');
+            if (params.sourceOwner) formData.append('source_owner', params.sourceOwner);
             if (params.dateFrom) formData.append('date_from', params.dateFrom);
             if (params.dateTo) formData.append('date_to', params.dateTo);
             const response = await api.post('/crm/payments/import/preview', formData, {
@@ -163,6 +175,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     const filteredSummary = useMemo(() => {
         const sumAmount = (rows) => rows.reduce((sum, r) => sum + Number(r.normalized_row?.amount || 0), 0);
         const validRows = dateFilteredRows.filter((r) => r.status === 'valid');
+        const needsMatchRows = dateFilteredRows.filter((r) => r.status === 'needs_match');
         const invalidRows = dateFilteredRows.filter((r) => r.status === 'invalid');
         const duplicateRows = dateFilteredRows.filter((r) => r.status === 'duplicate');
         const matchedRows = dateFilteredRows.filter((r) => r.status === 'valid' && r.suggested_match?.client_id);
@@ -170,6 +183,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         return {
             total: dateFilteredRows.length,       totalAmount: sumAmount(dateFilteredRows),
             valid: validRows.length,              validAmount: sumAmount(validRows),
+            needsMatch: needsMatchRows.length,     needsMatchAmount: sumAmount(needsMatchRows),
             invalid: invalidRows.length,          invalidAmount: sumAmount(invalidRows),
             duplicate: duplicateRows.length,      duplicateAmount: sumAmount(duplicateRows),
             matched: matchedRows.length,          matchedAmount: sumAmount(matchedRows),
@@ -183,6 +197,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         return dateFilteredRows.filter((row) => {
             switch (statusFilter) {
                 case 'valid': return row.status === 'valid';
+                case 'needs_match': return row.status === 'needs_match';
                 case 'invalid': return row.status === 'invalid';
                 case 'duplicate': return row.status === 'duplicate';
                 case 'matched': return row.status === 'valid' && row.suggested_match?.client_id;
@@ -227,13 +242,17 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
 
     // Handlers
     const handlePreview = () => {
-        if (!file || !platformId || !reason.trim()) return;
-        importPreviewMutation.mutate({ file, platformId, reason, dateFrom, dateTo });
+        if (!platformId || !reason.trim()) return;
+        if (inputMode === 'paste' && !pastedText.trim()) return;
+        if (inputMode !== 'paste' && !file) return;
+        importPreviewMutation.mutate({ inputMode, file, pastedText, platformId, reason, sourceOwner, dateFrom, dateTo });
     };
 
     const handleReparse = () => {
-        if (!file || !platformId) return;
-        importPreviewMutation.mutate({ file, platformId, reason, dateFrom, dateTo });
+        if (!platformId) return;
+        if (inputMode === 'paste' && !pastedText.trim()) return;
+        if (inputMode !== 'paste' && !file) return;
+        importPreviewMutation.mutate({ inputMode, file, pastedText, platformId, reason, sourceOwner, dateFrom, dateTo });
     };
 
     const handleCommit = () => {
@@ -247,9 +266,10 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     };
 
     const openMatchPanel = (row) => {
+        const defaultSearch = row.normalized_row?.phone || row.normalized_row?.client_name || row.normalized_row?.sender_name || '';
         setMatchingRow(row);
-        setMatchSearchInput(row.normalized_row?.phone || row.normalized_row?.sender_name || '');
-        setMatchSearch(row.normalized_row?.phone || '');
+        setMatchSearchInput(defaultSearch);
+        setMatchSearch(defaultSearch);
         setSelectedCandidate(null);
     };
 
@@ -284,13 +304,13 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
             render: (row) => <span className="text-slate-800">{row.normalized_row?.phone || '—'}</span>,
         });
 
-        if (isMpesa) {
+        if (isMpesa || preview?.source_type === 'orphan_paste') {
             cols.push({
                 key: 'sender',
-                label: 'Sender',
+                label: preview?.source_type === 'orphan_paste' ? 'Name' : 'Sender',
                 render: (row) => (
                     <span className="block max-w-[120px] truncate text-slate-600" title={row.normalized_row?.sender_name || ''}>
-                        {row.normalized_row?.sender_name || '—'}
+                        {row.normalized_row?.client_name || row.normalized_row?.sender_name || '—'}
                     </span>
                 ),
             });
@@ -316,12 +336,12 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
             ),
         });
 
-        if (isMpesa) {
+        if (isMpesa || preview?.source_type === 'orphan_paste') {
             cols.push({
                 key: 'client',
                 label: 'Client',
                 render: (row) => {
-                    if (row.status !== 'valid') return <span className="text-slate-400">—</span>;
+                    if (!['valid', 'needs_match'].includes(row.status)) return <span className="text-slate-400">—</span>;
                     if (row.suggested_match?.client_id) {
                         return (
                             <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
@@ -385,6 +405,14 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                         </span>
                     );
                 }
+                if (row.status === 'needs_match') {
+                    return (
+                        <span className="flex flex-col gap-0.5">
+                            <span className="text-sky-700">needs match</span>
+                            <span className="text-[10px] text-sky-500">Link a client before commit</span>
+                        </span>
+                    );
+                }
                 return (
                     <span className="flex items-center gap-1">
                         <span className={
@@ -405,12 +433,12 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         });
 
         return cols;
-    }, [isMpesa]);
+    }, [isMpesa, preview?.source_type]);
 
     if (!open) return null;
 
     const isPending = importPreviewMutation.isPending || importCommitMutation.isPending;
-    const canPreview = file && platformId && reason.trim();
+    const canPreview = platformId && reason.trim() && (inputMode === 'paste' ? pastedText.trim() : file);
     const canCommit = batchId && filteredSummary.valid > 0;
 
     return (
@@ -429,7 +457,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                             <h3 className="mt-1 text-lg font-semibold text-slate-900">
                                 {step === 'committed' ? 'Import Complete'
                                     : step === 'preview' ? 'Import Preview'
-                                        : 'Upload Payment File'}
+                                        : 'Add Orphaned Payments'}
                             </h3>
                             {step === 'preview' && preview && (
                                 <p className="mt-1 text-xs text-slate-500">
@@ -453,6 +481,31 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                 <div className="flex-1 overflow-y-auto px-5 py-4">
                     {step === 'upload' && (
                         <div className="mx-auto max-w-xl space-y-4">
+                            <div className="grid grid-cols-3 rounded-md border border-slate-200 bg-slate-50 p-1 text-sm font-semibold">
+                                {[
+                                    { key: 'paste', label: 'Paste records' },
+                                    { key: 'file', label: 'Upload file' },
+                                    { key: 'xml', label: 'M-Pesa XML' },
+                                ].map((mode) => (
+                                    <button
+                                        key={mode.key}
+                                        type="button"
+                                        onClick={() => {
+                                            setInputMode(mode.key);
+                                            setFile(null);
+                                            setPastedText('');
+                                        }}
+                                        className={`rounded px-3 py-2 transition ${
+                                            inputMode === mode.key
+                                                ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
+                                                : 'text-slate-500 hover:text-slate-800'
+                                        }`}
+                                    >
+                                        {mode.label}
+                                    </button>
+                                ))}
+                            </div>
+
                             <div>
                                 <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
                                 <select
@@ -467,15 +520,30 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 </select>
                             </div>
 
-                            <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">CSV / XLSX / XML File</label>
-                                <input
-                                    type="file"
-                                    accept=".csv,.xlsx,.txt,.xml"
-                                    onChange={(e) => setFile(e.target.files?.[0] || null)}
-                                    className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-                                />
-                            </div>
+                            {inputMode === 'paste' ? (
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Paste payment records</label>
+                                    <textarea
+                                        rows={10}
+                                        value={pastedText}
+                                        onChange={(e) => setPastedText(e.target.value)}
+                                        className="crm-input font-mono text-sm leading-6"
+                                        placeholder={'28th july 2026\nyohana\nDGR951X4BM\n40000\nrenewal\n\n47k\nT_5R6F4G-G4B5VXZMEZ'}
+                                    />
+                                </div>
+                            ) : (
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">
+                                        {inputMode === 'xml' ? 'M-Pesa XML file' : 'CSV / XLSX file'}
+                                    </label>
+                                    <input
+                                        type="file"
+                                        accept={inputMode === 'xml' ? '.xml' : '.csv,.xlsx,.txt'}
+                                        onChange={(e) => setFile(e.target.files?.[0] || null)}
+                                        className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                                    />
+                                </div>
+                            )}
 
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
@@ -498,8 +566,23 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 </div>
                             </div>
                             <p className="text-[11px] text-slate-500">
-                                Optional. Filters inbound payments by transaction date. Leave blank to include all dates.
+                                {inputMode === 'paste'
+                                    ? 'Optional. Used as the fallback date when pasted rows do not include a date.'
+                                    : 'Optional. Filters inbound payments by transaction date. Leave blank to include all dates.'}
                             </p>
+
+                            {inputMode === 'paste' && (
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Source owner</label>
+                                    <input
+                                        type="text"
+                                        value={sourceOwner}
+                                        onChange={(e) => setSourceOwner(e.target.value)}
+                                        className="crm-input"
+                                        placeholder="Dan, Joanne, Tanzania team..."
+                                    />
+                                </div>
+                            )}
 
                             <div>
                                 <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
@@ -534,7 +617,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         </div>
                                     </div>
                                     {/* Clickable filter row */}
-                                    <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                                    <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
                                         <button
                                             type="button"
                                             onClick={() => toggleStatusFilter('valid')}
@@ -560,6 +643,19 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             <p className="text-base font-semibold text-amber-700">{filteredSummary.duplicate}</p>
                                             <p className="text-[10px] font-medium text-amber-600/70">KES {filteredSummary.duplicateAmount.toLocaleString()}</p>
                                             <p className="mt-0.5 text-amber-600">Duplicate</p>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleStatusFilter('needs_match')}
+                                            className={`rounded-md p-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                                statusFilter === 'needs_match'
+                                                    ? 'ring-2 ring-sky-400 bg-sky-50'
+                                                    : 'bg-sky-50/60 hover:bg-sky-50 hover:ring-1 hover:ring-sky-300'
+                                            }`}
+                                        >
+                                            <p className="text-base font-semibold text-sky-700">{filteredSummary.needsMatch}</p>
+                                            <p className="text-[10px] font-medium text-sky-600/70">KES {filteredSummary.needsMatchAmount.toLocaleString()}</p>
+                                            <p className="mt-0.5 text-sky-600">Needs match</p>
                                         </button>
                                         <button
                                             type="button"
@@ -590,7 +686,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                     </div>
                                 </div>
                             ) : (
-                                <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                                <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
                                     <button
                                         type="button"
                                         onClick={() => setStatusFilter(null)}
@@ -629,6 +725,19 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         <p className="text-base font-semibold text-rose-700">{filteredSummary.invalid}</p>
                                         <p className="text-[10px] font-medium text-rose-600/70">KES {filteredSummary.invalidAmount.toLocaleString()}</p>
                                         <p className="mt-0.5 text-rose-600">Invalid</p>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleStatusFilter('needs_match')}
+                                        className={`rounded-md p-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                            statusFilter === 'needs_match'
+                                                ? 'ring-2 ring-sky-400 bg-sky-50'
+                                                : 'bg-sky-50/60 hover:bg-sky-50 hover:ring-1 hover:ring-sky-300'
+                                        }`}
+                                    >
+                                        <p className="text-base font-semibold text-sky-700">{filteredSummary.needsMatch}</p>
+                                        <p className="text-[10px] font-medium text-sky-600/70">KES {filteredSummary.needsMatchAmount.toLocaleString()}</p>
+                                        <p className="mt-0.5 text-sky-600">Needs match</p>
                                     </button>
                                     <button
                                         type="button"
@@ -678,7 +787,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 <button
                                     type="button"
                                     onClick={handleReparse}
-                                    disabled={importPreviewMutation.isPending || !file}
+                                    disabled={importPreviewMutation.isPending || !canPreview}
                                     className="ml-auto rounded-md border border-teal-300 bg-white px-2.5 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:opacity-50"
                                 >
                                     {importPreviewMutation.isPending ? 'Re-parsing...' : 'Re-parse with dates'}
@@ -834,7 +943,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         </div>
                                     </div>
                                     <p className="mt-2 text-[10px] text-slate-400">
-                                        MPESA records import as &ldquo;completed&rdquo;. Matched rows go to Confirmed, unmatched rows need manual matching on the Payments page.
+                                        Ready rows import as completed payments. Needs-match rows stay out of revenue until a client is linked and the batch is committed.
                                     </p>
                                 </section>
                             )}
@@ -851,15 +960,37 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                             <h4 className="text-lg font-semibold text-slate-900">Import Complete</h4>
                             <p className="text-sm text-slate-600">Batch #{batchId} has been committed.</p>
                             {commitResult.summary && (
-                                <div className="mx-auto grid max-w-xs grid-cols-2 gap-3 text-center text-xs">
+                                <div className="mx-auto grid max-w-sm grid-cols-3 gap-3 text-center text-xs">
                                     <div className="rounded-md bg-emerald-50 p-3">
                                         <p className="text-lg font-semibold text-emerald-700">{commitResult.summary.committed_rows ?? commitResult.summary.committed ?? 0}</p>
                                         <p className="text-emerald-600">Committed</p>
                                     </div>
-                                    <div className="rounded-md bg-slate-50 p-3">
-                                        <p className="text-lg font-semibold text-slate-600">{commitResult.summary.skipped_rows ?? commitResult.summary.skipped ?? 0}</p>
-                                        <p className="text-slate-500">Skipped</p>
+                                    <div className="rounded-md bg-sky-50 p-3">
+                                        <p className="text-lg font-semibold text-sky-700">{commitResult.summary.needs_match_rows ?? 0}</p>
+                                        <p className="text-sky-600">Needs match</p>
                                     </div>
+                                    <div className="rounded-md bg-slate-50 p-3">
+                                        <p className="text-lg font-semibold text-slate-600">{commitResult.summary.duplicate_rows ?? commitResult.summary.skipped_rows ?? 0}</p>
+                                        <p className="text-slate-500">Duplicate</p>
+                                    </div>
+                                </div>
+                            )}
+                            {preview?.source_type === 'orphan_paste' && (
+                                <div className="flex flex-wrap justify-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => { window.location.href = '/payments?source=orphan_manual_import'; }}
+                                        className="crm-btn-secondary"
+                                    >
+                                        View orphan imports
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { window.location.href = '/payments?source=orphan_manual_import&matched=unmatched&status=completed'; }}
+                                        className="crm-btn-secondary"
+                                    >
+                                        Review unmatched
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -874,7 +1005,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 <>
                                     {statusFilter
                                         ? <>{filteredRows.length} row{filteredRows.length !== 1 ? 's' : ''} ({statusFilter}) &middot; <button type="button" onClick={() => setStatusFilter(null)} className="font-medium text-teal-600 hover:text-teal-700">Clear filter</button></>
-                                        : <>{filteredSummary.valid} valid ({filteredSummary.matched} matched, {filteredSummary.unmatched} unmatched) &middot; KES {filteredSummary.validAmount.toLocaleString()}</>
+                                        : <>{filteredSummary.valid} ready, {filteredSummary.needsMatch} need match &middot; KES {filteredSummary.validAmount.toLocaleString()} ready</>
                                     }
                                 </>
                             )}

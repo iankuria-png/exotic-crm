@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
@@ -169,11 +170,166 @@ class PaymentImportFlowTest extends TestCase
             ->assertJsonPath('summary.invalid_rows', 0);
     }
 
+    public function test_orphan_paste_commit_preserves_thousands_and_backdated_completed_at(): void
+    {
+        $platform = $this->createPlatform('Tanzania', '255');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $paste = implode("\n", [
+            '47k',
+            'T_5R6F4G-G4B5VXZMEZ',
+            '',
+            '28th july 2026',
+            'yohana',
+            'DGR951X4BM',
+            '35,000',
+            'renewal',
+        ]);
+
+        $preview = $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'mode' => 'orphan_paste',
+            'pasted_text' => $paste,
+            'date_from' => '2026-07-28',
+            'reason' => 'Import orphaned Tanzania payments',
+            'source_owner' => 'Joanne',
+        ]);
+
+        $preview->assertOk()
+            ->assertJsonPath('source_type', 'orphan_paste')
+            ->assertJsonPath('summary.total_rows', 2)
+            ->assertJsonPath('summary.valid_rows', 2);
+
+        $batchId = (int) $preview->json('batch_id');
+        $commit = $this->postJson('/api/crm/payments/import/commit', [
+            'batch_id' => $batchId,
+            'reason' => 'Commit orphaned Tanzania payments',
+        ]);
+
+        $commit->assertOk()
+            ->assertJsonPath('summary.created_now', 2)
+            ->assertJsonPath('summary.committed_rows', 2);
+
+        $payments = Payment::query()
+            ->where('import_batch_id', $batchId)
+            ->orderBy('amount')
+            ->get();
+
+        $this->assertSame([35000.0, 47000.0], $payments->pluck('amount')->map(fn ($amount) => (float) $amount)->all());
+        $this->assertTrue($payments->every(fn (Payment $payment) => $payment->source === 'orphan_manual_import'));
+        $this->assertTrue($payments->every(fn (Payment $payment) => $payment->status === 'completed'));
+        $this->assertTrue($payments->every(fn (Payment $payment) => $payment->completed_at?->toDateString() === '2026-07-28'));
+        $this->assertSame('Joanne', data_get($payments->first()->raw_payload, 'import.source_owner'));
+
+        $this->getJson("/api/crm/payments/import/kpis?platform_id={$platform->id}")
+            ->assertOk()
+            ->assertJsonPath('kpis.payments_imported', 2);
+    }
+
+    public function test_csv_decimal_comma_import_stays_scoped_to_existing_parser(): void
+    {
+        $platform = $this->createPlatform('France', '33');
+        $sales = $this->createUser('sales', [$platform->id]);
+        Sanctum::actingAs($sales);
+
+        $csv = implode("\n", [
+            'phone,amount,currency,transaction_reference,status,payment_date',
+            '0712121212,"35,50",EUR,DECIMAL-COMMA-1,completed,2026-07-28',
+        ]);
+
+        $preview = $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'file' => UploadedFile::fake()->createWithContent('decimal-comma.csv', $csv),
+            'has_header' => true,
+            'reason' => 'Existing CSV decimal comma behavior',
+        ]);
+
+        $preview->assertOk()->assertJsonPath('rows.0.normalized_row.amount', 35.5);
+    }
+
+    public function test_orphan_paste_mode_is_admin_only_without_breaking_sales_file_import(): void
+    {
+        $platform = $this->createPlatform('Kenya', '254');
+        $sales = $this->createUser('sales', [$platform->id]);
+        Sanctum::actingAs($sales);
+
+        $csv = implode("\n", [
+            'phone,amount,currency,transaction_reference,status',
+            '0712121212,1800,KES,SALES-FILE-OK,completed',
+        ]);
+
+        $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'file' => UploadedFile::fake()->createWithContent('sales-file.csv', $csv),
+            'has_header' => true,
+            'reason' => 'Sales file import remains available',
+        ])->assertOk();
+
+        $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'mode' => 'orphan_paste',
+            'pasted_text' => "47k\nT_SALES_BLOCKED",
+            'reason' => 'Sales should not import orphan paste',
+        ])->assertForbidden();
+    }
+
+    public function test_code_less_orphan_row_requires_match_then_commits(): void
+    {
+        $platform = $this->createPlatform('Tanzania', '255');
+        $admin = $this->createUser('admin');
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Latipha',
+            'phone_normalized' => '255700000001',
+            'profile_status' => 'publish',
+            'wp_post_id' => 20001,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $preview = $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'mode' => 'orphan_paste',
+            'pasted_text' => '28th July 2026    Latipha    35000.',
+            'reason' => 'Code-less manual orphan row',
+        ]);
+
+        $preview->assertOk()
+            ->assertJsonPath('summary.needs_match_rows', 1)
+            ->assertJsonPath('rows.0.status', 'needs_match');
+
+        $rowId = (int) $preview->json('rows.0.id');
+        $batchId = (int) $preview->json('batch_id');
+
+        $match = $this->postJson('/api/crm/payments/import/row-match', [
+            'row_id' => $rowId,
+            'client_id' => $client->id,
+        ]);
+
+        $match->assertOk()->assertJsonPath('suggested_match.client_id', $client->id);
+        $this->assertDatabaseHas('payment_import_rows', [
+            'id' => $rowId,
+            'status' => 'valid',
+        ]);
+
+        $commit = $this->postJson('/api/crm/payments/import/commit', [
+            'batch_id' => $batchId,
+            'reason' => 'Commit matched code-less orphan row',
+        ]);
+
+        $commit->assertOk()->assertJsonPath('summary.created_now', 1);
+
+        $payment = Payment::query()->where('import_batch_id', $batchId)->firstOrFail();
+        $this->assertSame($client->id, (int) $payment->client_id);
+        $this->assertSame(35000.0, (float) $payment->amount);
+    }
+
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User
     {
         return User::query()->create([
-            'name' => ucfirst($role) . ' ' . Str::random(6),
-            'email' => Str::random(8) . '@example.test',
+            'name' => ucfirst($role).' '.Str::random(6),
+            'email' => Str::random(8).'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'status' => 'active',
@@ -185,7 +341,7 @@ class PaymentImportFlowTest extends TestCase
     {
         return Platform::query()->create([
             'name' => $name,
-            'domain' => Str::slug($name) . '-' . Str::random(6) . '.test',
+            'domain' => Str::slug($name).'-'.Str::random(6).'.test',
             'country' => $name,
             'is_active' => true,
             'phone_prefix' => $phonePrefix,
@@ -206,12 +362,12 @@ class PaymentImportFlowTest extends TestCase
             $cellsXml = '';
             foreach ($rowValues as $columnIndex => $value) {
                 $stringValue = (string) $value;
-                if (!array_key_exists($stringValue, $sharedIndex)) {
+                if (! array_key_exists($stringValue, $sharedIndex)) {
                     $sharedIndex[$stringValue] = count($sharedStrings);
                     $sharedStrings[] = $stringValue;
                 }
 
-                $cellRef = $this->columnLetter($columnIndex) . ($rowNumber + 1);
+                $cellRef = $this->columnLetter($columnIndex).($rowNumber + 1);
                 $cellsXml .= sprintf(
                     '<c r="%s" t="s"><v>%d</v></c>',
                     $cellRef,
@@ -223,7 +379,7 @@ class PaymentImportFlowTest extends TestCase
         }
 
         $sharedXmlParts = array_map(
-            fn(string $value) => '<si><t>' . htmlspecialchars($value, ENT_XML1 | ENT_COMPAT, 'UTF-8') . '</t></si>',
+            fn (string $value) => '<si><t>'.htmlspecialchars($value, ENT_XML1 | ENT_COMPAT, 'UTF-8').'</t></si>',
             $sharedStrings
         );
 
@@ -280,7 +436,7 @@ XML;
         );
 
         $tempZip = tempnam(sys_get_temp_dir(), 'xlsx_import_');
-        $zip = new ZipArchive();
+        $zip = new ZipArchive;
         $zip->open($tempZip, ZipArchive::CREATE | ZipArchive::OVERWRITE);
         $zip->addFromString('[Content_Types].xml', $contentTypes);
         $zip->addFromString('_rels/.rels', $rootRels);
@@ -303,7 +459,7 @@ XML;
 
         while ($index > 0) {
             $remainder = ($index - 1) % 26;
-            $letters = chr(65 + $remainder) . $letters;
+            $letters = chr(65 + $remainder).$letters;
             $index = intdiv($index - 1, 26);
         }
 

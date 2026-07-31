@@ -9,33 +9,36 @@ use App\Billing\Support\LegacyBillingOperationsCatalog;
 use App\Billing\Support\ProviderCapability;
 use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
+use App\Models\AuditLog;
+use App\Models\BillingRoutingDecision;
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
-use App\Models\BillingProviderTransaction;
-use App\Models\Client;
-use App\Models\Product;
-use App\Models\Platform;
 use App\Models\PaymentImportBatch;
 use App\Models\PaymentImportRow;
+use App\Models\PaymentManualSubmission;
+use App\Models\Platform;
+use App\Models\Product;
 use App\Models\TimelineEvent;
-use App\Models\AuditLog;
+use App\Models\WalletTransaction;
 use App\Services\AuditService;
 use App\Services\BillingGatewayService;
+use App\Services\LegacyStkService;
+use App\Services\ManualPaymentBundleService;
+use App\Services\ManualPaymentSubmissionService;
+use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
-use App\Services\PaymentImportService;
-use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
+use App\Services\PaymentImportService;
 use App\Services\PaymentLinkService;
-use App\Services\PaymentRecoveryMetricService;
+use App\Services\PaymentMatchingService;
 use App\Services\PaymentQueueQueryBuilder;
+use App\Services\PaymentRecoveryMetricService;
 use App\Services\ProviderStatusQueryOrchestrator;
 use App\Services\ReportingCurrencyService;
-use App\Services\LegacyStkService;
-use App\Models\IntegrationSetting;
-use App\Models\WalletTransaction;
-use App\Services\MarketAuthorizationService;
+use App\Services\SubscriptionDeactivationService;
+use App\Services\SubscriptionLifecycleService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
@@ -45,20 +48,14 @@ use App\Support\DeactivationRequest;
 use App\Support\DealDeactivationReason;
 use App\Support\LinkedPaymentAction;
 use App\Support\PhoneNormalizer;
-use App\Models\BillingRoutingDecision;
-use App\Models\PaymentManualSubmission;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Arr;
-use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
-use App\Services\ManualPaymentSubmissionService;
-use App\Services\ManualPaymentBundleService;
-use App\Services\SubscriptionLifecycleService;
-use App\Services\SubscriptionDeactivationService;
 
 class PaymentQueueController extends Controller
 {
@@ -86,8 +83,7 @@ class PaymentQueueController extends Controller
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService
-    ) {
-    }
+    ) {}
 
     public function index(Request $request)
     {
@@ -165,7 +161,7 @@ class PaymentQueueController extends Controller
         // Per-status currency breakdowns — each returns breakdown[], currency_count, scalar_amount.
         // scalar_amount is null when multiple currencies are in scope so the UI cannot
         // silently display a meaningless mixed-currency total.
-        $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
+        $pendingBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
         $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedStatsQuery);
         // Discounted: count distinct deals (not payment rows) and compute foregone revenue
         // (original_amount − amount per deal), grouped by platform currency for FX normalization.
@@ -203,15 +199,15 @@ class PaymentQueueController extends Controller
         }
 
         $discountedNormalized = $this->reportingCurrencyService->normalizeEventRows($foregoneEventRows, $targetCurrency);
-        $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
+        $reversedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedStatsQuery = (clone $statsQuery)
             ->where('status', 'failed');
-        $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
+        $failedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
-        $pendingNormalized   = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
+        $pendingNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
-        $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
-        $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery(clone $failedStatsQuery, $targetCurrency);
+        $reversedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
+        $failedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $failedStatsQuery, $targetCurrency);
         $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
         $customerMix = $this->buildCustomerMixStats(
             clone $confirmedStatsQuery,
@@ -223,10 +219,10 @@ class PaymentQueueController extends Controller
         );
 
         // Aging-bucket breakdowns
-        $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
-        $h1_24Breakdown  = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo));
+        $lt1hBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
+        $h1_24Breakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo));
         $h25_72Breakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo));
-        $gt72hBreakdown  = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo));
+        $gt72hBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo));
 
         $stats = [
             'total' => (clone $statsQuery)->count(),
@@ -305,7 +301,7 @@ class PaymentQueueController extends Controller
                 );
             }
 
-             if ($payment->manualSubmission) {
+            if ($payment->manualSubmission) {
                 $payment->manualSubmission->setAttribute(
                     'proof_url',
                     url("/api/crm/payments/manual-submissions/{$payment->manualSubmission->id}/proof")
@@ -316,7 +312,7 @@ class PaymentQueueController extends Controller
                 );
             }
 
-            if (!$payment->subscription_lifecycle && $payment->client_id) {
+            if (! $payment->subscription_lifecycle && $payment->client_id) {
                 try {
                     $resolved = $this->subscriptionLifecycleService->resolveForPayment($payment);
                     $payment->setAttribute('subscription_lifecycle', $resolved['subscription_lifecycle']);
@@ -337,6 +333,7 @@ class PaymentQueueController extends Controller
         $payload['can_view_tests'] = $canViewTests;
         $payload['stats_scope'] = $this->resolveStatsScope($statsVisibility, $environmentFilter);
         $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
+
         return response()->json($payload);
     }
 
@@ -361,10 +358,10 @@ class PaymentQueueController extends Controller
             ? [(int) $selectedPlatformId]
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
-        $from = !empty($validated['from'])
+        $from = ! empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
             : now()->subDays(29)->startOfDay();
-        $to = !empty($validated['to'])
+        $to = ! empty($validated['to'])
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
         $limit = (int) ($validated['limit'] ?? 100);
@@ -412,9 +409,10 @@ class PaymentQueueController extends Controller
     private function appendRecoveryAmountNormalization(array $metrics, string $targetCurrency, bool $shouldNormalize): array
     {
         foreach (['failed', 'recovered', 'lost'] as $bucket) {
-            if (!$shouldNormalize) {
+            if (! $shouldNormalize) {
                 $metrics["{$bucket}_normalized_amount"] = null;
                 $metrics["{$bucket}_normalization_meta"] = null;
+
                 continue;
             }
 
@@ -567,7 +565,7 @@ class PaymentQueueController extends Controller
         ]);
 
         $payment->refresh();
-        if (!$payment->isClassifiedTest()) {
+        if (! $payment->isClassifiedTest()) {
             return response()->json([
                 'message' => 'Only payments explicitly marked as test can be deleted.',
             ], 422);
@@ -613,7 +611,7 @@ class PaymentQueueController extends Controller
             'search' => 'nullable|string|max:120',
         ]);
 
-        if (!$payment->platform_id) {
+        if (! $payment->platform_id) {
             return response()->json(['data' => []]);
         }
 
@@ -734,10 +732,10 @@ class PaymentQueueController extends Controller
             (string) $validated['reason']
         );
 
-        $canCreateSubscription = !$this->isNonBusinessTestPayment($payment)
+        $canCreateSubscription = ! $this->isNonBusinessTestPayment($payment)
             && $payment->status === 'completed'
             && $payment->client_id
-            && !$payment->deal_id
+            && ! $payment->deal_id
             && $this->resolveReconciliationConfidence($payment) === 'high';
 
         return response()->json([
@@ -762,7 +760,7 @@ class PaymentQueueController extends Controller
         if ($this->isNonBusinessTestPayment($payment)) {
             return response()->json(['message' => 'Test or sandbox payments cannot create live subscriptions.'], 422);
         }
-        if (!$payment->client_id) {
+        if (! $payment->client_id) {
             return response()->json(['message' => 'Payment must be matched to a client first.'], 422);
         }
         if ($payment->deal_id) {
@@ -818,7 +816,7 @@ class PaymentQueueController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Subscription creation failed: ' . $exception->getMessage(),
+                'message' => 'Subscription creation failed: '.$exception->getMessage(),
             ], 500);
         }
 
@@ -855,7 +853,7 @@ class PaymentQueueController extends Controller
             'dry_run' => 'nullable|boolean',
         ]);
 
-        $platformId = !empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
+        $platformId = ! empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
         if ($platformId) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
@@ -887,6 +885,7 @@ class PaymentQueueController extends Controller
             }
 
             $results['dry_run'] = true;
+
             return response()->json($results);
         }
 
@@ -908,7 +907,7 @@ class PaymentQueueController extends Controller
         }
 
         $auditPlatformId = $platformId
-            ?? (is_array($accessiblePlatformIds) && !empty($accessiblePlatformIds) ? (int) $accessiblePlatformIds[0] : null);
+            ?? (is_array($accessiblePlatformIds) && ! empty($accessiblePlatformIds) ? (int) $accessiblePlatformIds[0] : null);
 
         if ($auditPlatformId !== null) {
             $this->auditService->fromRequest(
@@ -933,13 +932,40 @@ class PaymentQueueController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'required|integer|exists:platforms,id',
-            'file' => 'required|file|mimes:csv,txt,xlsx,xml|max:20480',
+            'file' => 'nullable|required_without:pasted_text|file|mimes:csv,txt,xlsx,xml|max:20480',
+            'pasted_text' => [
+                'nullable',
+                'required_without:file',
+                'string',
+                function (string $attribute, $value, \Closure $fail): void {
+                    if ($value !== null && trim((string) $value) === '') {
+                        $fail('Paste content cannot be empty.');
+                    }
+                },
+            ],
+            'mode' => 'nullable|in:file,orphan_paste',
             'has_header' => 'nullable|boolean',
             'default_currency' => 'nullable|string|max:10',
             'reason' => 'required|string|max:500',
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date|after_or_equal:date_from',
+            'source_owner' => 'nullable|string|max:120',
         ]);
+
+        if ($request->hasFile('file') && $request->filled('pasted_text')) {
+            return response()->json(['message' => 'Choose either a file or pasted records, not both.'], 422);
+        }
+
+        $mode = (string) ($validated['mode'] ?? ($request->filled('pasted_text') ? 'orphan_paste' : 'file'));
+        if ($mode === 'file' && ! $request->hasFile('file')) {
+            return response()->json(['message' => 'File import mode requires an uploaded file.'], 422);
+        }
+        if ($mode === 'orphan_paste' && ! $request->filled('pasted_text')) {
+            return response()->json(['message' => 'Orphaned payment import requires pasted records.'], 422);
+        }
+        if ($mode === 'orphan_paste' && ! $this->userCanManageOrphanImports($request)) {
+            return response()->json(['message' => 'Orphaned payment import is restricted to admins and sub-admins.'], 403);
+        }
 
         $platformId = (int) $validated['platform_id'];
         $this->marketAuthorizationService->ensureUserCanAccessPlatform(
@@ -949,17 +975,22 @@ class PaymentQueueController extends Controller
         );
 
         $platform = Platform::query()->findOrFail($platformId);
+        $input = $mode === 'orphan_paste'
+            ? (string) ($validated['pasted_text'] ?? '')
+            : $validated['file'];
 
         try {
             $result = $this->paymentImportService->previewImport(
-                $validated['file'],
+                $input,
                 $platform,
                 (int) $request->user()->id,
                 (bool) ($validated['has_header'] ?? true),
                 (string) $validated['reason'],
                 $validated['default_currency'] ?? null,
                 $validated['date_from'] ?? null,
-                $validated['date_to'] ?? null
+                $validated['date_to'] ?? null,
+                $mode,
+                $validated['source_owner'] ?? null
             );
         } catch (InvalidArgumentException $exception) {
             return response()->json([
@@ -975,8 +1006,9 @@ class PaymentQueueController extends Controller
             (int) $result['batch_id'],
             null,
             [
-                'file_name' => $validated['file']->getClientOriginalName(),
+                'file_name' => $request->hasFile('file') ? $validated['file']->getClientOriginalName() : null,
                 'summary' => $result['summary'] ?? [],
+                'source_type' => $result['source_type'] ?? null,
             ],
             (string) $validated['reason']
         );
@@ -997,6 +1029,11 @@ class PaymentQueueController extends Controller
             (int) $batch->platform_id,
             'You do not have access to this payment market.'
         );
+
+        $metadata = is_array($batch->metadata) ? $batch->metadata : [];
+        if (($metadata['source_type'] ?? null) === 'orphan_paste' && ! $this->userCanManageOrphanImports($request)) {
+            return response()->json(['message' => 'Orphaned payment import is restricted to admins and sub-admins.'], 403);
+        }
 
         $beforeState = [
             'status' => $batch->status,
@@ -1053,7 +1090,7 @@ class PaymentQueueController extends Controller
             'Optional free-form note',
         ];
 
-        $csv = implode(',', $headers) . PHP_EOL . implode(',', $sample) . PHP_EOL;
+        $csv = implode(',', $headers).PHP_EOL.implode(',', $sample).PHP_EOL;
 
         return response($csv, 200, [
             'Content-Type' => 'text/csv; charset=UTF-8',
@@ -1079,9 +1116,9 @@ class PaymentQueueController extends Controller
         $batchQuery = PaymentImportBatch::query();
         $paymentQuery = Payment::query()
             ->businessVisible()
-            ->where('source', 'excel_import');
+            ->whereIn('source', ['excel_import', 'orphan_manual_import']);
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $platformId = (int) $validated['platform_id'];
             $batchQuery->where('platform_id', $platformId);
             $paymentQuery->where('platform_id', $platformId);
@@ -1114,11 +1151,11 @@ class PaymentQueueController extends Controller
             }
         }
 
-        if (!empty($validated['from'])) {
+        if (! empty($validated['from'])) {
             $batchQuery->whereDate('created_at', '>=', $validated['from']);
             $paymentQuery->whereDate('created_at', '>=', $validated['from']);
         }
-        if (!empty($validated['to'])) {
+        if (! empty($validated['to'])) {
             $batchQuery->whereDate('created_at', '<=', $validated['to']);
             $paymentQuery->whereDate('created_at', '<=', $validated['to']);
         }
@@ -1197,7 +1234,7 @@ class PaymentQueueController extends Controller
             ->limit(30)
             ->get();
 
-        $latestFailedAttempt = $attempts->first(fn($attempt) => $attempt->status === 'failed');
+        $latestFailedAttempt = $attempts->first(fn ($attempt) => $attempt->status === 'failed');
         $latestAttempt = $attempts->first();
         $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
         $manualCloseMeta = $rawPayload['manual_close'] ?? null;
@@ -1205,17 +1242,17 @@ class PaymentQueueController extends Controller
 
         $initiationTypes = ['stk_initiate', 'send_payment_link', 'retry_stk', 'hosted_checkout_init'];
         $requestMeta = $attempts
-            ->filter(fn($attempt) => in_array($attempt->attempt_type, $initiationTypes, true))
-            ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
-            ->first(fn($meta) => is_array($meta) && !empty($meta))
+            ->filter(fn ($attempt) => in_array($attempt->attempt_type, $initiationTypes, true))
+            ->map(fn ($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
+            ->first(fn ($meta) => is_array($meta) && ! empty($meta))
             ?? $attempts
-                ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
-                ->first(fn($meta) => is_array($meta) && !empty($meta));
+                ->map(fn ($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
+                ->first(fn ($meta) => is_array($meta) && ! empty($meta));
 
         $latencies = $attempts
             ->pluck('latency_ms')
-            ->filter(fn($latency) => $latency !== null)
-            ->map(fn($latency) => (int) $latency)
+            ->filter(fn ($latency) => $latency !== null)
+            ->map(fn ($latency) => (int) $latency)
             ->sort()
             ->values();
 
@@ -1667,7 +1704,7 @@ class PaymentQueueController extends Controller
 
         $validated = $request->validate([
             'category' => 'nullable|in:timeout,customer_cancelled,duplicate_request,fraud_suspected,other',
-            'reason_code' => 'nullable|string|in:' . implode(',', array_unique(array_merge(CrmPaymentCloseReason::ALL, CrmClientCloseReason::ALL))),
+            'reason_code' => 'nullable|string|in:'.implode(',', array_unique(array_merge(CrmPaymentCloseReason::ALL, CrmClientCloseReason::ALL))),
             'reason' => 'nullable|string|max:500',
             'reason_note' => 'nullable|string|max:1000',
             'converted_payment_id' => 'nullable|integer|exists:payments,id',
@@ -1699,14 +1736,14 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        if (!in_array($payment->status, ['initiated', 'pending', 'failed'], true)) {
+        if (! in_array($payment->status, ['initiated', 'pending', 'failed'], true)) {
             return response()->json([
                 'message' => 'Only initiated, pending, or failed payments can be manually closed.',
             ], 422);
         }
 
         $reasonLabel = $this->paymentCloseReasonLabel($reasonCode);
-        $reasonText = $reasonNote !== null ? ($reasonLabel . ' — ' . $reasonNote) : $reasonLabel;
+        $reasonText = $reasonNote !== null ? ($reasonLabel.' — '.$reasonNote) : $reasonLabel;
         $convertedPayment = $reasonCode === CrmPaymentCloseReason::CUSTOMER_CONVERTED
             ? $this->resolveConvertedPaymentForClose($payment, isset($validated['converted_payment_id']) ? (int) $validated['converted_payment_id'] : null)
             : null;
@@ -1758,7 +1795,7 @@ class PaymentQueueController extends Controller
             'raw_payload' => $rawPayload,
         ];
 
-        if ($convertedPayment && !$payment->client_id && $convertedPayment->client_id) {
+        if ($convertedPayment && ! $payment->client_id && $convertedPayment->client_id) {
             $paymentUpdates['client_id'] = (int) $convertedPayment->client_id;
             $paymentUpdates['match_confidence'] = 'manual';
             $paymentUpdates['confirmed_by'] = optional($request->user())->id;
@@ -1850,7 +1887,7 @@ class PaymentQueueController extends Controller
         $normalizedPhone = PhoneNormalizer::normalize($payment->phone, $phonePrefix);
         $clientId = $payment->client_id ? (int) $payment->client_id : null;
 
-        if (!$clientId && $normalizedPhone) {
+        if (! $clientId && $normalizedPhone) {
             $clientId = Client::query()
                 ->where('platform_id', (int) $payment->platform_id)
                 ->where('phone_normalized', $normalizedPhone)
@@ -1882,7 +1919,7 @@ class PaymentQueueController extends Controller
             }
         }
 
-        if (!$normalizedPhone) {
+        if (! $normalizedPhone) {
             return null;
         }
 
@@ -1899,7 +1936,7 @@ class PaymentQueueController extends Controller
     {
         $submission->loadMissing(['payment']);
 
-        if (!$submission->payment) {
+        if (! $submission->payment) {
             return response()->json([
                 'message' => 'Manual submission proof is unavailable.',
             ], 404);
@@ -2019,17 +2056,17 @@ class PaymentQueueController extends Controller
             }
 
             if ($diskRoot !== '') {
-                $pushCandidate(rtrim($diskRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $relativePath);
+                $pushCandidate(rtrim($diskRoot, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.$relativePath);
             }
 
-            $pushCandidate(storage_path('app/' . $relativePath));
+            $pushCandidate(storage_path('app/'.$relativePath));
 
-            if (!str_starts_with($relativePath, 'public/')) {
-                $pushCandidate(storage_path('app/public/' . $relativePath));
+            if (! str_starts_with($relativePath, 'public/')) {
+                $pushCandidate(storage_path('app/public/'.$relativePath));
             }
 
             if (str_starts_with($relativePath, 'storage/')) {
-                $pushCandidate(storage_path('app/public/' . ltrim(substr($relativePath, 8), '/')));
+                $pushCandidate(storage_path('app/public/'.ltrim(substr($relativePath, 8), '/')));
             }
 
             if (str_starts_with($relativePath, 'app/')) {
@@ -2082,7 +2119,7 @@ class PaymentQueueController extends Controller
                 $payment->refresh();
                 $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
 
-                if (!$payment->deal || (string) $payment->deal->status !== 'active') {
+                if (! $payment->deal || (string) $payment->deal->status !== 'active') {
                     $this->manualPaymentSubmissionService->createOrActivateDeal(
                         $payment,
                         $submission,
@@ -2113,7 +2150,7 @@ class PaymentQueueController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Approval failed: ' . $exception->getMessage(),
+                'message' => 'Approval failed: '.$exception->getMessage(),
             ], 500);
         }
 
@@ -2160,7 +2197,7 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        if (!$submission->activated_on_submit && (!$payment->deal || (string) $payment->deal->status !== 'active')) {
+        if (! $submission->activated_on_submit && (! $payment->deal || (string) $payment->deal->status !== 'active')) {
             return response()->json([
                 'message' => 'Use approve and activate for manual submissions that are not already live.',
             ], 422);
@@ -2278,7 +2315,7 @@ class PaymentQueueController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Rejection failed: ' . $exception->getMessage(),
+                'message' => 'Rejection failed: '.$exception->getMessage(),
             ], 500);
         }
 
@@ -2286,7 +2323,7 @@ class PaymentQueueController extends Controller
         $this->manualPaymentSubmissionService->synchronizeWpState($payment);
 
         if ($client && $request->filled('reason')) {
-            $message = 'We could not verify your payment proof. Reason: ' . trim((string) $validated['reason']);
+            $message = 'We could not verify your payment proof. Reason: '.trim((string) $validated['reason']);
             $this->notificationService->sendSmsToClient($client, $message, [
                 'purpose' => 'manual_payment_rejected',
                 'payment_id' => $payment->id,
@@ -2328,7 +2365,7 @@ class PaymentQueueController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
+        if (! in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
             return response()->json([
                 'message' => 'Only failed, initiated, or pending payments can be retried.',
             ], 422);
@@ -2338,14 +2375,14 @@ class PaymentQueueController extends Controller
         $product = $payment->product;
         $platform = $payment->platform;
 
-        if (!$product || !$platform) {
+        if (! $product || ! $platform) {
             return response()->json([
                 'message' => 'Payment is missing product or platform.',
             ], 422);
         }
 
         $phone = PhoneNormalizer::normalize($payment->phone, (string) ($platform->phone_prefix ?: '254'));
-        if (!$phone) {
+        if (! $phone) {
             return response()->json([
                 'message' => 'Payment has no valid phone number for STK push.',
             ], 422);
@@ -2420,7 +2457,7 @@ class PaymentQueueController extends Controller
                     'legacy_stk' => $result['provider_response'] ?? null,
                 ]),
             ];
-            if (!empty($result['provider_reference'])) {
+            if (! empty($result['provider_reference'])) {
                 $updates['transaction_reference'] = $result['provider_reference'];
             }
             $payment->forceFill($updates)->save();
@@ -2495,7 +2532,7 @@ class PaymentQueueController extends Controller
 
         $this->paymentAttemptService->record($payment, 'retry_stk', 'failed', [
             'provider' => $result['provider'] ?? 'django_stk',
-            'error_code' => $result['http_status'] ? 'upstream_http_' . $result['http_status'] : 'upstream_error',
+            'error_code' => $result['http_status'] ? 'upstream_http_'.$result['http_status'] : 'upstream_error',
             'error_message' => $result['message'] ?? 'STK push could not be initiated.',
             'http_status' => $result['http_status'] ?? null,
             'latency_ms' => $latencyMs,
@@ -2552,7 +2589,7 @@ class PaymentQueueController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
+        if (! in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
             return response()->json([
                 'message' => 'Payment link can only be sent for failed, initiated, or pending payments.',
             ], 422);
@@ -2569,7 +2606,7 @@ class PaymentQueueController extends Controller
             'disabled_message' => $validated['channel'] === 'whatsapp' ? 'Payment link prepared but WhatsApp could not send.' : 'Payment link message prepared (SMS is disabled in settings).',
         ]);
 
-        if (!($sendResult['success'] ?? false)) {
+        if (! ($sendResult['success'] ?? false)) {
             return response()->json([
                 'message' => $sendResult['message'] ?? 'Message could not be sent.',
             ], (int) ($sendResult['http_status'] ?? 500));
@@ -2608,21 +2645,21 @@ class PaymentQueueController extends Controller
                 return 'proxy_link_expired';
             }
 
-            if ($payment->status === 'failed' && !empty($linkProxy['initialized_at'])) {
+            if ($payment->status === 'failed' && ! empty($linkProxy['initialized_at'])) {
                 return 'provider_checkout_failed';
             }
 
-            if (!empty($linkProxy['initialized_at'])) {
+            if (! empty($linkProxy['initialized_at'])) {
                 return $payment->status === 'completed'
                     ? 'provider_callback_completed'
                     : 'provider_checkout_pending';
             }
 
-            if (!empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
+            if (! empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
                 return 'proxy_link_opened';
             }
 
-            if (!empty($linkProxy['sent_at'])) {
+            if (! empty($linkProxy['sent_at'])) {
                 return 'proxy_link_sent';
             }
         }
@@ -2648,7 +2685,7 @@ class PaymentQueueController extends Controller
 
     private function ensureBundleFinanceReviewAccess(Request $request, Payment $payment): void
     {
-        if (!$payment->manual_payment_bundle_id) {
+        if (! $payment->manual_payment_bundle_id) {
             return;
         }
 
@@ -2754,14 +2791,14 @@ class PaymentQueueController extends Controller
             ];
         }
 
-        if ($payment->status === 'completed' && !$payment->client_id) {
+        if ($payment->status === 'completed' && ! $payment->client_id) {
             return [
                 ['key' => 'auto_match', 'label' => 'Auto-match', 'description' => 'Try phone-based matching first.', 'recommended' => true],
                 ['key' => 'manual_match', 'label' => 'Manual match', 'description' => 'Pick exact client when auto-match confidence is low.', 'recommended' => true],
             ];
         }
 
-        if ($payment->status === 'completed' && $payment->client_id && !$payment->deal_id) {
+        if ($payment->status === 'completed' && $payment->client_id && ! $payment->deal_id) {
             if ($this->resolveReconciliationConfidence($payment) !== 'high') {
                 return [
                     ['key' => 'manual_match', 'label' => 'Confirm reconciliation', 'description' => 'Resolve to high confidence before creating subscription.', 'recommended' => true],
@@ -2790,7 +2827,7 @@ class PaymentQueueController extends Controller
 
     private function prependRecommendation(array $recommendations, ?array $recommendation): array
     {
-        if (!$recommendation) {
+        if (! $recommendation) {
             return $recommendations;
         }
 
@@ -2809,7 +2846,7 @@ class PaymentQueueController extends Controller
             ? data_get($payment->payment_data, 'link_proxy')
             : null;
 
-        if (!is_array($linkProxy)) {
+        if (! is_array($linkProxy)) {
             return null;
         }
 
@@ -2868,15 +2905,15 @@ class PaymentQueueController extends Controller
             return 'completed';
         }
 
-        if ($payment->status === 'failed' && !empty($linkProxy['initialized_at'])) {
+        if ($payment->status === 'failed' && ! empty($linkProxy['initialized_at'])) {
             return 'failed';
         }
 
-        if (!empty($linkProxy['initialized_at'])) {
+        if (! empty($linkProxy['initialized_at'])) {
             return 'checkout_initialized';
         }
 
-        if (!empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
+        if (! empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
             return 'opened';
         }
 
@@ -2927,15 +2964,15 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Sandbox reconcile is available only for gateway payments.');
         }
 
-        if (!$this->isSandboxPayment($payment)) {
+        if (! $this->isSandboxPayment($payment)) {
             throw new InvalidArgumentException('Sandbox reconcile is available only for sandbox payments.');
         }
 
-        if (!$this->canSandboxReconcile($payment, is_array(data_get($payment->payment_data, 'link_proxy')) ? data_get($payment->payment_data, 'link_proxy') : null)) {
+        if (! $this->canSandboxReconcile($payment, is_array(data_get($payment->payment_data, 'link_proxy')) ? data_get($payment->payment_data, 'link_proxy') : null)) {
             throw new InvalidArgumentException('Sandbox reconcile is available only for hosted-checkout providers that advertise sandbox status checks.');
         }
 
-        if (!in_array((string) $payment->status, ['initiated', 'pending'], true) && !$this->isSandboxReconcileTerminal($payment)) {
+        if (! in_array((string) $payment->status, ['initiated', 'pending'], true) && ! $this->isSandboxReconcileTerminal($payment)) {
             throw new InvalidArgumentException('Only initiated or pending sandbox payments can be reconciled.');
         }
     }
@@ -2996,26 +3033,26 @@ class PaymentQueueController extends Controller
     {
         $definition = $this->billingProviderRegistry->find($this->resolvedProviderType($payment))?->definition();
 
-        if (!$definition || !$definition->capabilities->has(ProviderCapability::StatusQueries)) {
+        if (! $definition || ! $definition->capabilities->has(ProviderCapability::StatusQueries)) {
             return false;
         }
 
-        if (!in_array((string) $payment->status, ['initiated', 'pending'], true)) {
+        if (! in_array((string) $payment->status, ['initiated', 'pending'], true)) {
             return false;
         }
 
-        if (!is_array($linkProxy) || ($linkProxy['mode'] ?? null) !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
+        if (! is_array($linkProxy) || ($linkProxy['mode'] ?? null) !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
             return false;
         }
 
-        return !empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']);
+        return ! empty($linkProxy['initialized_at']) || ! empty($linkProxy['provider_reference']);
     }
 
     private function canSandboxReconcile(Payment $payment, ?array $linkProxy = null): bool
     {
         $definition = $this->billingProviderRegistry->find($this->resolvedProviderType($payment))?->definition();
 
-        if (!$definition || !$definition->capabilities->has(ProviderCapability::SandboxAvailable)) {
+        if (! $definition || ! $definition->capabilities->has(ProviderCapability::SandboxAvailable)) {
             return false;
         }
 
@@ -3240,7 +3277,7 @@ class PaymentQueueController extends Controller
 
     private function authorizePaymentAccess(Request $request, Payment $payment): void
     {
-        if ($payment->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
+        if ($payment->platform_id && ! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
             abort(403, 'You do not have access to this payment market.');
         }
     }
@@ -3251,7 +3288,7 @@ class PaymentQueueController extends Controller
             ? $payment->manualSubmission
             : $payment->manualSubmission()->first();
 
-        if (!$submission) {
+        if (! $submission) {
             throw new InvalidArgumentException('This payment does not have a manual submission to review.');
         }
 
@@ -3268,7 +3305,7 @@ class PaymentQueueController extends Controller
             ? $payment->manualSubmission
             : $payment->manualSubmission()->first();
 
-        if (!$submission) {
+        if (! $submission) {
             return false;
         }
 
@@ -3297,7 +3334,7 @@ class PaymentQueueController extends Controller
             $query->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
                     ->orWhere('transaction_reference', 'like', "%{$search}%")
-                    ->orWhereHas('client', fn($cq) => $cq->where('name', 'like', "%{$search}%"));
+                    ->orWhereHas('client', fn ($cq) => $cq->where('name', 'like', "%{$search}%"));
             });
         }
 
@@ -3321,6 +3358,7 @@ class PaymentQueueController extends Controller
                 $senderName = $normalizedRow['sender_name'] ?? null;
             }
             $data['sender_name'] = $senderName;
+
             return $data;
         });
 
@@ -3370,21 +3408,24 @@ class PaymentQueueController extends Controller
 
         foreach ($validated['selections'] as $selection) {
             $payment = Payment::find($selection['payment_id']);
-            if (!$payment || $payment->deal_id) {
+            if (! $payment || $payment->deal_id) {
                 $skipped += 1;
+
                 continue;
             }
 
-            if (!$payment->client_id) {
+            if (! $payment->client_id) {
                 $failed += 1;
+
                 continue;
             }
 
             $this->authorizePaymentAccess($request, $payment);
 
             $product = Product::find($selection['product_id']);
-            if (!$product) {
+            if (! $product) {
                 $failed += 1;
+
                 continue;
             }
 
@@ -3528,19 +3569,30 @@ class PaymentQueueController extends Controller
             return response()->json(['message' => 'Batch already committed.'], 422);
         }
 
+        $metadata = is_array($batch->metadata) ? $batch->metadata : [];
+        if (($metadata['source_type'] ?? null) === 'orphan_paste' && ! $this->userCanManageOrphanImports($request)) {
+            return response()->json(['message' => 'Orphaned payment import is restricted to admins and sub-admins.'], 403);
+        }
+
         $client = Client::findOrFail((int) $validated['client_id']);
         if ((int) $client->platform_id !== (int) $batch->platform_id) {
             return response()->json(['message' => 'Client does not belong to this market.'], 422);
         }
 
-        $row->update([
+        $updates = [
             'suggested_match' => [
                 'confidence' => 'manual',
                 'basis' => 'manual_import_match',
                 'client_id' => $client->id,
                 'client_name' => $client->name,
             ],
-        ]);
+        ];
+
+        if ($row->status === 'needs_match') {
+            $updates['status'] = 'valid';
+        }
+
+        $row->update($updates);
 
         return response()->json([
             'row_id' => $row->id,
@@ -3562,4 +3614,8 @@ class PaymentQueueController extends Controller
         };
     }
 
+    private function userCanManageOrphanImports(Request $request): bool
+    {
+        return in_array((string) $request->user()?->role, ['admin', 'sub_admin'], true);
+    }
 }

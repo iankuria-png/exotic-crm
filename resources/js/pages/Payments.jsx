@@ -1492,7 +1492,7 @@ export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue', 'reversed']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedHasDiscountFilters = new Set(['0', '1']);
-    const allowedSourceFilters = new Set(['gateway', 'excel_import']);
+    const allowedSourceFilters = new Set(['gateway', 'excel_import', 'orphan_manual_import']);
     const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
@@ -3229,7 +3229,7 @@ export default function Payments() {
                             className="crm-btn-secondary px-3 py-2"
                             data-tour="payments-import-panel"
                         >
-                            Upload payments
+                            Add payments
                         </button>
                         <button
                             type="button"
@@ -3696,6 +3696,7 @@ export default function Payments() {
                                     { value: '', label: 'All sources' },
                                     { value: 'gateway', label: 'Gateway/API' },
                                     { value: 'excel_import', label: 'Excel import' },
+                                    { value: 'orphan_manual_import', label: 'Orphaned import' },
                                 ]}
                             />
 
