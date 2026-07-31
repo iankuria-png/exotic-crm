@@ -34,7 +34,8 @@ class PaymentImportService
         ?string $dateFrom = null,
         ?string $dateTo = null,
         string $mode = 'file',
-        ?string $sourceOwner = null
+        ?string $sourceOwner = null,
+        ?int $sourceOwnerUserId = null
     ): array {
         $dateFromCarbon = $dateFrom ? Carbon::parse($dateFrom)->startOfDay() : null;
         $dateToCarbon = $dateTo ? Carbon::parse($dateTo)->endOfDay() : null;
@@ -76,6 +77,7 @@ class PaymentImportService
                 'default_currency' => $currency,
                 'source_type' => $sourceType,
                 'source_owner' => $sourceOwner ? trim($sourceOwner) : null,
+                'source_owner_user_id' => $sourceOwnerUserId,
                 ...($parseMeta ? ['parse_meta' => $parseMeta] : []),
             ],
         ]);
@@ -375,6 +377,7 @@ class PaymentImportService
                         'actor_id' => $actorId,
                         'reason' => $reason ? trim($reason) : ($lockedBatch->reason ?: null),
                         'source_owner' => $batchMeta['source_owner'] ?? null,
+                        'source_owner_user_id' => $batchMeta['source_owner_user_id'] ?? null,
                     ],
                     'normalized_row' => $normalized,
                     'raw_row' => is_array($row->raw_row) ? $row->raw_row : [],

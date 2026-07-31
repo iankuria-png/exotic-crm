@@ -23,7 +23,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
     const [pastedText, setPastedText] = useState('');
     const [platformId, setPlatformId] = useState('');
     const [reason, setReason] = useState('Payment import from CRM');
-    const [sourceOwner, setSourceOwner] = useState('');
+    const [sourceOwnerUserId, setSourceOwnerUserId] = useState('');
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
     const [preview, setPreview] = useState(null);
@@ -52,7 +52,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
             setPastedText('');
             setPlatformId('');
             setReason('Payment import from CRM');
-            setSourceOwner('');
+            setSourceOwnerUserId('');
             setDateFrom('');
             setDateTo('');
             setPreview(null);
@@ -73,6 +73,17 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         () => platformOptions?.find((p) => String(p.platform_id) === String(platformId)),
         [platformOptions, platformId],
     );
+
+    const ownersQuery = useQuery({
+        queryKey: ['settings-owners', 'payment-import-source-owner', platformId],
+        queryFn: () => api.get('/crm/settings/owners', {
+            params: { platform_id: Number(platformId) },
+        }).then((response) => response.data),
+        enabled: open && inputMode === 'paste' && Boolean(platformId),
+    });
+
+    const owners = ownersQuery.data?.owners || [];
+    const selectedSourceOwner = owners.find((owner) => String(owner.id) === String(sourceOwnerUserId)) || null;
 
     const selectedCurrency = useMemo(() => {
         const previewCurrency = preview?.rows?.find((row) => row.normalized_row?.currency)?.normalized_row?.currency;
@@ -105,6 +116,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
             formData.append('platform_id', params.platformId);
             formData.append('reason', params.reason);
             formData.append('has_header', '1');
+            if (params.sourceOwnerUserId) formData.append('source_owner_user_id', params.sourceOwnerUserId);
             if (params.sourceOwner) formData.append('source_owner', params.sourceOwner);
             if (params.dateFrom) formData.append('date_from', params.dateFrom);
             if (params.dateTo) formData.append('date_to', params.dateTo);
@@ -264,14 +276,34 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         if (!platformId || !reason.trim()) return;
         if (inputMode === 'paste' && !pastedText.trim()) return;
         if (inputMode !== 'paste' && !file) return;
-        importPreviewMutation.mutate({ inputMode, file, pastedText, platformId, reason, sourceOwner, dateFrom, dateTo });
+        importPreviewMutation.mutate({
+            inputMode,
+            file,
+            pastedText,
+            platformId,
+            reason,
+            sourceOwner: selectedSourceOwner?.name || '',
+            sourceOwnerUserId,
+            dateFrom,
+            dateTo,
+        });
     };
 
     const handleReparse = () => {
         if (!platformId) return;
         if (inputMode === 'paste' && !pastedText.trim()) return;
         if (inputMode !== 'paste' && !file) return;
-        importPreviewMutation.mutate({ inputMode, file, pastedText, platformId, reason, sourceOwner, dateFrom, dateTo });
+        importPreviewMutation.mutate({
+            inputMode,
+            file,
+            pastedText,
+            platformId,
+            reason,
+            sourceOwner: selectedSourceOwner?.name || '',
+            sourceOwnerUserId,
+            dateFrom,
+            dateTo,
+        });
     };
 
     const handleCommit = () => {
@@ -513,6 +545,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             setInputMode(mode.key);
                                             setFile(null);
                                             setPastedText('');
+                                            setSourceOwnerUserId('');
                                         }}
                                         className={`rounded px-3 py-2 transition ${
                                             inputMode === mode.key
@@ -529,7 +562,10 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
                                 <select
                                     value={platformId}
-                                    onChange={(e) => setPlatformId(e.target.value)}
+                                    onChange={(e) => {
+                                        setPlatformId(e.target.value);
+                                        setSourceOwnerUserId('');
+                                    }}
                                     className="crm-input"
                                 >
                                     <option value="">Select market...</option>
@@ -592,14 +628,30 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
 
                             {inputMode === 'paste' && (
                                 <div>
-                                    <label className="mb-1 block text-sm font-medium text-slate-700">Source owner</label>
-                                    <input
-                                        type="text"
-                                        value={sourceOwner}
-                                        onChange={(e) => setSourceOwner(e.target.value)}
-                                        className="crm-input"
-                                        placeholder="Dan, Joanne, Tanzania team..."
-                                    />
+                                    <label htmlFor="payment-import-source-owner" className="mb-1 block text-sm font-medium text-slate-700">Source owner</label>
+                                    <select
+                                        id="payment-import-source-owner"
+                                        value={sourceOwnerUserId}
+                                        onChange={(e) => setSourceOwnerUserId(e.target.value)}
+                                        className="crm-select w-full"
+                                        disabled={!platformId || ownersQuery.isLoading}
+                                    >
+                                        <option value="">
+                                            {!platformId
+                                                ? 'Select market first'
+                                                : ownersQuery.isLoading
+                                                    ? 'Loading CRM users...'
+                                                    : 'Select CRM user...'}
+                                        </option>
+                                        {owners.map((owner) => (
+                                            <option key={owner.id} value={owner.id}>
+                                                {owner.name} ({owner.role_label || owner.role})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {platformId && !ownersQuery.isLoading && owners.length === 0 && (
+                                        <p className="mt-1 text-[11px] text-amber-600">No active CRM users are eligible for this market.</p>
+                                    )}
                                 </div>
                             )}
 

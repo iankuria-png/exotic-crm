@@ -950,6 +950,7 @@ class PaymentQueueController extends Controller
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date|after_or_equal:date_from',
             'source_owner' => 'nullable|string|max:120',
+            'source_owner_user_id' => 'nullable|integer|exists:users,id',
         ]);
 
         if ($request->hasFile('file') && $request->filled('pasted_text')) {
@@ -975,6 +976,23 @@ class PaymentQueueController extends Controller
         );
 
         $platform = Platform::query()->findOrFail($platformId);
+        $sourceOwner = $validated['source_owner'] ?? null;
+        $sourceOwnerUserId = isset($validated['source_owner_user_id'])
+            ? (int) $validated['source_owner_user_id']
+            : null;
+
+        if ($sourceOwnerUserId) {
+            $sourceOwnerUser = $this->marketAuthorizationService
+                ->eligibleOwnersForPlatform($platformId)
+                ->first(fn ($owner) => (int) $owner->id === $sourceOwnerUserId);
+
+            if (! $sourceOwnerUser) {
+                return response()->json(['message' => 'Source owner is not eligible for this market.'], 422);
+            }
+
+            $sourceOwner = $sourceOwnerUser->name;
+        }
+
         $input = $mode === 'orphan_paste'
             ? (string) ($validated['pasted_text'] ?? '')
             : $validated['file'];
@@ -990,7 +1008,8 @@ class PaymentQueueController extends Controller
                 $validated['date_from'] ?? null,
                 $validated['date_to'] ?? null,
                 $mode,
-                $validated['source_owner'] ?? null
+                $sourceOwner,
+                $sourceOwnerUserId
             );
         } catch (InvalidArgumentException $exception) {
             return response()->json([

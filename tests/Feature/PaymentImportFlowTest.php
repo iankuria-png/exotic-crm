@@ -252,6 +252,14 @@ class PaymentImportFlowTest extends TestCase
     {
         $platform = $this->createPlatform('Senegal', '221', 'XOF');
         $admin = $this->createUser('admin');
+        $sourceOwner = User::query()->create([
+            'name' => 'Daniel Kimani',
+            'email' => 'daniel.kimani@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
         Sanctum::actingAs($admin);
 
         $preview = $this->postJson('/api/crm/payments/import/preview', [
@@ -266,7 +274,7 @@ class PaymentImportFlowTest extends TestCase
                 'xot-26aqr2qpr1y4j',
             ]),
             'reason' => 'Import orphaned Senegal payments',
-            'source_owner' => 'Dan',
+            'source_owner_user_id' => $sourceOwner->id,
         ]);
 
         $preview->assertOk()
@@ -287,10 +295,13 @@ class PaymentImportFlowTest extends TestCase
 
         $commit->assertOk()->assertJsonPath('summary.created_now', 2);
 
-        $this->assertTrue(Payment::query()
+        $payments = Payment::query()
             ->where('import_batch_id', $batchId)
-            ->get()
-            ->every(fn (Payment $payment) => $payment->currency === 'XOF'));
+            ->get();
+
+        $this->assertTrue($payments->every(fn (Payment $payment) => $payment->currency === 'XOF'));
+        $this->assertTrue($payments->every(fn (Payment $payment) => data_get($payment->raw_payload, 'import.source_owner') === 'Daniel Kimani'));
+        $this->assertTrue($payments->every(fn (Payment $payment) => (int) data_get($payment->raw_payload, 'import.source_owner_user_id') === $sourceOwner->id));
     }
 
     public function test_orphan_paste_mode_is_admin_only_without_breaking_sales_file_import(): void
