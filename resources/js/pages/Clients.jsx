@@ -15,6 +15,7 @@ import ClosedCasesView from '../components/clients/ClosedCasesView';
 import ChurnedQueueView from '../components/clients/ChurnedQueueView';
 import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import LocationsView from '../components/clients/LocationsView';
+import SeoRecoveryView from '../components/clients/SeoRecoveryView';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import ClientCreateModal from '../components/clients/ClientCreateModal';
 import { useToast } from '../components/ToastProvider';
@@ -436,8 +437,14 @@ export default function Clients() {
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
+    // SEO Recovery republishes public content, so it matches the admin-only
+    // API routes behind it — a sales user deep-linking to the tab falls back to All.
+    const canRecoverSeo = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
-    const allowedTabs = new Set(['all', 'conversion', 'closed', 'churned', 'optimizer', 'locations']);
+    const allowedTabs = new Set([
+        'all', 'conversion', 'closed', 'churned', 'optimizer', 'locations',
+        ...(canRecoverSeo ? ['seo_recovery'] : []),
+    ]);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
     const setTab = (next) => {
@@ -1848,6 +1855,11 @@ export default function Clients() {
             <button type="button" role="tab" aria-selected={tab === 'optimizer'} className={`${tabClass('optimizer')} rounded-md`} onClick={() => setTab('optimizer')}>
                 ✦ Optimizer
             </button>
+            {canRecoverSeo ? (
+                <button type="button" role="tab" aria-selected={tab === 'seo_recovery'} className={`${tabClass('seo_recovery')} rounded-md`} onClick={() => setTab('seo_recovery')}>
+                    ↻ SEO Recovery
+                </button>
+            ) : null}
         </div>
     );
 
@@ -1899,6 +1911,26 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <AutoOptimizeView platformId={platformFilter ? Number(platformFilter) : undefined} />
+            </div>
+        );
+    }
+
+    if (tab === 'seo_recovery') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Bring profiles that were taken offline back into Google — published and indexed, contacts hidden."
+                />
+                {tabStrip}
+                <SeoRecoveryView
+                    platformId={platformFilter}
+                    platforms={platformOptions.map((platform) => ({
+                        id: platform.platform_id,
+                        name: platform.platform_name,
+                    }))}
+                    marketName={activeMarketName}
+                />
             </div>
         );
     }

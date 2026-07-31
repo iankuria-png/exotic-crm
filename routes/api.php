@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
+use App\Http\Controllers\CRM\LifecycleRestoreController;
 use App\Http\Controllers\CRM\LifecycleSmsController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
@@ -323,6 +324,19 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/preview', [SeoBoostController::class, 'preview']);
         Route::post('/batches', [SeoBoostController::class, 'store']);
         Route::get('/batches/{batch}', [SeoBoostController::class, 'show']);
+    });
+    // SEO Recovery — republishes profiles the legacy sweep took offline.
+    // Admin-only: this creates public content, so it is not open to sales.
+    Route::middleware('role:admin,sub_admin')->prefix('lifecycle-restore')->group(function () {
+        Route::get('/options', [LifecycleRestoreController::class, 'options']);
+        Route::get('/eligibility', [LifecycleRestoreController::class, 'eligibility']);
+        Route::get('/cohort', [LifecycleRestoreController::class, 'cohort']);
+        Route::get('/pacing', [LifecycleRestoreController::class, 'pacing']);
+        Route::post('/pacing', [LifecycleRestoreController::class, 'updatePacing']);
+        Route::get('/runs', [LifecycleRestoreController::class, 'index']);
+        Route::post('/runs', [LifecycleRestoreController::class, 'store']);
+        Route::get('/runs/{run}', [LifecycleRestoreController::class, 'show']);
+        Route::post('/runs/{run}/revert', [LifecycleRestoreController::class, 'revert']);
     });
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');

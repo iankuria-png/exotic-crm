@@ -96,6 +96,16 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_archive_expired.log'));
 
+        // SEO Recovery: markets on `daily_trickle` pacing work through their
+        // backlog of legacy-offline profiles a quota at a time. Markets on
+        // manual pacing (the default) are untouched by this.
+        $schedule->command('crm:restore-offline-profiles --trickle')
+            ->name('crm_restore_offline_profiles')
+            ->dailyAt('04:10')
+            ->withoutOverlapping(120)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_restore_offline_profiles.log'));
+
         $schedule->command('crm:close-stale-sessions')
             ->name('crm_close_stale_sessions')
             ->everyMinute()

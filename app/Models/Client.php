@@ -63,6 +63,8 @@ class Client extends Model
         'bio_original_html',
         'bio_scrubbed_at',
         'bio_redactions',
+        'lifecycle_restored_at',
+        'lifecycle_restore_run_id',
         'needs_payment',
         'notactive',
         'is_high_risk',
@@ -154,6 +156,8 @@ class Client extends Model
         'lifecycle_archived_at' => 'datetime',
         'bio_scrubbed_at' => 'datetime',
         'bio_redactions' => 'integer',
+        'lifecycle_restored_at' => 'datetime',
+        'lifecycle_restore_run_id' => 'integer',
         'churned_at' => 'datetime',
         'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
@@ -287,6 +291,12 @@ class Client extends Model
     public function activeDeal()
     {
         return $this->hasOne(Deal::class)->where('status', 'active')->latest();
+    }
+
+    /** The SEO Recovery batch that republished this profile, if any. */
+    public function lifecycleRestoreRun()
+    {
+        return $this->belongsTo(LifecycleRestoreRun::class, 'lifecycle_restore_run_id');
     }
 
     public function scopeActive($query)
