@@ -2147,6 +2147,9 @@ class SettingsController extends Controller
             ->map(fn (Platform $platform) => [
                 'platform_id' => (int) $platform->id,
                 'platform_name' => $platform->name,
+                'country' => $platform->country,
+                'currency' => $platform->currency_code ?: 'KES',
+                'currency_code' => $platform->currency_code ?: 'KES',
                 'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
             ])
             ->values();

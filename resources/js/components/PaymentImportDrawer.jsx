@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import DataTable from './DataTable';
 import { useToast } from './ToastProvider';
 import { flaggedPlatformLabel } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
+import { formatCurrency } from '../utils/currency';
 
 function formatDateLabel(dateString) {
     if (!dateString) return '—';
@@ -72,6 +73,24 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         () => platformOptions?.find((p) => String(p.platform_id) === String(platformId)),
         [platformOptions, platformId],
     );
+
+    const selectedCurrency = useMemo(() => {
+        const previewCurrency = preview?.rows?.find((row) => row.normalized_row?.currency)?.normalized_row?.currency;
+
+        return previewCurrency
+            || preview?.currency
+            || selectedPlatform?.currency
+            || selectedPlatform?.currency_code
+            || 'KES';
+    }, [preview?.currency, preview?.rows, selectedPlatform]);
+
+    const formatImportAmount = useCallback((amount, currency = selectedCurrency) => {
+        if (amount === null || amount === undefined || amount === '') {
+            return '—';
+        }
+
+        return formatCurrency(amount, currency || selectedCurrency);
+    }, [selectedCurrency]);
 
     // Preview mutation
     const importPreviewMutation = useMutation({
@@ -171,7 +190,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         });
     }, [preview?.rows, dateFrom, dateTo]);
 
-    // Summary counts + KES amounts (always from date-filtered rows, unaffected by status filter)
+    // Summary counts + market-currency amounts (always from date-filtered rows, unaffected by status filter)
     const filteredSummary = useMemo(() => {
         const sumAmount = (rows) => rows.reduce((sum, r) => sum + Number(r.normalized_row?.amount || 0), 0);
         const validRows = dateFilteredRows.filter((r) => r.status === 'valid');
@@ -321,7 +340,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
             label: 'Amount',
             render: (row) => (
                 <span className="whitespace-nowrap text-slate-600">
-                    {row.normalized_row?.amount ? `KES ${Number(row.normalized_row.amount).toLocaleString()}` : '—'}
+                    {formatImportAmount(row.normalized_row?.amount, row.normalized_row?.currency)}
                 </span>
             ),
         });
@@ -433,7 +452,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
         });
 
         return cols;
-    }, [isMpesa, preview?.source_type]);
+    }, [formatImportAmount, isMpesa, preview?.source_type]);
 
     if (!open) return null;
 
@@ -628,7 +647,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             }`}
                                         >
                                             <p className="text-base font-semibold text-emerald-700">{filteredSummary.valid}</p>
-                                            <p className="text-[10px] font-medium text-emerald-600/70">KES {filteredSummary.validAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] font-medium text-emerald-600/70">{formatImportAmount(filteredSummary.validAmount)}</p>
                                             <p className="mt-0.5 text-emerald-600">Valid</p>
                                         </button>
                                         <button
@@ -641,7 +660,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             }`}
                                         >
                                             <p className="text-base font-semibold text-amber-700">{filteredSummary.duplicate}</p>
-                                            <p className="text-[10px] font-medium text-amber-600/70">KES {filteredSummary.duplicateAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] font-medium text-amber-600/70">{formatImportAmount(filteredSummary.duplicateAmount)}</p>
                                             <p className="mt-0.5 text-amber-600">Duplicate</p>
                                         </button>
                                         <button
@@ -654,7 +673,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             }`}
                                         >
                                             <p className="text-base font-semibold text-sky-700">{filteredSummary.needsMatch}</p>
-                                            <p className="text-[10px] font-medium text-sky-600/70">KES {filteredSummary.needsMatchAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] font-medium text-sky-600/70">{formatImportAmount(filteredSummary.needsMatchAmount)}</p>
                                             <p className="mt-0.5 text-sky-600">Needs match</p>
                                         </button>
                                         <button
@@ -667,7 +686,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             }`}
                                         >
                                             <p className="text-base font-semibold text-teal-700">{filteredSummary.matched}</p>
-                                            <p className="text-[10px] font-medium text-teal-600/70">KES {filteredSummary.matchedAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] font-medium text-teal-600/70">{formatImportAmount(filteredSummary.matchedAmount)}</p>
                                             <p className="mt-0.5 text-teal-600">Matched</p>
                                         </button>
                                         <button
@@ -680,7 +699,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                             }`}
                                         >
                                             <p className="text-base font-semibold text-slate-700">{filteredSummary.unmatched}</p>
-                                            <p className="text-[10px] font-medium text-slate-500/70">KES {filteredSummary.unmatchedAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] font-medium text-slate-500/70">{formatImportAmount(filteredSummary.unmatchedAmount)}</p>
                                             <p className="mt-0.5 text-slate-500">Unmatched</p>
                                         </button>
                                     </div>
@@ -697,7 +716,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         }`}
                                     >
                                         <p className="text-base font-semibold text-slate-900">{filteredSummary.total}</p>
-                                        <p className="text-[10px] font-medium text-slate-500/70">KES {filteredSummary.totalAmount.toLocaleString()}</p>
+                                        <p className="text-[10px] font-medium text-slate-500/70">{formatImportAmount(filteredSummary.totalAmount)}</p>
                                         <p className="mt-0.5 text-slate-500">Total</p>
                                     </button>
                                     <button
@@ -710,7 +729,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         }`}
                                     >
                                         <p className="text-base font-semibold text-emerald-700">{filteredSummary.valid}</p>
-                                        <p className="text-[10px] font-medium text-emerald-600/70">KES {filteredSummary.validAmount.toLocaleString()}</p>
+                                        <p className="text-[10px] font-medium text-emerald-600/70">{formatImportAmount(filteredSummary.validAmount)}</p>
                                         <p className="mt-0.5 text-emerald-600">Valid</p>
                                     </button>
                                     <button
@@ -723,7 +742,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         }`}
                                     >
                                         <p className="text-base font-semibold text-rose-700">{filteredSummary.invalid}</p>
-                                        <p className="text-[10px] font-medium text-rose-600/70">KES {filteredSummary.invalidAmount.toLocaleString()}</p>
+                                        <p className="text-[10px] font-medium text-rose-600/70">{formatImportAmount(filteredSummary.invalidAmount)}</p>
                                         <p className="mt-0.5 text-rose-600">Invalid</p>
                                     </button>
                                     <button
@@ -736,7 +755,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         }`}
                                     >
                                         <p className="text-base font-semibold text-sky-700">{filteredSummary.needsMatch}</p>
-                                        <p className="text-[10px] font-medium text-sky-600/70">KES {filteredSummary.needsMatchAmount.toLocaleString()}</p>
+                                        <p className="text-[10px] font-medium text-sky-600/70">{formatImportAmount(filteredSummary.needsMatchAmount)}</p>
                                         <p className="mt-0.5 text-sky-600">Needs match</p>
                                     </button>
                                     <button
@@ -749,7 +768,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                         }`}
                                     >
                                         <p className="text-base font-semibold text-amber-700">{filteredSummary.duplicate}</p>
-                                        <p className="text-[10px] font-medium text-amber-600/70">KES {filteredSummary.duplicateAmount.toLocaleString()}</p>
+                                        <p className="text-[10px] font-medium text-amber-600/70">{formatImportAmount(filteredSummary.duplicateAmount)}</p>
                                         <p className="mt-0.5 text-amber-600">Duplicate</p>
                                     </button>
                                 </div>
@@ -816,7 +835,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                                 Row #{matchingRow.row_number} — {matchingRow.normalized_row?.sender_name || matchingRow.normalized_row?.phone || 'Unknown'}
                                             </p>
                                             <p className="text-xs text-slate-500">
-                                                KES {Number(matchingRow.normalized_row?.amount || 0).toLocaleString()} &middot; {matchingRow.normalized_row?.transaction_reference || 'No ref'}
+                                                {formatImportAmount(matchingRow.normalized_row?.amount, matchingRow.normalized_row?.currency)} &middot; {matchingRow.normalized_row?.transaction_reference || 'No ref'}
                                             </p>
                                         </div>
                                         <button
@@ -925,12 +944,12 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                     <div className="grid grid-cols-4 gap-3 text-center text-xs">
                                         <div>
                                             <p className="text-sm font-semibold text-emerald-700">{filteredSummary.matched}</p>
-                                            <p className="text-[10px] text-emerald-600/70">KES {filteredSummary.matchedAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] text-emerald-600/70">{formatImportAmount(filteredSummary.matchedAmount)}</p>
                                             <p className="mt-0.5 text-slate-500">Confirmed</p>
                                         </div>
                                         <div>
                                             <p className="text-sm font-semibold text-sky-700">{filteredSummary.unmatched}</p>
-                                            <p className="text-[10px] text-sky-600/70">KES {filteredSummary.unmatchedAmount.toLocaleString()}</p>
+                                            <p className="text-[10px] text-sky-600/70">{formatImportAmount(filteredSummary.unmatchedAmount)}</p>
                                             <p className="mt-0.5 text-slate-500">Unmatched Confirmed</p>
                                         </div>
                                         <div>
@@ -1005,7 +1024,7 @@ export default function PaymentImportDrawer({ open, onClose, platformOptions, on
                                 <>
                                     {statusFilter
                                         ? <>{filteredRows.length} row{filteredRows.length !== 1 ? 's' : ''} ({statusFilter}) &middot; <button type="button" onClick={() => setStatusFilter(null)} className="font-medium text-teal-600 hover:text-teal-700">Clear filter</button></>
-                                        : <>{filteredSummary.valid} ready, {filteredSummary.needsMatch} need match &middot; KES {filteredSummary.validAmount.toLocaleString()} ready</>
+                                        : <>{filteredSummary.valid} ready, {filteredSummary.needsMatch} need match &middot; {formatImportAmount(filteredSummary.validAmount)} ready</>
                                     }
                                 </>
                             )}

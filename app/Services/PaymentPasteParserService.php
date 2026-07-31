@@ -34,6 +34,12 @@ class PaymentPasteParserService
                 continue;
             }
 
+            if ($this->looksLikeHeading($line)) {
+                $this->flushPending($rows, $pending, $pendingStart, $currentDate);
+
+                continue;
+            }
+
             $lineDate = $this->parseDate($line);
             if ($lineDate !== null && ! $this->looksLikeAmount($line) && ! $this->looksLikeReference($line)) {
                 $this->flushPending($rows, $pending, $pendingStart, $currentDate);
@@ -194,6 +200,28 @@ class PaymentPasteParserService
         }
 
         return $hasAmount && $hasReference && ! $hasName;
+    }
+
+    private function looksLikeHeading(string $value): bool
+    {
+        $candidate = strtolower(trim($value));
+        $candidate = preg_replace('/[^\p{L}\p{N}\s()]/u', '', $candidate) ?? $candidate;
+        $candidate = preg_replace('/\s+/', ' ', $candidate) ?? $candidate;
+
+        if (str_starts_with($candidate, 'payments (')) {
+            return true;
+        }
+
+        return in_array($candidate, [
+            'payment',
+            'payments',
+            'transaction code',
+            'transaction codes',
+            'transaction id',
+            'transaction ids',
+            'transaction reference',
+            'transaction references',
+        ], true);
     }
 
     private function looksLikeReference(string $value): bool

@@ -248,6 +248,51 @@ class PaymentImportFlowTest extends TestCase
         $preview->assertOk()->assertJsonPath('rows.0.normalized_row.amount', 35.5);
     }
 
+    public function test_orphan_paste_preview_uses_selected_market_currency_and_ignores_heading(): void
+    {
+        $platform = $this->createPlatform('Senegal', '221', 'XOF');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $preview = $this->postJson('/api/crm/payments/import/preview', [
+            'platform_id' => $platform->id,
+            'mode' => 'orphan_paste',
+            'pasted_text' => implode("\n", [
+                'transaction code',
+                '47k',
+                'T_5R6F4G-G4B5VXZMEZ',
+                '',
+                '74k',
+                'xot-26aqr2qpr1y4j',
+            ]),
+            'reason' => 'Import orphaned Senegal payments',
+            'source_owner' => 'Dan',
+        ]);
+
+        $preview->assertOk()
+            ->assertJsonPath('currency', 'XOF')
+            ->assertJsonPath('summary.total_rows', 2)
+            ->assertJsonPath('summary.valid_rows', 2)
+            ->assertJsonPath('rows.0.normalized_row.amount', 47000)
+            ->assertJsonPath('rows.0.normalized_row.currency', 'XOF')
+            ->assertJsonPath('rows.0.normalized_row.client_name', null)
+            ->assertJsonPath('rows.0.normalized_row.sender_name', null);
+
+        $batchId = (int) $preview->json('batch_id');
+
+        $commit = $this->postJson('/api/crm/payments/import/commit', [
+            'batch_id' => $batchId,
+            'reason' => 'Commit orphaned Senegal payments',
+        ]);
+
+        $commit->assertOk()->assertJsonPath('summary.created_now', 2);
+
+        $this->assertTrue(Payment::query()
+            ->where('import_batch_id', $batchId)
+            ->get()
+            ->every(fn (Payment $payment) => $payment->currency === 'XOF'));
+    }
+
     public function test_orphan_paste_mode_is_admin_only_without_breaking_sales_file_import(): void
     {
         $platform = $this->createPlatform('Kenya', '254');
@@ -337,7 +382,7 @@ class PaymentImportFlowTest extends TestCase
         ]);
     }
 
-    private function createPlatform(string $name, string $phonePrefix): Platform
+    private function createPlatform(string $name, string $phonePrefix, string $currency = 'KES'): Platform
     {
         return Platform::query()->create([
             'name' => $name,
@@ -345,7 +390,7 @@ class PaymentImportFlowTest extends TestCase
             'country' => $name,
             'is_active' => true,
             'phone_prefix' => $phonePrefix,
-            'currency_code' => 'KES',
+            'currency_code' => $currency,
             'wp_api_url' => 'https://example.test/wp-json/exotic-crm-sync/v1',
             'wp_api_user' => 'crm-user',
             'wp_api_password' => 'secret',

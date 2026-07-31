@@ -265,6 +265,7 @@ class PaymentImportService
             'batch_id' => $batch->id,
             'status' => $batch->status,
             'source_type' => $sourceType,
+            'currency' => $currency,
             'summary' => $totals,
             'headers' => $parsed['headers'] ?? [],
             'rows' => $responseRows,
