@@ -266,6 +266,7 @@ class FieldSalesController extends Controller
             'agents' => User::query()->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)->orderBy('name')->get(['id', 'name', 'email']),
             'markets' => Platform::query()->orderBy('name')->get(['id', 'name', 'currency_code']),
             'summary' => $this->buildCommissionSummary($validated),
+            'leaderboard' => $this->buildAgentLeaderboard($validated),
         ]);
     }
 
@@ -413,6 +414,111 @@ class FieldSalesController extends Controller
             'active_agents_30d' => (int) $activeAgents,
             'funnel' => $this->buildAcquisitionFunnel($validated),
         ];
+    }
+
+    /**
+     * Per-agent scoreboard: how much business each field agent brought in,
+     * not just what they earned. GMV is the activated non-trial deal value
+     * credited to the agent, kept split by currency so markets never mix.
+     */
+    private function buildAgentLeaderboard(array $validated): array
+    {
+        $agents = User::query()
+            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->orderBy('name')
+            ->get(['id', 'name', 'email']);
+
+        if (!empty($validated['agent_user_id'])) {
+            $agents = $agents->where('id', (int) $validated['agent_user_id'])->values();
+        }
+
+        if ($agents->isEmpty()) {
+            return [];
+        }
+
+        $marketId = !empty($validated['market_id']) ? (int) $validated['market_id'] : null;
+        $dateFrom = $validated['date_from'] ?? null;
+        $dateTo = !empty($validated['date_to']) ? Carbon::parse($validated['date_to'])->endOfDay() : null;
+
+        $sumByCurrency = function ($query) {
+            return $query
+                ->groupBy('currency')
+                ->selectRaw('currency, SUM(amount) as total')
+                ->get()
+                ->map(fn ($r) => ['currency' => (string) $r->currency, 'total' => (float) $r->total])
+                ->values()
+                ->all();
+        };
+
+        return $agents->map(function ($agent) use ($marketId, $dateFrom, $dateTo, $sumByCurrency) {
+            $agentId = (int) $agent->id;
+
+            // Acquisition is measured on clients the agent created.
+            $clients = Client::query()->where('created_by', $agentId);
+            if ($marketId) {
+                $clients->where('platform_id', $marketId);
+            }
+            if ($dateFrom) {
+                $clients->where('created_at', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $clients->where('created_at', '<=', $dateTo);
+            }
+
+            $acquired = (clone $clients)->count();
+            $converted = (clone $clients)
+                ->whereHas('deals', fn ($q) => $q
+                    ->where('is_free_trial', false)
+                    ->whereIn('status', ['active', 'expired', 'renewed'])
+                    ->whereNotNull('activated_at'))
+                ->count();
+
+            // Revenue is measured on deals credited to the agent — same
+            // column CommissionService pays on, so GMV and commission agree.
+            $deals = Deal::query()
+                ->where('activated_by_field_agent', $agentId)
+                ->where('is_free_trial', false)
+                ->whereIn('status', ['active', 'expired', 'renewed'])
+                ->whereNotNull('activated_at');
+            if ($marketId) {
+                $deals->where('platform_id', $marketId);
+            }
+            if ($dateFrom) {
+                $deals->where('activated_at', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $deals->where('activated_at', '<=', $dateTo);
+            }
+
+            $paidDeals = (clone $deals)->count();
+            $gmv = $sumByCurrency(clone $deals);
+
+            $commissions = Commission::query()->where('agent_user_id', $agentId);
+            if ($marketId) {
+                $commissions->whereHas('client', fn ($q) => $q->where('platform_id', $marketId));
+            }
+            if ($dateFrom) {
+                $commissions->where('earned_at', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $commissions->where('earned_at', '<=', $dateTo);
+            }
+
+            return [
+                'id' => $agentId,
+                'name' => (string) $agent->name,
+                'email' => (string) $agent->email,
+                'acquired' => (int) $acquired,
+                'converted' => (int) $converted,
+                'paid_deals' => (int) $paidDeals,
+                'gmv' => $gmv,
+                'commission_earned' => $sumByCurrency((clone $commissions)->where('status', 'earned')),
+                'commission_paid' => $sumByCurrency((clone $commissions)->where('status', 'paid')),
+            ];
+        })
+        ->sortByDesc(fn ($row) => array_sum(array_column($row['gmv'], 'total')))
+        ->values()
+        ->all();
     }
 
     private function buildAcquisitionFunnel(array $validated): array

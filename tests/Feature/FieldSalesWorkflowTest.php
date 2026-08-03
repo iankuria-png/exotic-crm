@@ -237,6 +237,62 @@ class FieldSalesWorkflowTest extends TestCase
         $this->assertSame(2, Commission::query()->where('status', 'paid')->count());
     }
 
+    public function test_admin_commissions_endpoint_returns_summary_funnel_and_leaderboard(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        $platform = Platform::factory()->create([
+            'field_activation_commission_rate' => 0.15,
+        ]);
+        $agent = User::factory()->create([
+            'role' => 'field_sales',
+            'status' => 'active',
+            'name' => 'Field Agent A',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'field',
+            'created_by' => $agent->id,
+        ]);
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'currency' => 'KES',
+        ]);
+
+        $paidDeal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'is_free_trial' => false,
+            'activated_by_field_agent' => $agent->id,
+            'activated_at' => now(),
+            'amount' => 2000,
+            'currency' => 'KES',
+            'status' => 'active',
+        ]);
+
+        app(CommissionService::class)->recordActivationCommission($paidDeal);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/admin/commissions?status=earned')->assertOk();
+
+        // Funnel: the agent created one client who converted to a paid deal.
+        $response->assertJsonPath('summary.funnel.acquired', 1);
+        $response->assertJsonPath('summary.funnel.converted', 1);
+
+        // Leaderboard: GMV is the activated deal value, not the commission.
+        $response->assertJsonPath('leaderboard.0.id', $agent->id);
+        $response->assertJsonPath('leaderboard.0.acquired', 1);
+        $response->assertJsonPath('leaderboard.0.converted', 1);
+        $response->assertJsonPath('leaderboard.0.paid_deals', 1);
+        $response->assertJsonPath('leaderboard.0.gmv.0.currency', 'KES');
+        $response->assertJsonPath('leaderboard.0.gmv.0.total', 2000);
+        $response->assertJsonPath('leaderboard.0.commission_earned.0.total', 300);
+
+        // Export shares the same query path — exercise it so SQL breaks surface here.
+        $this->get('/api/crm/admin/commissions/export?status=earned')->assertOk();
+    }
+
     public function test_admin_can_save_field_sales_settings(): void
     {
         $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);

@@ -194,6 +194,7 @@ export default function AdminCommissions() {
     const agents = query.data?.agents || [];
     const markets = query.data?.markets || [];
     const summary = query.data?.summary || {};
+    const leaderboard = query.data?.leaderboard || [];
 
     const selectedTotal = useMemo(() => {
         return selectedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -453,6 +454,92 @@ export default function AdminCommissions() {
                         tone="success"
                         isLoading={query.isLoading}
                     />
+                </div>
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Agent scoreboard</h3>
+                        <p className="text-xs text-slate-500">Subscription value each agent brought in, alongside what they earned.</p>
+                    </div>
+                    {agentId ? (
+                        <button type="button" onClick={() => { setAgentId(''); setPage(1); }} className="text-xs text-teal-700 hover:underline">
+                            Show all agents
+                        </button>
+                    ) : (
+                        <p className="text-[11px] text-slate-400">Click an agent to filter the table below</p>
+                    )}
+                </header>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-slate-200">
+                        <thead className="bg-slate-50/95">
+                            <tr>
+                                {['Agent', 'Acquired', 'Converted', 'Paid deals', 'Subscription value', 'Commission earned', 'Commission paid'].map((label, index) => (
+                                    <th
+                                        key={label}
+                                        className={`px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ${index === 0 ? 'text-left' : 'text-right'}`}
+                                    >
+                                        {label}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {query.isLoading ? (
+                                <tr>
+                                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-400">Loading...</td>
+                                </tr>
+                            ) : leaderboard.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
+                                        No field-sales agents match these filters.
+                                    </td>
+                                </tr>
+                            ) : (
+                                leaderboard.map((agent) => {
+                                    const isActive = String(agentId) === String(agent.id);
+                                    const rate = agent.acquired > 0
+                                        ? `${((agent.converted / agent.acquired) * 100).toFixed(0)}% conv.`
+                                        : null;
+                                    return (
+                                        <tr
+                                            key={agent.id}
+                                            onClick={() => { setAgentId(isActive ? '' : String(agent.id)); setPage(1); }}
+                                            className={`cursor-pointer transition-colors hover:bg-slate-50 ${isActive ? 'bg-teal-50/50' : ''}`}
+                                        >
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center gap-2.5">
+                                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-50 text-[11px] font-semibold text-teal-700 ring-1 ring-teal-100">
+                                                        {initials(agent.name || agent.email)}
+                                                    </span>
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-semibold text-slate-900">{agent.name || 'Agent'}</p>
+                                                        <p className="truncate text-xs text-slate-500">{agent.email || '—'}</p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 text-right text-sm text-slate-700">{(agent.acquired ?? 0).toLocaleString()}</td>
+                                            <td className="px-4 py-3 text-right">
+                                                <span className="text-sm text-slate-900">{(agent.converted ?? 0).toLocaleString()}</span>
+                                                {rate ? <span className="ml-1.5 text-[11px] text-slate-400">{rate}</span> : null}
+                                            </td>
+                                            <td className="px-4 py-3 text-right text-sm text-slate-700">{(agent.paid_deals ?? 0).toLocaleString()}</td>
+                                            <td className="px-4 py-3 text-right text-sm font-semibold text-slate-900">
+                                                <CurrencyList items={agent.gmv} emptyLabel="—" />
+                                            </td>
+                                            <td className="px-4 py-3 text-right text-sm text-amber-700">
+                                                <CurrencyList items={agent.commission_earned} emptyLabel="—" />
+                                            </td>
+                                            <td className="px-4 py-3 text-right text-sm text-emerald-700">
+                                                <CurrencyList items={agent.commission_paid} emptyLabel="—" />
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </section>
 
