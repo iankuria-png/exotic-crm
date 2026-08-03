@@ -187,6 +187,7 @@ class ClientSyncService
             'main_image_url'  => $imageUrl ?: null,
             'last_synced_at'  => now(),
             'wp_modified_at'  => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
+            'wp_created_at'   => $this->normalizeWpCreatedAt($wpClient, $client),
             // Mirror the CRM-authored lifecycle back from WordPress (same rule as
             // buildBulkClientRow): absent key preserves the current state, unknown
             // values normalise to 'active'.
@@ -582,6 +583,7 @@ class ClientSyncService
                         'last_online_at',
                         'last_synced_at',
                         'wp_modified_at',
+                        'wp_created_at',
                         'signup_source',
                         'source_presence_status',
                         'source_missing_at',
@@ -696,6 +698,7 @@ class ClientSyncService
             'last_online_at' => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
             'last_synced_at' => $now,
             'wp_modified_at' => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
+            'wp_created_at' => $this->normalizeWpCreatedAt($wpClient, $existing),
             'signup_source' => $signupSource,
             'source_presence_status' => 'present',
             'source_missing_at' => null,
@@ -956,6 +959,21 @@ class ClientSyncService
             return Carbon::parse((string) $value, 'UTC')->utc();
         } catch (\Throwable) {
             return null;
+        }
+    }
+
+    private function normalizeWpCreatedAt(array $wpClient, ?Client $existing = null): ?Carbon
+    {
+        $value = $wpClient['created_at'] ?? data_get($wpClient, 'post.created_at');
+
+        if ($value === null || $value === '' || $value === false) {
+            return $existing?->wp_created_at;
+        }
+
+        try {
+            return Carbon::parse((string) $value, 'UTC')->utc();
+        } catch (\Throwable) {
+            return $existing?->wp_created_at;
         }
     }
 }

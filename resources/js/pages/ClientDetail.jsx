@@ -2109,9 +2109,11 @@ export default function ClientDetail() {
     const profileExpiryMessage = buildSubscriptionExpiryMessage(client, isUntrackedForeverPlan);
     const profileCopyMessage = buildProfileCopyMessage(client, isUntrackedForeverPlan);
     const hasProfileUrl = Boolean(profilePrimaryUrl);
-    const joinedDate = parseDateValue(client.created_at);
+    const joinedDateSource = client.wp_created_at || client.created_at;
+    const joinedDate = parseDateValue(joinedDateSource);
     const joinedDateLabel = joinedDate ? formatProfileDate(joinedDate) : '—';
-    const joinedAgeLabel = formatJoinedAge(client.created_at);
+    const joinedAgeLabel = formatJoinedAge(joinedDateSource);
+    const joinedDateSourceLabel = client.wp_created_at ? 'WordPress profile created' : 'CRM profile created';
     const lifetimePaymentCount = Number(client.lifetime_payment_count || 0);
     const lifetimeSourceBreakdown = formatLifetimeBreakdown(client.lifetime_source_breakdown);
     const lifetimeValueIsPartial = Boolean(client.lifetime_value_partial);
@@ -3343,7 +3345,7 @@ export default function ClientDetail() {
                             label="Joined us"
                             value={joinedDateLabel}
                             detail={joinedAgeLabel}
-                            title={joinedDate ? joinedDate.toLocaleString() : 'Join date unavailable'}
+                            title={joinedDate ? `${joinedDateSourceLabel}: ${joinedDate.toLocaleString()}` : 'Join date unavailable'}
                         />
                         <SummaryMetric
                             label="Lifetime value"

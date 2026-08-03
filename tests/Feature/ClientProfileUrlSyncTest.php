@@ -34,6 +34,7 @@ class ClientProfileUrlSyncTest extends TestCase
         $this->assertSame('https://kenya.example.test/?p=10026', $client->wp_profile_url);
         $this->assertSame('https://kenya.example.test/escort/faithvideossquirtingnudes/', $client->wp_profile_permalink);
         $this->assertSame('faithvideossquirtingnudes', $client->wp_profile_slug);
+        $this->assertSame('2023-02-14 09:30:00', $client->wp_created_at?->toDateTimeString());
     }
 
     public function test_legacy_full_sync_persists_permalink_and_slug_without_changing_short_wp_profile_url(): void
@@ -59,6 +60,7 @@ class ClientProfileUrlSyncTest extends TestCase
         $this->assertSame('https://kenya.example.test/?p=10026', $client->wp_profile_url);
         $this->assertSame('https://kenya.example.test/escort/faithvideossquirtingnudes/', $client->wp_profile_permalink);
         $this->assertSame('faithvideossquirtingnudes', $client->wp_profile_slug);
+        $this->assertSame('2023-02-14 09:30:00', $client->wp_created_at?->toDateTimeString());
     }
 
     public function test_v2_cursor_sync_persists_permalink_and_slug(): void
@@ -101,6 +103,7 @@ class ClientProfileUrlSyncTest extends TestCase
         $this->assertSame(1, $result['created']);
         $this->assertSame('https://kenya.example.test/escort/another-profile/', $client->wp_profile_permalink);
         $this->assertSame('another-profile', $client->wp_profile_slug);
+        $this->assertSame('2023-02-14 09:30:00', $client->wp_created_at?->toDateTimeString());
     }
 
     public function test_v2_full_reconcile_deletes_source_backed_clients_not_returned_by_wordpress(): void
@@ -281,6 +284,7 @@ class ClientProfileUrlSyncTest extends TestCase
             'needs_payment' => false,
             'notactive' => false,
             'main_image_url' => '',
+            'created_at' => '2023-02-14 09:30:00',
             'modified_at' => '2026-05-06 08:00:00',
         ], $overrides);
     }
