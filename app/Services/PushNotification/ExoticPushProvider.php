@@ -111,7 +111,11 @@ class ExoticPushProvider implements PushProviderInterface
                 'provider' => $this->id(),
                 'provider_notification_id' => $providerNotificationId,
                 'provider_response' => $body,
-                'provider_debug' => $debug,
+                'provider_debug' => [
+                    ...$debug,
+                    'provider_code' => 'epe_queued',
+                    'provider_message' => 'Queued by Exotic Push Engine.',
+                ],
             ];
         }
 

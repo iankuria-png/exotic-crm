@@ -297,6 +297,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const [itemPage, setItemPage] = useState(1);
     const [itemStatus, setItemStatus] = useState('');
     const [includeDebug, setIncludeDebug] = useState(false);
+    const [expandedDebugItemId, setExpandedDebugItemId] = useState(null);
     const [scheduleAt, setScheduleAt] = useState('');
     const [analytics, setAnalytics] = useState(null);
     const [previewDevice, setPreviewDevice] = useState('mobile');
@@ -657,6 +658,12 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
             setIncludeDebug(false);
         }
     }, [canRequestDebug, includeDebug]);
+
+    useEffect(() => {
+        if (!debugRequested) {
+            setExpandedDebugItemId(null);
+        }
+    }, [debugRequested]);
 
     useEffect(() => {
         if (!items.length) {
@@ -1157,15 +1164,21 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                         {items.map((item) => {
                                             const reason = extractionReason(item);
                                             const timingMeta = timingStateMeta(item.timing_state);
-                                            const providerDebug = debugRequested && String(item.status || '') === 'failed'
+                                            const debugExpanded = debugRequested && expandedDebugItemId === item.id;
+                                            const providerDebug = debugExpanded
                                                 ? item.provider_meta?.debug || null
                                                 : null;
 
                                             return (
                                                 <React.Fragment key={item.id}>
                                                     <tr
-                                                        className={`border-t border-slate-100 ${previewItem?.id === item.id ? 'bg-teal-50/60' : ''}`}
-                                                        onClick={() => setPreviewItemId(item.id)}
+                                                        className={`cursor-pointer border-t border-slate-100 transition-colors duration-150 hover:bg-slate-50 ${previewItem?.id === item.id ? 'bg-teal-50/60' : ''} ${debugExpanded ? 'border-teal-200 bg-teal-50/70' : ''}`}
+                                                        onClick={() => {
+                                                            setPreviewItemId(item.id);
+                                                            if (debugRequested) {
+                                                                setExpandedDebugItemId((current) => (current === item.id ? null : item.id));
+                                                            }
+                                                        }}
                                                     >
                                                         <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--', item.timing_reference_timezone || marketTimezone)}</td>
                                                         <td className="px-2 py-1">
@@ -1228,6 +1241,19 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                                 >
                                                                     Match CRM
                                                                 </button>
+                                                                {debugRequested ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => {
+                                                                            event.stopPropagation();
+                                                                            setPreviewItemId(item.id);
+                                                                            setExpandedDebugItemId((current) => (current === item.id ? null : item.id));
+                                                                        }}
+                                                                        className={`crm-btn-secondary px-2 py-1 text-xs ${debugExpanded ? 'border-teal-500 text-teal-700' : ''}`}
+                                                                    >
+                                                                        Debug
+                                                                    </button>
+                                                                ) : null}
                                                                 <button
                                                                     type="button"
                                                                     onClick={(event) => {
@@ -1250,16 +1276,20 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                             <td colSpan={5} className="px-2 py-3">
                                                                 <div className="rounded-md border border-slate-200 bg-white p-3">
                                                                     <div className="grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                                                                        <p><span className="font-semibold text-slate-700">Debug source:</span> {debugValue(providerDebug.debug_source)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Provider:</span> {debugValue(providerDebug.provider)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Dispatch state:</span> {debugValue(providerDebug.dispatch_state || providerDebug.item_status)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Method:</span> {debugValue(providerDebug.request_method)}</p>
                                                                         <p><span className="font-semibold text-slate-700">EPE request time:</span> {debugValue(providerDebug.request_timestamp)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Timezone:</span> {debugValue(providerDebug.request_timezone)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Active/fallback:</span> {debugValue(providerDebug.active_provider)} / {debugValue(providerDebug.fallback_provider)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Site ID:</span> {debugValue(providerDebug.site_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Idempotency-Key:</span> {debugValue(providerDebug.idempotency_key)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Campaign ID:</span> {debugValue(providerDebug.campaign_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Item ID:</span> {debugValue(providerDebug.campaign_item_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Queue attempt:</span> {debugValue(providerDebug.queue_attempt)} / {debugValue(providerDebug.queue_max_attempts)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Queue job ID:</span> {debugValue(providerDebug.queue_job_id)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Scheduled at:</span> {debugValue(providerDebug.scheduled_at)}</p>
                                                                         <p><span className="font-semibold text-slate-700">HTTP status:</span> {debugValue(providerDebug.http_status)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Provider code:</span> {debugValue(providerDebug.provider_code)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Provider message:</span> {debugValue(providerDebug.provider_message)}</p>
@@ -1269,13 +1299,23 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                                     <p className="mt-2 truncate text-[11px] text-slate-500">
                                                                         <span className="font-semibold text-slate-700">Request URL:</span> {debugValue(providerDebug.request_url)}
                                                                     </p>
-                                                                    {providerDebug.response_headers && Object.keys(providerDebug.response_headers).length > 0 ? (
-                                                                        <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-slate-100 p-2 text-[11px] leading-5 text-slate-700">
-                                                                            {formatDebugBody(providerDebug.response_headers)}
-                                                                        </pre>
-                                                                    ) : null}
+                                                                    <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                                                                        <div>
+                                                                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Request payload</p>
+                                                                            <pre className="max-h-44 overflow-auto rounded-md bg-slate-100 p-2 text-[11px] leading-5 text-slate-700">
+                                                                                {formatDebugBody(providerDebug.request_payload)}
+                                                                            </pre>
+                                                                        </div>
+                                                                        <div>
+                                                                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Response headers</p>
+                                                                            <pre className="max-h-44 overflow-auto rounded-md bg-slate-100 p-2 text-[11px] leading-5 text-slate-700">
+                                                                                {formatDebugBody(providerDebug.response_headers)}
+                                                                            </pre>
+                                                                        </div>
+                                                                    </div>
+                                                                    <p className="mb-1 mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Response body</p>
                                                                     <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
-                                                                        {formatDebugBody(providerDebug.response_body)}
+                                                                        {providerDebug.response_body == null ? 'No HTTP response yet.' : formatDebugBody(providerDebug.response_body)}
                                                                     </pre>
                                                                 </div>
                                                             </td>

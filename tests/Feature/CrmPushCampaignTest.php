@@ -1006,6 +1006,24 @@ class CrmPushCampaignTest extends TestCase
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
         $marketingUser = $this->createUser('marketing', [$platform->id]);
         $adminUser = $this->createUser('admin');
+        IntegrationSetting::query()->create([
+            'key' => 'push_provider_config',
+            'value' => [
+                'enabled' => true,
+                'default_provider' => 'exoticpush',
+                'platforms' => [
+                    (string) $platform->id => [
+                        'active_provider' => 'exoticpush',
+                        'fallback_provider' => 'none',
+                        'exoticpush' => [
+                            'site_id' => 'site-kenya',
+                            'api_key' => 'rest_sample',
+                            'auth_token' => 'secret-token',
+                        ],
+                    ],
+                ],
+            ],
+        ]);
 
         $campaign = PushCampaign::query()->create([
             'name' => 'Debug campaign',
@@ -1038,6 +1056,40 @@ class CrmPushCampaignTest extends TestCase
                 ],
             ],
         ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/sent-debug/',
+            'custom_message' => 'Sent debug me',
+            'status' => 'sent',
+            'provider_notification_id' => 'notification-sent-1',
+            'provider_meta' => [
+                'provider' => 'exoticpush',
+                'fallback_attempted' => false,
+                'fallback_from' => null,
+                'debug' => [
+                    'debug_source' => 'provider_attempt',
+                    'provider' => 'exoticpush',
+                    'site_id' => 'site-kenya',
+                    'idempotency_key' => 'epe-item-2',
+                    'http_status' => 200,
+                    'response_body' => ['success' => true],
+                    'notification_id' => 'notification-sent-1',
+                    'job_id' => 'job-sent-1',
+                    'provider_code' => 'epe_queued',
+                    'provider_message' => 'Queued by Exotic Push Engine.',
+                ],
+            ],
+        ]);
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/scheduled-debug/',
+            'profile_name' => 'Scheduled Debug',
+            'profile_city' => 'Nairobi',
+            'profile_image_url' => 'https://kenya.example/debug.jpg',
+            'custom_message' => 'Scheduled debug me',
+            'scheduled_at' => now()->addHour(),
+            'status' => 'scheduled',
+        ]);
 
         Sanctum::actingAs($marketingUser);
         $marketingResponse = $this->getJson("/api/crm/push-campaigns/{$campaign->id}");
@@ -1059,7 +1111,14 @@ class CrmPushCampaignTest extends TestCase
             ->assertJsonPath('items.data.0.provider_meta.debug.http_status', 503)
             ->assertJsonPath('items.data.0.provider_meta.debug.notification_id', 'notification-1')
             ->assertJsonPath('items.data.0.provider_meta.debug.job_id', 'job-1')
-            ->assertJsonPath('items.data.0.provider_meta.debug.response_body.message', 'Server error');
+            ->assertJsonPath('items.data.0.provider_meta.debug.response_body.message', 'Server error')
+            ->assertJsonPath('items.data.1.provider_meta.debug.provider_code', 'epe_queued')
+            ->assertJsonPath('items.data.1.provider_meta.debug.notification_id', 'notification-sent-1')
+            ->assertJsonPath('items.data.1.provider_meta.debug.job_id', 'job-sent-1')
+            ->assertJsonPath('items.data.2.provider_meta.debug.debug_source', 'crm_planned_request')
+            ->assertJsonPath('items.data.2.provider_meta.debug.dispatch_state', 'not_dispatched')
+            ->assertJsonPath('items.data.2.provider_meta.debug.request_url', 'https://push.exotic-online.com/api/sites/site-kenya/rest-api/notifications')
+            ->assertJsonPath('items.data.2.provider_meta.debug.request_payload.title', 'Scheduled Debug from Nairobi');
     }
 
     public function test_execute_endpoint_is_blocked_when_pending_items_are_overdue(): void
@@ -3205,6 +3264,8 @@ HTML,
         $this->assertNull(data_get($result, 'provider_debug.response_headers.set-cookie'));
         $this->assertSame('epe-notification-1', data_get($result, 'provider_debug.notification_id'));
         $this->assertSame('job-1', data_get($result, 'provider_debug.job_id'));
+        $this->assertSame('epe_queued', data_get($result, 'provider_debug.provider_code'));
+        $this->assertSame('Queued by Exotic Push Engine.', data_get($result, 'provider_debug.provider_message'));
         $this->assertSame(true, data_get($result, 'provider_debug.response_body.success'));
 
         Http::assertSent(function ($request): bool {

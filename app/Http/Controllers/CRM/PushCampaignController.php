@@ -971,7 +971,7 @@ class PushCampaignController extends Controller
         $items = $itemsQuery->paginate((int) ($validated['per_page'] ?? 50));
         $timingReferenceUtc = now()->utc();
         $timingTimezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
-        $items->getCollection()->transform(function (PushCampaignItem $item) use ($timingReferenceUtc, $timingTimezone, $includeDebug): PushCampaignItem {
+        $items->getCollection()->transform(function (PushCampaignItem $item) use ($pushCampaign, $timingReferenceUtc, $timingTimezone, $includeDebug): PushCampaignItem {
             $timing = $this->pushCampaignDispatchReadinessService->describeItemTimingState(
                 $item,
                 $timingReferenceUtc,
@@ -981,7 +981,7 @@ class PushCampaignController extends Controller
             $item->setAttribute('timing_state', (string) ($timing['timing_state'] ?? 'unscheduled'));
             $item->setAttribute('timing_reference_timezone', (string) ($timing['timing_reference_timezone'] ?? $timingTimezone));
             $item->setAttribute('is_overdue', (bool) ($timing['is_overdue'] ?? false));
-            $item->setAttribute('provider_meta', $this->providerMetaForResponse($item, $includeDebug));
+            $item->setAttribute('provider_meta', $this->providerMetaForResponse($item, $includeDebug, $pushCampaign));
 
             return $item;
         });
@@ -2133,15 +2133,21 @@ class PushCampaignController extends Controller
         return in_array((string) ($request->user()?->role ?? ''), ['admin', 'sub_admin'], true);
     }
 
-    private function providerMetaForResponse(PushCampaignItem $item, bool $includeDebug): ?array
+    private function providerMetaForResponse(PushCampaignItem $item, bool $includeDebug, ?PushCampaign $campaign = null): ?array
     {
         $meta = $item->provider_meta;
         if (! is_array($meta)) {
-            return null;
+            $meta = [];
         }
 
-        if (! $includeDebug || (string) $item->status !== 'failed') {
+        if (! $includeDebug) {
             unset($meta['debug']);
+
+            return empty($meta) ? null : $meta;
+        }
+
+        if (! is_array($meta['debug'] ?? null) && $campaign instanceof PushCampaign) {
+            $meta['debug'] = $this->plannedProviderDebugForItem($campaign, $item);
         }
 
         return $meta;
@@ -2152,6 +2158,71 @@ class PushCampaignController extends Controller
         $item->setAttribute('provider_meta', $this->providerMetaForResponse($item, false));
 
         return $item;
+    }
+
+    private function plannedProviderDebugForItem(PushCampaign $campaign, PushCampaignItem $item): array
+    {
+        $pushConfig = $this->pushProviderService->currentPushConfig(masked: true);
+        $platformConfig = data_get($pushConfig, 'platforms.'.(int) $campaign->platform_id, []);
+        $provider = (string) ($campaign->provider
+            ?: data_get($platformConfig, 'active_provider')
+            ?: data_get($pushConfig, 'default_provider')
+            ?: 'webpushr');
+        $siteId = $provider === 'exoticpush'
+            ? trim((string) data_get($platformConfig, 'exoticpush.site_id', ''))
+            : '';
+        $endpoint = $provider === 'exoticpush' && $siteId !== ''
+            ? rtrim((string) config('services.exotic_push.base_url', 'https://push.exotic-online.com/api'), '/')
+                .'/sites/'.rawurlencode($siteId).'/rest-api/notifications'
+            : null;
+        $requestTimezone = MarketTimezone::resolve($campaign->platform?->timezone, config('app.timezone', 'UTC'));
+        $requestTimestamp = now($requestTimezone);
+        $city = trim((string) ($item->profile_city ?? ''));
+        $title = $city !== ''
+            ? trim((string) ($item->profile_name ?: 'New profile')).' from '.$city
+            : trim((string) ($item->profile_name ?: 'New profile'));
+        $requestPayload = array_filter([
+            'title' => mb_substr($title, 0, 150),
+            'body' => mb_substr((string) ($item->custom_message ?? ''), 0, 500),
+            'url' => (string) ($item->profile_url ?? ''),
+            'icon' => $item->profile_image_url ?: null,
+            'image' => $item->profile_image_url ?: null,
+        ], static fn ($value) => ! is_null($value) && $value !== '');
+        $dispatchState = in_array((string) $item->status, ['sent', 'failed'], true)
+            ? 'attempt_debug_unavailable'
+            : 'not_dispatched';
+
+        return [
+            'debug_source' => 'crm_planned_request',
+            'provider' => $provider,
+            'active_provider' => (string) (data_get($platformConfig, 'active_provider') ?: data_get($pushConfig, 'default_provider') ?: 'unknown'),
+            'fallback_provider' => (string) (data_get($platformConfig, 'fallback_provider') ?: 'none'),
+            'dispatch_state' => $dispatchState,
+            'request_timestamp' => $requestTimestamp->toIso8601String(),
+            'request_timezone' => $requestTimestamp->getTimezone()->getName(),
+            'request_method' => $provider === 'exoticpush' ? 'POST' : null,
+            'request_url' => $endpoint,
+            'site_id' => $siteId !== '' ? $siteId : null,
+            'idempotency_key' => 'epe-item-'.$item->id,
+            'campaign_id' => (string) $campaign->id,
+            'campaign_item_id' => (string) $item->id,
+            'queue_attempt' => null,
+            'queue_max_attempts' => null,
+            'queue_job_id' => null,
+            'scheduled_at' => $item->scheduled_at?->toIso8601String(),
+            'item_status' => (string) $item->status,
+            'timing_state' => (string) ($item->getAttribute('timing_state') ?? ''),
+            'http_status' => null,
+            'response_headers' => [],
+            'response_body' => null,
+            'notification_id' => $item->provider_notification_id ?: null,
+            'job_id' => null,
+            'provider_code' => $dispatchState,
+            'provider_message' => $dispatchState === 'not_dispatched'
+                ? 'This item has not been sent to Exotic Push Engine yet.'
+                : 'This item was completed before request/response debug capture was available.',
+            'request_payload' => $requestPayload,
+        ];
     }
 
     private function ensurePresetAccess(Request $request, ScraperProfilePreset $preset): void
