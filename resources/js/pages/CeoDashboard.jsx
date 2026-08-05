@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -70,6 +70,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [trendView, setTrendView] = useState('trend');
     const [recentLimit, setRecentLimit] = useState(10);
     const [recentChannel, setRecentChannel] = useState('all');
+    const [recentAgentId, setRecentAgentId] = useState('all');
     const [engagementMarket, setEngagementMarket] = useState(null);
 
     const queryParams = useMemo(() => ({
@@ -117,17 +118,32 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     });
 
     const recentPaymentsQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'recent-payments', queryParams, recentLimit, recentChannel],
+        queryKey: ['ceo-dashboard', 'recent-payments', queryParams, recentLimit, recentChannel, recentAgentId],
         queryFn: () => api.get('/crm/dashboard/ceo/recent-payments', {
             params: {
                 ...queryParams,
                 limit: recentLimit,
                 channel: recentChannel,
+                ...(recentAgentId !== 'all' ? { agent_id: recentAgentId } : {}),
             },
         }).then((response) => response.data),
         refetchInterval: typeof document === 'undefined' || document.visibilityState === 'visible' ? 60_000 : false,
         staleTime: 20_000,
     });
+
+    useEffect(() => {
+        if (recentAgentId === 'all' || !recentPaymentsQuery.data?.agents) {
+            return;
+        }
+
+        const agentStillAvailable = recentPaymentsQuery.data.agents.some(
+            (agent) => String(agent.id) === String(recentAgentId),
+        );
+
+        if (!agentStillAvailable) {
+            setRecentAgentId('all');
+        }
+    }, [recentAgentId, recentPaymentsQuery.data?.agents]);
 
     const agentPerformanceQuery = useQuery({
         queryKey: ['ceo-dashboard', 'agent-performance', queryParams],
@@ -361,6 +377,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         onLimitChange={setRecentLimit}
                         channel={recentChannel}
                         onChannelChange={setRecentChannel}
+                        agentId={recentAgentId}
+                        onAgentChange={setRecentAgentId}
                     />
                 </div>
             </section>

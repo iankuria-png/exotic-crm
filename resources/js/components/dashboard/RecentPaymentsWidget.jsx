@@ -31,8 +31,11 @@ export default function RecentPaymentsWidget({
     onLimitChange,
     channel = 'all',
     onChannelChange,
+    agentId = 'all',
+    onAgentChange,
 }) {
     const payments = data?.payments || [];
+    const agents = data?.agents || [];
 
     return (
         <SectionFrame
@@ -62,6 +65,17 @@ export default function RecentPaymentsWidget({
                     >
                         {CHANNELS.map((item) => (
                             <option key={item.key} value={item.key}>{item.label}</option>
+                        ))}
+                    </select>
+                    <select
+                        value={agentId}
+                        onChange={(event) => onAgentChange(event.target.value)}
+                        className="h-8 min-w-[9.5rem] rounded-md border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                        aria-label="Payment agent"
+                    >
+                        <option value="all">All agents</option>
+                        {agents.map((agent) => (
+                            <option key={agent.id} value={String(agent.id)}>{agent.name}</option>
                         ))}
                     </select>
                 </div>

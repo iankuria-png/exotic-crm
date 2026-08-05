@@ -350,9 +350,21 @@ class CeoDashboardDataService
         $context = $this->context($request);
         $limit = $this->resolveRecentPaymentLimit($request);
         $channelFilter = $this->resolveChannelFilter($request);
-        $payments = Payment::query()
+        $agentFilter = $this->resolveRecentPaymentAgentFilter($request);
+        $baseQuery = Payment::query()
             ->businessVisible()
             ->excludingWalletTopups()
+            ->where('status', 'completed')
+            ->when($context['platform_id'], fn (Builder $query, int $platformId) => $query->where('platform_id', $platformId))
+            ->when($channelFilter !== 'all', fn (Builder $query) => $this->applyPaymentChannelFilter($query, $channelFilter));
+
+        $agents = $this->recentPaymentAgentOptions(clone $baseQuery);
+
+        if ($agentFilter !== null) {
+            $this->applyRecentPaymentAgentFilter($baseQuery, $agentFilter);
+        }
+
+        $payments = $baseQuery
             ->with([
                 'client:id,name',
                 'platform:id,name,country,currency_code',
@@ -363,9 +375,6 @@ class CeoDashboardDataService
                 'providerTransactions:id,payment_id,provider_type_key,created_at,last_status_at',
                 'manualSubmission:id,payment_id,manual_method_key,review_decision,reviewed_at',
             ])
-            ->where('status', 'completed')
-            ->when($context['platform_id'], fn (Builder $query, int $platformId) => $query->where('platform_id', $platformId))
-            ->when($channelFilter !== 'all', fn (Builder $query) => $this->applyPaymentChannelFilter($query, $channelFilter))
             ->orderByRaw('COALESCE(completed_at, created_at) desc')
             ->limit($limit)
             ->get();
@@ -374,6 +383,8 @@ class CeoDashboardDataService
             'window' => $this->serializeWindow($context),
             'limit' => $limit,
             'channel_filter' => $channelFilter,
+            'agent_filter' => $agentFilter,
+            'agents' => $agents,
             'payments' => $payments->map(function (Payment $payment) use ($context) {
                 $eventDate = $payment->completed_at ?: $payment->created_at;
                 $currency = strtoupper((string) ($payment->currency ?: $payment->platform?->currency_code ?: $context['target_currency']));
@@ -416,6 +427,69 @@ class CeoDashboardDataService
                 ];
             })->all(),
         ];
+    }
+
+    private function resolveRecentPaymentAgentFilter(Request $request): ?int
+    {
+        $raw = trim((string) $request->query('agent_id', ''));
+
+        return ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null;
+    }
+
+    private function applyRecentPaymentAgentFilter(Builder $query, int $agentId): void
+    {
+        $query->where(function (Builder $builder) use ($agentId) {
+            $builder->whereHas('deal', function (Builder $dealQuery) use ($agentId) {
+                $dealQuery->where('assigned_to', $agentId);
+            })->orWhere(function (Builder $fallbackQuery) use ($agentId) {
+                $fallbackQuery
+                    ->where('confirmed_by', $agentId)
+                    ->whereDoesntHave('deal', function (Builder $dealQuery) {
+                        $dealQuery->whereNotNull('assigned_to');
+                    });
+            });
+        });
+    }
+
+    private function recentPaymentAgentOptions(Builder $baseQuery): array
+    {
+        $dealAgentIds = (clone $baseQuery)
+            ->whereHas('deal', function (Builder $dealQuery) {
+                $dealQuery->whereNotNull('assigned_to');
+            })
+            ->with('deal:id,assigned_to')
+            ->get(['id', 'deal_id'])
+            ->pluck('deal.assigned_to');
+
+        $confirmedAgentIds = (clone $baseQuery)
+            ->whereNotNull('confirmed_by')
+            ->whereDoesntHave('deal', function (Builder $dealQuery) {
+                $dealQuery->whereNotNull('assigned_to');
+            })
+            ->pluck('confirmed_by');
+
+        $agentIds = $dealAgentIds
+            ->merge($confirmedAgentIds)
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($agentIds->isEmpty()) {
+            return [];
+        }
+
+        return User::query()
+            ->whereIn('id', $agentIds)
+            ->orderBy('name')
+            ->get(['id', 'name', 'role'])
+            ->map(fn (User $agent) => [
+                'id' => (int) $agent->id,
+                'name' => $agent->name,
+                'role' => $agent->role,
+            ])
+            ->values()
+            ->all();
     }
 
     public function agentPerformance(Request $request): array

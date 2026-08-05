@@ -158,6 +158,69 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(50.0, (float) $manual[0]['amount']);
     }
 
+    public function test_recent_payments_can_filter_by_displayed_agent_before_limit(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Dar',
+            'country' => 'Tanzania',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        $joanne = $this->user(['name' => 'Joanne Yengo', 'role' => 'sales']);
+        $florence = $this->user(['name' => 'Florence Magoma', 'role' => 'sales']);
+        Sanctum::actingAs($ceo);
+
+        $joanneClient = Client::factory()->create(['platform_id' => $platform->id, 'assigned_to' => $joanne->id]);
+        $florenceClient = Client::factory()->create(['platform_id' => $platform->id, 'assigned_to' => $florence->id]);
+        $joanneDeal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $joanneClient->id,
+            'product_id' => $product->id,
+            'assigned_to' => $joanne->id,
+        ]);
+        $florenceDeal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $florenceClient->id,
+            'product_id' => $product->id,
+            'assigned_to' => $florence->id,
+        ]);
+
+        $this->payment($platform, $product, [
+            'client_id' => $florenceClient->id,
+            'deal_id' => $florenceDeal->id,
+            'amount' => 300,
+            'completed_at' => now()->subMinute(),
+        ]);
+        $joanneNewest = $this->payment($platform, $product, [
+            'client_id' => $joanneClient->id,
+            'deal_id' => $joanneDeal->id,
+            'amount' => 200,
+            'completed_at' => now()->subMinutes(5),
+        ]);
+        $joanneOlder = $this->payment($platform, $product, [
+            'client_id' => $joanneClient->id,
+            'deal_id' => $joanneDeal->id,
+            'amount' => 100,
+            'completed_at' => now()->subMinutes(10),
+        ]);
+
+        $all = $this->getJson('/api/crm/dashboard/ceo/recent-payments?limit=1&reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('Florence Magoma', data_get($all, 'payments.0.agent.name'));
+        $this->assertEqualsCanonicalizing(['Florence Magoma', 'Joanne Yengo'], array_column($all['agents'], 'name'));
+
+        $filtered = $this->getJson('/api/crm/dashboard/ceo/recent-payments?limit=10&agent_id='.$joanne->id.'&reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('agent_filter', $joanne->id)
+            ->json('payments');
+
+        $this->assertSame([$joanneNewest->id, $joanneOlder->id], array_column($filtered, 'id'));
+        $this->assertTrue(collect($filtered)->every(fn (array $payment) => data_get($payment, 'agent.name') === 'Joanne Yengo'));
+    }
+
     public function test_summary_uses_customer_revenue_mix_instead_of_ambiguous_activation_rate(): void
     {
         $platform = Platform::factory()->create([
