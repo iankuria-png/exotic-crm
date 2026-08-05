@@ -216,6 +216,11 @@ class SendPushNotificationJob implements ShouldBeUnique, ShouldQueue
             'provider' => $campaign->provider,
             'idempotency_key' => 'epe-item-'.$item->id,
             'request_timezone' => $marketTimezone,
+            'campaign_id' => (int) $campaign->id,
+            'campaign_item_id' => (int) $item->id,
+            'queue_attempt' => $this->attempts(),
+            'queue_max_attempts' => $this->tries,
+            'queue_job_id' => $this->queueJobId(),
         ]);
 
         $success = (bool) ($result['success'] ?? false);
@@ -301,6 +306,17 @@ class SendPushNotificationJob implements ShouldBeUnique, ShouldQueue
     public function backoff(): array
     {
         return [30, 60, 120];
+    }
+
+    private function queueJobId(): ?string
+    {
+        if (! isset($this->job) || ! is_object($this->job) || ! method_exists($this->job, 'getJobId')) {
+            return null;
+        }
+
+        $jobId = $this->job->getJobId();
+
+        return is_null($jobId) || $jobId === '' ? null : (string) $jobId;
     }
 
     /**

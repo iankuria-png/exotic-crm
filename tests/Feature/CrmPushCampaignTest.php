@@ -3162,6 +3162,9 @@ HTML,
                     'jobId' => 'job-1',
                     'queued' => true,
                 ],
+            ], 200, [
+                'X-Request-Id' => 'req-1',
+                'Set-Cookie' => 'secret-cookie',
             ]),
         ]);
 
@@ -3178,6 +3181,11 @@ HTML,
             'auth_token' => 'token-sample',
         ], [
             'idempotency_key' => 'epe-item-99',
+            'campaign_id' => 10,
+            'campaign_item_id' => 99,
+            'queue_attempt' => 1,
+            'queue_max_attempts' => 3,
+            'queue_job_id' => '42',
         ]);
 
         $this->assertTrue((bool) $result['success']);
@@ -3185,7 +3193,16 @@ HTML,
         $this->assertSame('epe-notification-1', $result['provider_notification_id']);
         $this->assertSame('site-123', data_get($result, 'provider_debug.site_id'));
         $this->assertSame('epe-item-99', data_get($result, 'provider_debug.idempotency_key'));
+        $this->assertSame('POST', data_get($result, 'provider_debug.request_method'));
+        $this->assertSame('https://push.example.test/api/sites/site-123/rest-api/notifications', data_get($result, 'provider_debug.request_url'));
+        $this->assertSame('10', data_get($result, 'provider_debug.campaign_id'));
+        $this->assertSame('99', data_get($result, 'provider_debug.campaign_item_id'));
+        $this->assertSame('1', data_get($result, 'provider_debug.queue_attempt'));
+        $this->assertSame('3', data_get($result, 'provider_debug.queue_max_attempts'));
+        $this->assertSame('42', data_get($result, 'provider_debug.queue_job_id'));
         $this->assertSame(200, data_get($result, 'provider_debug.http_status'));
+        $this->assertSame('req-1', data_get($result, 'provider_debug.response_headers.x-request-id'));
+        $this->assertNull(data_get($result, 'provider_debug.response_headers.set-cookie'));
         $this->assertSame('epe-notification-1', data_get($result, 'provider_debug.notification_id'));
         $this->assertSame('job-1', data_get($result, 'provider_debug.job_id'));
         $this->assertSame(true, data_get($result, 'provider_debug.response_body.success'));
@@ -3372,6 +3389,15 @@ HTML,
         $mock = \Mockery::mock(PushProviderService::class);
         $mock->shouldReceive('sendPush')
             ->once()
+            ->withArgs(function (array $notification, array $context) use ($campaign, $item): bool {
+                return ($context['campaign_id'] ?? null) === (int) $campaign->id
+                    && ($context['campaign_item_id'] ?? null) === (int) $item->id
+                    && ($context['queue_attempt'] ?? null) === 3
+                    && ($context['queue_max_attempts'] ?? null) === 3
+                    && array_key_exists('queue_job_id', $context)
+                    && $context['queue_job_id'] === null
+                    && ($context['request_timezone'] ?? null) === 'Africa/Nairobi';
+            })
             ->andReturn([
                 'success' => false,
                 'provider' => 'exoticpush',

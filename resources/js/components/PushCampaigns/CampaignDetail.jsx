@@ -1250,14 +1250,30 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                             <td colSpan={5} className="px-2 py-3">
                                                                 <div className="rounded-md border border-slate-200 bg-white p-3">
                                                                     <div className="grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                                                                        <p><span className="font-semibold text-slate-700">Provider:</span> {debugValue(providerDebug.provider)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Method:</span> {debugValue(providerDebug.request_method)}</p>
                                                                         <p><span className="font-semibold text-slate-700">EPE request time:</span> {debugValue(providerDebug.request_timestamp)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Timezone:</span> {debugValue(providerDebug.request_timezone)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Site ID:</span> {debugValue(providerDebug.site_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">Idempotency-Key:</span> {debugValue(providerDebug.idempotency_key)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Campaign ID:</span> {debugValue(providerDebug.campaign_id)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Item ID:</span> {debugValue(providerDebug.campaign_item_id)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Queue attempt:</span> {debugValue(providerDebug.queue_attempt)} / {debugValue(providerDebug.queue_max_attempts)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Queue job ID:</span> {debugValue(providerDebug.queue_job_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">HTTP status:</span> {debugValue(providerDebug.http_status)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Provider code:</span> {debugValue(providerDebug.provider_code)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Provider message:</span> {debugValue(providerDebug.provider_message)}</p>
                                                                         <p><span className="font-semibold text-slate-700">notificationID:</span> {debugValue(providerDebug.notification_id)}</p>
                                                                         <p><span className="font-semibold text-slate-700">jobID:</span> {debugValue(providerDebug.job_id)}</p>
                                                                     </div>
+                                                                    <p className="mt-2 truncate text-[11px] text-slate-500">
+                                                                        <span className="font-semibold text-slate-700">Request URL:</span> {debugValue(providerDebug.request_url)}
+                                                                    </p>
+                                                                    {providerDebug.response_headers && Object.keys(providerDebug.response_headers).length > 0 ? (
+                                                                        <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-slate-100 p-2 text-[11px] leading-5 text-slate-700">
+                                                                            {formatDebugBody(providerDebug.response_headers)}
+                                                                        </pre>
+                                                                    ) : null}
                                                                     <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
                                                                         {formatDebugBody(providerDebug.response_body)}
                                                                     </pre>
