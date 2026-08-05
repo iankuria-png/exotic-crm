@@ -10,16 +10,16 @@ use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Models\PushSubscriberSnapshot;
 use App\Models\ScraperProfilePreset;
-use App\Services\MarketAuthorizationService;
+use App\Services\AuditService;
 use App\Services\ClientProfileImageService;
-use App\Services\PushCampaign\PushCampaignService;
+use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
 use App\Services\PushCampaign\PushCampaignItemMatchService;
+use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\SelectorDetectionService;
 use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
-use App\Services\AuditService;
 use App\Services\WpSyncService;
 use App\Support\ClientProfileUrl;
 use App\Support\MarketTimezone;
@@ -36,6 +36,7 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 class PushCampaignController extends Controller
 {
     private const EXPRESS_PASTE_MAX_ROWS = 20;
+
     private const PROFILE_IMAGE_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp';
 
     public function __construct(
@@ -48,8 +49,7 @@ class PushCampaignController extends Controller
         private readonly SubscriberSyncService $subscriberSyncService,
         private readonly PushProviderService $pushProviderService,
         private readonly ClientProfileImageService $clientProfileImageService,
-    ) {
-    }
+    ) {}
 
     public function index(Request $request)
     {
@@ -61,7 +61,7 @@ class PushCampaignController extends Controller
             'per_page' => 'nullable|integer|min:10|max:100',
         ]);
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $validated['platform_id'],
@@ -72,31 +72,31 @@ class PushCampaignController extends Controller
         $query = PushCampaign::query()
             ->with('platform:id,name,country,timezone')
             ->withCount([
-                'items as pending_items_count' => fn($builder) => $builder->whereIn('status', ['pending_extraction', 'needs_preset', 'pending', 'scheduled']),
-                'items as failed_items_count' => fn($builder) => $builder->where('status', 'failed'),
+                'items as pending_items_count' => fn ($builder) => $builder->whereIn('status', ['pending_extraction', 'needs_preset', 'pending', 'scheduled']),
+                'items as failed_items_count' => fn ($builder) => $builder->where('status', 'failed'),
             ])
             ->orderByDesc('id');
 
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $query->where('platform_id', (int) $validated['platform_id']);
         }
 
-        if (!empty($validated['status'])) {
+        if (! empty($validated['status'])) {
             $query->where('status', (string) $validated['status']);
         }
 
-        if (!empty($validated['batch_id'])) {
+        if (! empty($validated['batch_id'])) {
             $query->where('upload_batch_id', (string) $validated['batch_id']);
         }
 
-        if (!empty($validated['search'])) {
+        if (! empty($validated['search'])) {
             $search = trim((string) $validated['search']);
             $query->where(function ($builder) use ($search): void {
-                $builder->where('name', 'like', '%' . $search . '%')
-                    ->orWhere('source_filename', 'like', '%' . $search . '%')
-                    ->orWhere('upload_batch_id', 'like', '%' . $search . '%');
+                $builder->where('name', 'like', '%'.$search.'%')
+                    ->orWhere('source_filename', 'like', '%'.$search.'%')
+                    ->orWhere('upload_batch_id', 'like', '%'.$search.'%');
             });
         }
 
@@ -121,7 +121,7 @@ class PushCampaignController extends Controller
 
         $dryRun = (bool) ($validated['dry_run'] ?? false);
         $setupIssues = $this->pushUploadSetupIssues($dryRun);
-        if (!empty($setupIssues)) {
+        if (! empty($setupIssues)) {
             return response()->json([
                 'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
                 'issues' => $setupIssues,
@@ -132,12 +132,12 @@ class PushCampaignController extends Controller
         $batchId = (string) Str::uuid();
         $extension = strtolower((string) $file->getClientOriginalExtension());
         $extension = in_array($extension, ['xlsx', 'xls'], true) ? $extension : 'xlsx';
-        $storedPath = $file->storeAs('push-uploads', $batchId . '.' . $extension);
+        $storedPath = $file->storeAs('push-uploads', $batchId.'.'.$extension);
 
         $initialStatus = $this->uploadBatchStatusService->put($batchId, [
             'batch_id' => $batchId,
             'status' => 'queued',
-            'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+            'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId.'.'.$extension),
             'stored_path' => (string) $storedPath,
             'queued_at' => now()->toDateTimeString(),
             'initiated_by' => (int) $request->user()->id,
@@ -154,8 +154,8 @@ class PushCampaignController extends Controller
         try {
             $jobPayload = [
                 $batchId,
-                storage_path('app/' . $storedPath),
-                (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+                storage_path('app/'.$storedPath),
+                (string) ($file->getClientOriginalName() ?: $batchId.'.'.$extension),
                 (int) $request->user()->id,
                 $dryRun,
             ];
@@ -170,7 +170,7 @@ class PushCampaignController extends Controller
             $this->uploadBatchStatusService->put($batchId, [
                 'batch_id' => $batchId,
                 'status' => 'failed',
-                'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+                'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId.'.'.$extension),
                 'initiated_by' => (int) $request->user()->id,
                 'error' => $exception->getMessage(),
                 'dry_run' => $dryRun,
@@ -244,7 +244,7 @@ class PushCampaignController extends Controller
         }
 
         $setupIssues = $this->pushUploadSetupIssues($dryRun);
-        if (!empty($setupIssues)) {
+        if (! empty($setupIssues)) {
             return response()->json([
                 'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
                 'issues' => $setupIssues,
@@ -252,10 +252,10 @@ class PushCampaignController extends Controller
         }
 
         $batchId = (string) Str::uuid();
-        $storedPath = 'push-uploads/' . $batchId . '.xlsx';
-        $absolutePath = storage_path('app/' . $storedPath);
+        $storedPath = 'push-uploads/'.$batchId.'.xlsx';
+        $absolutePath = storage_path('app/'.$storedPath);
         $sourceFilename = $this->sourceFilenameForPaste($platform, $year);
-        $expressMode = !$dryRun && count($rows) <= self::EXPRESS_PASTE_MAX_ROWS;
+        $expressMode = ! $dryRun && count($rows) <= self::EXPRESS_PASTE_MAX_ROWS;
 
         $this->writePasteWorkbook($absolutePath, $platform, $year, $rows);
 
@@ -352,7 +352,7 @@ class PushCampaignController extends Controller
     {
         $status = $this->uploadBatchStatusService->get($batchId);
 
-        if (!is_array($status)) {
+        if (! is_array($status)) {
             return response()->json([
                 'message' => 'Upload batch not found or expired.',
             ], 404);
@@ -364,8 +364,8 @@ class PushCampaignController extends Controller
         );
 
         $campaignIds = collect((array) ($status['campaign_ids'] ?? []))
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->values();
 
         if ($campaignIds->isEmpty()) {
@@ -379,11 +379,11 @@ class PushCampaignController extends Controller
             ->whereIn('id', $campaignIds->all())
             ->with('platform:id,name,country')
             ->withCount([
-                'items as pending_extraction_count' => fn($builder) => $builder->where('status', 'pending_extraction'),
-                'items as pending_count' => fn($builder) => $builder->where('status', 'pending'),
-                'items as scheduled_count' => fn($builder) => $builder->where('status', 'scheduled'),
-                'items as needs_preset_count' => fn($builder) => $builder->where('status', 'needs_preset'),
-                'items as failed_items_count' => fn($builder) => $builder->where('status', 'failed'),
+                'items as pending_extraction_count' => fn ($builder) => $builder->where('status', 'pending_extraction'),
+                'items as pending_count' => fn ($builder) => $builder->where('status', 'pending'),
+                'items as scheduled_count' => fn ($builder) => $builder->where('status', 'scheduled'),
+                'items as needs_preset_count' => fn ($builder) => $builder->where('status', 'needs_preset'),
+                'items as failed_items_count' => fn ($builder) => $builder->where('status', 'failed'),
             ])
             ->orderBy('id');
 
@@ -471,7 +471,7 @@ class PushCampaignController extends Controller
                 'can_cancel' => $status === 'queued',
                 'can_process_now' => $status === 'queued',
                 'can_create_from_dry_run' => $status === 'ready' && $dryRun && (int) ($item['total_items'] ?? 0) > 0,
-                'can_confirm' => $status === 'ready' && !$dryRun && $campaignCount > 0 && $unconfirmedCount > 0 && $processingCount === 0,
+                'can_confirm' => $status === 'ready' && ! $dryRun && $campaignCount > 0 && $unconfirmedCount > 0 && $processingCount === 0,
             ];
         }, $items);
 
@@ -491,7 +491,7 @@ class PushCampaignController extends Controller
     public function processQueuedUploadNow(Request $request, string $batchId)
     {
         $status = $this->uploadBatchStatusService->get($batchId);
-        if (!is_array($status)) {
+        if (! is_array($status)) {
             return response()->json([
                 'message' => 'Upload batch not found or expired.',
             ], 404);
@@ -512,14 +512,14 @@ class PushCampaignController extends Controller
         }
 
         $job = $this->findQueuedUploadJob($batchId);
-        if (!$job) {
+        if (! $job) {
             return response()->json([
                 'message' => 'No queued job was found for this upload batch.',
             ], 409);
         }
 
         $command = $this->decodeQueuedUploadCommand((string) $job->payload);
-        if (!$command instanceof ProcessPushUploadJob || $command->batchId !== $batchId) {
+        if (! $command instanceof ProcessPushUploadJob || $command->batchId !== $batchId) {
             return response()->json([
                 'message' => 'Unable to decode queued upload job payload.',
             ], 500);
@@ -557,7 +557,7 @@ class PushCampaignController extends Controller
     public function cancelQueuedUpload(Request $request, string $batchId)
     {
         $status = $this->uploadBatchStatusService->get($batchId);
-        if (!is_array($status)) {
+        if (! is_array($status)) {
             return response()->json([
                 'message' => 'Upload batch not found or expired.',
             ], 404);
@@ -576,7 +576,7 @@ class PushCampaignController extends Controller
                 ->where('queue', 'default')
                 ->whereNull('reserved_at')
                 ->where('payload', 'like', '%ProcessPushUploadJob%')
-                ->where('payload', 'like', '%' . $batchId . '%')
+                ->where('payload', 'like', '%'.$batchId.'%')
                 ->delete();
         }
 
@@ -595,7 +595,7 @@ class PushCampaignController extends Controller
     public function createCampaignsFromDryRun(Request $request, string $batchId)
     {
         $status = $this->uploadBatchStatusService->get($batchId);
-        if (!is_array($status)) {
+        if (! is_array($status)) {
             return response()->json([
                 'message' => 'Upload batch not found or expired.',
             ], 404);
@@ -603,7 +603,7 @@ class PushCampaignController extends Controller
 
         $this->ensureUploadBatchAccess($request, $status);
 
-        if (($status['status'] ?? null) !== 'ready' || !(bool) ($status['dry_run'] ?? false)) {
+        if (($status['status'] ?? null) !== 'ready' || ! (bool) ($status['dry_run'] ?? false)) {
             return response()->json([
                 'message' => 'Create campaigns is available only for ready dry-run batches.',
             ], 422);
@@ -616,7 +616,7 @@ class PushCampaignController extends Controller
         }
 
         $setupIssues = $this->pushUploadSetupIssues(false);
-        if (!empty($setupIssues)) {
+        if (! empty($setupIssues)) {
             return response()->json([
                 'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
                 'issues' => $setupIssues,
@@ -645,8 +645,8 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
-        $absolutePath = storage_path('app/' . ltrim($storedPath, '/'));
-        if (!is_file($absolutePath)) {
+        $absolutePath = storage_path('app/'.ltrim($storedPath, '/'));
+        if (! is_file($absolutePath)) {
             return response()->json([
                 'message' => 'Stored upload file no longer exists on disk.',
             ], 422);
@@ -728,7 +728,7 @@ class PushCampaignController extends Controller
             'per_page' => 'nullable|integer|min:10|max:100',
         ]);
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $validated['platform_id'],
@@ -741,7 +741,7 @@ class PushCampaignController extends Controller
             ->where('client_type', 'escort')
             ->orderByDesc('id');
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $query->where('platform_id', (int) $validated['platform_id']);
         } else {
             $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
@@ -750,25 +750,25 @@ class PushCampaignController extends Controller
             }
         }
 
-        if (!empty($validated['search'])) {
+        if (! empty($validated['search'])) {
             $search = trim((string) $validated['search']);
             $normalizedDigits = preg_replace('/\D+/', '', $search) ?? '';
             $query->where(function ($builder) use ($search, $normalizedDigits): void {
-                $builder->where('name', 'like', '%' . $search . '%')
-                    ->orWhere('phone_normalized', 'like', '%' . $search . '%')
-                    ->orWhere('email', 'like', '%' . $search . '%')
-                    ->orWhere('city', 'like', '%' . $search . '%');
+                $builder->where('name', 'like', '%'.$search.'%')
+                    ->orWhere('phone_normalized', 'like', '%'.$search.'%')
+                    ->orWhere('email', 'like', '%'.$search.'%')
+                    ->orWhere('city', 'like', '%'.$search.'%');
 
                 if ($normalizedDigits !== '') {
                     $builder->orWhereRaw(
                         "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone_normalized, ''), '+', ''), ' ', ''), '-', ''), '(', ''), ')', '') like ?",
-                        ['%' . $normalizedDigits . '%']
+                        ['%'.$normalizedDigits.'%']
                     );
                 }
             });
         }
 
-        if (!empty($validated['profile_status'])) {
+        if (! empty($validated['profile_status'])) {
             $query->where('profile_status', (string) $validated['profile_status']);
         }
 
@@ -818,8 +818,8 @@ class PushCampaignController extends Controller
         $platform = Platform::query()->findOrFail($platformId);
         $platformTimezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
         $clientIds = collect((array) $validated['client_ids'])
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->unique()
             ->values()
             ->all();
@@ -837,12 +837,12 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
-        $scheduledAt = !empty($validated['scheduled_at'])
+        $scheduledAt = ! empty($validated['scheduled_at'])
             ? Carbon::parse((string) $validated['scheduled_at'], $platformTimezone)->utc()
             : null;
 
         $campaign = PushCampaign::query()->create([
-            'name' => trim((string) ($validated['campaign_name'] ?? ($platform->name . ' CRM Escort Push - ' . now()->toDateString()))),
+            'name' => trim((string) ($validated['campaign_name'] ?? ($platform->name.' CRM Escort Push - '.now()->toDateString()))),
             'platform_id' => $platformId,
             'status' => 'draft',
             'total_items' => 0,
@@ -861,8 +861,9 @@ class PushCampaignController extends Controller
 
         foreach ($clients as $client) {
             $profileUrl = ClientProfileUrl::resolve($client, $platform);
-            if (!$profileUrl) {
+            if (! $profileUrl) {
                 $skippedClientIds[] = (int) $client->id;
+
                 continue;
             }
 
@@ -936,7 +937,16 @@ class PushCampaignController extends Controller
         $validated = $request->validate([
             'status' => 'nullable|in:pending_extraction,needs_preset,pending,scheduled,sent,failed,skipped',
             'per_page' => 'nullable|integer|min:10|max:250',
+            'include_debug' => 'nullable|boolean',
         ]);
+        $canViewDebug = $this->userCanViewPushDebug($request);
+        $includeDebug = (bool) ($validated['include_debug'] ?? false);
+
+        if ($includeDebug && ! $canViewDebug) {
+            return response()->json([
+                'message' => 'Only admin and sub-admin users can enable push debug output.',
+            ], 403);
+        }
 
         $pushCampaign->load([
             'platform:id,name,country,timezone',
@@ -954,14 +964,14 @@ class PushCampaignController extends Controller
             ->orderBy('scheduled_at')
             ->orderBy('id');
 
-        if (!empty($validated['status'])) {
+        if (! empty($validated['status'])) {
             $itemsQuery->where('status', (string) $validated['status']);
         }
 
         $items = $itemsQuery->paginate((int) ($validated['per_page'] ?? 50));
         $timingReferenceUtc = now()->utc();
         $timingTimezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
-        $items->getCollection()->transform(function (PushCampaignItem $item) use ($timingReferenceUtc, $timingTimezone): PushCampaignItem {
+        $items->getCollection()->transform(function (PushCampaignItem $item) use ($timingReferenceUtc, $timingTimezone, $includeDebug): PushCampaignItem {
             $timing = $this->pushCampaignDispatchReadinessService->describeItemTimingState(
                 $item,
                 $timingReferenceUtc,
@@ -971,6 +981,7 @@ class PushCampaignController extends Controller
             $item->setAttribute('timing_state', (string) ($timing['timing_state'] ?? 'unscheduled'));
             $item->setAttribute('timing_reference_timezone', (string) ($timing['timing_reference_timezone'] ?? $timingTimezone));
             $item->setAttribute('is_overdue', (bool) ($timing['is_overdue'] ?? false));
+            $item->setAttribute('provider_meta', $this->providerMetaForResponse($item, $includeDebug));
 
             return $item;
         });
@@ -978,6 +989,8 @@ class PushCampaignController extends Controller
         return response()->json([
             'campaign' => $pushCampaign,
             'items' => $items,
+            'can_view_debug' => $canViewDebug,
+            'debug_enabled' => $includeDebug && $canViewDebug,
         ]);
     }
 
@@ -1008,9 +1021,9 @@ class PushCampaignController extends Controller
             'profile_image_url',
             'profile_age',
         ];
-        $hasEditableField = collect($editableFields)->contains(fn(string $field): bool => array_key_exists($field, $validated));
+        $hasEditableField = collect($editableFields)->contains(fn (string $field): bool => array_key_exists($field, $validated));
 
-        if (!$hasEditableField) {
+        if (! $hasEditableField) {
             return response()->json([
                 'message' => 'No editable fields were provided.',
             ], 422);
@@ -1066,7 +1079,7 @@ class PushCampaignController extends Controller
         }
 
         $profileFieldChanged = collect(['profile_url', 'profile_name', 'profile_phone', 'profile_image_url', 'profile_age'])
-            ->contains(fn(string $field): bool => array_key_exists($field, $payload));
+            ->contains(fn (string $field): bool => array_key_exists($field, $payload));
 
         if ($profileFieldChanged) {
             $payload['error_message'] = null;
@@ -1079,7 +1092,7 @@ class PushCampaignController extends Controller
         $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
-            'item' => $pushCampaignItem->fresh(),
+            'item' => $this->itemForResponse($pushCampaignItem->fresh()),
             'message' => 'Campaign item updated.',
         ]);
     }
@@ -1123,7 +1136,7 @@ class PushCampaignController extends Controller
             (int) $validated['client_id']
         );
 
-        if (!$client) {
+        if (! $client) {
             return response()->json([
                 'message' => 'Selected CRM profile is not an escort in this campaign market.',
             ], 422);
@@ -1163,13 +1176,13 @@ class PushCampaignController extends Controller
                 $wpPayload = (new WpSyncService($pushCampaign->platform))->getClientProfile($wpPostId);
                 $fields = $this->extractWpProfileFields($wpPayload);
 
-                if (!empty($fields['phone'])) {
+                if (! empty($fields['phone'])) {
                     $payload['profile_phone'] = $fields['phone'];
                 }
-                if (!empty($fields['image'])) {
+                if (! empty($fields['image'])) {
                     $payload['profile_image_url'] = $fields['image'];
                 }
-                if (!empty($fields['age_value'])) {
+                if (! empty($fields['age_value'])) {
                     $payload['profile_age'] = $fields['age_value'];
                 }
             } catch (\Throwable) {
@@ -1184,7 +1197,7 @@ class PushCampaignController extends Controller
         $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
-            'item' => $pushCampaignItem->fresh(),
+            'item' => $this->itemForResponse($pushCampaignItem->fresh()),
             'message' => 'Campaign item matched with CRM profile.',
         ]);
     }
@@ -1205,7 +1218,7 @@ class PushCampaignController extends Controller
         $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
-            'item' => $pushCampaignItem->fresh(),
+            'item' => $this->itemForResponse($pushCampaignItem->fresh()),
             'message' => 'Campaign item removed from active send list.',
         ]);
     }
@@ -1224,7 +1237,7 @@ class PushCampaignController extends Controller
         $result = $this->hydratePushCampaignItemProfile($pushCampaign, $pushCampaignItem, $force, true);
 
         return response()->json([
-            'item' => $result['item'],
+            'item' => $this->itemForResponse($result['item']),
             'sources' => $result['sources'],
             'media' => $result['media'],
         ]);
@@ -1270,9 +1283,9 @@ class PushCampaignController extends Controller
         }
 
         $media = $this->fetchWpMediaOptions((array) $context);
-        $selected = collect($media)->first(fn(array $item): bool => (int) ($item['id'] ?? 0) === (int) $validated['attachment_id']);
+        $selected = collect($media)->first(fn (array $item): bool => (int) ($item['id'] ?? 0) === (int) $validated['attachment_id']);
 
-        if (!$selected) {
+        if (! $selected) {
             return response()->json([
                 'message' => 'Selected media item was not found for this profile.',
             ], 422);
@@ -1288,7 +1301,7 @@ class PushCampaignController extends Controller
         $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
-            'item' => $pushCampaignItem->fresh(),
+            'item' => $this->itemForResponse($pushCampaignItem->fresh()),
             'selected_media' => $selected,
         ]);
     }
@@ -1300,7 +1313,7 @@ class PushCampaignController extends Controller
         $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
 
         $validated = $request->validate([
-            'file' => 'required|file|mimes:' . self::PROFILE_IMAGE_ALLOWED_EXTENSIONS . '|max:5120',
+            'file' => 'required|file|mimes:'.self::PROFILE_IMAGE_ALLOWED_EXTENSIONS.'|max:5120',
             'apply_to_item' => 'nullable|boolean',
         ], [
             'file.mimes' => 'Campaign profile media must be a JPEG, PNG, or WEBP image.',
@@ -1328,13 +1341,13 @@ class PushCampaignController extends Controller
 
             $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
             $attachmentId = (int) data_get($upload, 'attachment.id', 0);
-            $uploadedMedia = collect($media)->first(fn(array $item): bool => (int) ($item['id'] ?? 0) === $attachmentId);
+            $uploadedMedia = collect($media)->first(fn (array $item): bool => (int) ($item['id'] ?? 0) === $attachmentId);
 
             $applyToItem = array_key_exists('apply_to_item', $validated)
                 ? (bool) $validated['apply_to_item']
                 : true;
 
-            if ($applyToItem && $uploadedMedia && !empty($uploadedMedia['url'])) {
+            if ($applyToItem && $uploadedMedia && ! empty($uploadedMedia['url'])) {
                 $pushCampaignItem->forceFill([
                     'profile_image_url' => (string) $uploadedMedia['url'],
                     'error_message' => null,
@@ -1346,7 +1359,7 @@ class PushCampaignController extends Controller
             }
 
             return response()->json([
-                'item' => $pushCampaignItem->fresh(),
+                'item' => $this->itemForResponse($pushCampaignItem->fresh()),
                 'uploaded_media' => $uploadedMedia ?: [
                     'id' => $attachmentId > 0 ? $attachmentId : null,
                     'url' => data_get($upload, 'attachment.url'),
@@ -1435,7 +1448,7 @@ class PushCampaignController extends Controller
             MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'))
         );
 
-        if (!(bool) ($readiness['can_activate'] ?? false)) {
+        if (! (bool) ($readiness['can_activate'] ?? false)) {
             return $this->readinessBlockedResponse($readiness);
         }
 
@@ -1478,7 +1491,7 @@ class PushCampaignController extends Controller
             $timezone
         );
 
-        if (!(bool) ($readiness['can_activate'] ?? false)) {
+        if (! (bool) ($readiness['can_activate'] ?? false)) {
             return $this->readinessBlockedResponse($readiness);
         }
 
@@ -1498,7 +1511,7 @@ class PushCampaignController extends Controller
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
 
-        if (!in_array((string) $pushCampaign->status, ['scheduled', 'running'], true)) {
+        if (! in_array((string) $pushCampaign->status, ['scheduled', 'running'], true)) {
             return response()->json([
                 'message' => 'Only scheduled or running campaigns can be cancelled.',
             ], 422);
@@ -1637,7 +1650,7 @@ class PushCampaignController extends Controller
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
 
-        if (!in_array((string) $pushCampaign->status, ['draft', 'failed', 'cancelled'], true)) {
+        if (! in_array((string) $pushCampaign->status, ['draft', 'failed', 'cancelled'], true)) {
             return response()->json([
                 'message' => 'Only draft, failed, or cancelled campaigns can be deleted.',
             ], 422);
@@ -1660,8 +1673,8 @@ class PushCampaignController extends Controller
         $this->marketAuthorizationService->applyPlatformScope($platformScopeQuery, $request->user(), 'id');
         $platformIds = $platformScopeQuery
             ->pluck('id')
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->values()
             ->all();
 
@@ -1683,7 +1696,7 @@ class PushCampaignController extends Controller
             }
         }
 
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $snapshots = PushSubscriberSnapshot::query()
                 ->whereIn('platform_id', $platformIds)
                 ->orderByDesc('snapshot_date')
@@ -1729,11 +1742,11 @@ class PushCampaignController extends Controller
         }
 
         $platforms = $platformQuery->get(['id', 'name', 'country', 'domain']);
-        $platformIds = $platforms->pluck('id')->map(fn($id) => (int) $id)->all();
+        $platformIds = $platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
         $historyByPlatform = [];
         $latestByPlatform = [];
 
-        if (!empty($platformIds)) {
+        if (! empty($platformIds)) {
             $snapshots = PushSubscriberSnapshot::query()
                 ->whereIn('platform_id', $platformIds)
                 ->where('snapshot_date', '>=', now()->subDays(29)->toDateString())
@@ -1750,15 +1763,15 @@ class PushCampaignController extends Controller
                 ];
             }
 
-            foreach ($snapshots->sortByDesc(fn($snapshot) => sprintf('%s-%010d', $snapshot->snapshot_date, $snapshot->id)) as $snapshot) {
-                if (!isset($latestByPlatform[$snapshot->platform_id])) {
+            foreach ($snapshots->sortByDesc(fn ($snapshot) => sprintf('%s-%010d', $snapshot->snapshot_date, $snapshot->id)) as $snapshot) {
+                if (! isset($latestByPlatform[$snapshot->platform_id])) {
                     $latestByPlatform[$snapshot->platform_id] = $snapshot;
                 }
             }
         }
 
         return response()->json([
-            'items' => $platforms->map(fn(Platform $platform) => [
+            'items' => $platforms->map(fn (Platform $platform) => [
                 'platform_id' => (int) $platform->id,
                 'platform_name' => $platform->name,
                 'country' => $platform->country,
@@ -1779,9 +1792,9 @@ class PushCampaignController extends Controller
             'platform_id' => 'nullable|integer|exists:platforms,id',
         ]);
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $platform = Platform::query()->find((int) $validated['platform_id']);
-            if (!$platform) {
+            if (! $platform) {
                 return response()->json([
                     'message' => 'Selected platform was not found.',
                 ], 404);
@@ -1795,7 +1808,7 @@ class PushCampaignController extends Controller
 
             $result = $this->subscriberSyncService->syncPlatform($platform);
             $diagnostic = null;
-            if (!$result) {
+            if (! $result) {
                 $diagnostic = $this->pushProviderService->debugSubscriberCountForPlatform((int) $platform->id);
             }
 
@@ -1817,13 +1830,13 @@ class PushCampaignController extends Controller
         $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         if (is_array($allowedPlatformIds)) {
-            $results = array_values(array_filter($results, static fn(array $row): bool => in_array((int) ($row['platform_id'] ?? 0), $allowedPlatformIds, true)));
+            $results = array_values(array_filter($results, static fn (array $row): bool => in_array((int) ($row['platform_id'] ?? 0), $allowedPlatformIds, true)));
         }
 
         $resultPlatformIds = collect($results)
             ->pluck('platform_id')
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->values()
             ->all();
 
@@ -1840,7 +1853,7 @@ class PushCampaignController extends Controller
             }
 
             $diagnostic = $this->pushProviderService->debugSubscriberCountForPlatform($platformId);
-            if (!(bool) ($diagnostic['ok'] ?? false)) {
+            if (! (bool) ($diagnostic['ok'] ?? false)) {
                 $diagnostics[] = [
                     'platform_id' => $platformId,
                     'provider' => $diagnostic['provider'] ?? null,
@@ -1853,9 +1866,9 @@ class PushCampaignController extends Controller
             ? 'Subscriber snapshots synced successfully.'
             : 'No subscriber snapshots were synced. Verify provider credentials and active provider mapping per market.';
 
-        if (count($results) === 0 && !empty($diagnostics)) {
+        if (count($results) === 0 && ! empty($diagnostics)) {
             $first = $diagnostics[0];
-            if (!empty($first['error'])) {
+            if (! empty($first['error'])) {
                 $message = (string) $first['error'];
             }
         }
@@ -1877,7 +1890,7 @@ class PushCampaignController extends Controller
             'per_page' => 'nullable|integer|min:10|max:100',
         ]);
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $validated['platform_id'],
@@ -1890,7 +1903,7 @@ class PushCampaignController extends Controller
             ->with('creator:id,name,email')
             ->orderByDesc('updated_at');
 
-        if (!empty($validated['domain'])) {
+        if (! empty($validated['domain'])) {
             $query->forDomain((string) $validated['domain']);
         }
 
@@ -1898,7 +1911,7 @@ class PushCampaignController extends Controller
             $query->where('is_active', (bool) $validated['is_active']);
         }
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $query->where('platform_id', (int) $validated['platform_id']);
         }
 
@@ -1906,7 +1919,7 @@ class PushCampaignController extends Controller
         if (is_array($allowedPlatformIds)) {
             $query->where(function ($builder) use ($allowedPlatformIds): void {
                 $builder->whereNull('platform_id');
-                if (!empty($allowedPlatformIds)) {
+                if (! empty($allowedPlatformIds)) {
                     $builder->orWhereIn('platform_id', $allowedPlatformIds);
                 }
             });
@@ -1924,7 +1937,7 @@ class PushCampaignController extends Controller
         $url = (string) $validated['url'];
         $domain = $this->extractDomainFromUrl($url);
 
-        if (!$domain) {
+        if (! $domain) {
             return response()->json([
                 'message' => 'Unable to derive domain from URL.',
             ], 422);
@@ -1933,7 +1946,7 @@ class PushCampaignController extends Controller
         $detection = $this->selectorDetectionService->detectSelectors($url);
 
         $existingPreset = ScraperProfilePreset::query()->forDomain($domain)->first();
-        if ($existingPreset && !empty($existingPreset->platform_id)) {
+        if ($existingPreset && ! empty($existingPreset->platform_id)) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $existingPreset->platform_id,
@@ -1966,17 +1979,17 @@ class PushCampaignController extends Controller
         ]);
 
         $domain = $this->normalizeDomain((string) ($validated['domain'] ?? ''));
-        if ($domain === null && !empty($validated['test_url'])) {
+        if ($domain === null && ! empty($validated['test_url'])) {
             $domain = $this->extractDomainFromUrl((string) $validated['test_url']);
         }
 
-        if (!$domain) {
+        if (! $domain) {
             return response()->json([
                 'message' => 'A valid domain (or test_url with a valid domain) is required.',
             ], 422);
         }
 
-        if (!empty($validated['platform_id'])) {
+        if (! empty($validated['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $validated['platform_id'],
@@ -1988,7 +2001,7 @@ class PushCampaignController extends Controller
             'domain' => $domain,
         ]);
 
-        if ($preset->exists && !empty($preset->platform_id)) {
+        if ($preset->exists && ! empty($preset->platform_id)) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $preset->platform_id,
@@ -2012,11 +2025,11 @@ class PushCampaignController extends Controller
                 : (bool) ($preset->is_active ?? true),
         ]);
 
-        if (!$preset->exists || !$preset->created_by) {
+        if (! $preset->exists || ! $preset->created_by) {
             $preset->created_by = (int) $request->user()->id;
         }
 
-        $created = !$preset->exists;
+        $created = ! $preset->exists;
         $preset->save();
         $preset->load('platform:id,name,country', 'creator:id,name,email');
 
@@ -2070,7 +2083,7 @@ class PushCampaignController extends Controller
             'is_active' => 'sometimes|boolean',
         ]);
 
-        if (array_key_exists('platform_id', $validated) && !empty($validated['platform_id'])) {
+        if (array_key_exists('platform_id', $validated) && ! empty($validated['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $validated['platform_id'],
@@ -2080,7 +2093,7 @@ class PushCampaignController extends Controller
 
         if (array_key_exists('domain', $validated)) {
             $normalizedDomain = $this->normalizeDomain((string) $validated['domain']);
-            if (!$normalizedDomain) {
+            if (! $normalizedDomain) {
                 return response()->json([
                     'message' => 'domain must be a valid host value.',
                 ], 422);
@@ -2097,7 +2110,7 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $readiness
+     * @param  array<string, mixed>  $readiness
      */
     private function readinessBlockedResponse(array $readiness)
     {
@@ -2113,6 +2126,32 @@ class PushCampaignController extends Controller
             (int) $pushCampaign->platform_id,
             'You do not have access to this campaign.'
         );
+    }
+
+    private function userCanViewPushDebug(Request $request): bool
+    {
+        return in_array((string) ($request->user()?->role ?? ''), ['admin', 'sub_admin'], true);
+    }
+
+    private function providerMetaForResponse(PushCampaignItem $item, bool $includeDebug): ?array
+    {
+        $meta = $item->provider_meta;
+        if (! is_array($meta)) {
+            return null;
+        }
+
+        if (! $includeDebug || (string) $item->status !== 'failed') {
+            unset($meta['debug']);
+        }
+
+        return $meta;
+    }
+
+    private function itemForResponse(PushCampaignItem $item): PushCampaignItem
+    {
+        $item->setAttribute('provider_meta', $this->providerMetaForResponse($item, false));
+
+        return $item;
     }
 
     private function ensurePresetAccess(Request $request, ScraperProfilePreset $preset): void
@@ -2163,8 +2202,8 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array<int, int> $campaignIds
-     * @param array<string, mixed>|null $batchState
+     * @param  array<int, int>  $campaignIds
+     * @param  array<string, mixed>|null  $batchState
      * @return array<string, mixed>
      */
     private function confirmBatch(Request $request, string $batchId, array $campaignIds = [], ?array $batchState = null): array
@@ -2180,7 +2219,7 @@ class PushCampaignController extends Controller
 
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
-        if (!empty($campaignIds)) {
+        if (! empty($campaignIds)) {
             $query->whereIn('id', $campaignIds);
         }
 
@@ -2226,7 +2265,7 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $batch
+     * @param  array<string, mixed>  $batch
      */
     private function ensureUploadBatchAccess(Request $request, array $batch): void
     {
@@ -2234,7 +2273,7 @@ class PushCampaignController extends Controller
         $userId = (int) $request->user()->id;
         $role = (string) ($request->user()->role ?? '');
 
-        if ($ownerId > 0 && $ownerId !== $userId && !in_array($role, ['admin', 'sub_admin'], true)) {
+        if ($ownerId > 0 && $ownerId !== $userId && ! in_array($role, ['admin', 'sub_admin'], true)) {
             abort(403, 'You do not have access to this upload batch.');
         }
     }
@@ -2250,7 +2289,7 @@ class PushCampaignController extends Controller
             ->where('queue', 'default')
             ->whereNull('reserved_at')
             ->where('payload', 'like', '%ProcessPushUploadJob%')
-            ->where('payload', 'like', '%' . $batchId . '%')
+            ->where('payload', 'like', '%'.$batchId.'%')
             ->orderBy('id')
             ->first();
     }
@@ -2258,7 +2297,7 @@ class PushCampaignController extends Controller
     private function decodeQueuedUploadCommand(string $payload): ?object
     {
         $decoded = json_decode($payload, true);
-        if (!is_array($decoded)) {
+        if (! is_array($decoded)) {
             return null;
         }
 
@@ -2282,15 +2321,15 @@ class PushCampaignController extends Controller
         $extension = strtolower(pathinfo($sourceFilename, PATHINFO_EXTENSION));
 
         if (in_array($extension, ['xlsx', 'xls'], true)) {
-            $candidates[] = 'push-uploads/' . $batchId . '.' . $extension;
+            $candidates[] = 'push-uploads/'.$batchId.'.'.$extension;
         }
 
-        $candidates[] = 'push-uploads/' . $batchId . '.xlsx';
-        $candidates[] = 'push-uploads/' . $batchId . '.xls';
+        $candidates[] = 'push-uploads/'.$batchId.'.xlsx';
+        $candidates[] = 'push-uploads/'.$batchId.'.xls';
         $candidates = array_values(array_unique($candidates));
 
         foreach ($candidates as $candidate) {
-            if (is_file(storage_path('app/' . $candidate))) {
+            if (is_file(storage_path('app/'.$candidate))) {
                 return $candidate;
             }
         }
@@ -2300,7 +2339,7 @@ class PushCampaignController extends Controller
 
     private function shouldProcessInline(\Illuminate\Http\UploadedFile $file, bool $dryRun): bool
     {
-        if (!$dryRun) {
+        if (! $dryRun) {
             return false;
         }
 
@@ -2311,7 +2350,7 @@ class PushCampaignController extends Controller
         }
 
         $realPath = $file->getRealPath();
-        if (!is_string($realPath) || !is_file($realPath)) {
+        if (! is_string($realPath) || ! is_file($realPath)) {
             return false;
         }
 
@@ -2333,7 +2372,7 @@ class PushCampaignController extends Controller
             return true;
         }
 
-        if (!$dryRun) {
+        if (! $dryRun) {
             return false;
         }
 
@@ -2370,12 +2409,12 @@ class PushCampaignController extends Controller
 
             $lineNumber = $index + 1;
             $parsedColumns = str_getcsv($rawLine, "\t");
-            if (!is_array($parsedColumns)) {
+            if (! is_array($parsedColumns)) {
                 $parsedColumns = explode("\t", $rawLine);
             }
 
-            $columns = array_map(fn($value): string => trim((string) $value), $parsedColumns);
-            while (!empty($columns) && end($columns) === '') {
+            $columns = array_map(fn ($value): string => trim((string) $value), $parsedColumns);
+            while (! empty($columns) && end($columns) === '') {
                 array_pop($columns);
             }
 
@@ -2484,7 +2523,7 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array{date:string,profile_url:string,message:string,time:string}|array<string, mixed> $row
+     * @param  array{date:string,profile_url:string,message:string,time:string}|array<string, mixed>  $row
      */
     private function isPasteHeaderRow(array $row): bool
     {
@@ -2530,19 +2569,19 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array<int, array{date:string,profile_url:string,message:string,time:string}> $rows
+     * @param  array<int, array{date:string,profile_url:string,message:string,time:string}>  $rows
      */
     private function writePasteWorkbook(string $absolutePath, Platform $platform, int $year, array $rows): void
     {
         $directory = dirname($absolutePath);
-        if (!is_dir($directory)) {
+        if (! is_dir($directory)) {
             @mkdir($directory, 0775, true);
         }
 
         $spreadsheet = null;
 
         try {
-            $spreadsheet = new Spreadsheet();
+            $spreadsheet = new Spreadsheet;
             $sheet = $spreadsheet->getActiveSheet();
             $sheet->setTitle($this->worksheetTitleForPlatform($platform));
             $sheet->setCellValue('A1', 'DATE');
@@ -2552,10 +2591,10 @@ class PushCampaignController extends Controller
 
             $rowNumber = 2;
             foreach ($rows as $row) {
-                $sheet->setCellValue('A' . $rowNumber, $row['date']);
-                $sheet->setCellValue('B' . $rowNumber, $row['profile_url']);
-                $sheet->setCellValue('C' . $rowNumber, $row['message']);
-                $sheet->setCellValue('D' . $rowNumber, $row['time']);
+                $sheet->setCellValue('A'.$rowNumber, $row['date']);
+                $sheet->setCellValue('B'.$rowNumber, $row['profile_url']);
+                $sheet->setCellValue('C'.$rowNumber, $row['message']);
+                $sheet->setCellValue('D'.$rowNumber, $row['time']);
                 $rowNumber++;
             }
 
@@ -2596,13 +2635,13 @@ class PushCampaignController extends Controller
     {
         $issues = [];
 
-        if (config('queue.default') === 'database' && !Schema::hasTable('jobs')) {
+        if (config('queue.default') === 'database' && ! Schema::hasTable('jobs')) {
             $issues[] = 'Missing table: jobs (required for QUEUE_CONNECTION=database).';
         }
 
-        if (!$dryRun) {
+        if (! $dryRun) {
             foreach (['push_campaigns', 'push_campaign_items'] as $table) {
-                if (!Schema::hasTable($table)) {
+                if (! Schema::hasTable($table)) {
                     $issues[] = "Missing table: {$table}.";
                 }
             }
@@ -2644,7 +2683,7 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array<int, int> $campaignIds
+     * @param  array<int, int>  $campaignIds
      * @return array{total_sent:int, delivered:int, clicked:int, failed:int, closed:int}
      */
     private function deliveryTotalsForCampaignIds(array $campaignIds): array
@@ -2706,13 +2745,13 @@ class PushCampaignController extends Controller
 
     private function platformHasWpIntegration(?Platform $platform): bool
     {
-        if (!$platform) {
+        if (! $platform) {
             return false;
         }
 
-        return !empty($platform->wp_api_url)
-            && !empty($platform->wp_api_user)
-            && !empty($platform->wp_api_password);
+        return ! empty($platform->wp_api_url)
+            && ! empty($platform->wp_api_user)
+            && ! empty($platform->wp_api_password);
     }
 
     /**
@@ -2778,19 +2817,19 @@ class PushCampaignController extends Controller
 
         if ($client) {
             if ($force || $this->isBlankValue($pushCampaignItem->profile_name)) {
-                if (!$this->isBlankValue($client->name)) {
+                if (! $this->isBlankValue($client->name)) {
                     $payload['profile_name'] = trim((string) $client->name);
                 }
             }
 
             if ($force || $this->isBlankValue($pushCampaignItem->profile_phone)) {
-                if (!$this->isBlankValue($client->phone_normalized)) {
+                if (! $this->isBlankValue($client->phone_normalized)) {
                     $payload['profile_phone'] = trim((string) $client->phone_normalized);
                 }
             }
 
             if ($force || $this->isBlankValue($pushCampaignItem->profile_image_url)) {
-                if (!$this->isBlankValue($client->main_image_url)) {
+                if (! $this->isBlankValue($client->main_image_url)) {
                     $payload['profile_image_url'] = trim((string) $client->main_image_url);
                     $sources['image_source'] = 'client_main';
                 }
@@ -2803,25 +2842,25 @@ class PushCampaignController extends Controller
                 $wpPayload = $wpSync->getClientProfile($wpPostId);
                 $fields = $this->extractWpProfileFields($wpPayload);
 
-                if (($force || $this->isBlankValue($pushCampaignItem->profile_name)) && !$this->isBlankValue($fields['name'] ?? null)) {
+                if (($force || $this->isBlankValue($pushCampaignItem->profile_name)) && ! $this->isBlankValue($fields['name'] ?? null)) {
                     $payload['profile_name'] = (string) $fields['name'];
                 }
 
-                if (($force || $this->isBlankValue($pushCampaignItem->profile_phone)) && !$this->isBlankValue($fields['phone'] ?? null)) {
+                if (($force || $this->isBlankValue($pushCampaignItem->profile_phone)) && ! $this->isBlankValue($fields['phone'] ?? null)) {
                     $payload['profile_phone'] = (string) $fields['phone'];
                 }
 
                 if (($force || $this->isBlankValue($pushCampaignItem->profile_image_url) || $this->isBlankValue($payload['profile_image_url'] ?? null))
-                    && !$this->isBlankValue($fields['image'] ?? null)) {
+                    && ! $this->isBlankValue($fields['image'] ?? null)) {
                     $payload['profile_image_url'] = (string) $fields['image'];
                     $sources['image_source'] = 'wp_profile';
                 }
 
                 if ($force || $this->isBlankValue($pushCampaignItem->profile_age)) {
-                    if (!$this->isBlankValue($fields['age_value'] ?? null)) {
+                    if (! $this->isBlankValue($fields['age_value'] ?? null)) {
                         $payload['profile_age'] = (string) $fields['age_value'];
                         $sources['age_source'] = 'wp_meta_age';
-                    } elseif (!$this->isBlankValue($fields['birthday'] ?? null)) {
+                    } elseif (! $this->isBlankValue($fields['birthday'] ?? null)) {
                         $derivedAge = $this->deriveAgeFromBirthday(
                             (string) $fields['birthday'],
                             $this->resolveItemAgeReferenceDate($pushCampaignItem, $platform),
@@ -2837,7 +2876,7 @@ class PushCampaignController extends Controller
                 if ($force || $this->isBlankValue($pushCampaignItem->profile_image_url) || $this->isBlankValue($payload['profile_image_url'] ?? null)) {
                     $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
                     $recommended = $this->clientProfileImageService->selectDisplayImage($media);
-                    if ($recommended && !$this->isBlankValue($recommended['url'] ?? null)) {
+                    if ($recommended && ! $this->isBlankValue($recommended['url'] ?? null)) {
                         $payload['profile_image_url'] = (string) ($recommended['url'] ?? '');
                         $sources['image_source'] = (string) ($recommended['source'] ?? 'wp_media_first');
                     }
@@ -2854,7 +2893,7 @@ class PushCampaignController extends Controller
         }
 
         $changedProfileFields = collect(['profile_name', 'profile_phone', 'profile_image_url', 'profile_age'])
-            ->contains(fn(string $field): bool => array_key_exists($field, $payload));
+            ->contains(fn (string $field): bool => array_key_exists($field, $payload));
 
         if ($changedProfileFields) {
             $payload['error_message'] = null;
@@ -2863,10 +2902,10 @@ class PushCampaignController extends Controller
             }
         }
 
-        if ($persist && !empty($payload)) {
+        if ($persist && ! empty($payload)) {
             $pushCampaignItem->forceFill($payload)->save();
             $pushCampaignItem = $pushCampaignItem->fresh();
-        } elseif (!empty($payload)) {
+        } elseif (! empty($payload)) {
             $pushCampaignItem->forceFill($payload);
         }
 
@@ -2881,17 +2920,18 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @param array{platform:Platform,wp_post_id:int} $context
+     * @param  array{platform:Platform,wp_post_id:int}  $context
      * @return array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}>
      */
     private function fetchWpMediaOptions(array $context): array
     {
         $wpSync = new WpSyncService($context['platform']);
+
         return $this->normalizeWpMediaItems($wpSync->getClientMedia((int) $context['wp_post_id']));
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $payload
      * @return array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}>
      */
     private function normalizeWpMediaItems(array $payload): array
@@ -2928,7 +2968,7 @@ class PushCampaignController extends Controller
             $wpPostId = (int) ($this->parseWpPostIdFromUrl((string) ($pushCampaignItem->profile_url ?? '')) ?? 0);
         }
 
-        if ($requireLinkedClient && !$client) {
+        if ($requireLinkedClient && ! $client) {
             return [
                 'platform' => $platform,
                 'client' => null,
@@ -2948,7 +2988,7 @@ class PushCampaignController extends Controller
             ];
         }
 
-        if (!$this->platformHasWpIntegration($platform)) {
+        if (! $this->platformHasWpIntegration($platform)) {
             return [
                 'platform' => $platform,
                 'client' => $client,
@@ -2976,7 +3016,7 @@ class PushCampaignController extends Controller
             return $scheduledAt->copy()->setTimezone($timezone);
         }
 
-        if (!$this->isBlankValue($scheduledAt)) {
+        if (! $this->isBlankValue($scheduledAt)) {
             try {
                 return Carbon::parse((string) $scheduledAt, 'UTC')->setTimezone($timezone);
             } catch (\Throwable) {
@@ -3030,7 +3070,7 @@ class PushCampaignController extends Controller
     {
         $host = parse_url(trim($url), PHP_URL_HOST);
 
-        if (!is_string($host) || trim($host) === '') {
+        if (! is_string($host) || trim($host) === '') {
             return null;
         }
 
@@ -3044,7 +3084,7 @@ class PushCampaignController extends Controller
         $normalized = preg_replace('/\/.*/', '', $normalized) ?? $normalized;
         $normalized = preg_replace('/^www\./i', '', $normalized) ?? $normalized;
 
-        if ($normalized === '' || !preg_match('/^[a-z0-9.-]+$/', $normalized)) {
+        if ($normalized === '' || ! preg_match('/^[a-z0-9.-]+$/', $normalized)) {
             return null;
         }
 

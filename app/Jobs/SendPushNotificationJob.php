@@ -6,11 +6,12 @@ use App\Models\Client;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Models\TimelineEvent;
+use App\Services\AuditService;
 use App\Services\ClientProfileImageService;
 use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
-use App\Services\AuditService;
 use App\Services\PushNotification\PushProviderService;
 use App\Support\CrmAuditAction;
+use App\Support\MarketTimezone;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -20,7 +21,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
+class SendPushNotificationJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -51,14 +52,15 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
     public function handle(PushProviderService $pushProviderService, AuditService $auditService): void
     {
         $item = PushCampaignItem::query()
-            ->with('campaign')
+            ->with('campaign.platform:id,timezone')
             ->find($this->pushCampaignItemId);
 
-        if (!$item || !$item->campaign) {
+        if (! $item || ! $item->campaign) {
             return;
         }
 
         $campaign = $item->campaign;
+        $marketTimezone = MarketTimezone::resolve($campaign->platform?->timezone, config('app.timezone', 'UTC'));
         $actorId = $campaign->created_by ? (int) $campaign->created_by : null;
 
         if (in_array((string) $item->status, ['sent', 'failed', 'skipped'], true)) {
@@ -112,6 +114,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
                 ]);
 
                 $this->completeCampaignIfDone((int) $campaign->id);
+
                 return;
             }
         }
@@ -128,19 +131,19 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         // and analytics consistent.
         $clientRow = null;
         if ($item->client_id
-            && (!$item->profile_city || !$item->profile_image_url || $this->isFallbackProfileUrl((string) $item->profile_url))
+            && (! $item->profile_city || ! $item->profile_image_url || $this->isFallbackProfileUrl((string) $item->profile_url))
         ) {
             $clientRow = Client::query()->find((int) $item->client_id);
         }
 
         $city = $item->profile_city;
-        if (!$city && $clientRow?->city) {
+        if (! $city && $clientRow?->city) {
             $city = $clientRow->city;
             $item->forceFill(['profile_city' => $city])->save();
         }
 
         $imageUrl = trim((string) ($item->profile_image_url ?? '')) ?: null;
-        if (!$imageUrl && $clientRow) {
+        if (! $imageUrl && $clientRow) {
             // Tier 2: stored fields (main_image_url from WP sync, then display_image_url
             // computed from the WP media library by ClientProfileImageService).
             $imageUrl = $clientRow->resolvePushImageUrl();
@@ -149,7 +152,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             // provided main_image_url AND display_image_url hasn't been computed yet
             // (or was cleared), fetch the media list now. Fails soft — the send still
             // ships without an image rather than blocking on WP being reachable.
-            if (!$imageUrl && (int) ($clientRow->wp_post_id ?? 0) > 0) {
+            if (! $imageUrl && (int) ($clientRow->wp_post_id ?? 0) > 0) {
                 try {
                     $selection = app(ClientProfileImageService::class)
                         ->refreshClient($clientRow, verifyReachable: false);
@@ -169,7 +172,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
-        if (!$imageUrl) {
+        if (! $imageUrl) {
             Log::warning('Push item shipping without image', [
                 'item_id' => (int) $item->id,
                 'client_id' => $item->client_id,
@@ -211,7 +214,8 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         $result = $pushProviderService->sendPush($notification, [
             'platform_id' => (int) $campaign->platform_id,
             'provider' => $campaign->provider,
-            'idempotency_key' => 'epe-item-' . $item->id,
+            'idempotency_key' => 'epe-item-'.$item->id,
+            'request_timezone' => $marketTimezone,
         ]);
 
         $success = (bool) ($result['success'] ?? false);
@@ -220,7 +224,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         // limits) get another attempt on the queue instead of being marked
         // `failed`. Laravel's backoff() schedules the retry [30s, 60s, 120s].
         // The last attempt falls through and marks the item failed as usual.
-        if (!$success) {
+        if (! $success) {
             $providerCode = data_get($result, 'provider_response.code');
             if (is_string($providerCode)
                 && in_array($providerCode, self::RETRIABLE_CODES, true)
@@ -232,7 +236,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
                     'attempt' => $this->attempts(),
                     'max_attempts' => $this->tries,
                     'code' => $providerCode,
-                    'idempotency_key' => 'epe-item-' . $item->id,
+                    'idempotency_key' => 'epe-item-'.$item->id,
                 ]);
 
                 // Idempotency-Key on the provider side dedupes the retry so the
@@ -249,6 +253,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
                 'provider' => $result['provider'] ?? null,
                 'fallback_attempted' => (bool) ($result['fallback_attempted'] ?? false),
                 'fallback_from' => $result['fallback_from'] ?? null,
+                'debug' => $result['provider_debug'] ?? null,
             ],
             'error_message' => $success ? null : $this->formatProviderError($result['provider_response'] ?? null),
         ])->save();
@@ -290,7 +295,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
     public function uniqueId(): string
     {
-        return 'push-item-' . $this->pushCampaignItemId;
+        return 'push-item-'.$this->pushCampaignItemId;
     }
 
     public function backoff(): array
@@ -326,7 +331,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
                 return "provider_error: {$message}";
             }
 
-            return 'provider_error: ' . (string) json_encode($providerResponse);
+            return 'provider_error: '.(string) json_encode($providerResponse);
         }
 
         return 'provider_error: unknown';
@@ -359,7 +364,7 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
         }
 
         $campaign = PushCampaign::query()->find($campaignId);
-        if (!$campaign) {
+        if (! $campaign) {
             return;
         }
 

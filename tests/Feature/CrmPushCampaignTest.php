@@ -181,10 +181,10 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $filePath = storage_path('framework/testing/inline-dry-run-' . Str::uuid() . '.xlsx');
+        $filePath = storage_path('framework/testing/inline-dry-run-'.Str::uuid().'.xlsx');
         @mkdir(dirname($filePath), 0777, true);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('KENYA');
         $sheet->setCellValue('A1', 'DATE');
@@ -405,10 +405,10 @@ class CrmPushCampaignTest extends TestCase
         $uploadBatchStatusService = app(UploadBatchStatusService::class);
 
         for ($i = 1; $i <= 13; $i++) {
-            $uploadBatchStatusService->put('page-batch-' . $i, [
-                'batch_id' => 'page-batch-' . $i,
+            $uploadBatchStatusService->put('page-batch-'.$i, [
+                'batch_id' => 'page-batch-'.$i,
                 'status' => 'queued',
-                'source_filename' => 'Queue ' . $i . '.xlsx',
+                'source_filename' => 'Queue '.$i.'.xlsx',
                 'queued_at' => now()->subMinutes($i)->toDateTimeString(),
                 'initiated_by' => $user->id,
                 'dry_run' => true,
@@ -524,7 +524,7 @@ class CrmPushCampaignTest extends TestCase
 
         $response = $this->postJson('/api/crm/push-campaigns/upload/paste', [
             'platform_id' => $platform->id,
-            'content' => "Invalid row without tabs",
+            'content' => 'Invalid row without tabs',
         ]);
 
         $response->assertStatus(422);
@@ -554,7 +554,7 @@ class CrmPushCampaignTest extends TestCase
         $this->assertNotSame('', $batchId);
         $this->assertGreaterThan(0, DB::table('jobs')->count());
 
-        $cancelResponse = $this->deleteJson('/api/crm/push-campaigns/upload/' . $batchId);
+        $cancelResponse = $this->deleteJson('/api/crm/push-campaigns/upload/'.$batchId);
         $cancelResponse->assertOk()
             ->assertJsonPath('status_payload.status', 'cancelled');
 
@@ -572,10 +572,10 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $filePath = storage_path('framework/testing/process-now-' . Str::uuid() . '.xlsx');
+        $filePath = storage_path('framework/testing/process-now-'.Str::uuid().'.xlsx');
         @mkdir(dirname($filePath), 0777, true);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('KENYA');
         $sheet->setCellValue('A1', 'DATE');
@@ -605,7 +605,7 @@ class CrmPushCampaignTest extends TestCase
         $batchId = (string) $uploadResponse->json('batch_id');
         $this->assertGreaterThan(0, DB::table('jobs')->count());
 
-        $processNowResponse = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/process-now');
+        $processNowResponse = $this->postJson('/api/crm/push-campaigns/upload/'.$batchId.'/process-now');
         $processNowResponse->assertOk()
             ->assertJsonPath('status_payload.status', 'ready')
             ->assertJsonPath('status_payload.sheets_parsed', 1)
@@ -624,10 +624,10 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $filePath = storage_path('framework/testing/create-from-dry-run-' . Str::uuid() . '.xlsx');
+        $filePath = storage_path('framework/testing/create-from-dry-run-'.Str::uuid().'.xlsx');
         @mkdir(dirname($filePath), 0777, true);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('KENYA');
         $sheet->setCellValue('A1', 'DATE');
@@ -642,9 +642,9 @@ class CrmPushCampaignTest extends TestCase
         $spreadsheet->disconnectWorksheets();
 
         $batchId = 'dry-run-ready-batch';
-        $storageRelative = 'push-uploads/' . $batchId . '.xlsx';
-        @mkdir(dirname(storage_path('app/' . $storageRelative)), 0777, true);
-        copy($filePath, storage_path('app/' . $storageRelative));
+        $storageRelative = 'push-uploads/'.$batchId.'.xlsx';
+        @mkdir(dirname(storage_path('app/'.$storageRelative)), 0777, true);
+        copy($filePath, storage_path('app/'.$storageRelative));
 
         app(UploadBatchStatusService::class)->put($batchId, [
             'batch_id' => $batchId,
@@ -660,7 +660,7 @@ class CrmPushCampaignTest extends TestCase
 
         Queue::fake();
 
-        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/create-from-dry-run');
+        $response = $this->postJson('/api/crm/push-campaigns/upload/'.$batchId.'/create-from-dry-run');
         $response->assertStatus(202)
             ->assertJsonPath('status_payload.status', 'queued')
             ->assertJsonPath('status_payload.dry_run', false);
@@ -671,7 +671,7 @@ class CrmPushCampaignTest extends TestCase
         });
 
         @unlink($filePath);
-        @unlink(storage_path('app/' . $storageRelative));
+        @unlink(storage_path('app/'.$storageRelative));
     }
 
     public function test_marketing_user_can_express_create_campaigns_from_small_paste_dry_run_batch(): void
@@ -682,10 +682,10 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $filePath = storage_path('framework/testing/create-from-paste-dry-run-' . Str::uuid() . '.xlsx');
+        $filePath = storage_path('framework/testing/create-from-paste-dry-run-'.Str::uuid().'.xlsx');
         @mkdir(dirname($filePath), 0777, true);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('KENYA');
         $sheet->setCellValue('A1', 'DATE');
@@ -700,9 +700,9 @@ class CrmPushCampaignTest extends TestCase
         $spreadsheet->disconnectWorksheets();
 
         $batchId = 'paste-dry-run-ready-batch';
-        $storageRelative = 'push-uploads/' . $batchId . '.xlsx';
-        @mkdir(dirname(storage_path('app/' . $storageRelative)), 0777, true);
-        copy($filePath, storage_path('app/' . $storageRelative));
+        $storageRelative = 'push-uploads/'.$batchId.'.xlsx';
+        @mkdir(dirname(storage_path('app/'.$storageRelative)), 0777, true);
+        copy($filePath, storage_path('app/'.$storageRelative));
 
         app(UploadBatchStatusService::class)->put($batchId, [
             'batch_id' => $batchId,
@@ -719,14 +719,14 @@ class CrmPushCampaignTest extends TestCase
 
         config()->set('queue.default', 'database');
 
-        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/create-from-dry-run');
+        $response = $this->postJson('/api/crm/push-campaigns/upload/'.$batchId.'/create-from-dry-run');
         $response->assertOk()
             ->assertJsonPath('status_payload.status', 'ready')
             ->assertJsonPath('status_payload.express_mode', true);
         $this->assertSame(0, DB::table('jobs')->count());
 
         @unlink($filePath);
-        @unlink(storage_path('app/' . $storageRelative));
+        @unlink(storage_path('app/'.$storageRelative));
     }
 
     public function test_marketing_user_can_confirm_ready_batch_from_upload_queue(): void
@@ -756,7 +756,7 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/confirm');
+        $response = $this->postJson('/api/crm/push-campaigns/upload/'.$batchId.'/confirm');
         $response->assertOk()
             ->assertJsonPath('confirmed_count', 1)
             ->assertJsonPath('campaigns.0.id', $campaign->id);
@@ -782,7 +782,7 @@ class CrmPushCampaignTest extends TestCase
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya', 'Africa/Nairobi');
         $service = app(ProfileExtractionService::class);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('KENYA');
         $sheet->setCellValue('A1', 'DATE');
@@ -813,7 +813,7 @@ class CrmPushCampaignTest extends TestCase
         $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Yamoussoukro');
         $service = app(ProfileExtractionService::class);
 
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle("Côte d'Ivoire");
         $sheet->setCellValue('A1', 'DATE');
@@ -999,6 +999,67 @@ class CrmPushCampaignTest extends TestCase
             ->assertJsonPath('items.data.0.timing_reference_timezone', 'Africa/Nairobi');
 
         Carbon::setTestNow();
+    }
+
+    public function test_campaign_detail_redacts_push_debug_unless_admin_enables_it(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $marketingUser = $this->createUser('marketing', [$platform->id]);
+        $adminUser = $this->createUser('admin');
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Debug campaign',
+            'platform_id' => $platform->id,
+            'status' => 'failed',
+            'created_by' => $marketingUser->id,
+            'upload_batch_id' => 'batch-debug',
+            'source_filename' => 'auto_push_engine',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/debug/',
+            'custom_message' => 'Debug me',
+            'status' => 'failed',
+            'error_message' => 'epe_provider_error: Provider internal error (503).',
+            'provider_meta' => [
+                'provider' => 'exoticpush',
+                'fallback_attempted' => false,
+                'fallback_from' => null,
+                'debug' => [
+                    'request_timestamp' => '2026-08-05T12:40:00+03:00',
+                    'request_timezone' => 'Africa/Nairobi',
+                    'site_id' => 'site-kenya',
+                    'idempotency_key' => 'epe-item-1',
+                    'http_status' => 503,
+                    'response_body' => ['success' => false, 'message' => 'Server error'],
+                    'notification_id' => 'notification-1',
+                    'job_id' => 'job-1',
+                ],
+            ],
+        ]);
+
+        Sanctum::actingAs($marketingUser);
+        $marketingResponse = $this->getJson("/api/crm/push-campaigns/{$campaign->id}");
+        $marketingResponse->assertOk()
+            ->assertJsonPath('can_view_debug', false)
+            ->assertJsonPath('items.data.0.provider_meta.provider', 'exoticpush');
+        $this->assertNull(data_get($marketingResponse->json(), 'items.data.0.provider_meta.debug'));
+
+        $this->getJson("/api/crm/push-campaigns/{$campaign->id}?include_debug=1")
+            ->assertStatus(403);
+
+        Sanctum::actingAs($adminUser);
+        $adminResponse = $this->getJson("/api/crm/push-campaigns/{$campaign->id}?include_debug=1");
+        $adminResponse->assertOk()
+            ->assertJsonPath('can_view_debug', true)
+            ->assertJsonPath('debug_enabled', true)
+            ->assertJsonPath('items.data.0.provider_meta.debug.site_id', 'site-kenya')
+            ->assertJsonPath('items.data.0.provider_meta.debug.idempotency_key', 'epe-item-1')
+            ->assertJsonPath('items.data.0.provider_meta.debug.http_status', 503)
+            ->assertJsonPath('items.data.0.provider_meta.debug.notification_id', 'notification-1')
+            ->assertJsonPath('items.data.0.provider_meta.debug.job_id', 'job-1')
+            ->assertJsonPath('items.data.0.provider_meta.debug.response_body.message', 'Server error');
     }
 
     public function test_execute_endpoint_is_blocked_when_pending_items_are_overdue(): void
@@ -1553,6 +1614,7 @@ class CrmPushCampaignTest extends TestCase
             ->once()
             ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
                 $capturedNotification = $notification;
+
                 return [
                     'success' => true,
                     'provider' => 'exoticpush',
@@ -1620,6 +1682,7 @@ class CrmPushCampaignTest extends TestCase
             ->once()
             ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
                 $capturedNotification = $notification;
+
                 return [
                     'success' => true,
                     'provider' => 'exoticpush',
@@ -1682,6 +1745,7 @@ class CrmPushCampaignTest extends TestCase
             ->once()
             ->andReturnUsing(function (Client $c) {
                 $c->forceFill(['display_image_url' => 'https://cdn.ghana.example/media/valerie-live.webp'])->save();
+
                 return [
                     'url' => 'https://cdn.ghana.example/media/valerie-live.webp',
                     'source' => 'wp_media_main',
@@ -1696,6 +1760,7 @@ class CrmPushCampaignTest extends TestCase
             ->once()
             ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
                 $capturedNotification = $notification;
+
                 return [
                     'success' => true,
                     'provider' => 'exoticpush',
@@ -1760,6 +1825,7 @@ class CrmPushCampaignTest extends TestCase
             ->once()
             ->andReturnUsing(function ($notification, $context) use (&$capturedNotification) {
                 $capturedNotification = $notification;
+
                 return [
                     'success' => true,
                     'provider' => 'exoticpush',
@@ -1850,7 +1916,7 @@ class CrmPushCampaignTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $response = $this->getJson('/api/crm/push-campaigns/crm-profiles?platform_id=' . $platformA->id);
+        $response = $this->getJson('/api/crm/push-campaigns/crm-profiles?platform_id='.$platformA->id);
 
         $response->assertOk();
         $items = $response->json('data');
@@ -1887,7 +1953,7 @@ class CrmPushCampaignTest extends TestCase
             'platform_id' => $platform->id,
             'search' => 'nia.search@example.com',
         ]);
-        $emailResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?' . $emailQuery);
+        $emailResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?'.$emailQuery);
         $emailResponse->assertOk();
         $this->assertCount(1, $emailResponse->json('data'));
         $this->assertSame('Nia Searchable', $emailResponse->json('data.0.name'));
@@ -1896,7 +1962,7 @@ class CrmPushCampaignTest extends TestCase
             'platform_id' => $platform->id,
             'search' => '+254 700-111-222',
         ]);
-        $phoneResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?' . $phoneQuery);
+        $phoneResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?'.$phoneQuery);
         $phoneResponse->assertOk();
         $this->assertCount(1, $phoneResponse->json('data'));
         $this->assertSame('Nia Searchable', $phoneResponse->json('data.0.name'));
@@ -2436,7 +2502,8 @@ HTML,
             'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/2293/media' => Http::response([], 200),
         ]);
 
-        $extractor = new class(app(PushCampaignItemMatchService::class)) extends ProfileExtractionService {
+        $extractor = new class(app(PushCampaignItemMatchService::class)) extends ProfileExtractionService
+        {
             public function __construct(PushCampaignItemMatchService $matchService)
             {
                 parent::__construct($matchService);
@@ -2498,8 +2565,8 @@ HTML,
                 'platform_id' => $platform->id,
                 'client_type' => 'escort',
                 'wp_post_id' => 9100 + $index,
-                'name' => 'Luna Candidate ' . $index,
-                'phone_normalized' => '25470030' . str_pad((string) $index, 4, '0', STR_PAD_LEFT),
+                'name' => 'Luna Candidate '.$index,
+                'phone_normalized' => '25470030'.str_pad((string) $index, 4, '0', STR_PAD_LEFT),
                 'profile_status' => 'publish',
             ]);
         }
@@ -2987,7 +3054,7 @@ HTML,
         $this->mock(SubscriberSyncService::class, function ($mock) use ($platform): void {
             $mock->shouldReceive('syncPlatform')
                 ->once()
-                ->withArgs(fn(Platform $input): bool => (int) $input->id === (int) $platform->id)
+                ->withArgs(fn (Platform $input): bool => (int) $input->id === (int) $platform->id)
                 ->andReturn(null);
         });
 
@@ -3098,7 +3165,7 @@ HTML,
             ]),
         ]);
 
-        $provider = new ExoticPushProvider();
+        $provider = new ExoticPushProvider;
         $result = $provider->send([
             'title' => Str::repeat('T', 160),
             'message' => Str::repeat('M', 520),
@@ -3116,6 +3183,12 @@ HTML,
         $this->assertTrue((bool) $result['success']);
         $this->assertSame('exoticpush', $result['provider']);
         $this->assertSame('epe-notification-1', $result['provider_notification_id']);
+        $this->assertSame('site-123', data_get($result, 'provider_debug.site_id'));
+        $this->assertSame('epe-item-99', data_get($result, 'provider_debug.idempotency_key'));
+        $this->assertSame(200, data_get($result, 'provider_debug.http_status'));
+        $this->assertSame('epe-notification-1', data_get($result, 'provider_debug.notification_id'));
+        $this->assertSame('job-1', data_get($result, 'provider_debug.job_id'));
+        $this->assertSame(true, data_get($result, 'provider_debug.response_body.success'));
 
         Http::assertSent(function ($request): bool {
             $data = $request->data();
@@ -3144,7 +3217,7 @@ HTML,
             ]),
         ]);
 
-        $result = (new ExoticPushProvider())->send([
+        $result = (new ExoticPushProvider)->send([
             'title' => 'Test',
             'message' => 'Body',
             'target_url' => 'https://kenya.example/profiles/1',
@@ -3176,12 +3249,12 @@ HTML,
         ]);
 
         foreach ([401, 429] as $status) {
-            $result = (new ExoticPushProvider())->send([
+            $result = (new ExoticPushProvider)->send([
                 'title' => 'Test',
                 'message' => 'Body',
                 'target_url' => 'https://kenya.example/profiles/1',
             ], [
-                'site_id' => 'site-' . $status,
+                'site_id' => 'site-'.$status,
                 'api_key' => 'rest_sample',
                 'auth_token' => 'token-sample',
             ]);
@@ -3227,7 +3300,7 @@ HTML,
         ];
 
         foreach ($cases as [$siteId, $expectedCode, $expectedMessage]) {
-            $result = (new ExoticPushProvider())->send([
+            $result = (new ExoticPushProvider)->send([
                 'title' => 'Test',
                 'message' => 'Body',
                 'target_url' => 'https://kenya.example/profiles/1',
@@ -3245,7 +3318,7 @@ HTML,
 
     public function test_exotic_push_provider_signals_missing_credentials_with_code(): void
     {
-        $result = (new ExoticPushProvider())->send([
+        $result = (new ExoticPushProvider)->send([
             'title' => 'Test',
             'message' => 'Body',
             'target_url' => 'https://kenya.example/profiles/1',
@@ -3315,7 +3388,8 @@ HTML,
         // Retry logic protects transient failures from being marked failed on
         // the first try — this test cares about the error_message formatting,
         // so simulate the last attempt where the retry cap is reached.
-        $job = new class ((int) $item->id) extends SendPushNotificationJob {
+        $job = new class((int) $item->id) extends SendPushNotificationJob
+        {
             public function attempts(): int
             {
                 return 3;
@@ -3331,7 +3405,7 @@ HTML,
     public function test_webpushr_provider_maps_401_to_unauthorized(): void
     {
         Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Invalid auth token'], 401)]);
-        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+        $result = (new \App\Services\PushNotification\WebPushrProvider)->send(
             ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
             ['api_key' => 'k', 'auth_token' => 't']
         );
@@ -3342,7 +3416,7 @@ HTML,
     public function test_webpushr_provider_maps_429_to_rate_limited(): void
     {
         Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Rate limit exceeded'], 429)]);
-        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+        $result = (new \App\Services\PushNotification\WebPushrProvider)->send(
             ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
             ['api_key' => 'k', 'auth_token' => 't']
         );
@@ -3352,7 +3426,7 @@ HTML,
     public function test_webpushr_provider_maps_5xx_to_provider_error(): void
     {
         Http::fake(['https://api.webpushr.com/v1/notification/send/all' => Http::response(['error' => 'Something broke'], 502)]);
-        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+        $result = (new \App\Services\PushNotification\WebPushrProvider)->send(
             ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
             ['api_key' => 'k', 'auth_token' => 't']
         );
@@ -3362,7 +3436,7 @@ HTML,
 
     public function test_webpushr_provider_signals_missing_credentials_with_code(): void
     {
-        $result = (new \App\Services\PushNotification\WebPushrProvider())->send(
+        $result = (new \App\Services\PushNotification\WebPushrProvider)->send(
             ['title' => 'x', 'message' => 'y', 'target_url' => 'https://ex/1'],
             ['api_key' => '', 'auth_token' => '']
         );
@@ -3489,7 +3563,8 @@ HTML,
         // Simulate the LAST attempt — Laravel exposes this via the underlying
         // queue Job's attempts() bumping to $tries. We use a fake job whose
         // attempts() returns the max so the retriable path is skipped.
-        $job = new class ((int) $item->id) extends SendPushNotificationJob {
+        $job = new class((int) $item->id) extends SendPushNotificationJob
+        {
             public function attempts(): int
             {
                 return 3;
@@ -3583,7 +3658,7 @@ HTML,
             ]),
         ]);
 
-        $provider = new ExoticPushProvider();
+        $provider = new ExoticPushProvider;
         $config = [
             'site_id' => 'site-123',
             'api_key' => 'rest_sample',
@@ -3714,8 +3789,8 @@ HTML,
     private function createUser(string $role, array $assignedMarketIds = []): User
     {
         return User::query()->create([
-            'name' => ucfirst($role) . ' User',
-            'email' => strtolower($role) . Str::random(6) . '@example.test',
+            'name' => ucfirst($role).' User',
+            'email' => strtolower($role).Str::random(6).'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'assigned_market_ids' => $assignedMarketIds,

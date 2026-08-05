@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
+import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../ToastProvider';
 import { proxyImageUrl } from '../../utils/imageProxy';
 
@@ -234,6 +235,26 @@ function timingStateMeta(timingState) {
     return null;
 }
 
+function formatDebugBody(value) {
+    if (value == null) {
+        return '--';
+    }
+
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch (error) {
+        return String(value);
+    }
+}
+
+function debugValue(value) {
+    return value == null || value === '' ? '--' : String(value);
+}
+
 const EMPTY_EDIT_FORM = {
     profile_url: '',
     profile_name: '',
@@ -272,8 +293,10 @@ function mergeHydratedItemIntoForm(form, item, timeZone) {
 export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const toast = useToast();
     const queryClient = useQueryClient();
+    const { user } = useAuth();
     const [itemPage, setItemPage] = useState(1);
     const [itemStatus, setItemStatus] = useState('');
+    const [includeDebug, setIncludeDebug] = useState(false);
     const [scheduleAt, setScheduleAt] = useState('');
     const [analytics, setAnalytics] = useState(null);
     const [previewDevice, setPreviewDevice] = useState('mobile');
@@ -291,7 +314,9 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const [executeModalOpen, setExecuteModalOpen] = useState(false);
     const [executeReadiness, setExecuteReadiness] = useState(null);
 
-    const detailQueryKey = ['push-campaign-detail', campaignId, itemPage, itemStatus];
+    const canRequestDebug = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const debugRequested = canRequestDebug && includeDebug;
+    const detailQueryKey = ['push-campaign-detail', campaignId, itemPage, itemStatus, debugRequested];
 
     const { data, isLoading } = useQuery({
         queryKey: detailQueryKey,
@@ -301,6 +326,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                 page: itemPage,
                 per_page: 50,
                 ...(itemStatus ? { status: itemStatus } : {}),
+                ...(debugRequested ? { include_debug: 1 } : {}),
             },
         }).then((response) => response.data),
     });
@@ -624,6 +650,13 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const items = data?.items?.data || [];
     const pagination = data?.items || null;
     const marketTimezone = campaign?.platform?.timezone || 'UTC';
+    const canViewDebug = Boolean(data?.can_view_debug) || canRequestDebug;
+
+    useEffect(() => {
+        if (!canRequestDebug && includeDebug) {
+            setIncludeDebug(false);
+        }
+    }, [canRequestDebug, includeDebug]);
 
     useEffect(() => {
         if (!items.length) {
@@ -1075,23 +1108,35 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                             <h4 className="text-sm font-semibold text-slate-900">Items</h4>
-                            <select
-                                value={itemStatus}
-                                onChange={(event) => {
-                                    setItemStatus(event.target.value);
-                                    setItemPage(1);
-                                }}
-                                className="crm-select w-44"
-                            >
-                                <option value="">All statuses</option>
-                                <option value="pending_extraction">Pending extraction</option>
-                                <option value="needs_preset">Needs preset</option>
-                                <option value="pending">Pending</option>
-                                <option value="scheduled">Scheduled</option>
-                                <option value="sent">Sent</option>
-                                <option value="failed">Failed</option>
-                                <option value="skipped">Skipped</option>
-                            </select>
+                            <div className="flex flex-wrap items-center gap-2">
+                                {canViewDebug ? (
+                                    <label className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={includeDebug}
+                                            onChange={(event) => setIncludeDebug(event.target.checked)}
+                                        />
+                                        Debug
+                                    </label>
+                                ) : null}
+                                <select
+                                    value={itemStatus}
+                                    onChange={(event) => {
+                                        setItemStatus(event.target.value);
+                                        setItemPage(1);
+                                    }}
+                                    className="crm-select w-44"
+                                >
+                                    <option value="">All statuses</option>
+                                    <option value="pending_extraction">Pending extraction</option>
+                                    <option value="needs_preset">Needs preset</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="scheduled">Scheduled</option>
+                                    <option value="sent">Sent</option>
+                                    <option value="failed">Failed</option>
+                                    <option value="skipped">Skipped</option>
+                                </select>
+                            </div>
                         </div>
 
                         {isLoading ? (
@@ -1112,91 +1157,115 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                         {items.map((item) => {
                                             const reason = extractionReason(item);
                                             const timingMeta = timingStateMeta(item.timing_state);
+                                            const providerDebug = debugRequested && String(item.status || '') === 'failed'
+                                                ? item.provider_meta?.debug || null
+                                                : null;
 
                                             return (
-                                                <tr
-                                                    key={item.id}
-                                                    className={`border-t border-slate-100 ${previewItem?.id === item.id ? 'bg-teal-50/60' : ''}`}
-                                                    onClick={() => setPreviewItemId(item.id)}
-                                                >
-                                                    <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--', item.timing_reference_timezone || marketTimezone)}</td>
-                                                    <td className="px-2 py-1">
-                                                        <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}{item.profile_city ? ` — ${item.profile_city}` : ''}</p>
-                                                        <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
-                                                        <p className="text-[11px] text-slate-500">{item.profile_phone || 'phone n/a'} • age {item.profile_age || 'n/a'}</p>
-                                                        {item.delivery_stats && (item.delivery_stats.total_sent > 0 || item.delivery_stats.delivered > 0) ? (
-                                                            <p className="text-[10px] text-emerald-700">
-                                                                {item.delivery_stats.delivered != null ? `${item.delivery_stats.delivered} delivered` : ''}
-                                                                {item.delivery_stats.clicked > 0 ? ` · ${item.delivery_stats.clicked} clicked` : ''}
-                                                                {item.delivery_stats.closed > 0 ? ` · ${item.delivery_stats.closed} closed` : ''}
-                                                            </p>
-                                                        ) : null}
-                                                        {timingMeta ? (
-                                                            <span className={`mr-1 inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${timingMeta.className}`}>
-                                                                {timingMeta.label}
-                                                            </span>
-                                                        ) : null}
-                                                        {reason ? (
-                                                            <span className={`inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${reason.severityClass}`} title={reason.message}>
-                                                                {reason.code}
-                                                            </span>
-                                                        ) : null}
-                                                        {reason?.message ? (
-                                                            <p className="mt-0.5 max-w-[250px] truncate text-[10px] text-slate-500" title={reason.message}>
-                                                                {reason.message}
-                                                            </p>
-                                                        ) : null}
-                                                        {reason?.kind === 'redirect_home' ? (
-                                                            <p className="max-w-[250px] text-[10px] text-amber-700">
-                                                                Imported URL looks stale or wrong. Review the suggested CRM match.
-                                                            </p>
-                                                        ) : null}
-                                                    </td>
-                                                    <td className="px-2 py-1">
-                                                        <p className="max-w-[320px] truncate">{item.custom_message || '--'}</p>
-                                                    </td>
-                                                    <td className="px-2 py-1">{prettyStatus(item.status)}</td>
-                                                    <td className="px-2 py-1">
-                                                        <div className="flex items-center gap-1">
-                                                            <button
-                                                                type="button"
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    startEditing(item);
-                                                                }}
-                                                                disabled={!canMutateItem(item)}
-                                                                className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50"
-                                                            >
-                                                                Edit item
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    startMatching(item);
-                                                                }}
-                                                                disabled={!canMutateItem(item)}
-                                                                className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50"
-                                                            >
-                                                                Match CRM
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    if (!window.confirm('Remove this item from the active send list?')) {
-                                                                        return;
-                                                                    }
-                                                                    removeItemMutation.mutate(item.id);
-                                                                }}
-                                                                disabled={!canMutateItem(item) || removeItemMutation.isPending}
-                                                                className="crm-btn-danger px-2 py-1 text-xs disabled:opacity-50"
-                                                            >
-                                                                Remove
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
+                                                <React.Fragment key={item.id}>
+                                                    <tr
+                                                        className={`border-t border-slate-100 ${previewItem?.id === item.id ? 'bg-teal-50/60' : ''}`}
+                                                        onClick={() => setPreviewItemId(item.id)}
+                                                    >
+                                                        <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--', item.timing_reference_timezone || marketTimezone)}</td>
+                                                        <td className="px-2 py-1">
+                                                            <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}{item.profile_city ? ` — ${item.profile_city}` : ''}</p>
+                                                            <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
+                                                            <p className="text-[11px] text-slate-500">{item.profile_phone || 'phone n/a'} • age {item.profile_age || 'n/a'}</p>
+                                                            {item.delivery_stats && (item.delivery_stats.total_sent > 0 || item.delivery_stats.delivered > 0) ? (
+                                                                <p className="text-[10px] text-emerald-700">
+                                                                    {item.delivery_stats.delivered != null ? `${item.delivery_stats.delivered} delivered` : ''}
+                                                                    {item.delivery_stats.clicked > 0 ? ` · ${item.delivery_stats.clicked} clicked` : ''}
+                                                                    {item.delivery_stats.closed > 0 ? ` · ${item.delivery_stats.closed} closed` : ''}
+                                                                </p>
+                                                            ) : null}
+                                                            {timingMeta ? (
+                                                                <span className={`mr-1 inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${timingMeta.className}`}>
+                                                                    {timingMeta.label}
+                                                                </span>
+                                                            ) : null}
+                                                            {reason ? (
+                                                                <span className={`inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${reason.severityClass}`} title={reason.message}>
+                                                                    {reason.code}
+                                                                </span>
+                                                            ) : null}
+                                                            {reason?.message ? (
+                                                                <p className="mt-0.5 max-w-[250px] truncate text-[10px] text-slate-500" title={reason.message}>
+                                                                    {reason.message}
+                                                                </p>
+                                                            ) : null}
+                                                            {reason?.kind === 'redirect_home' ? (
+                                                                <p className="max-w-[250px] text-[10px] text-amber-700">
+                                                                    Imported URL looks stale or wrong. Review the suggested CRM match.
+                                                                </p>
+                                                            ) : null}
+                                                        </td>
+                                                        <td className="px-2 py-1">
+                                                            <p className="max-w-[320px] truncate">{item.custom_message || '--'}</p>
+                                                        </td>
+                                                        <td className="px-2 py-1">{prettyStatus(item.status)}</td>
+                                                        <td className="px-2 py-1">
+                                                            <div className="flex items-center gap-1">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        startEditing(item);
+                                                                    }}
+                                                                    disabled={!canMutateItem(item)}
+                                                                    className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50"
+                                                                >
+                                                                    Edit item
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        startMatching(item);
+                                                                    }}
+                                                                    disabled={!canMutateItem(item)}
+                                                                    className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50"
+                                                                >
+                                                                    Match CRM
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        if (!window.confirm('Remove this item from the active send list?')) {
+                                                                            return;
+                                                                        }
+                                                                        removeItemMutation.mutate(item.id);
+                                                                    }}
+                                                                    disabled={!canMutateItem(item) || removeItemMutation.isPending}
+                                                                    className="crm-btn-danger px-2 py-1 text-xs disabled:opacity-50"
+                                                                >
+                                                                    Remove
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                    {providerDebug ? (
+                                                        <tr className="border-t border-teal-100 bg-slate-50">
+                                                            <td colSpan={5} className="px-2 py-3">
+                                                                <div className="rounded-md border border-slate-200 bg-white p-3">
+                                                                    <div className="grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                                                                        <p><span className="font-semibold text-slate-700">EPE request time:</span> {debugValue(providerDebug.request_timestamp)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Timezone:</span> {debugValue(providerDebug.request_timezone)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Site ID:</span> {debugValue(providerDebug.site_id)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">Idempotency-Key:</span> {debugValue(providerDebug.idempotency_key)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">HTTP status:</span> {debugValue(providerDebug.http_status)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">notificationID:</span> {debugValue(providerDebug.notification_id)}</p>
+                                                                        <p><span className="font-semibold text-slate-700">jobID:</span> {debugValue(providerDebug.job_id)}</p>
+                                                                    </div>
+                                                                    <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                                                                        {formatDebugBody(providerDebug.response_body)}
+                                                                    </pre>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ) : null}
+                                                </React.Fragment>
                                             );
                                         })}
                                     </tbody>

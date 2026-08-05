@@ -6,6 +6,7 @@ use App\Services\PushNotification\Concerns\ClassifiesProviderFailure;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 class ExoticPushProvider implements PushProviderInterface
@@ -19,14 +20,29 @@ class ExoticPushProvider implements PushProviderInterface
 
     public function configured(array $config): bool
     {
-        return !empty($config['site_id'])
-            && !empty($config['api_key'])
-            && !empty($config['auth_token']);
+        return ! empty($config['site_id'])
+            && ! empty($config['api_key'])
+            && ! empty($config['auth_token']);
     }
 
     public function send(array $notification, array $config, array $context = []): array
     {
-        if (!$this->configured($config)) {
+        $siteId = trim((string) ($config['site_id'] ?? ''));
+        $idempotencyKey = trim((string) ($context['idempotency_key'] ?? ''));
+        $requestTimezone = trim((string) ($context['request_timezone'] ?? config('app.timezone', 'UTC'))) ?: 'UTC';
+        $requestTimestamp = now($requestTimezone);
+        $debug = [
+            'request_timestamp' => $requestTimestamp->toIso8601String(),
+            'request_timezone' => $requestTimestamp->getTimezone()->getName(),
+            'site_id' => $siteId !== '' ? $siteId : null,
+            'idempotency_key' => $idempotencyKey !== '' ? $idempotencyKey : null,
+            'http_status' => null,
+            'response_body' => null,
+            'notification_id' => null,
+            'job_id' => null,
+        ];
+
+        if (! $this->configured($config)) {
             return [
                 'success' => false,
                 'provider' => $this->id(),
@@ -35,6 +51,7 @@ class ExoticPushProvider implements PushProviderInterface
                     'code' => 'epe_credentials_missing',
                     'message' => 'Exotic Push Engine credentials are incomplete.',
                 ],
+                'provider_debug' => $debug,
             ];
         }
 
@@ -46,10 +63,9 @@ class ExoticPushProvider implements PushProviderInterface
             'image' => $notification['image_url'] ?? null,
         ];
 
-        $payload = array_filter($payload, static fn ($value) => !is_null($value) && $value !== '');
+        $payload = array_filter($payload, static fn ($value) => ! is_null($value) && $value !== '');
 
         $request = $this->baseRequest($config);
-        $idempotencyKey = trim((string) ($context['idempotency_key'] ?? ''));
         if ($idempotencyKey !== '') {
             $request = $request->withHeaders([
                 'Idempotency-Key' => $idempotencyKey,
@@ -61,6 +77,14 @@ class ExoticPushProvider implements PushProviderInterface
         $raw = $response->json();
         $body = is_array($raw) ? $raw : ['body' => $response->body()];
         $providerNotificationId = $this->extractNotificationId($body);
+        $providerJobId = $this->extractJobId($body);
+        $debug = [
+            ...$debug,
+            'http_status' => $response->status(),
+            'response_body' => $this->sanitizeDebugBody($body),
+            'notification_id' => $providerNotificationId,
+            'job_id' => $providerJobId,
+        ];
         $success = $response->successful() && data_get($body, 'success') === true;
 
         if ($success) {
@@ -69,6 +93,7 @@ class ExoticPushProvider implements PushProviderInterface
                 'provider' => $this->id(),
                 'provider_notification_id' => $providerNotificationId,
                 'provider_response' => $body,
+                'provider_debug' => $debug,
             ];
         }
 
@@ -84,19 +109,20 @@ class ExoticPushProvider implements PushProviderInterface
                 'status' => $response->status(),
                 'body' => $body,
             ],
+            'provider_debug' => $debug,
         ];
     }
 
     public function getStatus(string $providerNotificationId, array $config): ?array
     {
-        if (!$this->configured($config) || trim($providerNotificationId) === '') {
+        if (! $this->configured($config) || trim($providerNotificationId) === '') {
             return null;
         }
 
         $response = $this->baseRequest($config)
-            ->get($this->siteEndpoint($config, '/rest-api/notifications/' . rawurlencode($providerNotificationId) . '/status'));
+            ->get($this->siteEndpoint($config, '/rest-api/notifications/'.rawurlencode($providerNotificationId).'/status'));
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             return null;
         }
 
@@ -115,14 +141,14 @@ class ExoticPushProvider implements PushProviderInterface
 
     public function getSubscriberCount(array $config): ?array
     {
-        if (!$this->configured($config)) {
+        if (! $this->configured($config)) {
             return null;
         }
 
         $response = $this->baseRequest($config)
             ->get($this->siteEndpoint($config, '/rest-api/subscribers/count'));
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             $raw = $response->json();
             $body = is_array($raw) ? $raw : ['body' => $response->body()];
             $description = trim((string) $this->firstValue($body, ['message', 'error', 'description'], ''));
@@ -154,7 +180,7 @@ class ExoticPushProvider implements PushProviderInterface
             ->withHeaders([
                 'Content-Type' => 'application/json',
                 'X-EPE-Site-Key' => (string) $config['api_key'],
-                'Authorization' => 'Bearer ' . (string) $config['auth_token'],
+                'Authorization' => 'Bearer '.(string) $config['auth_token'],
             ])
             ->timeout(10)
             ->retry(2, 500, throw: false);
@@ -165,7 +191,7 @@ class ExoticPushProvider implements PushProviderInterface
         $baseUrl = rtrim((string) config('services.exotic_push.base_url', 'https://push.exotic-online.com/api'), '/');
         $siteId = rawurlencode((string) $config['site_id']);
 
-        return $baseUrl . '/sites/' . $siteId . $path;
+        return $baseUrl.'/sites/'.$siteId.$path;
     }
 
     private function extractNotificationId(array $body): ?string
@@ -181,11 +207,47 @@ class ExoticPushProvider implements PushProviderInterface
         return $id === '' ? null : $id;
     }
 
+    private function extractJobId(array $body): ?string
+    {
+        $value = $this->firstValue($body, ['data.jobId', 'data.jobID', 'jobId', 'jobID', 'job_id']);
+
+        if (is_null($value)) {
+            return null;
+        }
+
+        $id = trim((string) $value);
+
+        return $id === '' ? null : $id;
+    }
+
+    private function sanitizeDebugBody(array $body): array
+    {
+        return $this->truncateDebugValue($body);
+    }
+
+    private function truncateDebugValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return Str::limit($value, 12000, '... [truncated]');
+        }
+
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $key => $item) {
+                $normalized[$key] = $this->truncateDebugValue($item);
+            }
+
+            return $normalized;
+        }
+
+        return $value;
+    }
+
     private function firstValue(array $data, array $paths, $default = null)
     {
         foreach ($paths as $path) {
             $value = Arr::get($data, $path);
-            if (!is_null($value)) {
+            if (! is_null($value)) {
                 return $value;
             }
         }
