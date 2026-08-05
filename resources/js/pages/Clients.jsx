@@ -36,6 +36,7 @@ const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SMART_DELETE_DAY_OPTIONS = [30, 60, 90, 180, 365];
 const DEFAULT_SORT_OPTION = 'updated_desc';
 const ONLINE_STATUS_WINDOW_MINUTES = 30;
+const NO_ACTIVE_SUBSCRIPTION_PLAN_FILTER = 'no-active-subscription';
 const PLAN_SORT_ORDER = {
     vvip: 0,
     vip: 1,
@@ -1247,6 +1248,7 @@ export default function Clients() {
 
         return [
             { value: '', label: 'All plans' },
+            { value: NO_ACTIVE_SUBSCRIPTION_PLAN_FILTER, label: 'No active subscription' },
             ...Array.from(optionMap.values()),
         ];
     }, [planFilter, platformFilter, platformOptions, rows]);
@@ -1718,18 +1720,27 @@ export default function Clients() {
         {
             key: 'plan',
             label: 'Plan',
-            render: (row) => (
-                <div className="flex flex-wrap items-center gap-1.5">
-                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${planBadgeClasses(slugifyPlanKey(row.plan_key || row.plan_label) || 'basic')}`}>
-                        {row.plan_label || 'Basic'}
-                    </span>
-                    {row.verified ? (
-                        <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
-                            Verified
+            render: (row) => {
+                const hasNoActiveSubscription = isClientPubliclyActive(row) && !row.active_deal;
+
+                return (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${planBadgeClasses(slugifyPlanKey(row.plan_key || row.plan_label) || 'basic')}`}>
+                            {row.plan_label || 'Basic'}
                         </span>
-                    ) : null}
-                </div>
-            ),
+                        {hasNoActiveSubscription ? (
+                            <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                                No active subscription
+                            </span>
+                        ) : null}
+                        {row.verified ? (
+                            <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                                Verified
+                            </span>
+                        ) : null}
+                    </div>
+                );
+            },
         },
         {
             key: 'value',

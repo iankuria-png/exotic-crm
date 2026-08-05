@@ -67,6 +67,7 @@ use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ClientController extends Controller
 {
+    private const PLAN_FILTER_NO_ACTIVE_SUBSCRIPTION = 'no-active-subscription';
     private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4';
     private const PROFILE_MEDIA_IMAGE_MAX_KB = 5120;
     private const PROFILE_MEDIA_VIDEO_MAX_KB = 51200;
@@ -181,10 +182,12 @@ class ClientController extends Controller
         }
 
         if ($request->filled('plan')) {
-            $this->applyCanonicalPlanFilter(
-                $query,
-                Client::normalizePlanFilterKey((string) $request->input('plan'))
-            );
+            $planKey = Client::normalizePlanFilterKey((string) $request->input('plan'));
+            if ($planKey === self::PLAN_FILTER_NO_ACTIVE_SUBSCRIPTION) {
+                $this->applyNoActiveSubscriptionFilter($query);
+            } else {
+                $this->applyCanonicalPlanFilter($query, $planKey);
+            }
         }
 
         if ($request->filled('signup_source')) {
@@ -524,6 +527,14 @@ class ClientController extends Controller
                 $legacyQuery->where('premium', false)->where('featured', false);
             });
         });
+    }
+
+    private function applyNoActiveSubscriptionFilter($query): void
+    {
+        $query->active()
+            ->whereDoesntHave('deals', function ($dealQuery) {
+                $dealQuery->where('status', 'active');
+            });
     }
 
     private function parseClientDateBoundary(string $date, bool $endOfDay = false): Carbon

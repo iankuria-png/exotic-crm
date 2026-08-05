@@ -103,6 +103,75 @@ class ClientIndexListingTest extends TestCase
         $this->assertSame([$legacyFeaturedClient->id], collect($featuredResponse->json('data'))->pluck('id')->all());
     }
 
+    public function test_clients_index_can_filter_active_clients_without_active_subscriptions(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+
+        $activeWithoutDeal = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Active Without Deal',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        $activeWithExpiredDeal = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Active With Expired Deal',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        $activeWithPendingDeal = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Active With Pending Deal',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        $activeWithLiveDeal = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Active With Live Deal',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Inactive Without Deal',
+            'profile_status' => 'private',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $activeWithExpiredDeal->id,
+            'status' => 'expired',
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $activeWithPendingDeal->id,
+            'status' => 'pending',
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $activeWithLiveDeal->id,
+            'status' => 'active',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&plan=no-active-subscription");
+        $response->assertOk()
+            ->assertJsonPath('stats.total', 3);
+
+        $this->assertEqualsCanonicalizing(
+            [$activeWithoutDeal->id, $activeWithExpiredDeal->id, $activeWithPendingDeal->id],
+            collect($response->json('data'))->pluck('id')->all()
+        );
+    }
+
     public function test_clients_index_filters_created_date_range_and_reports_new_user_stats(): void
     {
         $platform = $this->createPlatform();
