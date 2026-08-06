@@ -157,6 +157,53 @@ class PaymentLinkService
             && (string) ($resolved['config']['mode'] ?? self::MODE_STATIC_URL) === self::MODE_PROXY_HOSTED_CHECKOUT;
     }
 
+    /**
+     * Whether the market has an enabled MANUAL payment method (paybill/bank/till
+     * with proof upload). Markets without a tokenized PSP can still run lifecycle
+     * flows by pointing the client at their manual checkout page.
+     */
+    public function hasManualPaymentMethod(?Platform $platform): bool
+    {
+        if (!$platform) {
+            return false;
+        }
+
+        return \App\Models\BillingManualPaymentMethod::query()
+            ->where('market_id', (int) $platform->id)
+            ->where('enabled', true)
+            ->exists();
+    }
+
+    /**
+     * The manual-payment checkout URL a client is sent to (shows the market's
+     * paybill/bank instructions + proof upload). Uses the per-market override
+     * when set, else the market's public pay page, with the payment reference
+     * appended so the submission can be tied back to this subscription.
+     */
+    public function resolveManualCheckoutUrl(?Platform $platform, ?Payment $payment = null, ?string $override = null): ?string
+    {
+        if (!$platform || !$payment) {
+            return null;
+        }
+
+        // An explicit per-market override wins (an external checkout page); we
+        // still append the reference so the submission ties back to this deal.
+        $override = trim((string) $override);
+        if ($override !== '') {
+            $reference = $payment->transaction_reference ?: $payment->reference_number;
+            return $reference
+                ? $override . (str_contains($override, '?') ? '&' : '?') . 'ref=' . urlencode((string) $reference)
+                : $override;
+        }
+
+        // Default: the CRM-hosted manual checkout page (signed, 30-day expiry).
+        return \Illuminate\Support\Facades\URL::temporarySignedRoute(
+            'manual.checkout',
+            now()->addDays(30),
+            ['payment' => (int) $payment->id]
+        );
+    }
+
     public function sendLink(Payment $payment, array $options = []): array
     {
         $payment->loadMissing(['platform', 'product', 'client']);

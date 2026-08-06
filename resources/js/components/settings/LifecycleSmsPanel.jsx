@@ -129,7 +129,14 @@ function MarketLifecycleRow({ market, overrides, onChange, templates, products, 
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-slate-800">{market.platform_name}</span>
                         <Badge ok={caps.sms_ready} label={caps.sms_ready ? 'SMS ready' : 'SMS not ready'} title={caps.sms_provider ? `Provider: ${caps.sms_provider}` : 'No configured SMS provider'} />
-                        <Badge ok={caps.psp_ready} label={caps.psp_ready ? 'Payment provider ready' : 'No tokenized PSP'} title={caps.psp_ready ? 'Tokenized hosted-checkout links available' : 'Link-bearing sends will be skipped (market_no_psp)'} />
+                        <Badge
+                            ok={caps.psp_ready}
+                            label={caps.payment_mode === 'tokenized' ? 'Tokenized checkout' : caps.payment_mode === 'manual' ? 'Manual checkout' : 'No payment method'}
+                            title={caps.payment_mode === 'tokenized'
+                                ? 'Tokenized hosted-checkout links available'
+                                : caps.payment_mode === 'manual'
+                                    ? 'No PSP — links point to the hosted manual checkout (paybill/bank + proof upload)'
+                                    : 'Link-bearing sends will be skipped (market_no_psp)'} />
                         <Badge ok={templatesReady} label={templatesReady ? 'Templates present' : 'No templates'} />
                     </div>
                     {smsEnabled ? (

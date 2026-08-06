@@ -79,12 +79,23 @@ class LifecycleSmsService
             $templates[$flow] = $this->resolveTemplate($flow, (int) $platform->id) !== null;
         }
 
+        $tokenized = $this->paymentLinkService->hasTokenizedProvider($platform);
+        $manual = $this->paymentLinkService->hasManualPaymentMethod($platform);
+
         return [
             'sms_ready' => $smsReady,
             'sms_provider' => $activeProvider ?: null,
-            'psp_ready' => $this->paymentLinkService->hasTokenizedProvider($platform),
+            'psp_ready' => $tokenized || $manual,
+            'payment_mode' => $tokenized ? 'tokenized' : ($manual ? 'manual' : 'none'),
             'templates' => $templates,
         ];
+    }
+
+    /** A market can carry a lifecycle payment link via a tokenized PSP or manual checkout. */
+    private function canCarryPaymentLink(?Platform $platform): bool
+    {
+        return $this->paymentLinkService->hasTokenizedProvider($platform)
+            || $this->paymentLinkService->hasManualPaymentMethod($platform);
     }
 
     // ---------------------------------------------------------------
@@ -132,11 +143,27 @@ class LifecycleSmsService
             }
         }
 
-        $link = $this->paymentLinkService->prepareTokenizedUrl($payment, [
-            'notification_purpose' => 'lifecycle_' . $flow,
-        ]);
-        if (!($link['success'] ?? false)) {
-            return $this->skip($flow, $client, (string) ($link['skip_reason'] ?? 'link_unavailable'));
+        // Tokenized hosted checkout when the market has a PSP; otherwise the
+        // CRM-hosted manual checkout page (paybill/bank + proof upload).
+        if ($this->paymentLinkService->hasTokenizedProvider($platform)) {
+            $link = $this->paymentLinkService->prepareTokenizedUrl($payment, [
+                'notification_purpose' => 'lifecycle_' . $flow,
+            ]);
+            if (!($link['success'] ?? false)) {
+                return $this->skip($flow, $client, (string) ($link['skip_reason'] ?? 'link_unavailable'));
+            }
+            $linkMode = 'tokenized';
+        } else {
+            $manualUrl = $this->paymentLinkService->resolveManualCheckoutUrl(
+                $platform,
+                $payment,
+                $marketConfig['manual_checkout_url'] ?? null
+            );
+            if (!$manualUrl) {
+                return $this->skip($flow, $client, 'market_no_psp');
+            }
+            $link = ['success' => true, 'payment_url' => $manualUrl, 'mode' => 'manual'];
+            $linkMode = 'manual';
         }
 
         $template = $evaluation['template'];
@@ -245,9 +272,10 @@ class LifecycleSmsService
             return $this->skipResult($flow, $client, 'reminders_paused');
         }
 
-        // Payment-provider capability: tokenized only, checked BEFORE any
-        // deal/payment is minted so a no-PSP market causes zero churn.
-        if (!$this->paymentLinkService->hasTokenizedProvider($platform)) {
+        // Payment-provider capability: a tokenized PSP OR a configured manual
+        // checkout, checked BEFORE any deal/payment is minted so a market with
+        // neither causes zero churn.
+        if (!$this->canCarryPaymentLink($platform)) {
             return $this->skipResult($flow, $client, 'market_no_psp');
         }
 

@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\BillingController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
+use App\Http\Controllers\ManualCheckoutController;
 
 
 /*
@@ -16,6 +17,12 @@ use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 | be assigned to the "web" middleware group. Make something great!
 |
 */
+
+// Hosted manual-payment checkout for lifecycle SMS (markets without a PSP).
+// Signed URL so it can't be enumerated; renders the market's manual methods.
+Route::get('/pay/manual/{payment}', [ManualCheckoutController::class, 'show'])
+    ->name('manual.checkout')
+    ->middleware('signed');
 
 // Payment response routes (these are called by CyberSource)
 Route::post('/response', [PaymentController::class, 'paymentResponse'])->name('payment.response');

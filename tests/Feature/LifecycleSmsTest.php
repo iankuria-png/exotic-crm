@@ -717,6 +717,57 @@ class LifecycleSmsTest extends TestCase
         $this->assertFalse($this->service()->alreadySent($client->fresh(), 'onboarding', 'onboarding'));
     }
 
+    public function test_manual_market_sends_with_a_hosted_manual_checkout_link(): void
+    {
+        // Market with NO tokenized PSP but an enabled manual method.
+        $platform = Platform::factory()->create();
+        $product = Product::factory()->create(['platform_id' => $platform->id]);
+        $price = ProductPrice::factory()->create([
+            'product_id' => $product->id,
+            'duration_key' => '1_week',
+            'duration_days' => 7,
+            'price' => 1000,
+            'currency' => 'KES',
+            'is_active' => true,
+        ]);
+        \App\Models\BillingManualPaymentMethod::create([
+            'market_id' => $platform->id,
+            'method_key' => 'paybill',
+            'enabled' => true,
+            'display_name' => 'M-Pesa Paybill',
+            'proof_required' => true,
+            'sender_name_required' => true,
+            'transaction_id_required' => true,
+            'auto_activate_on_submission' => false,
+            'details_json' => ['business_number' => '123456', 'recipient_name' => 'Exotic'],
+        ]);
+
+        $this->settings()->saveConfig([
+            'enabled' => true,
+            'markets' => [
+                (string) $platform->id => [
+                    'sms_enabled' => true,
+                    'onboarding' => ['enabled' => true, 'product_id' => $product->id, 'product_price_id' => $price->id],
+                ],
+            ],
+        ]);
+
+        $this->onboardingTemplate();
+        $this->admin();
+
+        // Capability (real service): no tokenized PSP, but manual checkout works.
+        $caps = $this->service()->capabilitiesForPlatform($platform->fresh());
+        $this->assertTrue($caps['psp_ready']);
+        $this->assertSame('manual', $caps['payment_mode']);
+
+        $this->fakeSmsDelivery();
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'fast_signup']);
+        $result = $this->service()->send('onboarding', $client);
+
+        $this->assertSame('sent', $result['status'], json_encode($result));
+        $this->assertStringContainsString('/pay/manual/', (string) $result['payment_url']);
+    }
+
     public function test_reminder_history_badges_opened_and_converted(): void
     {
         $platform = Platform::factory()->create();
