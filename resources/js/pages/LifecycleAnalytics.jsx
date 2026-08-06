@@ -10,6 +10,7 @@ const FLOW_LABELS = {
 };
 
 const WINDOW_OPTIONS = [7, 14, 30];
+const PERIOD_PRESETS = [7, 14, 30];
 
 function usd(n) {
     if (n === null || n === undefined) return '—';
@@ -35,7 +36,7 @@ function Tile({ label, value, sub, tone = 'slate' }) {
         rose: 'text-rose-700',
     };
     return (
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
             <p className={`mt-1 text-2xl font-semibold ${tones[tone]}`}>{value}</p>
             {sub ? <p className="mt-0.5 text-xs text-slate-400">{sub}</p> : null}
@@ -66,9 +67,16 @@ function FunnelBar({ label, count, total, tone }) {
 export default function LifecycleAnalytics() {
     const queryClient = useQueryClient();
     const [platformId, setPlatformId] = useState('');
-    const [from, setFrom] = useState(() => isoDaysAgo(30));
-    const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+    const [period, setPeriod] = useState(30); // 7 | 14 | 30 | 'custom'
+    const [customFrom, setCustomFrom] = useState(() => isoDaysAgo(30));
+    const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
     const [windowDays, setWindowDays] = useState(null); // null → use server default
+
+    const { from, to } = useMemo(() => (
+        period === 'custom'
+            ? { from: customFrom, to: customTo }
+            : { from: isoDaysAgo(period), to: new Date().toISOString().slice(0, 10) }
+    ), [period, customFrom, customTo]);
 
     const marketsQuery = useQuery({
         queryKey: ['my-markets'],
@@ -141,7 +149,46 @@ export default function LifecycleAnalytics() {
             </header>
 
             {/* Filters */}
-            <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex flex-wrap items-end gap-x-5 gap-y-3 rounded-xl border border-slate-200 bg-white p-3">
+                {/* Period */}
+                <div>
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Period</p>
+                    <div className="inline-flex items-center rounded-lg bg-slate-100 p-0.5">
+                        {PERIOD_PRESETS.map((p) => (
+                            <button
+                                key={p}
+                                type="button"
+                                onClick={() => setPeriod(p)}
+                                className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                            >
+                                {p}d
+                            </button>
+                        ))}
+                        <button
+                            type="button"
+                            onClick={() => setPeriod('custom')}
+                            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${period === 'custom' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                            Custom
+                        </button>
+                    </div>
+                </div>
+
+                {period === 'custom' ? (
+                    <div className="flex items-end gap-2">
+                        <div>
+                            <label htmlFor="la-from" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</label>
+                            <input id="la-from" type="date" value={customFrom} max={customTo} onChange={(e) => setCustomFrom(e.target.value)} className="crm-input text-sm" />
+                        </div>
+                        <div>
+                            <label htmlFor="la-to" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</label>
+                            <input id="la-to" type="date" value={customTo} min={customFrom} onChange={(e) => setCustomTo(e.target.value)} className="crm-input text-sm" />
+                        </div>
+                    </div>
+                ) : null}
+
+                <div className="h-9 w-px self-end bg-slate-200" aria-hidden="true" />
+
                 <div>
                     <label htmlFor="la-market" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market</label>
                     <select id="la-market" value={platformId} onChange={(e) => setPlatformId(e.target.value)} className="crm-select text-sm">
@@ -152,15 +199,7 @@ export default function LifecycleAnalytics() {
                     </select>
                 </div>
                 <div>
-                    <label htmlFor="la-from" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</label>
-                    <input id="la-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="crm-input text-sm" />
-                </div>
-                <div>
-                    <label htmlFor="la-to" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</label>
-                    <input id="la-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="crm-input text-sm" />
-                </div>
-                <div>
-                    <label htmlFor="la-window" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Attribution window</label>
+                    <label htmlFor="la-window" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500" title="How long after a send a conversion is still credited to it">Attribution window</label>
                     <div className="flex items-center gap-2">
                         <select id="la-window" value={effectiveWindow} onChange={(e) => setWindowDays(Number(e.target.value))} className="crm-select text-sm">
                             {WINDOW_OPTIONS.map((w) => <option key={w} value={w}>{w} days</option>)}
@@ -210,10 +249,10 @@ export default function LifecycleAnalytics() {
                                 <FunnelBar label="Opened link" count={data.funnel.opened} total={data.funnel.sent} tone="opened" />
                                 <FunnelBar label="Converted" count={data.funnel.converted} total={data.funnel.sent} tone="converted" />
                             </div>
-                            <div className="mt-3 flex flex-wrap gap-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                                <span><span className="font-semibold text-emerald-700">{data.funnel.direct}</span> direct (paid the link we sent)</span>
-                                <span><span className="font-semibold text-teal-700">{data.funnel.assisted}</span> assisted (activated any way in {effectiveWindow}d)</span>
-                                <span><span className="font-semibold text-slate-700">{data.new_vs_existing.new}</span> new · <span className="font-semibold text-slate-700">{data.new_vs_existing.existing}</span> existing customers</span>
+                            <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700 ring-1 ring-inset ring-emerald-600/15"><span className="font-semibold">{data.funnel.direct}</span> direct · paid the link</span>
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2.5 py-1 text-xs text-teal-700 ring-1 ring-inset ring-teal-600/15"><span className="font-semibold">{data.funnel.assisted}</span> assisted · in {effectiveWindow}d</span>
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"><span className="font-semibold">{data.new_vs_existing.new}</span> new · <span className="font-semibold">{data.new_vs_existing.existing}</span> existing</span>
                             </div>
                         </section>
 
@@ -257,7 +296,7 @@ export default function LifecycleAnalytics() {
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {data.by_flow.map((f) => (
-                                        <tr key={f.flow}>
+                                        <tr key={f.flow} className="hover:bg-slate-50">
                                             <td className="px-4 py-2 font-medium text-slate-800">{FLOW_LABELS[f.flow] || f.flow}</td>
                                             <td className="px-4 py-2 text-slate-600">{f.sent.toLocaleString()}</td>
                                             <td className="px-4 py-2 text-slate-600">{f.opened.toLocaleString()}</td>
@@ -289,7 +328,7 @@ export default function LifecycleAnalytics() {
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {data.by_market.map((m) => (
-                                            <tr key={m.platform_id}>
+                                            <tr key={m.platform_id} className="hover:bg-slate-50">
                                                 <td className="px-4 py-2 font-medium text-slate-800">{m.platform_name}</td>
                                                 <td className="px-4 py-2 text-slate-600">{m.sent.toLocaleString()}</td>
                                                 <td className="px-4 py-2 text-slate-600">{m.converted.toLocaleString()}</td>
