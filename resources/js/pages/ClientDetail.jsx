@@ -826,6 +826,17 @@ function LifecycleReminderDrawer({ open, client, toast, onClose }) {
                                                 <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
                                                     {ok ? 'Sent' : 'Failed'}
                                                 </span>
+                                                {entry.opened ? (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" title="Payment link was opened">
+                                                        <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                                        Opened
+                                                    </span>
+                                                ) : null}
+                                                {entry.converted ? (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800" title={`Converted (${entry.conversion_type})`}>
+                                                        ✓ Converted{entry.conversion_type === 'assisted' ? ' · assisted' : ''}
+                                                    </span>
+                                                ) : null}
                                                 {entry.provider ? <span className="text-[10px] text-slate-400">via {entry.provider}</span> : null}
                                                 {entry.fallback_used ? <span className="text-[10px] text-amber-600">fallback</span> : null}
                                                 <span className="ml-auto text-[10px] text-slate-400" title={entry.sent_at ? new Date(entry.sent_at).toLocaleString() : ''}>
@@ -838,7 +849,7 @@ function LifecycleReminderDrawer({ open, client, toast, onClose }) {
                                 })}
                             </ol>
                         )}
-                        <p className="mt-2 text-[11px] text-slate-400">Status reflects provider acceptance; delivery receipts aren’t tracked.</p>
+                        <p className="mt-2 text-[11px] text-slate-400">Sent = provider accepted (no delivery receipts). Opened = payment link opened. Converted = paid within the attribution window.</p>
                     </section>
                 </div>
             </div>

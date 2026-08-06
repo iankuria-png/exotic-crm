@@ -717,6 +717,60 @@ class LifecycleSmsTest extends TestCase
         $this->assertFalse($this->service()->alreadySent($client->fresh(), 'onboarding', 'onboarding'));
     }
 
+    public function test_reminder_history_badges_opened_and_converted(): void
+    {
+        $platform = Platform::factory()->create();
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+
+        // A completed lifecycle link payment (client paid the link → direct).
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $client->id,
+            'status' => 'completed',
+            'amount' => 100,
+            'currency' => 'KES',
+            'completed_at' => now()->subDay(),
+        ]);
+        \App\Models\BillingProxySession::create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'environment' => 'production',
+            'token_hash' => 'hist1',
+            'token_expires_at' => now()->addDay(),
+            'opened_at' => now()->subDay(),
+            'open_count' => 1,
+            'state' => 'opened',
+        ]);
+
+        $sentAt = now()->subDays(2);
+        TimelineEvent::create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => LifecycleSmsService::TIMELINE_EVENT_TYPE,
+            'actor_id' => null,
+            'content' => ['flow' => 'onboarding', 'status' => 'sent', 'reference' => 'onboarding', 'payment_id' => $payment->id, 'body' => 'Welcome!'],
+            'created_at' => $sentAt,
+        ]);
+        \App\Models\SmsLog::create([
+            'phone' => $client->phone_normalized,
+            'message' => 'Welcome!',
+            'status' => 'sent',
+            'provider' => 'test_provider',
+            'platform_id' => $platform->id,
+            'purpose' => 'lifecycle_onboarding',
+            'sent_at' => $sentAt,
+        ]);
+
+        $history = $this->service()->reminderHistory($client->fresh());
+
+        $this->assertCount(1, $history);
+        $this->assertTrue($history[0]['opened']);
+        $this->assertTrue($history[0]['converted']);
+        $this->assertSame('direct', $history[0]['conversion_type']);
+    }
+
     public function test_run_command_dry_run_reports_targets_without_sending(): void
     {
         [$platform] = $this->marketWithOffer();

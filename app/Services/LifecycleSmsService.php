@@ -1120,7 +1120,7 @@ class LifecycleSmsService
             return [];
         }
 
-        return \App\Models\SmsLog::query()
+        $logs = \App\Models\SmsLog::query()
             ->where('phone', $phone)
             ->where(function (Builder $builder) {
                 $builder->where('purpose', 'like', 'lifecycle_%')
@@ -1129,17 +1129,134 @@ class LifecycleSmsService
             ->where('purpose', '!=', 'lifecycle_test')
             ->orderByDesc('sent_at')
             ->limit(max(1, min(100, $limit)))
-            ->get()
-            ->map(fn ($log) => [
+            ->get();
+
+        // Per-client opened/converted outcomes, matched to each log by flow + time.
+        $outcomes = $this->clientSendOutcomes($client);
+
+        return $logs->map(function ($log) use ($outcomes) {
+            $flow = $this->flowFromPurpose((string) ($log->purpose ?: ''));
+            $outcome = $this->matchOutcome($outcomes, $flow, $log->sent_at);
+
+            return [
                 'id' => (int) $log->id,
                 'message' => (string) $log->message,
                 'status' => (string) $log->status,
                 'provider' => (string) ($log->provider ?: ''),
-                'flow' => $this->flowFromPurpose((string) ($log->purpose ?: '')),
+                'flow' => $flow,
                 'fallback_used' => (bool) $log->fallback_used,
                 'sent_at' => optional($log->sent_at)?->toIso8601String(),
-            ])
-            ->all();
+                'opened' => $outcome['opened'] ?? null,
+                'converted' => $outcome['converted'] ?? null,
+                'conversion_type' => $outcome['conversion_type'] ?? null,
+            ];
+        })->all();
+    }
+
+    /**
+     * Opened/converted outcome per lifecycle send for one client — the authoritative
+     * timeline sends (with payment_id) joined to link-opens and last-touch
+     * conversions. Used to badge the drawer history.
+     */
+    private function clientSendOutcomes(Client $client): \Illuminate\Support\Collection
+    {
+        $sends = TimelineEvent::query()
+            ->where('entity_type', 'client')
+            ->where('entity_id', (int) $client->id)
+            ->where('event_type', self::TIMELINE_EVENT_TYPE)
+            ->orderBy('created_at')
+            ->limit(200)
+            ->get(['content', 'created_at'])
+            ->map(function (TimelineEvent $event) {
+                $content = is_array($event->content) ? $event->content : [];
+                if (($content['status'] ?? null) !== 'sent') {
+                    return null;
+                }
+
+                return [
+                    'flow' => (string) ($content['flow'] ?? ''),
+                    'payment_id' => isset($content['payment_id']) ? (int) $content['payment_id'] : null,
+                    'sent_at' => $event->created_at,
+                ];
+            })
+            ->filter()
+            ->values();
+
+        if ($sends->isEmpty()) {
+            return collect();
+        }
+
+        $paymentIds = $sends->pluck('payment_id')->filter()->unique();
+        $openedSet = $paymentIds->isEmpty()
+            ? collect()
+            : \App\Models\BillingProxySession::query()
+                ->whereIn('payment_id', $paymentIds->all())
+                ->whereNotNull('opened_at')
+                ->pluck('payment_id')->map(fn ($id) => (int) $id)->unique()->flip();
+
+        $windowDays = (int) ($this->settings->currentConfig()['attribution_window_days'] ?? 7);
+        $conversions = Payment::query()
+            ->where('client_id', (int) $client->id)
+            ->where('status', 'completed')
+            ->businessVisible()
+            ->whereNotNull('completed_at')
+            ->orderBy('completed_at')
+            ->get(['id', 'completed_at']);
+
+        // Last-touch: each conversion credits the most recent qualifying send.
+        $creditedType = [];
+        foreach ($conversions as $conversion) {
+            $windowStart = $conversion->completed_at->copy()->subDays($windowDays);
+            $matchIdx = null;
+            foreach ($sends as $idx => $send) {
+                if ($send['sent_at']->lte($conversion->completed_at)
+                    && $send['sent_at']->gte($windowStart)
+                    && !array_key_exists($idx, $creditedType)) {
+                    $matchIdx = $idx;
+                }
+            }
+            if ($matchIdx === null) {
+                continue;
+            }
+            $direct = $sends[$matchIdx]['payment_id'] && (int) $sends[$matchIdx]['payment_id'] === (int) $conversion->id;
+            $creditedType[$matchIdx] = $direct ? 'direct' : 'assisted';
+        }
+
+        return $sends->map(fn ($send, $idx) => [
+            'flow' => $send['flow'],
+            'sent_at' => $send['sent_at'],
+            'opened' => (bool) ($send['payment_id'] && $openedSet->has((int) $send['payment_id'])),
+            'converted' => array_key_exists($idx, $creditedType),
+            'conversion_type' => $creditedType[$idx] ?? null,
+        ])->values();
+    }
+
+    /** Nearest same-flow send within 5 minutes of the log's send time. */
+    private function matchOutcome(\Illuminate\Support\Collection $outcomes, string $flow, $sentAt): array
+    {
+        if ($outcomes->isEmpty() || !$sentAt) {
+            return [];
+        }
+
+        $sentAt = $sentAt instanceof Carbon ? $sentAt : Carbon::parse($sentAt);
+        $best = null;
+        $bestDiff = null;
+        foreach ($outcomes as $outcome) {
+            if ($outcome['flow'] !== $flow) {
+                continue;
+            }
+            $diff = abs($outcome['sent_at']->diffInSeconds($sentAt));
+            if ($bestDiff === null || $diff < $bestDiff) {
+                $bestDiff = $diff;
+                $best = $outcome;
+            }
+        }
+
+        if ($best && $bestDiff !== null && $bestDiff <= 300) {
+            return ['opened' => $best['opened'], 'converted' => $best['converted'], 'conversion_type' => $best['conversion_type']];
+        }
+
+        return [];
     }
 
     private function flowFromPurpose(string $purpose): string
