@@ -101,6 +101,49 @@ class LifecycleAnalyticsTest extends TestCase
         $this->assertEqualsWithDelta(150.0, $overview['attributed_revenue_usd'], 0.5);
     }
 
+    public function test_messages_drill_annotates_and_filters_rows(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'name' => 'Joy']);
+
+        // Converted onboarding send (direct).
+        $paid = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $client->id,
+            'status' => 'completed',
+            'amount' => 100,
+            'currency' => 'USD',
+            'completed_at' => now()->subDays(2),
+        ]);
+        $s1 = $this->send($client, 'onboarding', $paid->id, now()->subDays(3));
+        $s1->forceFill(['content' => array_merge($s1->content, ['body' => 'Welcome Joy, tap to pay: link'])])->save();
+
+        // Non-converted win-back send.
+        $s2 = $this->send($client, 'reactivation', null, now()->subDay());
+        $s2->forceFill(['content' => array_merge($s2->content, ['body' => 'We miss you Joy'])])->save();
+
+        $service = app(LifecycleAnalyticsService::class);
+        $filters = ['from' => now()->subDays(30)->toDateString(), 'to' => now()->toDateString(), 'window_days' => 7];
+
+        $all = $service->messages($filters, 1, 25);
+        $this->assertSame(2, $all['total']);
+        $direct = collect($all['data'])->firstWhere('flow', 'onboarding');
+        $this->assertTrue($direct['converted']);
+        $this->assertSame('direct', $direct['conversion_type']);
+        $this->assertStringContainsString('Welcome Joy', $direct['body']);
+
+        // Outcome filter: only converted rows.
+        $converted = $service->messages(array_merge($filters, ['outcome' => 'converted']), 1, 25);
+        $this->assertSame(1, $converted['total']);
+        $this->assertSame('onboarding', $converted['data'][0]['flow']);
+
+        // Flow filter.
+        $winback = $service->messages(array_merge($filters, ['flow' => 'reactivation']), 1, 25);
+        $this->assertSame(1, $winback['total']);
+        $this->assertFalse($winback['data'][0]['converted']);
+    }
+
     public function test_conversion_outside_window_is_not_attributed(): void
     {
         $platform = Platform::factory()->create(['currency_code' => 'USD']);

@@ -742,6 +742,9 @@ class LifecycleSmsService
             'deal_id' => $details['deal_id'] ?? null,
             'payment_id' => $details['payment_id'] ?? null,
             'payment_url' => $details['payment_url'] ?? null,
+            // The rendered message, so the analytics drill table can show exactly
+            // what each client received without a phone-scoped sms_logs lookup.
+            'body' => $details['body'] ?? null,
             'channel' => $details['channel'] ?? null,
             'delivered_channel' => $details['delivered_channel'] ?? null,
             'source' => $details['source'] ?? 'automated',

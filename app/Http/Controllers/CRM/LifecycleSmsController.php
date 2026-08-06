@@ -304,6 +304,36 @@ class LifecycleSmsController extends Controller
         );
     }
 
+    /** Per-message drill-down rows for the analytics dashboard (paginated). */
+    public function analyticsMessages(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date',
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'window_days' => 'nullable|integer|min:1|max:90',
+            'flow' => 'nullable|string|in:onboarding,recovery,reactivation,renewal',
+            'outcome' => 'nullable|string|in:opened,converted,not_converted',
+            'search' => 'nullable|string|max:100',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:5|max:100',
+        ]);
+
+        if (!empty($validated['platform_id'])) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $validated['platform_id']);
+        }
+
+        return response()->json(
+            app(\App\Services\LifecycleAnalyticsService::class)->messages(
+                $validated,
+                (int) ($validated['page'] ?? 1),
+                (int) ($validated['per_page'] ?? 25)
+            )
+        );
+    }
+
     /** Persist the default attribution window used by the analytics dashboard. */
     public function updateAnalyticsSettings(Request $request)
     {

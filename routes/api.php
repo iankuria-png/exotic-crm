@@ -464,6 +464,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
         // Lifecycle SMS (onboarding / recovery / renewal links / reactivation)
         Route::get('/lifecycle-sms/analytics', [LifecycleSmsController::class, 'analytics']);
+        Route::get('/lifecycle-sms/analytics/messages', [LifecycleSmsController::class, 'analyticsMessages']);
         Route::patch('/lifecycle-sms/analytics/settings', [LifecycleSmsController::class, 'updateAnalyticsSettings']);
         Route::get('/lifecycle-sms/config', [LifecycleSmsController::class, 'config']);
         Route::patch('/lifecycle-sms/config', [LifecycleSmsController::class, 'updateConfig']);

@@ -102,6 +102,27 @@ export default function LifecycleAnalytics() {
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['lifecycle-analytics'] }),
     });
 
+    // Per-message drill-down
+    const [msgFlow, setMsgFlow] = useState('');
+    const [msgOutcome, setMsgOutcome] = useState('');
+    const [msgSearch, setMsgSearch] = useState('');
+    const [msgPage, setMsgPage] = useState(1);
+
+    const msgParams = useMemo(() => ({
+        ...params,
+        ...(msgFlow ? { flow: msgFlow } : {}),
+        ...(msgOutcome ? { outcome: msgOutcome } : {}),
+        ...(msgSearch.trim() ? { search: msgSearch.trim() } : {}),
+        page: msgPage,
+        per_page: 25,
+    }), [params, msgFlow, msgOutcome, msgSearch, msgPage]);
+
+    const messagesQuery = useQuery({
+        queryKey: ['lifecycle-messages', msgParams],
+        queryFn: () => api.get('/crm/lifecycle-sms/analytics/messages', { params: msgParams }).then((r) => r.data),
+        keepPreviousData: true,
+    });
+
     const data = analyticsQuery.data;
     const effectiveWindow = windowDays ?? data?.window_days ?? 7;
     const markets = marketsQuery.data || [];
@@ -341,6 +362,87 @@ export default function LifecycleAnalytics() {
                             </div>
                         </section>
                     ) : null}
+
+                    {/* Per-message drill-down */}
+                    <section className="rounded-xl border border-slate-200 bg-white">
+                        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
+                            <h3 className="text-sm font-semibold text-slate-900">Messages</h3>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                    type="search"
+                                    value={msgSearch}
+                                    onChange={(e) => { setMsgSearch(e.target.value); setMsgPage(1); }}
+                                    placeholder="Search client or text"
+                                    className="crm-input text-xs sm:w-48"
+                                    aria-label="Search messages"
+                                />
+                                <select value={msgFlow} onChange={(e) => { setMsgFlow(e.target.value); setMsgPage(1); }} className="crm-select text-xs" aria-label="Flow filter">
+                                    <option value="">All flows</option>
+                                    {Object.entries(FLOW_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                </select>
+                                <select value={msgOutcome} onChange={(e) => { setMsgOutcome(e.target.value); setMsgPage(1); }} className="crm-select text-xs" aria-label="Outcome filter">
+                                    <option value="">All outcomes</option>
+                                    <option value="opened">Opened</option>
+                                    <option value="converted">Converted</option>
+                                    <option value="not_converted">Not converted</option>
+                                </select>
+                            </div>
+                        </header>
+
+                        {messagesQuery.isLoading ? (
+                            <div className="py-10 text-center text-xs text-slate-400">Loading messages…</div>
+                        ) : (messagesQuery.data?.data || []).length === 0 ? (
+                            <div className="py-10 text-center text-xs text-slate-400">No messages match these filters.</div>
+                        ) : (
+                            <>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                                                <th className="px-4 py-2 font-semibold">Sent</th>
+                                                <th className="px-4 py-2 font-semibold">Client</th>
+                                                <th className="px-4 py-2 font-semibold">Flow</th>
+                                                <th className="px-4 py-2 font-semibold">Message</th>
+                                                <th className="px-4 py-2 font-semibold">Opened</th>
+                                                <th className="px-4 py-2 font-semibold">Converted</th>
+                                                <th className="px-4 py-2 font-semibold">Time</th>
+                                                <th className="px-4 py-2 font-semibold">Value</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {(messagesQuery.data?.data || []).map((m) => (
+                                                <tr key={m.id} className="align-top hover:bg-slate-50">
+                                                    <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-500">{new Date(m.sent_at).toLocaleString()}</td>
+                                                    <td className="px-4 py-2">
+                                                        <a href={`/clients/${m.client_id}`} className="font-medium text-teal-700 hover:underline">{m.client_name}</a>
+                                                        {m.is_new != null ? <span className="ml-1 text-[10px] text-slate-400">{m.is_new ? 'new' : 'existing'}</span> : null}
+                                                    </td>
+                                                    <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-600">{FLOW_LABELS[m.flow] || m.flow}</td>
+                                                    <td className="px-4 py-2 text-xs text-slate-600"><span className="line-clamp-2 max-w-xs" title={m.body}>{m.body || '—'}</span></td>
+                                                    <td className="px-4 py-2">{m.opened ? <span className="inline-flex rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700">Opened</span> : <span className="text-[10px] text-slate-300">—</span>}</td>
+                                                    <td className="px-4 py-2">
+                                                        {m.converted
+                                                            ? <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${m.conversion_type === 'direct' ? 'bg-emerald-50 text-emerald-700' : 'bg-teal-50 text-teal-700'}`}>{m.conversion_type}</span>
+                                                            : <span className="text-[10px] text-slate-300">—</span>}
+                                                    </td>
+                                                    <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-500">{m.hours_to_convert != null ? `${Number(m.hours_to_convert).toFixed(1)} h` : '—'}</td>
+                                                    <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-700">{m.value_usd != null ? usd(m.value_usd) : '—'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <footer className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+                                    <span>{(messagesQuery.data?.total || 0).toLocaleString()} messages</span>
+                                    <div className="flex items-center gap-2">
+                                        <button type="button" disabled={msgPage <= 1} onClick={() => setMsgPage((p) => Math.max(1, p - 1))} className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40">Prev</button>
+                                        <span>Page {messagesQuery.data?.page || 1} / {messagesQuery.data?.total_pages || 1}</span>
+                                        <button type="button" disabled={(messagesQuery.data?.page || 1) >= (messagesQuery.data?.total_pages || 1)} onClick={() => setMsgPage((p) => p + 1)} className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40">Next</button>
+                                    </div>
+                                </footer>
+                            </>
+                        )}
+                    </section>
 
                     {data.capped ? (
                         <p className="text-[11px] text-amber-600">Note: this range hit the {(20000).toLocaleString()}-send scan cap; narrow the date range for exact totals.</p>

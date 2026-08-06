@@ -48,13 +48,7 @@ class LifecycleAnalyticsService
      */
     public function overview(array $filters = []): array
     {
-        $to = isset($filters['to']) && $filters['to'] ? Carbon::parse($filters['to'])->endOfDay() : now();
-        $from = isset($filters['from']) && $filters['from'] ? Carbon::parse($filters['from'])->startOfDay() : $to->copy()->subDays(30)->startOfDay();
-        $platformId = !empty($filters['platform_id']) ? (int) $filters['platform_id'] : null;
-        $windowDays = isset($filters['window_days']) && $filters['window_days']
-            ? max(1, min(90, (int) $filters['window_days']))
-            : $this->defaultWindowDays();
-
+        [$from, $to, $platformId, $windowDays] = $this->resolveFilters($filters);
         $targetCurrency = 'USD';
 
         // 1) Sends in range.
@@ -81,47 +75,12 @@ class LifecycleAnalyticsService
             ? collect()
             : $this->loadConversions($clientIds, $from, $to->copy()->addDays($windowDays), $platformId);
 
-        // 4) Last-touch attribution: credit each conversion to the client's most
-        //    recent send within the window before it; one conversion per send.
-        $sendsByClient = $sends->groupBy('client_id')->map(
-            fn (Collection $rows) => $rows->sortBy('sent_at')->values()
-        );
-        $creditedSendIds = [];
-        $attributed = collect();
-
-        foreach ($conversions as $conversion) {
-            $clientSends = $sendsByClient->get($conversion['client_id']);
-            if (!$clientSends) {
-                continue;
-            }
-
-            $windowStart = Carbon::parse($conversion['completed_at'])->subDays($windowDays);
-            $match = null;
-            foreach ($clientSends as $send) {
-                $sentAt = $send['sent_at'];
-                if ($sentAt->lte($conversion['completed_at']) && $sentAt->gte($windowStart)) {
-                    if (!isset($creditedSendIds[$send['id']])) {
-                        $match = $send; // latest qualifying send wins (list is asc)
-                    }
-                }
-            }
-            if (!$match) {
-                continue;
-            }
-
-            $creditedSendIds[$match['id']] = true;
-            $direct = $match['payment_id'] && (int) $match['payment_id'] === (int) $conversion['payment_id'];
-            $attributed->push([
-                'flow' => $match['flow'],
-                'platform_id' => $match['platform_id'],
-                'client_id' => $match['client_id'],
-                'direct' => $direct,
-                'usd' => $this->toUsd((float) $conversion['amount'], (string) $conversion['currency'], $conversion['completed_at']),
-                'hours_to_convert' => max(0, $match['sent_at']->diffInMinutes($conversion['completed_at']) / 60),
-                'is_new' => $conversion['client_first_paid_at'] === null
-                    || Carbon::parse($conversion['client_first_paid_at'])->gte($match['sent_at']),
-            ]);
-        }
+        // 4) Last-touch attribution, then reconstruct the credited-send rows.
+        $attributionBySendId = $this->attribute($sends, $conversions, $windowDays);
+        $attributed = $sends
+            ->filter(fn ($s) => isset($attributionBySendId[$s['id']]))
+            ->map(fn ($s) => array_merge($s, $attributionBySendId[$s['id']]))
+            ->values();
 
         // 5) Roll everything up.
         $sentCount = $sends->count();
@@ -163,6 +122,150 @@ class LifecycleAnalyticsService
         ];
     }
 
+    /**
+     * Per-message drill: one paginated row per lifecycle send with its content,
+     * opened flag, conversion outcome (direct/assisted/none), value, time-to-
+     * convert and new/existing — the same attribution the overview aggregates.
+     *
+     * @param array{from?:string,to?:string,platform_id?:int|null,window_days?:int|null,flow?:string,outcome?:string,search?:string} $filters
+     */
+    public function messages(array $filters, int $page = 1, int $perPage = 25): array
+    {
+        [$from, $to, $platformId, $windowDays] = $this->resolveFilters($filters);
+
+        $sends = $this->loadSends($from, $to, $platformId);
+        $sendPaymentIds = $sends->pluck('payment_id')->filter()->unique()->values();
+        $clientIds = $sends->pluck('client_id')->filter()->unique()->values();
+
+        $openedSet = $sendPaymentIds->isEmpty()
+            ? collect()
+            : BillingProxySession::query()
+                ->whereIn('payment_id', $sendPaymentIds->all())
+                ->whereNotNull('opened_at')
+                ->pluck('payment_id')->map(fn ($id) => (int) $id)->unique()->flip();
+
+        $conversions = $clientIds->isEmpty()
+            ? collect()
+            : $this->loadConversions($clientIds, $from, $to->copy()->addDays($windowDays), $platformId);
+        $attribution = $this->attribute($sends, $conversions, $windowDays);
+
+        $names = $clientIds->isEmpty() ? collect() : \App\Models\Client::query()->whereIn('id', $clientIds->all())->pluck('name', 'id');
+
+        $flowFilter = trim((string) ($filters['flow'] ?? ''));
+        $outcome = trim((string) ($filters['outcome'] ?? '')); // opened | converted | not_converted
+        $search = strtolower(trim((string) ($filters['search'] ?? '')));
+
+        $rows = $sends
+            ->map(function ($s) use ($openedSet, $attribution, $names) {
+                $attr = $attribution[$s['id']] ?? null;
+                return [
+                    'id' => $s['id'],
+                    'sent_at' => $s['sent_at']->toIso8601String(),
+                    'client_id' => $s['client_id'],
+                    'client_name' => (string) ($names[$s['client_id']] ?? ('Client #' . $s['client_id'])),
+                    'flow' => $s['flow'],
+                    'source' => $s['source'],
+                    'body' => $s['body'],
+                    'opened' => (bool) ($s['payment_id'] && $openedSet->has((int) $s['payment_id'])),
+                    'converted' => $attr !== null,
+                    'conversion_type' => $attr === null ? null : ($attr['direct'] ? 'direct' : 'assisted'),
+                    'value_usd' => $attr['usd'] ?? null,
+                    'hours_to_convert' => $attr['hours_to_convert'] ?? null,
+                    'is_new' => $attr['is_new'] ?? null,
+                ];
+            })
+            ->filter(function ($row) use ($flowFilter, $outcome, $search) {
+                if ($flowFilter !== '' && $row['flow'] !== $flowFilter) {
+                    return false;
+                }
+                if ($outcome === 'opened' && !$row['opened']) {
+                    return false;
+                }
+                if ($outcome === 'converted' && !$row['converted']) {
+                    return false;
+                }
+                if ($outcome === 'not_converted' && $row['converted']) {
+                    return false;
+                }
+                if ($search !== '' && !str_contains(strtolower($row['client_name']), $search) && !str_contains(strtolower((string) $row['body']), $search)) {
+                    return false;
+                }
+
+                return true;
+            })
+            ->sortByDesc('sent_at')
+            ->values();
+
+        $total = $rows->count();
+        $perPage = max(5, min(100, $perPage));
+        $page = max(1, $page);
+
+        return [
+            'data' => $rows->forPage($page, $perPage)->values()->all(),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => max(1, (int) ceil($total / $perPage)),
+            'window_days' => $windowDays,
+        ];
+    }
+
+    /**
+     * Last-touch attribution map: send_id => outcome. Each conversion credits the
+     * client's most recent qualifying send; one conversion per send.
+     */
+    private function attribute(Collection $sends, Collection $conversions, int $windowDays): array
+    {
+        $sendsByClient = $sends->groupBy('client_id')->map(
+            fn (Collection $rows) => $rows->sortBy('sent_at')->values()
+        );
+        $creditedSendIds = [];
+        $map = [];
+
+        foreach ($conversions as $conversion) {
+            $clientSends = $sendsByClient->get($conversion['client_id']);
+            if (!$clientSends) {
+                continue;
+            }
+
+            $windowStart = Carbon::parse($conversion['completed_at'])->subDays($windowDays);
+            $match = null;
+            foreach ($clientSends as $send) {
+                $sentAt = $send['sent_at'];
+                if ($sentAt->lte($conversion['completed_at']) && $sentAt->gte($windowStart) && !isset($creditedSendIds[$send['id']])) {
+                    $match = $send; // latest qualifying send wins (asc list)
+                }
+            }
+            if (!$match) {
+                continue;
+            }
+
+            $creditedSendIds[$match['id']] = true;
+            $map[$match['id']] = [
+                'direct' => (bool) ($match['payment_id'] && (int) $match['payment_id'] === (int) $conversion['payment_id']),
+                'usd' => $this->toUsd((float) $conversion['amount'], (string) $conversion['currency'], $conversion['completed_at']),
+                'hours_to_convert' => max(0, $match['sent_at']->diffInMinutes($conversion['completed_at']) / 60),
+                'is_new' => $conversion['client_first_paid_at'] === null
+                    || Carbon::parse($conversion['client_first_paid_at'])->gte($match['sent_at']),
+            ];
+        }
+
+        return $map;
+    }
+
+    /** @return array{0:Carbon,1:Carbon,2:?int,3:int} */
+    private function resolveFilters(array $filters): array
+    {
+        $to = isset($filters['to']) && $filters['to'] ? Carbon::parse($filters['to'])->endOfDay() : now();
+        $from = isset($filters['from']) && $filters['from'] ? Carbon::parse($filters['from'])->startOfDay() : $to->copy()->subDays(30)->startOfDay();
+        $platformId = !empty($filters['platform_id']) ? (int) $filters['platform_id'] : null;
+        $windowDays = isset($filters['window_days']) && $filters['window_days']
+            ? max(1, min(90, (int) $filters['window_days']))
+            : $this->defaultWindowDays();
+
+        return [$from, $to, $platformId, $windowDays];
+    }
+
     private function loadSends(Carbon $from, Carbon $to, ?int $platformId): Collection
     {
         return TimelineEvent::query()
@@ -185,6 +288,8 @@ class LifecycleAnalyticsService
                     'client_id' => (int) $event->entity_id,
                     'flow' => (string) ($content['flow'] ?? 'unknown'),
                     'payment_id' => isset($content['payment_id']) ? (int) $content['payment_id'] : null,
+                    'body' => (string) ($content['body'] ?? ''),
+                    'source' => (string) ($content['source'] ?? 'automated'),
                     'sent_at' => $event->created_at,
                 ];
             })
