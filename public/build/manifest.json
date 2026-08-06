@@ -12,7 +12,11 @@
     "src": "node_modules/leaflet/dist/images/marker-icon.png"
   },
   "resources/js/app.jsx": {
+<<<<<<< HEAD
     "file": "assets/app-CH6ZeUzY.js",
+=======
+    "file": "assets/app-BcU6IuRf.js",
+>>>>>>> 1cb046b (feat(lifecycle): conversion & observability analytics dashboard (Phase 1))
     "name": "app",
     "src": "resources/js/app.jsx",
     "isEntry": true,

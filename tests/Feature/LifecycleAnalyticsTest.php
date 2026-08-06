@@ -1,0 +1,159 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\BillingProxySession;
+use App\Models\Client;
+use App\Models\Payment;
+use App\Models\Platform;
+use App\Models\TimelineEvent;
+use App\Services\LifecycleAnalyticsService;
+use App\Services\LifecycleSmsService;
+use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class LifecycleAnalyticsTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Carbon::setTestNow(Carbon::parse('2026-07-24 12:00:00', 'UTC'));
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
+
+    private function send(Client $client, string $flow, ?int $paymentId, Carbon $at): TimelineEvent
+    {
+        return TimelineEvent::create([
+            'platform_id' => $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => LifecycleSmsService::TIMELINE_EVENT_TYPE,
+            'actor_id' => null,
+            'content' => ['flow' => $flow, 'status' => 'sent', 'reference' => $flow, 'payment_id' => $paymentId],
+            'created_at' => $at,
+        ]);
+    }
+
+    public function test_funnel_direct_and_assisted_attribution(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+
+        // Client A: onboarding link sent, opened, and the SAME link payment completes → DIRECT.
+        $clientA = Client::factory()->create(['platform_id' => $platform->id]);
+        $linkPayment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $clientA->id,
+            'status' => 'completed',
+            'amount' => 100,
+            'currency' => 'USD',
+            'completed_at' => now()->subDays(4),
+            'raw_payload' => ['source' => 'crm_lifecycle', 'lifecycle_flow' => 'onboarding'],
+        ]);
+        $this->send($clientA, 'onboarding', $linkPayment->id, now()->subDays(5));
+        BillingProxySession::create([
+            'payment_id' => $linkPayment->id,
+            'provider_type_key' => 'pawapay',
+            'environment' => 'production',
+            'token_hash' => 'h1',
+            'token_expires_at' => now()->addDay(),
+            'opened_at' => now()->subDays(4),
+            'open_count' => 2,
+            'state' => 'opened',
+        ]);
+
+        // Client B: win-back sent; client pays via a DIFFERENT payment in-window → ASSISTED.
+        $clientB = Client::factory()->create(['platform_id' => $platform->id]);
+        $this->send($clientB, 'reactivation', 999999, now()->subDays(3));
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $clientB->id,
+            'status' => 'completed',
+            'amount' => 50,
+            'currency' => 'USD',
+            'completed_at' => now()->subDays(2),
+        ]);
+
+        // Client C: sent, never converted.
+        $clientC = Client::factory()->create(['platform_id' => $platform->id]);
+        $this->send($clientC, 'onboarding', null, now()->subDays(6));
+
+        $overview = app(LifecycleAnalyticsService::class)->overview([
+            'from' => now()->subDays(30)->toDateString(),
+            'to' => now()->toDateString(),
+            'window_days' => 7,
+        ]);
+
+        $this->assertSame(3, $overview['funnel']['sent']);
+        $this->assertSame(1, $overview['funnel']['opened']);
+        $this->assertSame(2, $overview['funnel']['converted']);
+        $this->assertSame(1, $overview['funnel']['direct']);
+        $this->assertSame(1, $overview['funnel']['assisted']);
+        $this->assertEqualsWithDelta(150.0, $overview['attributed_revenue_usd'], 0.5);
+    }
+
+    public function test_conversion_outside_window_is_not_attributed(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+
+        $this->send($client, 'onboarding', null, now()->subDays(20));
+        // Paid 10 days after the send — outside a 7-day window.
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $client->id,
+            'status' => 'completed',
+            'amount' => 100,
+            'currency' => 'USD',
+            'completed_at' => now()->subDays(10),
+        ]);
+
+        $overview = app(LifecycleAnalyticsService::class)->overview([
+            'from' => now()->subDays(30)->toDateString(),
+            'to' => now()->toDateString(),
+            'window_days' => 7,
+        ]);
+
+        $this->assertSame(1, $overview['funnel']['sent']);
+        $this->assertSame(0, $overview['funnel']['converted']);
+    }
+
+    public function test_payment_rollup_groups_lifecycle_payments_by_status(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+
+        foreach ([['completed', 100], ['initiated', 40], ['pending', 40], ['failed', 30]] as [$status, $amount]) {
+            Payment::factory()->create([
+                'platform_id' => $platform->id,
+                'product_id' => null,
+            'client_id' => $client->id,
+                'status' => $status,
+                'amount' => $amount,
+                'currency' => 'USD',
+                'completed_at' => $status === 'completed' ? now()->subDay() : null,
+                'raw_payload' => ['source' => 'crm_lifecycle', 'lifecycle_flow' => 'onboarding'],
+            ]);
+        }
+
+        $overview = app(LifecycleAnalyticsService::class)->overview([
+            'from' => now()->subDays(30)->toDateString(),
+            'to' => now()->toDateString(),
+        ]);
+
+        $this->assertSame(1, $overview['payments']['completed']['count']);
+        $this->assertSame(2, $overview['payments']['pending']['count']); // initiated + pending
+        $this->assertSame(1, $overview['payments']['failed']['count']);
+        $this->assertSame(4, $overview['payments']['total']['count']);
+    }
+}

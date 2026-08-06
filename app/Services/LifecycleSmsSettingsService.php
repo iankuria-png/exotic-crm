@@ -23,6 +23,7 @@ class LifecycleSmsSettingsService
     {
         return [
             'enabled' => false,
+            'attribution_window_days' => 7,
             'defaults' => [
                 'channel' => 'sms',
                 'rate_cap_count' => 3,
@@ -136,6 +137,10 @@ class LifecycleSmsSettingsService
 
         if (array_key_exists('enabled', $incoming)) {
             $merged['enabled'] = (bool) $incoming['enabled'];
+        }
+
+        if (array_key_exists('attribution_window_days', $incoming) && is_numeric($incoming['attribution_window_days'])) {
+            $merged['attribution_window_days'] = max(1, min(90, (int) $incoming['attribution_window_days']));
         }
 
         if (is_array($incoming['defaults'] ?? null)) {

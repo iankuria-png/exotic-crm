@@ -11,6 +11,7 @@ import Payments from './pages/Payments';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
+import LifecycleAnalytics from './pages/LifecycleAnalytics';
 import PushCampaigns from './pages/PushCampaigns';
 import AutoPush from './pages/AutoPush';
 import Reports from './pages/Reports';
@@ -139,6 +140,7 @@ export default function AppRouter() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
+                <Route path="lifecycle" element={<LifecycleAnalytics />} />
                 <Route path="kyc" element={<Kyc />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
                 <Route path="auto-push" element={<AutoPush />} />

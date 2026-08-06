@@ -283,6 +283,47 @@ class LifecycleSmsController extends Controller
         return response()->json($this->lifecycleSmsService->previewForClient((string) $validated['flow'], $client));
     }
 
+    /** Aggregate lifecycle analytics dashboard (funnel, conversion, payments). */
+    public function analytics(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date',
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'window_days' => 'nullable|integer|min:1|max:90',
+        ]);
+
+        if (!empty($validated['platform_id'])) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $validated['platform_id']);
+        }
+
+        return response()->json(
+            app(\App\Services\LifecycleAnalyticsService::class)->overview($validated)
+        );
+    }
+
+    /** Persist the default attribution window used by the analytics dashboard. */
+    public function updateAnalyticsSettings(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can change analytics settings.'
+        );
+
+        $validated = $request->validate([
+            'attribution_window_days' => 'required|integer|min:1|max:90',
+        ]);
+
+        $this->settings->saveConfig([
+            'attribution_window_days' => (int) $validated['attribution_window_days'],
+        ], (int) $request->user()->id);
+
+        return response()->json(['attribution_window_days' => (int) $validated['attribution_window_days']]);
+    }
+
     /** Reminder telemetry for the client page (count, last send, per-flow, paused). */
     public function stats(Request $request, Client $client)
     {
