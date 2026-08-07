@@ -11,8 +11,10 @@
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink); line-height:1.5; }
     .wrap { max-width:520px; margin:0 auto; padding:16px 16px 48px; }
     .top { display:flex; align-items:center; gap:10px; padding:14px 2px 18px; }
-    .top .dot { width:34px; height:34px; border-radius:9px; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:700; }
+    .top .flag { font-size:24px; line-height:1; }
     .top b { font-size:15px; }
+    .top .sec { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); background:#fff; border:1px solid var(--line); padding:5px 9px; border-radius:999px; }
+    .top .sec svg { width:12px; height:12px; }
     .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:18px; margin-bottom:14px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
     .amt { text-align:center; padding:22px 18px; }
     .amt .lbl { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
@@ -51,8 +53,12 @@
 <body>
 <div class="wrap">
     <div class="top">
-        <span class="dot">{{ strtoupper(substr($platform->name,0,1)) }}</span>
+        @if($flag)<span class="flag">{!! $flag !!}</span>@endif
         <b>{{ $platform->name }}</b>
+        <span class="sec">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            Secure
+        </span>
     </div>
 
     <div id="checkout">

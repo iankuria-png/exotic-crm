@@ -52,28 +52,55 @@ class ManualCheckoutController extends Controller
         $currency = (string) ($payment->currency ?: ($platform->currency_code ?: 'KES'));
         $nameParts = preg_split('/\s+/', trim((string) ($client?->name ?: 'Client')), 2) ?: ['Client'];
 
+        $payment->loadMissing('deal');
+        // The lifecycle pro-forma deal is custom-priced (product_price_id is null),
+        // so pass the catalog price it maps to (base_product_price_id) — otherwise
+        // the submit re-resolves by duration 'manual' and fails with
+        // "<CUR> price not configured for this plan/duration".
+        $priceId = (int) ($payment->deal?->base_product_price_id ?: $payment->deal?->product_price_id ?: 0) ?: null;
+
         return view('manual-checkout', [
             'payment' => $payment,
             'platform' => $platform,
             'client' => $client,
+            'flag' => $this->flagEmoji($platform->country),
             'methods' => $methods,
             'currency' => $currency,
             'amountDisplay' => $currency . ' ' . number_format((float) $payment->amount),
             'productName' => (string) ($payment->product?->display_name ?: $payment->product?->name ?: 'your subscription'),
             'reference' => (string) ($payment->transaction_reference ?: $payment->reference_number),
             'submitContext' => [
+                // Linkage: the submission is matched to THIS profile by the WP user
+                // id (primary) + phone + market, so the receipt can't land on the
+                // wrong account. product/price/amount are locked to the deal.
                 'product_id' => (int) $payment->product_id,
-                'product_price_id' => (int) ($payment->deal?->product_price_id ?? 0) ?: null,
+                'product_price_id' => $priceId,
                 'platform_id' => (int) $platform->id,
                 'user_id' => (int) ($client?->wp_user_id ?? 0),
                 'first_name' => $nameParts[0] ?: 'Client',
                 'last_name' => $nameParts[1] ?? '.',
                 'phone' => (string) ($client?->phone_normalized ?: $payment->phone),
                 'email' => (string) ($client?->email ?? ''),
-                'duration' => (string) ($payment->duration ?: ''),
                 'currency' => $currency,
             ],
         ]);
+    }
+
+    /** Country name → flag emoji (regional-indicator pair). */
+    private function flagEmoji(?string $country): string
+    {
+        $map = [
+            'kenya' => 'KE', 'tanzania' => 'TZ', 'uganda' => 'UG', 'nigeria' => 'NG',
+            'south africa' => 'ZA', 'ghana' => 'GH', 'ethiopia' => 'ET', 'rwanda' => 'RW',
+            'zambia' => 'ZM', 'botswana' => 'BW', 'zimbabwe' => 'ZW', 'malawi' => 'MW',
+        ];
+        $normalized = strtolower(trim((string) $country));
+        $code = $map[$normalized] ?? (strlen($normalized) >= 2 ? strtoupper(substr($normalized, 0, 2)) : '');
+        if (strlen($code) !== 2 || !ctype_alpha($code)) {
+            return '';
+        }
+
+        return mb_chr(0x1F1E6 + ord($code[0]) - 65) . mb_chr(0x1F1E6 + ord($code[1]) - 65);
     }
 
     private function recordOpen(Payment $payment, $platform): void

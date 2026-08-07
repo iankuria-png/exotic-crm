@@ -18,7 +18,7 @@ class ManualCheckoutTest extends TestCase
 
     private function makePayment(): Payment
     {
-        $platform = Platform::factory()->create(['name' => 'Tanzania', 'currency_code' => 'TZS']);
+        $platform = Platform::factory()->create(['name' => 'Tanzania', 'country' => 'Tanzania', 'currency_code' => 'TZS']);
         $product = Product::factory()->create(['platform_id' => $platform->id, 'name' => 'VIP', 'display_name' => 'VIP']);
         $client = Client::factory()->create(['platform_id' => $platform->id, 'wp_user_id' => 4321, 'name' => 'Amani M']);
 
@@ -35,7 +35,15 @@ class ManualCheckoutTest extends TestCase
             'details_json' => ['phone_number' => '+255746734025', 'recipient_name' => 'AMANI MOLEL'],
         ]);
 
-        return Payment::factory()->create([
+        $price = \App\Models\ProductPrice::factory()->create([
+            'product_id' => $product->id,
+            'duration_key' => '1_week',
+            'duration_days' => 7,
+            'price' => 15000,
+            'currency' => 'TZS',
+            'is_active' => true,
+        ]);
+        $payment = Payment::factory()->create([
             'platform_id' => $platform->id,
             'client_id' => $client->id,
             'product_id' => $product->id,
@@ -43,6 +51,18 @@ class ManualCheckoutTest extends TestCase
             'currency' => 'TZS',
             'transaction_reference' => 'LIFECYCLE-99',
         ]);
+        // Custom-priced lifecycle deal: real price lives in base_product_price_id.
+        $deal = \App\Models\Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'product_price_id' => null,
+            'base_product_price_id' => $price->id,
+            'duration' => 'manual',
+        ]);
+        $payment->forceFill(['deal_id' => $deal->id])->save();
+
+        return $payment->fresh();
     }
 
     public function test_signed_manual_checkout_page_renders_market_details(): void
@@ -55,7 +75,11 @@ class ManualCheckoutTest extends TestCase
             ->assertSee('Vodacom M-Pesa')
             ->assertSee('+255746734025')
             ->assertSee('TZS 15,000')
-            ->assertSee('Upload your payment proof');
+            ->assertSee('Upload your payment proof')
+            ->assertSee("\u{1F1F9}\u{1F1FF}") // 🇹🇿 flag
+            // Submit context locks to the catalog price (base_product_price_id),
+            // so the submit resolves the currency price instead of 'manual'.
+            ->assertSee('"product_price_id":' . $payment->deal->base_product_price_id, false);
 
         // The open is recorded so lifecycle analytics can count it.
         $this->assertDatabaseHas('billing_proxy_sessions', [
