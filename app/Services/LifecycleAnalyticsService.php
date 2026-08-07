@@ -82,6 +82,27 @@ class LifecycleAnalyticsService
             ->map(fn ($s) => array_merge($s, $attributionBySendId[$s['id']]))
             ->values();
 
+        // 4b) Manual "proof submitted / in review" stage — for manual markets,
+        //     clients pay offline and upload proof before activation. Credit each
+        //     submission to its most recent send (last-touch), same as conversions.
+        $submissions = $clientIds->isEmpty()
+            ? collect()
+            : \App\Models\PaymentManualSubmission::query()
+                ->whereIn('client_id', $clientIds->all())
+                ->whereBetween('created_at', [$from, $to->copy()->addDays($windowDays)])
+                ->get(['payment_id', 'client_id', 'created_at'])
+                ->map(fn ($s) => [
+                    'payment_id' => (int) $s->payment_id,
+                    'client_id' => (int) $s->client_id,
+                    'amount' => 0.0,
+                    'currency' => 'USD',
+                    'completed_at' => $s->created_at,
+                    'client_first_paid_at' => null,
+                ])
+                ->sortBy('completed_at')
+                ->values();
+        $submittedCount = count($this->attribute($sends, $submissions, $windowDays));
+
         // 5) Roll everything up.
         $sentCount = $sends->count();
         $openedCount = $sends->filter(fn ($s) => $s['payment_id'] && $openedSet->has((int) $s['payment_id']))->count();
@@ -100,8 +121,10 @@ class LifecycleAnalyticsService
             'funnel' => [
                 'sent' => $sentCount,
                 'opened' => $openedCount,
+                'submitted' => $submittedCount,
                 'converted' => $convertedCount,
                 'open_rate' => $sentCount > 0 ? round($openedCount / $sentCount * 100, 1) : 0.0,
+                'submitted_rate' => $sentCount > 0 ? round($submittedCount / $sentCount * 100, 1) : 0.0,
                 'conversion_rate' => $sentCount > 0 ? round($convertedCount / $sentCount * 100, 1) : 0.0,
                 'direct' => $directCount,
                 'assisted' => $assistedCount,

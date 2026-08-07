@@ -49,6 +49,7 @@ function FunnelBar({ label, count, total, tone }) {
     const tones = {
         sent: 'bg-slate-300',
         opened: 'bg-teal-400',
+        submitted: 'bg-amber-400',
         converted: 'bg-emerald-500',
     };
     return (
@@ -268,6 +269,9 @@ export default function LifecycleAnalytics() {
                             <div className="space-y-3">
                                 <FunnelBar label="Sent" count={data.funnel.sent} total={data.funnel.sent} tone="sent" />
                                 <FunnelBar label="Opened link" count={data.funnel.opened} total={data.funnel.sent} tone="opened" />
+                                {data.funnel.submitted > 0 ? (
+                                    <FunnelBar label="Proof submitted · in review" count={data.funnel.submitted} total={data.funnel.sent} tone="submitted" />
+                                ) : null}
                                 <FunnelBar label="Converted" count={data.funnel.converted} total={data.funnel.sent} tone="converted" />
                             </div>
                             <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">

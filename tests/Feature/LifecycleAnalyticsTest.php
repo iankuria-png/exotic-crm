@@ -171,6 +171,44 @@ class LifecycleAnalyticsTest extends TestCase
         $this->assertSame(0, $overview['funnel']['converted']);
     }
 
+    public function test_funnel_counts_proof_submitted_stage(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+
+        $this->send($client, 'onboarding', null, now()->subDays(2));
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $client->id,
+            'status' => 'initiated',
+            'amount' => 50,
+            'currency' => 'USD',
+        ]);
+        \App\Models\PaymentManualSubmission::create([
+            'payment_id' => $payment->id,
+            'client_id' => $client->id,
+            'platform_id' => $platform->id,
+            'duration_key' => '1_week',
+            'manual_method_key' => 'till',
+            'sender_name' => 'Client',
+            'transaction_reference' => 'ABC123',
+            'proof_path' => 'proofs/x.jpg',
+            'proof_mime' => 'image/jpeg',
+            'created_at' => now()->subDay(),
+        ]);
+
+        $overview = app(LifecycleAnalyticsService::class)->overview([
+            'from' => now()->subDays(30)->toDateString(),
+            'to' => now()->toDateString(),
+            'window_days' => 7,
+        ]);
+
+        $this->assertSame(1, $overview['funnel']['submitted']);
+        $this->assertSame(0, $overview['funnel']['converted']); // proof in review, not yet activated
+    }
+
     public function test_payment_rollup_groups_lifecycle_payments_by_status(): void
     {
         $platform = Platform::factory()->create(['currency_code' => 'USD']);
