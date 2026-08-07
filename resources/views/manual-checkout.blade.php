@@ -32,6 +32,13 @@
     .copy:active { transform:scale(.96); }
     .copy.done { color:var(--ok); border-color:#a7f3d0; background:#ecfdf5; }
     .foot { font-size:12.5px; color:var(--muted); margin-top:10px; }
+    .dur-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+    .dur { flex:1 1 46%; min-width:130px; border:1.5px solid var(--line); border-radius:11px; padding:11px 12px; cursor:pointer; text-align:center; background:#fff; transition:.15s; }
+    .dur:active { transform:scale(.98); }
+    .dur.sel { border-color:var(--brand); background:#f0fdfa; }
+    .dur .d { font-weight:700; font-size:14px; }
+    .dur .p { font-size:12px; color:var(--muted); margin-top:2px; }
+    .dur.sel .p { color:var(--brand); }
     label { display:block; font-size:12px; font-weight:600; color:var(--ink); margin:12px 0 6px; }
     input[type=text], select, textarea { width:100%; border:1px solid var(--line); border-radius:11px; padding:12px 13px; font-size:15px; font-family:inherit; background:#fff; }
     input:focus, select:focus, textarea:focus { outline:none; border-color:var(--brand); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
@@ -64,9 +71,23 @@
     <div id="checkout">
         <div class="card amt">
             <div class="lbl">Amount to pay</div>
-            <div class="val">{{ $amountDisplay }}</div>
-            <div class="sub">{{ $productName }}@if($client) · {{ $client->name }}@endif</div>
+            <div class="val" id="amountVal">{{ $amountDisplay }}</div>
+            <div class="sub" id="amountSub">{{ $productName }}@if($client) · {{ $client->name }}@endif</div>
         </div>
+
+        @if(count($plans) > 0)
+        <div class="card" id="planPicker">
+            <div class="step"><span class="n">✓</span> Choose your subscription</div>
+            <label for="planSel">Plan</label>
+            <select id="planSel">
+                @foreach($plans as $p)
+                    <option value="{{ $p['id'] }}" @if($p['id'] === $defaultProductId) selected @endif>{{ $p['name'] }}</option>
+                @endforeach
+            </select>
+            <label style="margin-top:12px;">Duration</label>
+            <div id="durList" class="dur-list"></div>
+        </div>
+        @endif
 
         <div class="card">
             <div class="step"><span class="n">1</span> Pay using any option below</div>
@@ -86,8 +107,8 @@
                         @endif
                     @endforeach
                     <div class="row">
-                        <div><div class="k">Amount</div><div class="v">{{ $amountDisplay }}</div></div>
-                        <button type="button" class="copy" data-copy="{{ (int) $payment->amount }}">Copy</button>
+                        <div><div class="k">Amount</div><div class="v js-amt">{{ $amountDisplay }}</div></div>
+                        <button type="button" class="copy js-amt-copy" data-copy="{{ (int) $payment->amount }}">Copy</button>
                     </div>
                     @if($m['footer'])<div class="foot">{{ $m['footer'] }}</div>@endif
                 </div>
@@ -132,6 +153,47 @@
 <script>
 (function () {
     var ctx = @json($submitContext);
+    var PLANS = @json($plans);
+    var CLIENT_NAME = @json($client?->name ?? '');
+    var defaultPriceId = {{ $defaultPriceId ?? 'null' }};
+
+    var planSel = document.getElementById('planSel');
+    var durList = document.getElementById('durList');
+    var amountVal = document.getElementById('amountVal');
+    var amountSub = document.getElementById('amountSub');
+
+    function selectDuration(plan, dur) {
+        ctx.product_id = plan.id;
+        ctx.product_price_id = dur.price_id;
+        if (amountVal) amountVal.textContent = dur.amount_display;
+        if (amountSub) amountSub.textContent = plan.name + (CLIENT_NAME ? ' · ' + CLIENT_NAME : '');
+        document.querySelectorAll('.js-amt').forEach(function (el) { el.textContent = dur.amount_display; });
+        document.querySelectorAll('.js-amt-copy').forEach(function (el) { el.setAttribute('data-copy', String(Math.round(dur.amount))); });
+        Array.prototype.forEach.call(durList.children, function (el) {
+            el.classList.toggle('sel', Number(el.getAttribute('data-price')) === dur.price_id);
+        });
+    }
+
+    function renderDurations(planId, preferPriceId) {
+        var plan = PLANS.find(function (p) { return p.id === planId; });
+        if (!plan || !durList) return;
+        durList.innerHTML = '';
+        var chosen = plan.durations.find(function (d) { return d.price_id === preferPriceId; }) || plan.durations[0];
+        plan.durations.forEach(function (d) {
+            var el = document.createElement('div');
+            el.className = 'dur';
+            el.setAttribute('data-price', d.price_id);
+            el.innerHTML = '<div class="d">' + d.label + '</div><div class="p">' + d.amount_display + '</div>';
+            el.addEventListener('click', function () { selectDuration(plan, d); });
+            durList.appendChild(el);
+        });
+        if (chosen) selectDuration(plan, chosen);
+    }
+
+    if (planSel) {
+        planSel.addEventListener('change', function () { renderDurations(Number(planSel.value), null); });
+        renderDurations(Number(planSel.value), defaultPriceId);
+    }
 
     document.querySelectorAll('.copy').forEach(function (b) {
         b.addEventListener('click', function () {

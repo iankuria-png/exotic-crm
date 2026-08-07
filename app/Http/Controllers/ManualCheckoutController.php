@@ -54,10 +54,36 @@ class ManualCheckoutController extends Controller
 
         $payment->loadMissing('deal');
         // The lifecycle pro-forma deal is custom-priced (product_price_id is null),
-        // so pass the catalog price it maps to (base_product_price_id) — otherwise
-        // the submit re-resolves by duration 'manual' and fails with
-        // "<CUR> price not configured for this plan/duration".
-        $priceId = (int) ($payment->deal?->base_product_price_id ?: $payment->deal?->product_price_id ?: 0) ?: null;
+        // so the price it maps to is base_product_price_id.
+        $defaultPriceId = (int) ($payment->deal?->base_product_price_id ?: $payment->deal?->product_price_id ?: 0) ?: null;
+
+        // Plan/duration options for this market in the payment's currency, so the
+        // client can pick a different subscription than the one offered.
+        $plans = \App\Models\Product::query()
+            ->where('platform_id', (int) $platform->id)
+            ->where('is_active', true)
+            ->where('is_public', true)
+            ->where('is_archived', false)
+            ->with(['prices' => function ($query) use ($currency) {
+                $query->where('is_active', true)
+                    ->whereRaw('UPPER(currency) = ?', [strtoupper($currency)])
+                    ->orderBy('duration_days');
+            }])
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (\App\Models\Product $p) => [
+                'id' => (int) $p->id,
+                'name' => (string) ($p->display_name ?: $p->name),
+                'durations' => $p->prices->map(fn ($pr) => [
+                    'price_id' => (int) $pr->id,
+                    'label' => (string) ($pr->duration_label ?: ($pr->duration_days . ' days')),
+                    'amount' => (float) $pr->price,
+                    'amount_display' => $currency . ' ' . number_format((float) $pr->price),
+                ])->values()->all(),
+            ])
+            ->filter(fn ($p) => count($p['durations']) > 0)
+            ->values();
 
         return view('manual-checkout', [
             'payment' => $payment,
@@ -66,15 +92,18 @@ class ManualCheckoutController extends Controller
             'flag' => $this->flagEmoji($platform->country),
             'methods' => $methods,
             'currency' => $currency,
+            'plans' => $plans,
+            'defaultProductId' => (int) $payment->product_id,
+            'defaultPriceId' => $defaultPriceId,
             'amountDisplay' => $currency . ' ' . number_format((float) $payment->amount),
             'productName' => (string) ($payment->product?->display_name ?: $payment->product?->name ?: 'your subscription'),
             'reference' => (string) ($payment->transaction_reference ?: $payment->reference_number),
             'submitContext' => [
                 // Linkage: the submission is matched to THIS profile by the WP user
                 // id (primary) + phone + market, so the receipt can't land on the
-                // wrong account. product/price/amount are locked to the deal.
+                // wrong account. product/price/amount reflect the chosen plan.
                 'product_id' => (int) $payment->product_id,
-                'product_price_id' => $priceId,
+                'product_price_id' => $defaultPriceId,
                 'platform_id' => (int) $platform->id,
                 'user_id' => (int) ($client?->wp_user_id ?? 0),
                 'first_name' => $nameParts[0] ?: 'Client',

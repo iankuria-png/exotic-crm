@@ -1546,6 +1546,7 @@ export default function Payments() {
         const requested = (searchParams.get('test_visibility') || '').trim().toLowerCase();
         return allowedTestVisibilityFilters.has(requested) ? requested : 'hide';
     });
+    const [hideLifecycle, setHideLifecycle] = useState(() => (searchParams.get('hide_lifecycle') || '') === '1');
 
     useEffect(() => {
         if (workspaceTab === 'fraud' && !canAccessFraudAudit) {
@@ -1687,6 +1688,7 @@ export default function Payments() {
         ...(statusFilter && { status: statusFilter }),
         ...(matchFilter && { matched: matchFilter }),
         ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
+        ...(hideLifecycle && { hide_lifecycle: 1 }),
         ...(platformFilter && { platform_id: Number(platformFilter) }),
         ...(sourceFilter && { source: sourceFilter }),
         ...(purposeFilter && { purpose: purposeFilter }),
@@ -1704,6 +1706,7 @@ export default function Payments() {
         statusFilter,
         matchFilter,
         hasDiscountFilter,
+        hideLifecycle,
         platformFilter,
         sourceFilter,
         purposeFilter,
@@ -3759,7 +3762,20 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || purposeFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    <label
+                        className={`mb-0.5 inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition ${hideLifecycle ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                        title="Hide the LIFECYCLE-* pro-forma links minted by the SMS engine"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={hideLifecycle}
+                            onChange={(e) => { setHideLifecycle(e.target.checked); setPage(1); }}
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                        />
+                        Hide SMS payment links
+                    </label>
+
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -3768,6 +3784,7 @@ export default function Payments() {
                                 setStatusFilter('');
                                 setMatchFilter('');
                                 setHasDiscountFilter('');
+                                setHideLifecycle(false);
                                 setPlatformFilter('');
                                 setSourceFilter('');
                                 setPurposeFilter('');

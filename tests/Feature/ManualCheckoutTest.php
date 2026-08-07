@@ -19,7 +19,14 @@ class ManualCheckoutTest extends TestCase
     private function makePayment(): Payment
     {
         $platform = Platform::factory()->create(['name' => 'Tanzania', 'country' => 'Tanzania', 'currency_code' => 'TZS']);
-        $product = Product::factory()->create(['platform_id' => $platform->id, 'name' => 'VIP', 'display_name' => 'VIP']);
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'is_active' => true,
+            'is_public' => true,
+            'is_archived' => false,
+        ]);
         $client = Client::factory()->create(['platform_id' => $platform->id, 'wp_user_id' => 4321, 'name' => 'Amani M']);
 
         BillingManualPaymentMethod::create([
@@ -38,6 +45,7 @@ class ManualCheckoutTest extends TestCase
         $price = \App\Models\ProductPrice::factory()->create([
             'product_id' => $product->id,
             'duration_key' => '1_week',
+            'duration_label' => '1 Week',
             'duration_days' => 7,
             'price' => 15000,
             'currency' => 'TZS',
@@ -76,6 +84,8 @@ class ManualCheckoutTest extends TestCase
             ->assertSee('+255746734025')
             ->assertSee('TZS 15,000')
             ->assertSee('Upload your payment proof')
+            ->assertSee('Choose your subscription')
+            ->assertSee('1 Week') // plan duration option in the selector
             ->assertSee("\u{1F1F9}\u{1F1FF}") // 🇹🇿 flag
             // Submit context locks to the catalog price (base_product_price_id),
             // so the submit resolves the currency price instead of 'manual'.

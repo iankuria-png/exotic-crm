@@ -29,6 +29,7 @@ class PaymentQueueQueryBuilder
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
             'has_discount' => 'nullable|in:0,1',
+            'hide_lifecycle' => 'nullable|boolean',
             'match_confidence' => 'nullable|string|max:40',
             'review_state' => 'nullable|string|max:40',
             'resolution_code' => 'nullable|in:reversed,invalid_reference',
@@ -311,6 +312,20 @@ class PaymentQueueQueryBuilder
 
         if ($request->filled('platform_id')) {
             $query->where('platform_id', (int) $request->input('platform_id'));
+        }
+
+        // Hide lifecycle-initiated links (pro-forma LIFECYCLE-* payments minted by
+        // the SMS engine) so the reconciliation queue isn't cluttered for agents.
+        if ($request->boolean('hide_lifecycle')) {
+            $query->where(function (Builder $builder) {
+                $builder->where(function (Builder $inner) {
+                    $inner->whereNull('raw_payload->source')
+                        ->orWhere('raw_payload->source', '!=', 'crm_lifecycle');
+                })->where(function (Builder $inner) {
+                    $inner->whereNull('transaction_reference')
+                        ->orWhere('transaction_reference', 'not like', 'LIFECYCLE-%');
+                });
+            });
         }
 
         if ($request->filled('search')) {
