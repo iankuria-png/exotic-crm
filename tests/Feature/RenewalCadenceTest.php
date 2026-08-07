@@ -69,6 +69,26 @@ class RenewalCadenceTest extends TestCase
         ]);
     }
 
+    public function test_renewal_send_emits_lifecycle_telemetry(): void
+    {
+        $platform = Platform::factory()->create();
+        $template = $this->renewalTemplate();
+        $campaign = $this->campaign(null, 0, $template->id); // day 0 (expiry day)
+        $deal = $this->deal($platform, 0, 'weekly', 7);      // expires today
+
+        app(RenewalService::class)->runCampaigns($campaign->id, null, [$platform->id], []);
+
+        $event = \App\Models\TimelineEvent::query()
+            ->where('event_type', 'lifecycle_sms')
+            ->where('entity_type', 'client')
+            ->where('entity_id', $deal->client_id)
+            ->first();
+
+        $this->assertNotNull($event, 'renewal send should record a lifecycle telemetry event');
+        $this->assertSame('renewal', $event->content['flow']);
+        $this->assertSame('sent', $event->content['status']);
+    }
+
     public function test_renewal_skips_client_who_already_renewed_to_a_later_subscription(): void
     {
         $platform = Platform::factory()->create();

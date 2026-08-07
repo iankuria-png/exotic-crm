@@ -1324,12 +1324,24 @@ class LifecycleSmsService
      */
     public function renewalLinkVariables(?Deal $deal, Template $template, ?int $actorId = null): array
     {
-        $usesLink = str_contains((string) $template->body, 'payment_link');
-        if (!$usesLink) {
-            return [];
-        }
+        return $this->prepareRenewalLink($deal, $template, $actorId)['variables'];
+    }
 
-        $blank = ['payment_link' => ''];
+    /**
+     * Resolve a renewal payment link (tokenized PSP or hosted manual checkout)
+     * and the pro-forma payment behind it, so RenewalService can both render the
+     * copy and record lifecycle telemetry.
+     *
+     * @return array{variables: array<string,string>, payment: ?Payment, link_mode: string}
+     */
+    public function prepareRenewalLink(?Deal $deal, Template $template, ?int $actorId = null): array
+    {
+        $none = ['variables' => [], 'payment' => null, 'link_mode' => 'none'];
+        $blank = ['variables' => ['payment_link' => ''], 'payment' => null, 'link_mode' => 'none'];
+
+        if (!str_contains((string) $template->body, 'payment_link')) {
+            return $none;
+        }
 
         $client = $deal?->client;
         if (!$client) {
@@ -1341,8 +1353,7 @@ class LifecycleSmsService
         if (!$platform || !$this->settings->flowEnabled((int) $platform->id, self::FLOW_RENEWAL)) {
             return $blank;
         }
-
-        if (!$this->paymentLinkService->hasTokenizedProvider($platform)) {
+        if (!$this->canCarryPaymentLink($platform)) {
             return $blank;
         }
 
@@ -1373,9 +1384,20 @@ class LifecycleSmsService
                 $this->resolveActorId($actorId)
             );
 
-            $link = $this->paymentLinkService->prepareTokenizedUrl($payment, [
-                'notification_purpose' => 'lifecycle_renewal',
-            ]);
+            if ($this->paymentLinkService->hasTokenizedProvider($platform)) {
+                $link = $this->paymentLinkService->prepareTokenizedUrl($payment, [
+                    'notification_purpose' => 'lifecycle_renewal',
+                ]);
+                $url = ($link['success'] ?? false) ? (string) $link['payment_url'] : null;
+                $mode = 'tokenized';
+            } else {
+                $url = $this->paymentLinkService->resolveManualCheckoutUrl(
+                    $platform,
+                    $payment,
+                    $marketConfig['manual_checkout_url'] ?? null
+                );
+                $mode = 'manual';
+            }
         } catch (\Throwable $exception) {
             Log::warning('Renewal payment link could not be prepared', [
                 'deal_id' => $deal->id,
@@ -1386,11 +1408,53 @@ class LifecycleSmsService
             return $blank;
         }
 
-        if (!($link['success'] ?? false)) {
+        if (!$url) {
             return $blank;
         }
 
-        return ['payment_link' => (string) $link['payment_url']];
+        return ['variables' => ['payment_link' => $url], 'payment' => $payment, 'link_mode' => $mode];
+    }
+
+    /**
+     * Record a renewal reminder as a lifecycle send so it shows in the funnel,
+     * per-client history, and conversion attribution — without re-gating (the
+     * renewal cadence engine owns targeting/dedup). Telemetry only.
+     */
+    public function recordRenewalTelemetry(
+        Client $client,
+        ?Deal $deal,
+        ?Payment $payment,
+        string $body,
+        bool $success,
+        ?string $paymentUrl,
+        array $meta = []
+    ): void {
+        try {
+            TimelineEvent::create([
+                'platform_id' => (int) $client->platform_id,
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'event_type' => self::TIMELINE_EVENT_TYPE,
+                'actor_id' => $meta['actor_id'] ?? null,
+                'content' => array_filter([
+                    'flow' => self::FLOW_RENEWAL,
+                    'status' => $success ? 'sent' : 'failed',
+                    'reference' => $meta['reference'] ?? ('renewal:' . now()->toDateString()),
+                    'deal_id' => $deal?->id,
+                    'payment_id' => $payment?->id,
+                    'payment_url' => $paymentUrl ?: null,
+                    'body' => $body,
+                    'channel' => $meta['channel'] ?? 'sms',
+                    'source' => $meta['source'] ?? 'automated',
+                ], static fn ($value) => $value !== null && $value !== ''),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Renewal lifecycle telemetry failed', [
+                'client_id' => (int) $client->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     private function resolveActorId(?int $actorId): int

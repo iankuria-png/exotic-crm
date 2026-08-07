@@ -50,7 +50,7 @@ class RenewalService
      * stats + (when the template embeds {{payment_link}} and the market allows
      * it) a tokenized checkout link on the client's current plan.
      */
-    private function renewalTemplateVariables(Deal $deal, Template $template, array $extra = [], ?int $actorId = null): array
+    private function renewalTemplateVariables(Deal $deal, Template $template, array $extra, array $linkVars): array
     {
         return array_merge(
             $this->templateService->buildClientVariables(
@@ -58,7 +58,7 @@ class RenewalService
                 $deal,
                 array_merge($this->profileMetricsService->templateVariables($deal->client), $extra)
             ),
-            $this->lifecycleSmsService->renewalLinkVariables($deal, $template, $actorId)
+            $linkVars
         );
     }
 
@@ -1023,9 +1023,10 @@ class RenewalService
             ];
         }
 
+        $linkInfo = $this->lifecycleSmsService->prepareRenewalLink($deal, $template, $actorId);
         $variables = $this->renewalTemplateVariables($deal, $template, [
             'trigger_days' => $this->suggestTriggerDays($deal),
-        ], $actorId);
+        ], $linkInfo['variables']);
 
         $rendered = $this->templateService->renderTemplate($template, $variables);
         $rendered['body'] = rtrim((string) $rendered['body']);
@@ -1046,6 +1047,18 @@ class RenewalService
             'mode' => 'manual',
             'purpose' => 'renewal_reminder',
         ]);
+
+        if ($deal->client) {
+            $this->lifecycleSmsService->recordRenewalTelemetry(
+                $deal->client,
+                $deal->id ? $deal : null,
+                $linkInfo['payment'],
+                (string) $rendered['body'],
+                (bool) $delivery['success'],
+                $linkInfo['variables']['payment_link'] ?? null,
+                ['reference' => 'renewal:manual', 'source' => 'manual', 'channel' => $channel, 'actor_id' => $actorId]
+            );
+        }
 
         $eventType = $this->renewalEventType($channel, (bool) $delivery['success']);
         $notePrefix = $delivery['success'] ? "[Renewal {$channelLabel}]" : "[Renewal {$channelLabel} Failed]";
@@ -1329,9 +1342,12 @@ class RenewalService
                 continue;
             }
 
+            // Resolve the renewal payment link (tokenized or manual checkout) once,
+            // so the copy and the lifecycle telemetry share the same payment.
+            $linkInfo = $this->lifecycleSmsService->prepareRenewalLink($deal, $campaign->template, $runnerId);
             $variables = $this->renewalTemplateVariables($deal, $campaign->template, [
                 'trigger_days' => $campaign->trigger_days,
-            ], $runnerId);
+            ], $linkInfo['variables']);
             $rendered = $this->templateService->renderTemplate($campaign->template, $variables);
             // A market that can't carry a link renders {{payment_link}} as '' —
             // trim so the copy doesn't end on a dangling space.
@@ -1365,6 +1381,25 @@ class RenewalService
                 $skipped++;
             } else {
                 $failed++;
+            }
+
+            // Route the renewal into the lifecycle engine's telemetry so it shows
+            // in the funnel + attribution (targeting/dedup stay with the cadence).
+            if (($delivery['status'] ?? null) !== 'suppressed' && $deal->client) {
+                $this->lifecycleSmsService->recordRenewalTelemetry(
+                    $deal->client,
+                    $deal->id ? $deal : null,
+                    $linkInfo['payment'],
+                    (string) $rendered['body'],
+                    (bool) $delivery['success'],
+                    $linkInfo['variables']['payment_link'] ?? null,
+                    [
+                        'reference' => 'renewal:c' . $campaign->id . ':' . $campaign->trigger_days,
+                        'source' => 'automated',
+                        'channel' => $channel,
+                        'actor_id' => $runnerId,
+                    ]
+                );
             }
 
             DB::transaction(function () use ($deal, $campaign, $run, $rendered, $delivery, $runnerId, $channel, $channelLabel) {
