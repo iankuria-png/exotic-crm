@@ -64,9 +64,9 @@ function movementTone(value) {
 
 function movementLabel(value) {
     const tone = movementTone(value);
-    if (tone === 'positive') return 'Active base expanding';
-    if (tone === 'negative') return 'Inactive exits outpacing activations';
-    return 'No net movement';
+    if (tone === 'positive') return 'Paid base expanding';
+    if (tone === 'negative') return 'Paid exits outpacing first activations';
+    return 'No paid base movement';
 }
 
 function comparisonLine(comparison, key, noun) {
@@ -121,12 +121,16 @@ function MovementTooltip({ active, payload, label }) {
             <p className="mt-0.5 text-[11px] font-medium text-slate-400">{formatRange(point)}</p>
             <div className="mt-3 grid min-w-48 gap-2 text-sm">
                 <p className="flex items-center justify-between gap-8 text-teal-700">
-                    <span>Activated</span>
+                    <span>First paid activations</span>
                     <span className="crm-mono font-semibold">{formatNumber(point.active_profiles)}</span>
                 </p>
                 <p className="flex items-center justify-between gap-8 text-rose-700">
-                    <span>Inactive</span>
+                    <span>Paid exits</span>
                     <span className="crm-mono font-semibold">{formatNumber(point.inactive_profiles)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-600">
+                    <span>Successful payments</span>
+                    <span className="crm-mono font-semibold">{formatNumber(point.successful_payments)}</span>
                 </p>
                 <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-900">
                     <span>Net movement</span>
@@ -186,11 +190,14 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
     return (
         <aside className="rounded-[1.2rem] bg-white p-4 ring-1 ring-slate-200">
             <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current base</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Paying subscriber base</p>
                 <div className="mt-3 flex items-end justify-between gap-3">
                     <div>
                         <p className="crm-mono text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(total)}</p>
-                        <p className="mt-1 text-sm text-slate-500">profiles in selected scope</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                            paid clients in selected scope
+                            {currentScope.as_of ? <span> - snapshot {currentScope.as_of}</span> : null}
+                        </p>
                     </div>
                     <div className={`rounded-xl px-2.5 py-1 text-xs font-semibold ${
                         netTone === 'positive'
@@ -210,11 +217,11 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                     <div>
-                        <p className="text-xs font-medium text-slate-400">Active now</p>
+                        <p className="text-xs font-medium text-slate-400">Active paying now</p>
                         <p className="mt-1 crm-mono font-semibold text-teal-700">{formatNumber(active)}</p>
                     </div>
                     <div>
-                        <p className="text-xs font-medium text-slate-400">Inactive now</p>
+                        <p className="text-xs font-medium text-slate-400">Paid but inactive</p>
                         <p className="mt-1 crm-mono font-semibold text-rose-700">{formatNumber(inactive)}</p>
                     </div>
                 </div>
@@ -232,12 +239,16 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
 
             <div className="mt-3 grid gap-2">
                 <div className="flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-teal-800">Activated in window</span>
+                    <span className="font-medium text-teal-800">First paid activations</span>
                     <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.active_profiles)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-rose-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-rose-800">Moved inactive</span>
+                    <span className="font-medium text-rose-800">Paid exits</span>
                     <span className="crm-mono font-semibold text-rose-900">{formatNumber(totals.inactive_profiles)}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2 text-sm">
+                    <span className="font-medium text-slate-700">Successful payments</span>
+                    <span className="crm-mono font-semibold text-slate-900">{formatNumber(totals.successful_payments)}</span>
                 </div>
             </div>
         </aside>
@@ -260,6 +271,7 @@ export default function ProfileMovementWidget({
                 inactive_profiles: asNumber(point.inactive_profiles),
                 created_profiles: asNumber(point.created_profiles),
                 net_active_movement: asNumber(point.net_active_movement),
+                successful_payments: asNumber(point.successful_payments),
             }))
             : []
     ), [data?.points]);
@@ -271,6 +283,7 @@ export default function ProfileMovementWidget({
         || point.inactive_profiles > 0
         || point.net_active_movement !== 0
     ));
+    const hasActivityContext = hasMovement || asNumber(totals.successful_payments) > 0;
     const hasLoadedPayload = Boolean(data?.range || points.length || currentScope.total_profiles !== undefined);
     const resolvedBucket = BUCKETS.some((item) => item.key === bucket) ? bucket : (data?.bucket || 'day');
     const netTone = movementTone(totals.net_active_movement);
@@ -284,8 +297,8 @@ export default function ProfileMovementWidget({
         content = (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
                 <EmptyState
-                    title="No active/inactive movement in this window"
-                    message="The selected scope has no paid-profile activations or inactive-profile exits for this bucket. Current base totals are still shown on the right."
+                    title="No paid subscriber movement in this window"
+                    message="The selected scope has no first-payment activations or paid subscriber exits for this bucket. Successful payments can still happen here as renewals or repeat payments."
                 />
                 <CurrentBaseRail currentScope={currentScope} totals={totals} comparison={comparison} data={data} />
             </div>
@@ -313,10 +326,13 @@ export default function ProfileMovementWidget({
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">
-                                    Activated {formatNumber(totals.active_profiles)}
+                                    First activations {formatNumber(totals.active_profiles)}
                                 </span>
                                 <span className="rounded-full bg-rose-400/12 px-2.5 py-1 font-semibold text-rose-200 ring-1 ring-rose-300/20">
-                                    Inactive {formatNumber(totals.inactive_profiles)}
+                                    Paid exits {formatNumber(totals.inactive_profiles)}
+                                </span>
+                                <span className="rounded-full bg-white/8 px-2.5 py-1 font-semibold text-slate-200 ring-1 ring-white/15">
+                                    Payments {formatNumber(totals.successful_payments)}
                                 </span>
                             </div>
                         </div>
@@ -363,7 +379,7 @@ export default function ProfileMovementWidget({
                                         stroke="#2dd4bf"
                                         strokeWidth={2.75}
                                         fill="url(#profileMovementActive)"
-                                        name="Activated"
+                                        name="First paid activations"
                                         dot={false}
                                         activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#5eead4' }}
                                     />
@@ -373,7 +389,7 @@ export default function ProfileMovementWidget({
                                         stroke="#fb7185"
                                         strokeWidth={2.4}
                                         dot={false}
-                                        name="Inactive"
+                                        name="Paid exits"
                                         activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#fb7185' }}
                                     />
                                 </ComposedChart>
@@ -390,7 +406,7 @@ export default function ProfileMovementWidget({
     return (
         <SectionFrame
             title="Profile Movement"
-            subtitle="Active-profile entries, inactive exits, and the resulting base shift."
+            subtitle="First paid activations, paid subscriber exits, and the resulting base shift."
             className={`overflow-hidden ${className}`}
             contentClassName="space-y-4 bg-slate-50/50"
             action={(
@@ -414,16 +430,16 @@ export default function ProfileMovementWidget({
         >
             {!errorMessage || !hasLoadedPayload ? null : <ErrorState message={errorMessage} />}
 
-            {!isLoading && hasLoadedPayload && hasMovement ? (
-                <div className="grid gap-3 md:grid-cols-3">
+            {!isLoading && hasLoadedPayload && hasActivityContext ? (
+                <div className="grid gap-3 md:grid-cols-4">
                     <MicroMetric
-                        label="Activation intake"
+                        label="First paid activations"
                         value={formatNumber(totals.active_profiles)}
                         helper={comparisonLine(comparison, 'active_profiles', 'activation')}
                         tone="active"
                     />
                     <MicroMetric
-                        label="Inactive exits"
+                        label="Paid exits"
                         value={formatNumber(totals.inactive_profiles)}
                         helper={comparisonLine(comparison, 'inactive_profiles', 'inactive')}
                         tone="inactive"
@@ -433,6 +449,12 @@ export default function ProfileMovementWidget({
                         value={formatSigned(totals.net_active_movement)}
                         helper={`${formatSigned(comparison.net_active_movement?.delta)} vs prior window`}
                         tone="net"
+                    />
+                    <MicroMetric
+                        label="Successful payments"
+                        value={formatNumber(totals.successful_payments)}
+                        helper="Renewals and repeat payments included"
+                        tone="neutral"
                     />
                 </div>
             ) : null}

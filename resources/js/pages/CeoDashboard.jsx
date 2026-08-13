@@ -330,14 +330,6 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            <ProfileMovementWidget
-                data={movementQuery.data}
-                isLoading={movementQuery.isLoading}
-                errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
-                bucket={movementBucket}
-                onBucketChange={setMovementBucket}
-            />
-
             <RevenueTrendWidget
                 data={trendQuery.data}
                 isLoading={trendQuery.isLoading}
@@ -406,6 +398,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                     />
                 </div>
             </section>
+
+            <ProfileMovementWidget
+                data={movementQuery.data}
+                isLoading={movementQuery.isLoading}
+                errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
+                bucket={movementBucket}
+                onBucketChange={setMovementBucket}
+            />
 
             <AgentPerformanceWidget
                 data={agentPerformanceQuery.data}

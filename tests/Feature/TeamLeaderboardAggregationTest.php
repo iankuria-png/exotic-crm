@@ -535,6 +535,126 @@ class TeamLeaderboardAggregationTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_agent_stats_answer_client_category_recovery_winback_and_workload_questions(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+        ]);
+        $agent = $this->createTeamUser('sales', [$platform->id], [
+            'name' => 'Client Portfolio Agent',
+            'email' => 'client-portfolio-agent@example.test',
+        ]);
+        $busyPeer = $this->createTeamUser('sales', [$platform->id], [
+            'name' => 'Busier Peer',
+            'email' => 'busier-peer@example.test',
+        ]);
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'currency' => 'KES',
+            'tier' => 'vip',
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'slug' => 'vip',
+        ]);
+
+        $newClient = $this->createTeamClient($platform, [
+            'assigned_to' => $agent->id,
+            'created_at' => now()->subHours(5),
+            'first_activated_at' => now()->subHours(4),
+        ]);
+        $existingClient = $this->createTeamClient($platform, [
+            'assigned_to' => $agent->id,
+            'created_at' => now()->subMonth(),
+            'first_activated_at' => now()->subMonth()->addDay(),
+        ]);
+        $recoveryClient = $this->createTeamClient($platform, [
+            'assigned_to' => $agent->id,
+            'created_at' => now()->subMonth(),
+            'first_activated_at' => now()->subMonth()->addDays(2),
+        ]);
+        $winbackClient = $this->createTeamClient($platform, [
+            'assigned_to' => $agent->id,
+            'created_at' => now()->subMonths(2),
+            'first_activated_at' => now()->subMonths(2)->addDay(),
+            'churned_at' => now()->subWeek(),
+        ]);
+
+        $newDeal = $this->createTeamDeal($platform, $agent, ['client' => $newClient, 'product' => $product, 'amount' => 10000]);
+        $existingDeal = $this->createTeamDeal($platform, $agent, ['client' => $existingClient, 'product' => $product, 'amount' => 5000]);
+        $recoveryDeal = $this->createTeamDeal($platform, $agent, ['client' => $recoveryClient, 'product' => $product, 'amount' => 7000]);
+        $winbackDeal = $this->createTeamDeal($platform, $agent, [
+            'client' => $winbackClient,
+            'product' => $product,
+            'amount' => 8000,
+            'subscription_lifecycle' => 'reactivation',
+        ]);
+
+        $this->createTeamPayment($platform, $newDeal, ['amount' => 10000, 'currency' => 'KES', 'created_at' => now()->subHours(4), 'completed_at' => now()->subHours(4)]);
+        $this->createTeamPayment($platform, $existingDeal, ['amount' => 5000, 'currency' => 'KES', 'created_at' => now()->subHours(3), 'completed_at' => now()->subHours(3)]);
+        $this->createTeamPayment($platform, $recoveryDeal, ['amount' => 7000, 'currency' => 'KES', 'status' => 'failed', 'created_at' => now()->subHours(2)]);
+        $this->createTeamPayment($platform, $recoveryDeal, ['amount' => 7000, 'currency' => 'KES', 'created_at' => now()->subHour(), 'completed_at' => now()->subHour()]);
+        $this->createTeamPayment($platform, $winbackDeal, [
+            'amount' => 8000,
+            'currency' => 'KES',
+            'subscription_lifecycle' => 'reactivation',
+            'created_at' => now()->subMinutes(30),
+            'completed_at' => now()->subMinutes(30),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.01);
+
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => 'deal_activate',
+            'entity_type' => 'deal',
+            'entity_id' => $newDeal->id,
+            'after_state' => ['deal_status' => 'active'],
+            'created_at' => now()->subHour(),
+        ]);
+        foreach (range(1, 4) as $index) {
+            $this->createTeamAudit([
+                'platform_id' => $platform->id,
+                'actor_id' => $busyPeer->id,
+                'action' => 'client_create',
+                'entity_type' => 'client',
+                'entity_id' => 900 + $index,
+                'created_at' => now()->subMinutes($index),
+            ]);
+        }
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/' . $agent->id . '/stats?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('client_performance.customer_mix.0.key', 'new_users')
+            ->assertJsonPath('client_performance.customer_mix.1.key', 'existing_users')
+            ->assertJsonPath('client_performance.conversion.new_clients', 1)
+            ->assertJsonPath('client_performance.conversion.converted_clients', 1)
+            ->assertJsonPath('client_performance.payment_recovery.failed_payments', 1)
+            ->assertJsonPath('client_performance.payment_recovery.failed_clients', 1)
+            ->assertJsonPath('client_performance.payment_recovery.recovered_clients', 1)
+            ->assertJsonPath('client_performance.winback.lost_clients_at_start', 1)
+            ->assertJsonPath('client_performance.winback.won_back_clients', 1)
+            ->assertJsonPath('client_performance.workload.rank', 2)
+            ->assertJsonPath('client_performance.workload.team_size', 2)
+            ->assertJsonPath('client_performance.workload.band', 'Least busy visible team member');
+
+        $this->assertEqualsWithDelta(300.0, (float) $response->json('client_performance.total_normalized'), 0.01);
+        $this->assertEqualsWithDelta(33.3, (float) $response->json('client_performance.customer_mix.0.share_percent'), 0.1);
+        $this->assertEqualsWithDelta(66.7, (float) $response->json('client_performance.customer_mix.1.share_percent'), 0.1);
+        $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.conversion.rate'), 0.01);
+        $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.payment_recovery.rate'), 0.01);
+        $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.winback.rate'), 0.01);
+
+        Carbon::setTestNow();
+    }
+
     private function createRate(string $source, string $target, Carbon $date, float $rate): void
     {
         ReportingFxRate::query()->create([

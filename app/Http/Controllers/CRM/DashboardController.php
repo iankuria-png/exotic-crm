@@ -4,21 +4,20 @@ namespace App\Http\Controllers\CRM;
 
 use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use App\Models\Client;
 use App\Models\AgentGoalOverride;
-use App\Models\MarketRevenueTarget;
-use App\Models\Lead;
+use App\Models\Client;
+use App\Models\ClientNote;
 use App\Models\Deal;
+use App\Models\Lead;
+use App\Models\MarketRevenueTarget;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
-use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
+use App\Services\ChurnAggregatorService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSyncRunService;
-use App\Services\ChurnAggregatorService;
 use App\Services\MarketAuthorizationService;
 use App\Services\PaymentRecoveryMetricService;
 use App\Services\RenewalService;
@@ -28,12 +27,13 @@ use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Carbon\CarbonInterval;
 use Carbon\CarbonPeriod;
-use Throwable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class DashboardController extends Controller
 {
@@ -50,8 +50,7 @@ class DashboardController extends Controller
         private readonly ClientSyncRunService $clientSyncRunService,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
         private readonly ChurnAggregatorService $churnAggregatorService
-    ) {
-    }
+    ) {}
 
     public function summary(Request $request)
     {
@@ -101,15 +100,15 @@ class DashboardController extends Controller
             $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
             $defaultTo = now()->endOfDay();
 
-            $from = !empty($validated['from'])
+            $from = ! empty($validated['from'])
                 ? Carbon::parse($validated['from'])->startOfDay()
                 : (clone $defaultFrom);
-            $to = !empty($validated['to'])
+            $to = ! empty($validated['to'])
                 ? Carbon::parse($validated['to'])->endOfDay()
                 : (clone $defaultTo);
-            $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
-            $requestedFromDate = !empty($validated['from']) ? Carbon::parse($validated['from'])->toDateString() : null;
-            $requestedToDate = !empty($validated['to']) ? Carbon::parse($validated['to'])->toDateString() : null;
+            $hasExplicitDateFilter = ! empty($validated['from']) || ! empty($validated['to']);
+            $requestedFromDate = ! empty($validated['from']) ? Carbon::parse($validated['from'])->toDateString() : null;
+            $requestedToDate = ! empty($validated['to']) ? Carbon::parse($validated['to'])->toDateString() : null;
             $isDefaultDateWindow = (empty($validated['from']) && empty($validated['to']))
                 || (
                     $requestedFromDate !== null
@@ -226,12 +225,12 @@ class DashboardController extends Controller
 
             // Per-currency breakdowns for all revenue KPIs. scalar_amount is null when
             // multiple currencies are present so the frontend cannot display a wrong total.
-            $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
-            $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
-            $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
-            $revenueWindowNormalized   = $this->normalizePaymentQueryForMode(clone $paymentsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $revenueWindowBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
+            $revenuePreviousBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
+            $walletTopupBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
+            $revenueWindowNormalized = $this->normalizePaymentQueryForMode(clone $paymentsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
             $revenuePreviousNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
-            $walletTopupNormalized     = $this->normalizePaymentQueryForMode(clone $walletTopupsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $walletTopupNormalized = $this->normalizePaymentQueryForMode(clone $walletTopupsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
             $this->recordDashboardTimingCheckpoint(
                 'normalize_revenue_windows',
                 $dashboardTimingStartedAt,
@@ -245,7 +244,7 @@ class DashboardController extends Controller
                 $to
             );
 
-            $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
+            $revenueWindow = $revenueWindowBreakdown['scalar_amount'];
             $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
             $walletTopupRevenueWindow = $walletTopupBreakdown['scalar_amount'];
 
@@ -254,12 +253,12 @@ class DashboardController extends Controller
             $walletTopupsWindow = (clone $walletTopupsWindowQuery)->count();
 
             // Average ticket and delta only make sense for a single-currency scope.
-            $averageTicket = (!$isMixed && $completedPaymentsWindow > 0 && $revenueWindow !== null)
+            $averageTicket = (! $isMixed && $completedPaymentsWindow > 0 && $revenueWindow !== null)
                 ? round($revenueWindow / $completedPaymentsWindow, 2)
                 : null;
 
             $prevRevScalar = $revenuePreviousBreakdown['scalar_amount'];
-            $revenueDeltaPercent = (!$isMixed && $revenuePreviousBreakdown['currency_count'] <= 1 && $prevRevScalar !== null && $prevRevScalar > 0 && $revenueWindow !== null)
+            $revenueDeltaPercent = (! $isMixed && $revenuePreviousBreakdown['currency_count'] <= 1 && $prevRevScalar !== null && $prevRevScalar > 0 && $revenueWindow !== null)
                 ? round((($revenueWindow - $prevRevScalar) / $prevRevScalar) * 100, 1)
                 : null;
 
@@ -276,7 +275,7 @@ class DashboardController extends Controller
 
             $renewalSummary = $this->renewalService->buildSummary([
                 'platform_ids' => is_array($platformIds) ? $platformIds : null,
-                'platform_id' => !is_array($platformIds) && $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'platform_id' => ! is_array($platformIds) && $selectedPlatformId ? (int) $selectedPlatformId : null,
                 'search' => $search,
                 'include_untracked' => true,
             ]);
@@ -349,86 +348,86 @@ class DashboardController extends Controller
             $missedChatsCount = $salesView ? $this->resolveMissedChatsCount(is_array($platformIds) ? $platformIds : null) : null;
 
             $response = response()->json([
-            'filters' => [
-                'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
-                'from' => $from->toDateString(),
-                'to' => $to->toDateString(),
-                'search' => $search !== '' ? $search : null,
-                'country_period' => $validated['country_period'] ?? 'week',
-                'currency_mode' => $currencyMode,
-                'reporting_currency' => $targetCurrency,
-            ],
-            'window' => [
-                'default_from' => $defaultFrom->toDateString(),
-                'default_to' => $defaultTo->toDateString(),
-                'all_time_from' => $defaultFrom->toDateString(),
-                'all_time_to' => $defaultTo->toDateString(),
-                'applied_from' => $from->toDateString(),
-                'applied_to' => $to->toDateString(),
-                'is_default' => $isDefaultDateWindow,
-                'label' => $isDefaultDateWindow ? 'All-time default (oldest record to today)' : 'Custom range',
-            ],
-            'kpis' => [
-                'active_clients' => $activeClientsQuery->count(),
-                'total_clients' => $totalClientsQuery->count(),
-                'pending_leads' => $pendingLeadsQuery->count(),
-                'total_leads' => $totalLeadsQuery->count(),
-                'active_deals' => $activeDealsQuery->count(),
-                'expiring_soon' => $expiringSoonQuery->count(),
-                'completed_payments_window' => $completedPaymentsWindow,
-                'completed_payments_mtd' => $completedPaymentsWindow,
-                'recent_payments' => $completedPaymentsWindow,
-                'revenue_window' => $revenueWindow,
-                'revenue_window_breakdown' => $revenueWindowBreakdown['breakdown'],
-                'revenue_window_normalized' => $revenueWindowNormalized['normalized_total'],
-                'revenue_window_normalized_display' => $revenueWindowNormalized['normalized_display'],
-                'revenue_window_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
-                'revenue_mtd' => $revenueWindow,
-                'revenue_mtd_breakdown' => $revenueWindowBreakdown['breakdown'],
-                'revenue_mtd_normalized' => $revenueWindowNormalized['normalized_total'],
-                'revenue_mtd_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
-                'wallet_topups_window' => $walletTopupsWindow,
-                'wallet_topup_revenue_window' => $walletTopupRevenueWindow,
-                'wallet_topup_revenue_window_breakdown' => $walletTopupBreakdown['breakdown'],
-                'wallet_topup_revenue_window_normalized' => $walletTopupNormalized['normalized_total'],
-                'wallet_topup_revenue_window_normalization_meta' => $walletTopupNormalized['normalization_meta'],
-                'revenue_previous_window' => $revenuePreviousWindow,
-                'revenue_previous_window_breakdown' => $revenuePreviousBreakdown['breakdown'],
-                'revenue_previous_window_normalized' => $revenuePreviousNormalized['normalized_total'],
-                'revenue_previous_window_normalization_meta' => $revenuePreviousNormalized['normalization_meta'],
-                'revenue_delta_percent' => $revenueDeltaPercent,
-                'average_ticket_window' => $averageTicket,
-                'revenue_is_mixed' => $isMixed,
-                'normalized_currency' => $targetCurrency,
-                'currency_mode' => $currencyMode,
-                'payment_recovery_queue_total' => $paymentRecoveryTotal,
-                'payment_recovery_pending' => $paymentRecoveryPending,
-                'payment_recovery_failed' => $paymentRecoveryFailed,
-                'payment_recovery_unmatched' => $paymentRecoveryUnmatched,
-                'failed_payment_recovery' => $failedPaymentRecovery,
-                'unmatched_payments_window' => $unmatchedPaymentsWindow,
-                'unmatched_payments' => $unmatchedPaymentsWindow,
-                'renewal_risk_72h' => $renewalRisk72h,
-                'renewal_pipeline_4_14d' => $renewalPipeline14d,
-                'renewal_workload_14d' => $renewalWorkload14d,
-                'upcoming_follow_ups_count' => $upcomingFollowUpsCount,
-                'new_users' => $newUsers,
-                'missed_chats_count' => $missedChatsCount,
-            ],
-            'expiring_deals' => $expiringDeals,
-            'payment_review_queue' => $paymentReviewQueue,
-            'recent_payments' => $paymentReviewQueue,
-            'upcoming_follow_ups' => $upcomingFollowUps,
-            'country_revenue' => [],
-            'top_packages' => $topPackages,
-            'active_campaigns_count' => $activeCampaignsCount,
-            'recent_activity' => $recentActivity,
-            'retention_summary' => $retentionSummary,
-            'comms_stats' => [
-                'sent_count' => $commsSentCount,
-                'delivered_count' => $commsDeliveredCount,
-                'failed_count' => $commsFailedCount,
-            ],
+                'filters' => [
+                    'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+                    'from' => $from->toDateString(),
+                    'to' => $to->toDateString(),
+                    'search' => $search !== '' ? $search : null,
+                    'country_period' => $validated['country_period'] ?? 'week',
+                    'currency_mode' => $currencyMode,
+                    'reporting_currency' => $targetCurrency,
+                ],
+                'window' => [
+                    'default_from' => $defaultFrom->toDateString(),
+                    'default_to' => $defaultTo->toDateString(),
+                    'all_time_from' => $defaultFrom->toDateString(),
+                    'all_time_to' => $defaultTo->toDateString(),
+                    'applied_from' => $from->toDateString(),
+                    'applied_to' => $to->toDateString(),
+                    'is_default' => $isDefaultDateWindow,
+                    'label' => $isDefaultDateWindow ? 'All-time default (oldest record to today)' : 'Custom range',
+                ],
+                'kpis' => [
+                    'active_clients' => $activeClientsQuery->count(),
+                    'total_clients' => $totalClientsQuery->count(),
+                    'pending_leads' => $pendingLeadsQuery->count(),
+                    'total_leads' => $totalLeadsQuery->count(),
+                    'active_deals' => $activeDealsQuery->count(),
+                    'expiring_soon' => $expiringSoonQuery->count(),
+                    'completed_payments_window' => $completedPaymentsWindow,
+                    'completed_payments_mtd' => $completedPaymentsWindow,
+                    'recent_payments' => $completedPaymentsWindow,
+                    'revenue_window' => $revenueWindow,
+                    'revenue_window_breakdown' => $revenueWindowBreakdown['breakdown'],
+                    'revenue_window_normalized' => $revenueWindowNormalized['normalized_total'],
+                    'revenue_window_normalized_display' => $revenueWindowNormalized['normalized_display'],
+                    'revenue_window_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
+                    'revenue_mtd' => $revenueWindow,
+                    'revenue_mtd_breakdown' => $revenueWindowBreakdown['breakdown'],
+                    'revenue_mtd_normalized' => $revenueWindowNormalized['normalized_total'],
+                    'revenue_mtd_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
+                    'wallet_topups_window' => $walletTopupsWindow,
+                    'wallet_topup_revenue_window' => $walletTopupRevenueWindow,
+                    'wallet_topup_revenue_window_breakdown' => $walletTopupBreakdown['breakdown'],
+                    'wallet_topup_revenue_window_normalized' => $walletTopupNormalized['normalized_total'],
+                    'wallet_topup_revenue_window_normalization_meta' => $walletTopupNormalized['normalization_meta'],
+                    'revenue_previous_window' => $revenuePreviousWindow,
+                    'revenue_previous_window_breakdown' => $revenuePreviousBreakdown['breakdown'],
+                    'revenue_previous_window_normalized' => $revenuePreviousNormalized['normalized_total'],
+                    'revenue_previous_window_normalization_meta' => $revenuePreviousNormalized['normalization_meta'],
+                    'revenue_delta_percent' => $revenueDeltaPercent,
+                    'average_ticket_window' => $averageTicket,
+                    'revenue_is_mixed' => $isMixed,
+                    'normalized_currency' => $targetCurrency,
+                    'currency_mode' => $currencyMode,
+                    'payment_recovery_queue_total' => $paymentRecoveryTotal,
+                    'payment_recovery_pending' => $paymentRecoveryPending,
+                    'payment_recovery_failed' => $paymentRecoveryFailed,
+                    'payment_recovery_unmatched' => $paymentRecoveryUnmatched,
+                    'failed_payment_recovery' => $failedPaymentRecovery,
+                    'unmatched_payments_window' => $unmatchedPaymentsWindow,
+                    'unmatched_payments' => $unmatchedPaymentsWindow,
+                    'renewal_risk_72h' => $renewalRisk72h,
+                    'renewal_pipeline_4_14d' => $renewalPipeline14d,
+                    'renewal_workload_14d' => $renewalWorkload14d,
+                    'upcoming_follow_ups_count' => $upcomingFollowUpsCount,
+                    'new_users' => $newUsers,
+                    'missed_chats_count' => $missedChatsCount,
+                ],
+                'expiring_deals' => $expiringDeals,
+                'payment_review_queue' => $paymentReviewQueue,
+                'recent_payments' => $paymentReviewQueue,
+                'upcoming_follow_ups' => $upcomingFollowUps,
+                'country_revenue' => [],
+                'top_packages' => $topPackages,
+                'active_campaigns_count' => $activeCampaignsCount,
+                'recent_activity' => $recentActivity,
+                'retention_summary' => $retentionSummary,
+                'comms_stats' => [
+                    'sent_count' => $commsSentCount,
+                    'delivered_count' => $commsDeliveredCount,
+                    'failed_count' => $commsFailedCount,
+                ],
             ]);
 
             $this->recordDashboardTimingCheckpoint(
@@ -503,6 +502,7 @@ class DashboardController extends Controller
                     'active_profiles' => 0,
                     'inactive_profiles' => 0,
                     'net_active_movement' => 0,
+                    'successful_payments' => 0,
                 ],
                 'comparison' => [],
                 'current_scope' => [
@@ -510,11 +510,15 @@ class DashboardController extends Controller
                     'inactive_profiles' => 0,
                     'total_profiles' => 0,
                     'active_share_percent' => 0,
+                    'as_of' => null,
+                    'approximate' => false,
+                    'source' => 'client_active_snapshots',
                 ],
                 'definition' => [
-                    'active_profiles' => 'Profiles with first_activated_at in the selected window.',
-                    'inactive_profiles' => 'Paid profiles stamped with churned_at in the selected window.',
-                    'net_active_movement' => 'Active profile entries minus inactive profile exits.',
+                    'active_profiles' => 'Clients whose first reportable successful payment happened in the selected window.',
+                    'inactive_profiles' => 'Paid clients stamped with churned_at in the selected window.',
+                    'successful_payments' => 'All reportable successful payment events in the selected window, including renewals and repeat payments.',
+                    'net_active_movement' => 'First paid activations minus paid subscriber exits.',
                 ],
                 'filters' => [
                     'platform_id' => null,
@@ -570,7 +574,7 @@ class DashboardController extends Controller
             $profilesTotal = $this->extractSyncedProfilesTotal($lastResult);
             $lastSyncedAt = optional($platform->sync_last_synced_at)->toDateTimeString();
             $needsSync = $platform->sync_last_status === 'error'
-                || !$platform->sync_last_synced_at
+                || ! $platform->sync_last_synced_at
                 || $platform->sync_last_synced_at->lt(now()->subHours(12));
             $latestRun = $clientSyncRuns->get((int) $platform->id);
 
@@ -662,10 +666,10 @@ class DashboardController extends Controller
         $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
         $defaultTo = now()->endOfDay();
 
-        $from = !empty($validated['from'])
+        $from = ! empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
             : (clone $defaultFrom);
-        $to = !empty($validated['to'])
+        $to = ! empty($validated['to'])
             ? Carbon::parse($validated['to'])->endOfDay()
             : (clone $defaultTo);
 
@@ -708,10 +712,10 @@ class DashboardController extends Controller
         $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
         $defaultTo = now()->endOfDay();
 
-        $from = !empty($validated['from'])
+        $from = ! empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
             : (clone $defaultFrom);
-        $to = !empty($validated['to'])
+        $to = ! empty($validated['to'])
             ? Carbon::parse($validated['to'])->endOfDay()
             : (clone $defaultTo);
 
@@ -822,8 +826,8 @@ class DashboardController extends Controller
             if (
                 $shouldNormalizeRevenue
                 &&
-                !($currentRevenueNormalized['normalization_meta']['partial'] ?? true)
-                && !($previousRevenueNormalized['normalization_meta']['partial'] ?? true)
+                ! ($currentRevenueNormalized['normalization_meta']['partial'] ?? true)
+                && ! ($previousRevenueNormalized['normalization_meta']['partial'] ?? true)
                 && (float) ($previousRevenueNormalized['normalized_total'] ?? 0) > 0
             ) {
                 $normalizedTrend = round(
@@ -853,9 +857,9 @@ class DashboardController extends Controller
                     'source' => $target['source'] ?? 'agent_allocations',
                     'target' => $targetAmount,
                     'target_currency' => $target['target_currency'],
-                    'target_display' => $target['target_currency'] . ' ' . number_format($targetAmount, 2),
+                    'target_display' => $target['target_currency'].' '.number_format($targetAmount, 2),
                     'current' => $progressValue,
-                    'current_display' => $target['target_currency'] . ' ' . number_format($progressValue, 2),
+                    'current_display' => $target['target_currency'].' '.number_format($progressValue, 2),
                     'percentage' => $targetAmount && $targetAmount > 0 ? (int) min(100, round(($progressValue / $targetAmount) * 100)) : 0,
                 ] : null,
             ];
@@ -889,6 +893,7 @@ class DashboardController extends Controller
             ->when(is_array($platformIds), function ($query) use ($platformIds) {
                 if (empty($platformIds)) {
                     $query->whereRaw('1 = 0');
+
                     return;
                 }
 
@@ -906,6 +911,7 @@ class DashboardController extends Controller
             ->when(is_array($platformIds), function ($query) use ($platformIds) {
                 if (empty($platformIds)) {
                     $query->whereRaw('1 = 0');
+
                     return;
                 }
 
@@ -971,8 +977,8 @@ class DashboardController extends Controller
     {
         $driver = DB::connection()->getDriverName();
         $dateExpression = $driver === 'sqlite'
-            ? "date(COALESCE(payments.completed_at, payments.created_at))"
-            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
         $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, 'KES')";
 
         $query = Payment::query()
@@ -1038,7 +1044,7 @@ class DashboardController extends Controller
     private function calculateNormalizedCountryTrend(array $currentNormalized, array $previousNormalized, bool $shouldNormalizeRevenue): ?float
     {
         if (
-            !$shouldNormalizeRevenue
+            ! $shouldNormalizeRevenue
             || ($currentNormalized['normalized_total'] ?? null) === null
             || ($previousNormalized['normalized_total'] ?? null) === null
             || ($currentNormalized['normalization_meta']['partial'] ?? true)
@@ -1245,7 +1251,7 @@ class DashboardController extends Controller
 
     private function extractAnalyticsMetricDelta($metric): ?float
     {
-        if (!is_array($metric)) {
+        if (! is_array($metric)) {
             return null;
         }
 
@@ -1287,7 +1293,7 @@ class DashboardController extends Controller
 
     private function normalizeAnalyticsContactMix($mix): array
     {
-        if (!is_array($mix)) {
+        if (! is_array($mix)) {
             return [];
         }
 
@@ -1429,7 +1435,7 @@ class DashboardController extends Controller
 
         foreach ($platforms as $platform) {
             $service = new SupportBoardService($platform);
-            if (!$service->isConfigured()) {
+            if (! $service->isConfigured()) {
                 continue;
             }
 
@@ -1581,7 +1587,7 @@ class DashboardController extends Controller
             $expiresAt = $row->expiry_ts ? Carbon::createFromTimestamp((int) $row->expiry_ts) : null;
             $planType = $row->plan_type;
 
-            if (!$row->deal_id) {
+            if (! $row->deal_id) {
                 if ($row->getAttribute('featured') || $row->getAttribute('featured_expire')) {
                     $planType = 'vip';
                 } elseif ($row->getAttribute('premium') || $row->getAttribute('premium_expire')) {
@@ -1592,7 +1598,7 @@ class DashboardController extends Controller
             }
 
             return [
-                'id' => $row->deal_id ?: ('virtual_' . $row->client_id),
+                'id' => $row->deal_id ?: ('virtual_'.$row->client_id),
                 'client_id' => $row->client_id,
                 'client' => [
                     'id' => $row->client_id,
@@ -1601,7 +1607,7 @@ class DashboardController extends Controller
                 'product' => $row->product_name ? ['name' => $row->product_name] : null,
                 'plan_type' => $planType,
                 'expires_at' => $expiresAt ? $expiresAt->toDateTimeString() : null,
-                'is_virtual' => !$row->deal_id,
+                'is_virtual' => ! $row->deal_id,
             ];
         })->all();
     }
@@ -1639,7 +1645,7 @@ class DashboardController extends Controller
             $paymentsQuery->min('created_at'),
             $notesQuery->min('created_at'),
         ] as $candidate) {
-            if (!$candidate) {
+            if (! $candidate) {
                 continue;
             }
 
@@ -1661,6 +1667,7 @@ class DashboardController extends Controller
 
             return $left->lt($right) ? -1 : 1;
         });
+
         return $oldestCandidates[0];
     }
 
@@ -1677,14 +1684,14 @@ class DashboardController extends Controller
             return null;
         }
 
-        if (!is_array($value)) {
+        if (! is_array($value)) {
             return null;
         }
 
         $mode = $value['mode'] ?? 'fresh_start';
         $cutoffDate = $value['cutoff_date'] ?? null;
 
-        if ($mode !== 'fresh_start' || !$cutoffDate) {
+        if ($mode !== 'fresh_start' || ! $cutoffDate) {
             return null;
         }
 

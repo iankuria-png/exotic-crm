@@ -480,6 +480,7 @@ class TeamActivityService
         $currentRevenue = $this->aggregateRevenueByUser([$agent->id], $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $previousRevenue = $this->aggregateRevenueByUser([$agent->id], $previousRange['start'], $previousRange['end'], $viewerForScope, $platformId, $targetCurrency);
         $contribution = $this->agentRevenueContribution($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
+        $clientPerformance = $this->agentClientPerformance($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $goalProgress = $this->getGoalProgress($agent, $platformId);
 
         $currentSummary = $this->buildUserSummary(
@@ -510,6 +511,7 @@ class TeamActivityService
             'trend' => $this->buildTrendPayload($currentSummary, $previousSummary),
             'goals' => $goalProgress,
             'contribution' => $contribution,
+            'client_performance' => $clientPerformance,
         ];
     }
 
@@ -1675,6 +1677,571 @@ class TeamActivityService
                 'top_platform' => null,
                 'top_package' => null,
             ],
+        ];
+    }
+
+    private function agentClientPerformance(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): array {
+        if ($start->gte($end)) {
+            return $this->emptyClientPerformancePayload($targetCurrency);
+        }
+
+        $payments = $this->agentSuccessfulPaymentDetailRows($agent, $start, $end, $viewer, $platformId, $targetCurrency);
+        $total = $this->normalizeClientPerformanceRows($payments, $targetCurrency);
+        $totalValue = (float) ($total['normalized_total'] ?? 0);
+        $newUserRows = $payments->filter(fn ($row) => $this->isNewUserRevenueRow($row, $start, $end))->values();
+        $existingUserRows = $payments->reject(fn ($row) => $this->isNewUserRevenueRow($row, $start, $end))->values();
+        $winbackRows = $payments->filter(fn ($row) => $this->isWinbackRevenueRow($row))->values();
+        $recovery = $this->agentPaymentRecoveryPerformance($agent, $start, $end, $viewer, $platformId, $targetCurrency, $payments);
+        $conversion = $this->agentNewUserConversionPerformance($agent, $start, $end, $viewer, $platformId);
+        $winback = $this->agentWinbackPerformance($agent, $start, $viewer, $platformId, $winbackRows);
+        $workload = $this->agentWorkloadPosition($agent, $start, $end, $viewer, $platformId);
+        $segments = [
+            $this->clientRevenueSegment('new_users', 'New users', $newUserRows, $targetCurrency, $totalValue),
+            $this->clientRevenueSegment('existing_users', 'Existing users', $existingUserRows, $targetCurrency, $totalValue),
+        ];
+        $plays = [
+            array_merge(
+                $this->clientRevenueSegment('payment_recovery', 'Payment recovery', $recovery['revenue_rows'], $targetCurrency, $totalValue),
+                [
+                    'attempted_count' => $recovery['failed_payments'],
+                    'recovered_count' => $recovery['recovered_clients'],
+                    'rate' => $recovery['rate'],
+                    'rate_label' => $this->formatRateLabel($recovery['rate']),
+                ]
+            ),
+            array_merge(
+                $this->clientRevenueSegment('winbacks', 'Won-back clients', $winbackRows, $targetCurrency, $totalValue),
+                [
+                    'attempted_count' => $winback['lost_clients_at_start'],
+                    'recovered_count' => $winback['won_back_clients'],
+                    'rate' => $winback['rate'],
+                    'rate_label' => $this->formatRateLabel($winback['rate']),
+                ]
+            ),
+        ];
+
+        return [
+            'target_currency' => $targetCurrency,
+            'total_normalized' => $total['normalized_total'],
+            'total_display' => $total['normalized_display'],
+            'normalization_meta' => $total['normalization_meta'],
+            'customer_mix' => $segments,
+            'plays' => $plays,
+            'conversion' => $conversion,
+            'payment_recovery' => [
+                'failed_payments' => $recovery['failed_payments'],
+                'failed_clients' => $recovery['failed_clients'],
+                'recovered_clients' => $recovery['recovered_clients'],
+                'rate' => $recovery['rate'],
+                'rate_label' => $this->formatRateLabel($recovery['rate']),
+                'recovered_revenue_display' => $plays[0]['normalized_display'],
+            ],
+            'winback' => [
+                'lost_clients_at_start' => $winback['lost_clients_at_start'],
+                'won_back_clients' => $winback['won_back_clients'],
+                'rate' => $winback['rate'],
+                'rate_label' => $this->formatRateLabel($winback['rate']),
+                'revenue_display' => $plays[1]['normalized_display'],
+            ],
+            'workload' => $workload,
+            'insights' => $this->agentClientPerformanceInsights($segments, $plays, $conversion, $recovery, $winback, $workload),
+        ];
+    }
+
+    private function agentSuccessfulPaymentDetailRows(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): Collection {
+        $driver = DB::connection()->getDriverName();
+        $dateExpression = $driver === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at))"
+            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+        $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
+
+        $query = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('clients', function ($join) {
+                $join->on('clients.id', '=', DB::raw('COALESCE(payments.client_id, deals.client_id)'));
+            })
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->where('deals.assigned_to', (int) $agent->id)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()]);
+
+        if ($platformId) {
+            $query->where('payments.platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
+        }
+
+        return $query
+            ->selectRaw('payments.id as payment_id')
+            ->selectRaw("{$dateExpression} as event_date")
+            ->selectRaw('COALESCE(payments.completed_at, payments.created_at) as event_at')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("COALESCE(platforms.name, 'Unassigned market') as platform_name")
+            ->selectRaw("COALESCE(platforms.country, '') as platform_country")
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('payments.amount as amount')
+            ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
+            ->selectRaw('clients.created_at as client_created_at')
+            ->selectRaw('clients.first_activated_at as client_first_activated_at')
+            ->selectRaw('clients.churned_at as client_churned_at')
+            ->selectRaw('clients.profile_status as client_profile_status')
+            ->selectRaw('clients.needs_payment as client_needs_payment')
+            ->selectRaw('clients.notactive as client_notactive')
+            ->selectRaw('deals.subscription_lifecycle as deal_subscription_lifecycle')
+            ->selectRaw('payments.subscription_lifecycle as payment_subscription_lifecycle')
+            ->orderByRaw('COALESCE(payments.completed_at, payments.created_at) DESC')
+            ->get();
+    }
+
+    private function clientRevenueSegment(
+        string $key,
+        string $label,
+        Collection $rows,
+        string $targetCurrency,
+        float $totalValue
+    ): array {
+        $normalized = $this->normalizeClientPerformanceRows($rows, $targetCurrency);
+        $value = (float) ($normalized['normalized_total'] ?? 0);
+
+        return [
+            'key' => $key,
+            'label' => $label,
+            'payments_count' => $rows->count(),
+            'clients_count' => $this->countUniqueRowValues($rows, 'client_id'),
+            'native_display' => $this->nativeContributionDisplay($rows),
+            'normalized_total' => $normalized['normalized_total'],
+            'normalized_currency' => $normalized['normalized_currency'],
+            'normalized_display' => $normalized['normalized_display'],
+            'normalization_meta' => $normalized['normalization_meta'],
+            'share_percent' => $totalValue > 0 ? round(($value / $totalValue) * 100, 1) : 0.0,
+        ];
+    }
+
+    private function normalizeClientPerformanceRows(Collection $rows, string $targetCurrency): array
+    {
+        if ($rows->isEmpty()) {
+            return [
+                'source_breakdown' => [],
+                'normalized_total' => 0.0,
+                'normalized_currency' => $targetCurrency,
+                'normalized_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+                'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
+            ];
+        }
+
+        $eventRows = $rows->map(fn ($row) => [
+            'event_date' => (string) $row->event_date,
+            'platform_id' => $row->platform_id,
+            'platform_country' => $row->platform_country,
+            'platform_name' => $row->platform_name,
+            'currency' => strtoupper((string) ($row->currency ?: $targetCurrency)),
+            'amount' => (float) $row->amount,
+        ])->all();
+
+        $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency);
+
+        return [
+            ...$normalized,
+            'normalized_total' => $normalized['normalized_total'] ?? 0.0,
+            'normalized_display' => $normalized['normalized_display'] ?? ($targetCurrency . ' ' . $this->formatMoney(0)),
+        ];
+    }
+
+    private function isNewUserRevenueRow(object $row, CarbonInterface $start, CarbonInterface $end): bool
+    {
+        $activatedAt = $this->safeTimestamp($row->client_first_activated_at ?? null);
+        if ($activatedAt && $activatedAt->gte($start) && $activatedAt->lt($end)) {
+            return true;
+        }
+
+        $createdAt = $this->safeTimestamp($row->client_created_at ?? null);
+
+        return $createdAt && $createdAt->gte($start) && $createdAt->lt($end);
+    }
+
+    private function isWinbackRevenueRow(object $row): bool
+    {
+        $eventAt = $this->safeTimestamp($row->event_at ?? $row->event_date ?? null);
+        $churnedAt = $this->safeTimestamp($row->client_churned_at ?? null);
+        $dealLifecycle = strtolower((string) ($row->deal_subscription_lifecycle ?? ''));
+        $paymentLifecycle = strtolower((string) ($row->payment_subscription_lifecycle ?? ''));
+
+        return ($eventAt && $churnedAt && $churnedAt->lt($eventAt))
+            || in_array($dealLifecycle, ['reactivation', 'win_back', 'winback'], true)
+            || in_array($paymentLifecycle, ['reactivation', 'win_back', 'winback'], true);
+    }
+
+    private function agentNewUserConversionPerformance(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId
+    ): array {
+        $query = Client::query()
+            ->where('assigned_to', (int) $agent->id)
+            ->where('created_at', '>=', $start)
+            ->where('created_at', '<', $end);
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'clients.platform_id');
+        }
+
+        $created = (clone $query)->count();
+        $activated = (clone $query)
+            ->whereNotNull('first_activated_at')
+            ->where('first_activated_at', '>=', $start)
+            ->where('first_activated_at', '<', $end)
+            ->count();
+        $rate = $created > 0 ? round(($activated / $created) * 100, 1) : null;
+
+        return [
+            'new_clients' => (int) $created,
+            'converted_clients' => (int) $activated,
+            'rate' => $rate,
+            'rate_label' => $this->formatRateLabel($rate),
+        ];
+    }
+
+    private function agentPaymentRecoveryPerformance(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency,
+        Collection $successfulPayments
+    ): array {
+        $failedRows = $this->agentFailedPaymentRows($agent, $start, $end, $viewer, $platformId, $targetCurrency);
+        $failedClientIds = $failedRows
+            ->pluck('client_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $recoveredRows = $successfulPayments
+            ->filter(fn ($row) => $failedClientIds->contains((int) $row->client_id))
+            ->values();
+        $recoveredClients = $this->countUniqueRowValues($recoveredRows, 'client_id');
+        $failedClients = $failedClientIds->count();
+        $rate = $failedClients > 0 ? round(($recoveredClients / $failedClients) * 100, 1) : null;
+
+        return [
+            'failed_payments' => $failedRows->count(),
+            'failed_clients' => $failedClients,
+            'recovered_clients' => $recoveredClients,
+            'rate' => $rate,
+            'revenue_rows' => $recoveredRows,
+        ];
+    }
+
+    private function agentFailedPaymentRows(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): Collection {
+        $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
+
+        $query = Payment::query()
+            ->businessVisible()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->where('deals.assigned_to', (int) $agent->id)
+            ->where('payments.status', 'failed')
+            ->where('payments.created_at', '>=', $start)
+            ->where('payments.created_at', '<', $end);
+
+        if ($platformId) {
+            $query->where('payments.platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
+        }
+
+        return $query
+            ->selectRaw('payments.id as payment_id')
+            ->selectRaw('payments.created_at as event_date')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("COALESCE(platforms.name, 'Unassigned market') as platform_name")
+            ->selectRaw("COALESCE(platforms.country, '') as platform_country")
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('payments.amount as amount')
+            ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
+            ->get();
+    }
+
+    private function agentWinbackPerformance(
+        User $agent,
+        CarbonInterface $start,
+        ?User $viewer,
+        ?int $platformId,
+        Collection $winbackRows
+    ): array {
+        $query = Client::query()
+            ->where('assigned_to', (int) $agent->id)
+            ->whereNotNull('churned_at')
+            ->where('churned_at', '<', $start);
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'clients.platform_id');
+        }
+
+        $wonBackClients = $this->countUniqueRowValues($winbackRows, 'client_id');
+        $lostClients = max((int) $query->count(), $wonBackClients);
+        $rate = $lostClients > 0 ? round(($wonBackClients / $lostClients) * 100, 1) : null;
+
+        return [
+            'lost_clients_at_start' => $lostClients,
+            'won_back_clients' => $wonBackClients,
+            'rate' => $rate,
+        ];
+    }
+
+    private function agentWorkloadPosition(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId
+    ): array {
+        $team = $this->visibleAgentsForViewer($viewer ?? $agent, $platformId);
+        $agentIds = $team->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        if (empty($agentIds)) {
+            return [
+                'rank' => null,
+                'team_size' => 0,
+                'band' => 'No team benchmark',
+                'score' => 0,
+                'total_actions' => 0,
+                'active_seconds' => 0,
+                'most_busy' => null,
+                'least_busy' => null,
+            ];
+        }
+
+        $metrics = $this->aggregateActionMetricsForRange($start, $end, $viewer ?? $agent, $platformId, $agentIds);
+        $sessions = $this->aggregateSessionTotals($agentIds, $start, $end);
+        $rows = $team
+            ->map(function (User $teamMember) use ($metrics, $sessions): array {
+                $metric = $metrics[$teamMember->id] ?? $this->emptyMetricRow();
+                $session = $sessions[$teamMember->id] ?? ['active_seconds' => 0, 'session_count' => 0];
+                $totalActions = (int) ($metric['total_actions'] ?? 0);
+                $activeSeconds = (int) ($session['active_seconds'] ?? 0);
+                $score = ($totalActions * 10)
+                    + ((int) ($metric['subs_activated'] ?? 0) * 4)
+                    + ((int) ($metric['payments_matched'] ?? 0) * 3)
+                    + round($activeSeconds / 300, 1);
+
+                return [
+                    'user_id' => (int) $teamMember->id,
+                    'name' => $teamMember->name,
+                    'role' => $teamMember->role,
+                    'score' => round($score, 1),
+                    'total_actions' => $totalActions,
+                    'active_seconds' => $activeSeconds,
+                ];
+            })
+            ->sortByDesc('score')
+            ->values()
+            ->map(function (array $row, int $index): array {
+                $row['rank'] = $index + 1;
+
+                return $row;
+            });
+
+        $current = $rows->firstWhere('user_id', (int) $agent->id);
+        $rank = $current['rank'] ?? null;
+        $teamSize = $rows->count();
+
+        return [
+            'rank' => $rank,
+            'team_size' => $teamSize,
+            'band' => $this->workloadBand($rank, $teamSize),
+            'score' => (float) ($current['score'] ?? 0),
+            'total_actions' => (int) ($current['total_actions'] ?? 0),
+            'active_seconds' => (int) ($current['active_seconds'] ?? 0),
+            'most_busy' => $rows->first(),
+            'least_busy' => $rows->last(),
+        ];
+    }
+
+    private function agentClientPerformanceInsights(
+        array $segments,
+        array $plays,
+        array $conversion,
+        array $recovery,
+        array $winback,
+        array $workload
+    ): array {
+        $newSegment = collect($segments)->firstWhere('key', 'new_users') ?? [];
+        $existingSegment = collect($segments)->firstWhere('key', 'existing_users') ?? [];
+        $recoveryPlay = collect($plays)->firstWhere('key', 'payment_recovery') ?? [];
+        $winbackPlay = collect($plays)->firstWhere('key', 'winbacks') ?? [];
+
+        return [
+            [
+                'key' => 'revenue_shape',
+                'label' => 'Revenue shape',
+                'value' => ((float) ($newSegment['share_percent'] ?? 0)) >= ((float) ($existingSegment['share_percent'] ?? 0))
+                    ? 'New-user led'
+                    : 'Existing-user led',
+                'detail' => sprintf(
+                    '%s from new users vs %s from existing users.',
+                    $this->formatRateLabel($newSegment['share_percent'] ?? 0),
+                    $this->formatRateLabel($existingSegment['share_percent'] ?? 0)
+                ),
+            ],
+            [
+                'key' => 'conversion',
+                'label' => 'New-user conversion',
+                'value' => $conversion['rate_label'],
+                'detail' => sprintf('%d of %d assigned new users activated.', $conversion['converted_clients'], $conversion['new_clients']),
+            ],
+            [
+                'key' => 'recovery',
+                'label' => 'Payment recovery',
+                'value' => $recovery['rate'] === null ? 'No failures' : $this->formatRateLabel($recovery['rate']),
+                'detail' => sprintf('%d recovered clients, %s recovered revenue.', $recovery['recovered_clients'], $recoveryPlay['normalized_display'] ?? '0'),
+            ],
+            [
+                'key' => 'winback',
+                'label' => 'Win-back',
+                'value' => $winback['rate'] === null ? 'No lost base' : $this->formatRateLabel($winback['rate']),
+                'detail' => sprintf('%d clients won back, %s revenue.', $winback['won_back_clients'], $winbackPlay['normalized_display'] ?? '0'),
+            ],
+            [
+                'key' => 'workload',
+                'label' => 'Workload',
+                'value' => $workload['rank'] ? sprintf('#%d of %d', $workload['rank'], $workload['team_size']) : 'No benchmark',
+                'detail' => $workload['band'],
+            ],
+        ];
+    }
+
+    private function workloadBand(?int $rank, int $teamSize): string
+    {
+        if (!$rank || $teamSize <= 0) {
+            return 'No team benchmark';
+        }
+
+        if ($rank === 1) {
+            return 'Most busy visible team member';
+        }
+
+        if ($rank === $teamSize) {
+            return 'Least busy visible team member';
+        }
+
+        if ($rank <= max(1, (int) ceil($teamSize / 3))) {
+            return 'Upper workload band';
+        }
+
+        if ($rank > (int) floor(($teamSize * 2) / 3)) {
+            return 'Lower workload band';
+        }
+
+        return 'Middle workload band';
+    }
+
+    private function countUniqueRowValues(Collection $rows, string $key): int
+    {
+        return $rows
+            ->pluck($key)
+            ->filter()
+            ->map(fn ($value) => (int) $value)
+            ->unique()
+            ->count();
+    }
+
+    private function formatRateLabel(?float $rate): string
+    {
+        return $rate === null ? 'No baseline' : number_format($rate, $rate >= 10 ? 0 : 1) . '%';
+    }
+
+    private function emptyClientPerformancePayload(string $targetCurrency): array
+    {
+        $emptySegment = fn (string $key, string $label): array => [
+            'key' => $key,
+            'label' => $label,
+            'payments_count' => 0,
+            'clients_count' => 0,
+            'native_display' => '--',
+            'normalized_total' => 0.0,
+            'normalized_currency' => $targetCurrency,
+            'normalized_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
+            'share_percent' => 0.0,
+        ];
+
+        return [
+            'target_currency' => $targetCurrency,
+            'total_normalized' => 0.0,
+            'total_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
+            'customer_mix' => [
+                $emptySegment('new_users', 'New users'),
+                $emptySegment('existing_users', 'Existing users'),
+            ],
+            'plays' => [
+                $emptySegment('payment_recovery', 'Payment recovery'),
+                $emptySegment('winbacks', 'Won-back clients'),
+            ],
+            'conversion' => [
+                'new_clients' => 0,
+                'converted_clients' => 0,
+                'rate' => null,
+                'rate_label' => 'No baseline',
+            ],
+            'payment_recovery' => [
+                'failed_payments' => 0,
+                'failed_clients' => 0,
+                'recovered_clients' => 0,
+                'rate' => null,
+                'rate_label' => 'No baseline',
+                'recovered_revenue_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            ],
+            'winback' => [
+                'lost_clients_at_start' => 0,
+                'won_back_clients' => 0,
+                'rate' => null,
+                'rate_label' => 'No baseline',
+                'revenue_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            ],
+            'workload' => [
+                'rank' => null,
+                'team_size' => 0,
+                'band' => 'No team benchmark',
+                'score' => 0,
+                'total_actions' => 0,
+                'active_seconds' => 0,
+                'most_busy' => null,
+                'least_busy' => null,
+            ],
+            'insights' => [],
         ];
     }
 

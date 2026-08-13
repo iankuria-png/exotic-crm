@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Models\ClientActiveSnapshot;
 use App\Models\AgentGoalOverride;
 use App\Models\Client;
+use App\Models\ClientActiveSnapshot;
 use App\Models\Deal;
 use App\Models\MarketRevenueTarget;
 use App\Models\Payment;
@@ -102,7 +102,7 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(2, (int) data_get($summary, 'metrics.collected_revenue.value.payments_count'));
         $this->assertSame(12, (int) data_get($summary, 'metrics.active_clients.value.count'));
 
-        $recent = $this->getJson('/api/crm/dashboard/ceo/recent-payments?platform_id=' . $platform->id . '&reporting_currency=USD')
+        $recent = $this->getJson('/api/crm/dashboard/ceo/recent-payments?platform_id='.$platform->id.'&reporting_currency=USD')
             ->assertOk()
             ->json('payments');
 
@@ -683,9 +683,10 @@ class CeoDashboardTest extends TestCase
     public function test_profile_movement_reports_activations_inactive_profiles_and_current_scope(): void
     {
         $platform = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya']);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
         Sanctum::actingAs($this->user(['role' => 'admin', 'status' => 'active']));
 
-        Client::factory()->create([
+        $activePaidClient = Client::factory()->create([
             'platform_id' => $platform->id,
             'profile_status' => 'publish',
             'needs_payment' => false,
@@ -694,7 +695,7 @@ class CeoDashboardTest extends TestCase
             'first_activated_at' => '2026-05-10 09:00:00',
             'churned_at' => null,
         ]);
-        Client::factory()->create([
+        $inactivePaidClient = Client::factory()->create([
             'platform_id' => $platform->id,
             'profile_status' => 'private',
             'needs_payment' => false,
@@ -703,6 +704,7 @@ class CeoDashboardTest extends TestCase
             'first_activated_at' => '2026-04-21 09:00:00',
             'churned_at' => '2026-05-11 09:00:00',
         ]);
+        // Active profile status alone should not inflate paid subscriber movement.
         Client::factory()->create([
             'platform_id' => $platform->id,
             'profile_status' => 'publish',
@@ -712,25 +714,57 @@ class CeoDashboardTest extends TestCase
             'first_activated_at' => '2026-05-12 10:00:00',
             'churned_at' => null,
         ]);
+        ClientActiveSnapshot::query()->create([
+            'date' => '2026-05-12',
+            'platform_id' => $platform->id,
+            'count' => 1,
+            'created_at' => now(),
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $activePaidClient->id,
+            'amount' => 100,
+            'status' => 'completed',
+            'created_at' => '2026-05-10 09:00:00',
+            'completed_at' => '2026-05-10 09:00:00',
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $activePaidClient->id,
+            'amount' => 150,
+            'status' => 'completed',
+            'created_at' => '2026-05-12 09:00:00',
+            'completed_at' => '2026-05-12 09:00:00',
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $inactivePaidClient->id,
+            'amount' => 90,
+            'status' => 'completed',
+            'created_at' => '2026-04-21 09:00:00',
+            'completed_at' => '2026-04-21 09:00:00',
+        ]);
 
         $payload = $this->getJson("/api/crm/dashboard/profile-movement?platform_id={$platform->id}&from=2026-05-10&to=2026-05-12&bucket=day")
             ->assertOk()
             ->json();
 
-        $this->assertSame(2, data_get($payload, 'totals.active_profiles'));
+        $this->assertSame(1, data_get($payload, 'totals.active_profiles'));
         $this->assertSame(1, data_get($payload, 'totals.inactive_profiles'));
-        $this->assertSame(1, data_get($payload, 'totals.net_active_movement'));
-        $this->assertSame(2, data_get($payload, 'current_scope.active_profiles'));
+        $this->assertSame(0, data_get($payload, 'totals.net_active_movement'));
+        $this->assertSame(2, data_get($payload, 'totals.successful_payments'));
+        $this->assertSame(1, data_get($payload, 'current_scope.active_profiles'));
         $this->assertSame(1, data_get($payload, 'current_scope.inactive_profiles'));
+        $this->assertSame(2, data_get($payload, 'current_scope.total_profiles'));
+        $this->assertSame('client_active_snapshots', data_get($payload, 'current_scope.source'));
+        $this->assertSame('2026-05-12', data_get($payload, 'current_scope.as_of'));
         $this->assertSame('2026-05-11', data_get($payload, 'points.1.label'));
         $this->assertSame(1, data_get($payload, 'points.1.inactive_profiles'));
+        $this->assertSame(1, data_get($payload, 'points.2.successful_payments'));
     }
 
     private function user(array $overrides = []): User
     {
         return User::query()->create(array_merge([
             'name' => 'Test User',
-            'email' => Str::uuid() . '@example.test',
+            'email' => Str::uuid().'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',

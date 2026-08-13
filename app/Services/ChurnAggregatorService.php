@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\ClientActiveSnapshot;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Support\CrmClientChurnReason;
@@ -71,10 +72,11 @@ class ChurnAggregatorService
     }
 
     /**
-     * Build dashboard-ready active/inactive profile movement.
+     * Build dashboard-ready paid subscriber movement.
      *
-     * Activations come from first_activated_at; inactive movement comes from churned_at.
-     * This matches the Retention Pulse definition used by the Clients workspace.
+     * Activations are first successful paid events per client; inactive movement comes from
+     * paid clients stamped with churned_at. The current base uses the same active subscriber
+     * snapshot source as the CEO KPI, so the dashboard does not show competing totals.
      *
      * @param  array<int>  $platformIds  Empty = all accessible platforms
      */
@@ -83,14 +85,14 @@ class ChurnAggregatorService
         $bucket = in_array($bucket, ['day', 'week', 'month'], true) ? $bucket : 'day';
         $from = $from->copy()->startOfDay();
         $to = $to->copy()->endOfDay();
-        $daily = $this->dailySeries($from->copy(), $to->copy(), $platformIds, false);
+        $daily = $this->dailySeries($from->copy(), $to->copy(), $platformIds, true, true);
         $totals = $this->totals($daily);
         $dayCount = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
         $previousTo = $from->copy()->subDay()->endOfDay();
         $previousFrom = $previousTo->copy()->subDays($dayCount - 1)->startOfDay();
-        $previousDaily = $this->dailySeries($previousFrom->copy(), $previousTo->copy(), $platformIds, false);
+        $previousDaily = $this->dailySeries($previousFrom->copy(), $previousTo->copy(), $platformIds, true, true);
         $previousTotals = $this->totals($previousDaily);
-        $currentCounts = $this->currentProfileCounts($platformIds);
+        $currentCounts = $this->currentSubscriberCounts($platformIds, $to);
 
         return [
             'range' => [
@@ -108,6 +110,7 @@ class ChurnAggregatorService
                 'active_profiles' => (int) $totals['activations'],
                 'inactive_profiles' => (int) $totals['churn'],
                 'net_active_movement' => (int) ($totals['activations'] - $totals['churn']),
+                'successful_payments' => (int) $totals['successful_payments'],
             ],
             'comparison' => [
                 'created_profiles' => $this->movementComparison((int) $totals['signups'], (int) $previousTotals['signups']),
@@ -120,9 +123,10 @@ class ChurnAggregatorService
             ],
             'current_scope' => $currentCounts,
             'definition' => [
-                'active_profiles' => 'Profiles with first_activated_at in the selected window.',
-                'inactive_profiles' => 'Paid profiles stamped with churned_at in the selected window.',
-                'net_active_movement' => 'Active profile entries minus inactive profile exits.',
+                'active_profiles' => 'Clients whose first reportable successful payment happened in the selected window.',
+                'inactive_profiles' => 'Paid clients stamped with churned_at in the selected window.',
+                'successful_payments' => 'All reportable successful payment events in the selected window, including renewals and repeat payments.',
+                'net_active_movement' => 'First paid activations minus paid subscriber exits.',
             ],
         ];
     }
@@ -135,6 +139,7 @@ class ChurnAggregatorService
         Carbon $to,
         array $platformIds = [],
         bool $includeRevenueRisk = true,
+        bool $usePaidActivationIntake = false,
     ): array {
         // Signups per day
         $signupsQuery = Client::query()
@@ -146,16 +151,20 @@ class ChurnAggregatorService
         }
         $signups = $signupsQuery->pluck('cnt', 'date');
 
-        // Activations per day (first_activated_at)
-        $activationsQuery = Client::query()
-            ->selectRaw('DATE(first_activated_at) as date, COUNT(*) as cnt')
-            ->whereNotNull('first_activated_at')
-            ->whereBetween('first_activated_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
-            ->groupBy(DB::raw('DATE(first_activated_at)'));
-        if (! empty($platformIds)) {
-            $activationsQuery->whereIn('platform_id', $platformIds);
+        if ($usePaidActivationIntake) {
+            $activations = $this->firstPaidActivationCounts($from, $to, $platformIds);
+        } else {
+            // Activations per day (first_activated_at)
+            $activationsQuery = Client::query()
+                ->selectRaw('DATE(first_activated_at) as date, COUNT(*) as cnt')
+                ->whereNotNull('first_activated_at')
+                ->whereBetween('first_activated_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
+                ->groupBy(DB::raw('DATE(first_activated_at)'));
+            if (! empty($platformIds)) {
+                $activationsQuery->whereIn('platform_id', $platformIds);
+            }
+            $activations = $activationsQuery->pluck('cnt', 'date');
         }
-        $activations = $activationsQuery->pluck('cnt', 'date');
 
         // Churn per day
         $churnQuery = Client::query()
@@ -163,6 +172,9 @@ class ChurnAggregatorService
             ->whereNotNull('churned_at')
             ->whereBetween('churned_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
             ->groupBy(DB::raw('DATE(churned_at)'));
+        if ($usePaidActivationIntake) {
+            $churnQuery->whereIn('clients.id', $this->successfulPaymentClientIdsQuery($platformIds));
+        }
         if (! empty($platformIds)) {
             $churnQuery->whereIn('platform_id', $platformIds);
         }
@@ -202,11 +214,13 @@ class ChurnAggregatorService
         $signups = array_sum(array_column($daily, 'signups'));
         $activations = array_sum(array_column($daily, 'activations'));
         $churn = array_sum(array_column($daily, 'churn'));
+        $successfulPayments = array_sum(array_column($daily, 'successful_payments'));
 
         return [
             'signups' => $signups,
             'activations' => $activations,
             'churn' => $churn,
+            'successful_payments' => $successfulPayments,
             'net' => $signups - $churn,
         ];
     }
@@ -235,30 +249,85 @@ class ChurnAggregatorService
                     'active_profiles' => $active,
                     'inactive_profiles' => $inactive,
                     'net_active_movement' => $active - $inactive,
+                    'successful_payments' => (int) $rows->sum('successful_payments'),
                 ];
             })
             ->values()
             ->all();
     }
 
-    private function currentProfileCounts(array $platformIds): array
+    private function firstPaidActivationCounts(Carbon $from, Carbon $to, array $platformIds): \Illuminate\Support\Collection
     {
-        $activeQuery = Client::query()->active();
-        $totalQuery = Client::query();
+        $dateExpression = DB::connection()->getDriverName() === 'sqlite'
+            ? 'date(first_paid_at)'
+            : 'DATE(first_paid_at)';
 
-        if (! empty($platformIds)) {
-            $activeQuery->whereIn('platform_id', $platformIds);
-            $totalQuery->whereIn('platform_id', $platformIds);
-        }
+        return DB::query()
+            ->fromSub(
+                Payment::query()
+                    ->reportableSuccessful()
+                    ->excludingWalletTopups()
+                    ->whereNotNull('payments.client_id')
+                    ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+                    ->selectRaw('payments.client_id')
+                    ->selectRaw('MIN(COALESCE(payments.completed_at, payments.created_at)) as first_paid_at')
+                    ->groupBy('payments.client_id'),
+                'first_paid_clients'
+            )
+            ->whereBetween('first_paid_at', [$from->copy()->startOfDay()->toDateTimeString(), $to->copy()->endOfDay()->toDateTimeString()])
+            ->selectRaw("{$dateExpression} as date")
+            ->selectRaw('COUNT(*) as cnt')
+            ->groupByRaw($dateExpression)
+            ->pluck('cnt', 'date');
+    }
 
-        $active = (int) $activeQuery->count();
-        $total = (int) $totalQuery->count();
+    private function successfulPaymentClientIdsQuery(array $platformIds): Builder
+    {
+        return Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->whereNotNull('payments.client_id')
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+            ->select('payments.client_id')
+            ->distinct();
+    }
+
+    private function currentSubscriberCounts(array $platformIds, Carbon $asOf): array
+    {
+        $snapshotQuery = ClientActiveSnapshot::query()
+            ->whereDate('date', '<=', $asOf->toDateString())
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->orderBy('platform_id')
+            ->orderByDesc('date');
+
+        $snapshotRows = $snapshotQuery->get()->unique('platform_id')->values();
+        $active = (int) $snapshotRows->sum('count');
+        $snapshotDates = $snapshotRows
+            ->pluck('date')
+            ->filter()
+            ->map(fn ($value) => Carbon::parse($value)->toDateString())
+            ->unique()
+            ->values()
+            ->all();
+
+        $paidClientTotal = (int) Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->whereNotNull('payments.client_id')
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+            ->distinct('payments.client_id')
+            ->count('payments.client_id');
+
+        $total = max($paidClientTotal, $active);
 
         return [
             'active_profiles' => $active,
             'inactive_profiles' => max(0, $total - $active),
             'total_profiles' => $total,
             'active_share_percent' => $total > 0 ? round(($active / $total) * 100, 1) : 0.0,
+            'as_of' => count($snapshotDates) === 1 ? $snapshotDates[0] : null,
+            'approximate' => count($snapshotDates) !== 1 || ($snapshotDates[0] ?? null) !== $asOf->toDateString(),
+            'source' => 'client_active_snapshots',
         ];
     }
 

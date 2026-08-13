@@ -446,6 +446,206 @@ function RevenueContributionPanel({ contribution }) {
     );
 }
 
+function clientPerformanceRate(value, fallback = 'No baseline') {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        return fallback;
+    }
+
+    return formatShare(value);
+}
+
+function ClientSegmentRow({ segment, tone = 'teal' }) {
+    const money = contributionMoney(segment, segment?.normalized_currency || 'USD');
+    const barClass = tone === 'rose'
+        ? 'bg-rose-500'
+        : tone === 'amber'
+            ? 'bg-amber-500'
+            : tone === 'indigo'
+                ? 'bg-indigo-500'
+                : 'bg-teal-600';
+    const width = Math.max(2, Math.min(100, asNumber(segment?.share_percent)));
+
+    return (
+        <article className="rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200 transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 hover:ring-slate-300">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p className="text-sm font-semibold text-slate-900">{segment?.label || 'Segment'}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                        {formatCount(segment?.clients_count)} clients · {formatCount(segment?.payments_count)} payments
+                    </p>
+                </div>
+                <div className="text-right">
+                    <p className="crm-mono text-sm font-semibold text-slate-950">{money.primary}</p>
+                    {money.secondary ? <p className="mt-1 text-[11px] font-medium text-slate-500">{money.secondary}</p> : null}
+                </div>
+            </div>
+            <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3">
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className={`h-full rounded-full ${barClass}`} style={{ width: `${width}%` }} />
+                </div>
+                <span className="crm-mono text-xs font-semibold text-slate-500">{formatShare(segment?.share_percent)}</span>
+            </div>
+        </article>
+    );
+}
+
+function ClientPerformanceStat({ label, value, detail, tone = 'slate' }) {
+    const toneClass = {
+        teal: 'bg-teal-50 text-teal-800 ring-teal-100',
+        rose: 'bg-rose-50 text-rose-800 ring-rose-100',
+        amber: 'bg-amber-50 text-amber-800 ring-amber-100',
+        slate: 'bg-slate-50 text-slate-800 ring-slate-200',
+    }[tone] || 'bg-slate-50 text-slate-800 ring-slate-200';
+
+    return (
+        <div className={`rounded-2xl px-4 py-3 ring-1 ${toneClass}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">{label}</p>
+            <p className="mt-2 crm-mono text-2xl font-semibold leading-none">{value}</p>
+            <p className="mt-2 text-xs font-medium leading-5 opacity-75">{detail}</p>
+        </div>
+    );
+}
+
+function ClientPerformancePanel({ performance }) {
+    const customerMix = Array.isArray(performance?.customer_mix) ? performance.customer_mix : [];
+    const plays = Array.isArray(performance?.plays) ? performance.plays : [];
+    const insights = Array.isArray(performance?.insights) ? performance.insights : [];
+    const conversion = performance?.conversion || {};
+    const recovery = performance?.payment_recovery || {};
+    const winback = performance?.winback || {};
+    const workload = performance?.workload || {};
+    const total = performance?.total_display || formatCurrency(0, performance?.target_currency || 'USD');
+    const newUsers = customerMix.find((item) => item.key === 'new_users') || {};
+    const existingUsers = customerMix.find((item) => item.key === 'existing_users') || {};
+    const recoveryPlay = plays.find((item) => item.key === 'payment_recovery') || {};
+    const winbackPlay = plays.find((item) => item.key === 'winbacks') || {};
+    const hasData = asNumber(performance?.total_normalized) > 0
+        || asNumber(conversion.new_clients) > 0
+        || asNumber(recovery.failed_payments) > 0
+        || asNumber(winback.lost_clients_at_start) > 0
+        || workload.rank;
+
+    if (!hasData) {
+        return (
+            <TeamEmptyState
+                title="No client portfolio signals yet"
+                message="Assigned client revenue, new-user conversion, payment recovery, win-back, and workload ranking will appear here once this member has activity in the selected window."
+            />
+        );
+    }
+
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+                <div className="rounded-[1.4rem] bg-slate-950 p-1.5 text-white shadow-[0_20px_54px_rgba(15,23,42,0.16)]">
+                    <div className="rounded-[1.05rem] bg-[radial-gradient(circle_at_0%_0%,rgba(20,184,166,0.22),transparent_34%),linear-gradient(145deg,#06111d,#101827_68%,#151923)] p-5 ring-1 ring-white/10">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Client revenue character</p>
+                                <p className="mt-3 crm-mono text-4xl font-semibold tracking-tight">{total}</p>
+                                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
+                                    Revenue split by whether the client is newly converted, existing, recovered after failed payment, or won back from churn.
+                                </p>
+                            </div>
+                            <div className="grid min-w-56 gap-2 text-xs">
+                                <span className="rounded-full bg-white/8 px-3 py-1.5 font-semibold text-teal-100 ring-1 ring-white/10">
+                                    New users {formatShare(newUsers.share_percent)}
+                                </span>
+                                <span className="rounded-full bg-white/8 px-3 py-1.5 font-semibold text-slate-200 ring-1 ring-white/10">
+                                    Existing users {formatShare(existingUsers.share_percent)}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 grid gap-3 lg:grid-cols-2">
+                            <ClientSegmentRow segment={newUsers} tone="teal" />
+                            <ClientSegmentRow segment={existingUsers} tone="indigo" />
+                        </div>
+                    </div>
+                </div>
+
+                <aside className="grid gap-3">
+                    <ClientPerformanceStat
+                        label="New-user conversion"
+                        value={clientPerformanceRate(conversion.rate)}
+                        detail={`${formatCount(conversion.converted_clients)} activated from ${formatCount(conversion.new_clients)} assigned new users`}
+                        tone="teal"
+                    />
+                    <ClientPerformanceStat
+                        label="Payment recovery"
+                        value={clientPerformanceRate(recovery.rate, 'No failed payments')}
+                        detail={`${formatCount(recovery.recovered_clients)} recovered clients · ${recovery.recovered_revenue_display || recoveryPlay.normalized_display || '--'}`}
+                        tone="amber"
+                    />
+                    <ClientPerformanceStat
+                        label="Win-back"
+                        value={clientPerformanceRate(winback.rate, 'No lost base')}
+                        detail={`${formatCount(winback.won_back_clients)} won back from ${formatCount(winback.lost_clients_at_start)} churned clients · ${winback.revenue_display || winbackPlay.normalized_display || '--'}`}
+                        tone="rose"
+                    />
+                </aside>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+                <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">Lifecycle plays</p>
+                            <p className="mt-1 text-sm text-slate-500">Recovery and win-back are not mutually exclusive with new/existing revenue.</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                            {formatCount(plays.length)} tracked plays
+                        </span>
+                    </div>
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                        <ClientSegmentRow segment={recoveryPlay} tone="amber" />
+                        <ClientSegmentRow segment={winbackPlay} tone="rose" />
+                    </div>
+                </div>
+
+                <aside className="rounded-[1.25rem] bg-slate-50 p-4 ring-1 ring-slate-200">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Workload benchmark</p>
+                    <p className="mt-3 crm-mono text-3xl font-semibold text-slate-950">
+                        {workload.rank ? `#${workload.rank}` : '--'}
+                        <span className="text-base font-medium text-slate-400"> / {formatCount(workload.team_size)}</span>
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">{workload.band || 'No team benchmark'}</p>
+                    <div className="mt-4 grid gap-2 text-sm">
+                        <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-slate-500">Actions</span>
+                            <span className="crm-mono font-semibold text-slate-900">{formatCount(workload.total_actions)}</span>
+                        </div>
+                        <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-slate-500">Active time</span>
+                            <span className="crm-mono font-semibold text-slate-900">{formatDuration(workload.active_seconds)}</span>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <p className="text-xs font-medium text-slate-400">Most busy</p>
+                            <p className="mt-1 truncate font-semibold text-slate-900">{workload.most_busy?.name || '--'}</p>
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <p className="text-xs font-medium text-slate-400">Least busy</p>
+                            <p className="mt-1 truncate font-semibold text-slate-900">{workload.least_busy?.name || '--'}</p>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+
+            {insights.length ? (
+                <div className="grid gap-2 lg:grid-cols-5">
+                    {insights.map((insight) => (
+                        <article key={insight.key} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-slate-200">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{insight.label}</p>
+                            <p className="mt-2 text-sm font-semibold text-slate-900">{insight.value}</p>
+                            <p className="mt-1 text-xs leading-5 text-slate-500">{insight.detail}</p>
+                        </article>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function paymentAmountDisplay(payment) {
     if (!payment) {
         return { primary: '--', secondary: null };
@@ -1422,6 +1622,7 @@ export default function Team() {
     const agentTrend = agentStatsQuery.data?.trend || {};
     const agentGoals = agentStatsQuery.data?.goals || [];
     const agentContribution = agentStatsQuery.data?.contribution || {};
+    const agentClientPerformance = agentStatsQuery.data?.client_performance || {};
     const managerGoals = useMemo(() => [...defaultGoals, ...individualGoals], [defaultGoals, individualGoals]);
 
     const topLevelManagerMetrics = useMemo(() => [
@@ -2762,6 +2963,20 @@ export default function Team() {
                             />
                         ) : (
                             <RevenueContributionPanel contribution={agentContribution} />
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title="Client portfolio intelligence"
+                        subtitle="New vs existing revenue, failed-payment recovery, churn win-back, and workload position."
+                    >
+                        {agentStatsQuery.isError ? (
+                            <TeamErrorState
+                                message={getApiErrorMessage(agentStatsQuery.error, 'Client performance data could not be loaded.')}
+                                onRetry={() => agentStatsQuery.refetch()}
+                            />
+                        ) : (
+                            <ClientPerformancePanel performance={agentClientPerformance} />
                         )}
                     </SectionFrame>
 
