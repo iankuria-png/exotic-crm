@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Lead;
+use App\Models\Product;
 use App\Models\ReportingFxRate;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -424,6 +425,112 @@ class TeamLeaderboardAggregationTest extends TestCase
             ->assertJsonPath('data.0.user_id', $agent->id)
             ->assertJsonPath('data.0.revenue_display', 'KES 100,000')
             ->assertJsonPath('data.0.normalized_revenue_total', 770);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_agent_stats_include_platform_and_package_revenue_contribution(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platformKes = $this->createTeamPlatform([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+        ]);
+        $platformTzs = $this->createTeamPlatform([
+            'name' => 'Tanzania',
+            'country' => 'Tanzania',
+            'currency_code' => 'TZS',
+            'domain' => 'tz-contribution.test',
+        ]);
+        $agent = $this->createTeamUser('sales', [$platformKes->id, $platformTzs->id], [
+            'name' => 'Contribution Agent',
+            'email' => 'contribution-agent@example.test',
+        ]);
+
+        $vipKes = Product::factory()->create([
+            'platform_id' => $platformKes->id,
+            'currency' => 'KES',
+            'tier' => 'vip',
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'slug' => 'vip',
+        ]);
+        $premiumKes = Product::factory()->create([
+            'platform_id' => $platformKes->id,
+            'currency' => 'KES',
+            'tier' => 'premium',
+            'name' => 'Premium',
+            'display_name' => 'Premium',
+            'slug' => 'premium',
+        ]);
+        $vipTzs = Product::factory()->create([
+            'platform_id' => $platformTzs->id,
+            'currency' => 'TZS',
+            'tier' => 'vip',
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'slug' => 'vip',
+        ]);
+
+        $dealVipKes = $this->createTeamDeal($platformKes, $agent, [
+            'product' => $vipKes,
+            'amount' => 10000,
+            'currency' => 'KES',
+        ]);
+        $dealPremiumKes = $this->createTeamDeal($platformKes, $agent, [
+            'product' => $premiumKes,
+            'amount' => 5000,
+            'currency' => 'KES',
+        ]);
+        $dealVipTzs = $this->createTeamDeal($platformTzs, $agent, [
+            'product' => $vipTzs,
+            'amount' => 200000,
+            'currency' => 'TZS',
+        ]);
+
+        $this->createTeamPayment($platformKes, $dealVipKes, [
+            'amount' => 10000,
+            'currency' => 'KES',
+            'created_at' => now()->subHours(3),
+            'completed_at' => now()->subHours(3),
+        ]);
+        $this->createTeamPayment($platformKes, $dealPremiumKes, [
+            'amount' => 5000,
+            'currency' => 'KES',
+            'created_at' => now()->subHours(2),
+            'completed_at' => now()->subHours(2),
+        ]);
+        $this->createTeamPayment($platformTzs, $dealVipTzs, [
+            'amount' => 200000,
+            'currency' => 'TZS',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subHour(),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.01);
+        $this->createRate('TZS', 'USD', now(), 0.0005);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/' . $agent->id . '/stats?from=2026-06-02&to=2026-06-02&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('contribution.target_currency', 'USD')
+            ->assertJsonPath('contribution.summary.platform_count', 2)
+            ->assertJsonPath('contribution.summary.package_count', 2)
+            ->assertJsonPath('contribution.platforms.0.name', 'Kenya')
+            ->assertJsonPath('contribution.platforms.1.name', 'Tanzania')
+            ->assertJsonPath('contribution.packages.0.label', 'VIP')
+            ->assertJsonPath('contribution.packages.1.label', 'Premium');
+
+        $this->assertEqualsWithDelta(250.0, (float) $response->json('contribution.total_normalized'), 0.01);
+        $this->assertEqualsWithDelta(60.0, (float) $response->json('contribution.platforms.0.share_percent'), 0.01);
+        $this->assertEqualsWithDelta(40.0, (float) $response->json('contribution.platforms.1.share_percent'), 0.01);
+        $this->assertEqualsWithDelta(80.0, (float) $response->json('contribution.packages.0.share_percent'), 0.01);
+        $this->assertEqualsWithDelta(20.0, (float) $response->json('contribution.packages.1.share_percent'), 0.01);
+        $this->assertCount(2, $response->json('contribution.packages.0.platforms'));
 
         Carbon::setTestNow();
     }

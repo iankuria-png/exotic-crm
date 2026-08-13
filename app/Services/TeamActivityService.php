@@ -7,6 +7,7 @@ use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
 use App\Models\AgentSession;
 use App\Models\AuditLog;
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Lead;
 use App\Models\MarketRevenueTarget;
@@ -478,6 +479,7 @@ class TeamActivityService
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
         $currentRevenue = $this->aggregateRevenueByUser([$agent->id], $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $previousRevenue = $this->aggregateRevenueByUser([$agent->id], $previousRange['start'], $previousRange['end'], $viewerForScope, $platformId, $targetCurrency);
+        $contribution = $this->agentRevenueContribution($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $goalProgress = $this->getGoalProgress($agent, $platformId);
 
         $currentSummary = $this->buildUserSummary(
@@ -507,6 +509,7 @@ class TeamActivityService
             'previous_summary' => $previousSummary,
             'trend' => $this->buildTrendPayload($currentSummary, $previousSummary),
             'goals' => $goalProgress,
+            'contribution' => $contribution,
         ];
     }
 
@@ -1408,6 +1411,271 @@ class TeamActivityService
         }
 
         return $grouped;
+    }
+
+    private function agentRevenueContribution(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): array {
+        if ($start->gte($end)) {
+            return $this->emptyContributionPayload($targetCurrency);
+        }
+
+        $rows = $this->agentRevenueContributionRows($agent, $start, $end, $viewer, $platformId, $targetCurrency);
+        if ($rows->isEmpty()) {
+            return $this->emptyContributionPayload($targetCurrency);
+        }
+
+        $total = $this->normalizeContributionRows($rows, $targetCurrency);
+        $totalValue = (float) ($total['normalized_total'] ?? 0);
+        $platformRows = $this->platformContributionRows($rows, $targetCurrency, $totalValue);
+        $packageRows = $this->packageContributionRows($rows, $targetCurrency, $totalValue);
+        $topPlatform = $platformRows[0] ?? null;
+        $topPackage = $packageRows[0] ?? null;
+
+        return [
+            'target_currency' => $targetCurrency,
+            'total_normalized' => $total['normalized_total'],
+            'total_display' => $total['normalized_display'],
+            'normalization_meta' => $total['normalization_meta'],
+            'platforms' => $platformRows,
+            'packages' => $packageRows,
+            'summary' => [
+                'platform_count' => count($platformRows),
+                'package_count' => count($packageRows),
+                'top_platform' => $topPlatform ? [
+                    'platform_id' => $topPlatform['platform_id'],
+                    'name' => $topPlatform['name'],
+                    'country' => $topPlatform['country'],
+                    'share_percent' => $topPlatform['share_percent'],
+                    'normalized_total' => $topPlatform['normalized_total'],
+                    'display' => $topPlatform['normalized_display'],
+                ] : null,
+                'top_package' => $topPackage ? [
+                    'key' => $topPackage['key'],
+                    'label' => $topPackage['label'],
+                    'share_percent' => $topPackage['share_percent'],
+                    'normalized_total' => $topPackage['normalized_total'],
+                    'display' => $topPackage['normalized_display'],
+                ] : null,
+            ],
+        ];
+    }
+
+    private function agentRevenueContributionRows(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): Collection {
+        $driver = DB::connection()->getDriverName();
+        $dateExpression = $driver === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at))"
+            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+        $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
+        $clientExpression = 'COALESCE(payments.client_id, deals.client_id)';
+
+        $query = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->leftJoin('products', 'products.id', '=', 'deals.product_id')
+            ->where('deals.assigned_to', (int) $agent->id)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()]);
+
+        if ($platformId) {
+            $query->where('payments.platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
+        }
+
+        return $query
+            ->selectRaw("{$dateExpression} as event_date")
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("COALESCE(platforms.name, 'Unassigned market') as platform_name")
+            ->selectRaw("COALESCE(platforms.country, '') as platform_country")
+            ->selectRaw('platforms.currency_code as platform_currency')
+            ->selectRaw('deals.product_id as product_id')
+            ->selectRaw('products.tier as product_tier')
+            ->selectRaw('products.display_name as product_display_name')
+            ->selectRaw('products.name as product_name')
+            ->selectRaw('products.slug as product_slug')
+            ->selectRaw('deals.plan_type as deal_plan_type')
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->selectRaw("COUNT(DISTINCT {$clientExpression}) as clients_count")
+            ->selectRaw("GROUP_CONCAT(DISTINCT {$clientExpression}) as client_ids")
+            ->groupByRaw($dateExpression)
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country', 'platforms.currency_code')
+            ->groupBy('deals.product_id', 'products.tier', 'products.display_name', 'products.name', 'products.slug', 'deals.plan_type')
+            ->groupByRaw($currencyExpression)
+            ->get();
+    }
+
+    private function platformContributionRows(Collection $rows, string $targetCurrency, float $totalValue): array
+    {
+        return $rows
+            ->groupBy(fn ($row) => (string) ((int) $row->platform_id))
+            ->map(function (Collection $platformRows) use ($targetCurrency, $totalValue): array {
+                $normalized = $this->normalizeContributionRows($platformRows, $targetCurrency);
+                $value = (float) ($normalized['normalized_total'] ?? 0);
+                $packages = $this->packageContributionRows($platformRows, $targetCurrency, $value, 3);
+
+                return [
+                    'platform_id' => (int) $platformRows->first()->platform_id,
+                    'name' => (string) $platformRows->first()->platform_name,
+                    'country' => (string) $platformRows->first()->platform_country,
+                    'currency' => strtoupper((string) ($platformRows->first()->platform_currency ?: '')),
+                    'payments_count' => (int) $platformRows->sum('payments_count'),
+                    'clients_count' => $this->countUniqueContributionClients($platformRows),
+                    'source_breakdown' => $this->nativeContributionBreakdown($platformRows),
+                    'native_display' => $this->nativeContributionDisplay($platformRows),
+                    'normalized_total' => $normalized['normalized_total'],
+                    'normalized_currency' => $normalized['normalized_currency'],
+                    'normalized_display' => $normalized['normalized_display'],
+                    'normalization_meta' => $normalized['normalization_meta'],
+                    'share_percent' => $totalValue > 0 ? round(($value / $totalValue) * 100, 1) : 0.0,
+                    'top_packages' => $packages,
+                ];
+            })
+            ->sortByDesc(fn (array $row) => (float) ($row['normalized_total'] ?? 0))
+            ->values()
+            ->all();
+    }
+
+    private function packageContributionRows(Collection $rows, string $targetCurrency, float $totalValue, ?int $limit = null): array
+    {
+        $payload = $rows
+            ->groupBy(fn ($row) => $this->packageContributionKey($row))
+            ->map(function (Collection $packageRows) use ($targetCurrency, $totalValue): array {
+                $normalized = $this->normalizeContributionRows($packageRows, $targetCurrency);
+                $value = (float) ($normalized['normalized_total'] ?? 0);
+                $presentation = $this->packageContributionPresentation($packageRows->first());
+                $platforms = $packageRows
+                    ->groupBy(fn ($row) => (string) ((int) $row->platform_id))
+                    ->map(fn (Collection $platformRows) => [
+                        'platform_id' => (int) $platformRows->first()->platform_id,
+                        'name' => (string) $platformRows->first()->platform_name,
+                        'country' => (string) $platformRows->first()->platform_country,
+                        'share_percent' => $value > 0
+                            ? round(((float) ($this->normalizeContributionRows($platformRows, $targetCurrency)['normalized_total'] ?? 0) / $value) * 100, 1)
+                            : 0.0,
+                    ])
+                    ->sortByDesc('share_percent')
+                    ->values()
+                    ->all();
+
+                return [
+                    'key' => $presentation['key'],
+                    'label' => $presentation['label'],
+                    'payments_count' => (int) $packageRows->sum('payments_count'),
+                    'clients_count' => $this->countUniqueContributionClients($packageRows),
+                    'source_breakdown' => $this->nativeContributionBreakdown($packageRows),
+                    'native_display' => $this->nativeContributionDisplay($packageRows),
+                    'normalized_total' => $normalized['normalized_total'],
+                    'normalized_currency' => $normalized['normalized_currency'],
+                    'normalized_display' => $normalized['normalized_display'],
+                    'normalization_meta' => $normalized['normalization_meta'],
+                    'share_percent' => $totalValue > 0 ? round(($value / $totalValue) * 100, 1) : 0.0,
+                    'platforms' => $platforms,
+                ];
+            })
+            ->sortByDesc(fn (array $row) => (float) ($row['normalized_total'] ?? 0))
+            ->values();
+
+        return $limit !== null ? $payload->take($limit)->all() : $payload->all();
+    }
+
+    private function countUniqueContributionClients(Collection $rows): int
+    {
+        return $rows
+            ->flatMap(fn ($row) => explode(',', (string) ($row->client_ids ?? '')))
+            ->map(fn (string $id) => trim($id))
+            ->filter(fn (string $id) => $id !== '')
+            ->unique()
+            ->count();
+    }
+
+    private function normalizeContributionRows(Collection $rows, string $targetCurrency): array
+    {
+        $eventRows = $rows->map(fn ($row) => [
+            'event_date' => (string) $row->event_date,
+            'platform_id' => $row->platform_id,
+            'platform_country' => $row->platform_country,
+            'platform_name' => $row->platform_name,
+            'currency' => strtoupper((string) ($row->currency ?: $targetCurrency)),
+            'amount' => (float) $row->amount,
+        ])->all();
+
+        return $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency);
+    }
+
+    private function nativeContributionBreakdown(Collection $rows): array
+    {
+        return $rows
+            ->groupBy(fn ($row) => strtoupper((string) ($row->currency ?: '')))
+            ->map(fn (Collection $currencyRows) => round((float) $currencyRows->sum('amount'), 2))
+            ->filter(fn (float $amount, string $currency) => $currency !== '' && $amount > 0)
+            ->sortKeys()
+            ->all();
+    }
+
+    private function nativeContributionDisplay(Collection $rows): string
+    {
+        $breakdown = $this->nativeContributionBreakdown($rows);
+        if (empty($breakdown)) {
+            return '--';
+        }
+
+        return collect($breakdown)
+            ->map(fn (float $amount, string $currency) => $currency . ' ' . $this->formatMoney($amount))
+            ->implode(' | ');
+    }
+
+    private function packageContributionKey(object $row): string
+    {
+        return $this->packageContributionPresentation($row)['key'];
+    }
+
+    private function packageContributionPresentation(object $row): array
+    {
+        $presentation = Client::planPresentationFromPackageValues(
+            $row->product_tier,
+            $row->product_display_name ?: $row->product_name ?: $row->deal_plan_type,
+            $row->product_slug,
+        );
+
+        return $presentation ?: [
+            'key' => 'unknown',
+            'label' => 'Unknown package',
+        ];
+    }
+
+    private function emptyContributionPayload(string $targetCurrency): array
+    {
+        return [
+            'target_currency' => $targetCurrency,
+            'total_normalized' => 0.0,
+            'total_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
+            'platforms' => [],
+            'packages' => [],
+            'summary' => [
+                'platform_count' => 0,
+                'package_count' => 0,
+                'top_platform' => null,
+                'top_package' => null,
+            ],
+        ];
     }
 
     private function aggregateSessionTotals(array $userIds, CarbonInterface $start, CarbonInterface $end): array

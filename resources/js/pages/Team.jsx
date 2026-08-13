@@ -293,6 +293,159 @@ function formatCurrencyRows(rows) {
     return rows.map((row) => `${row.currency} ${asNumber(row.amount).toLocaleString()}`);
 }
 
+function formatShare(value) {
+    const numeric = asNumber(value);
+    return `${numeric.toFixed(numeric >= 10 ? 0 : 1)}%`;
+}
+
+function contributionMoney(row, fallbackCurrency = 'USD') {
+    if (!row) {
+        return { primary: '--', secondary: null };
+    }
+
+    const normalized = row.normalized_total !== null && row.normalized_total !== undefined
+        ? (row.normalized_display || formatCurrency(row.normalized_total, row.normalized_currency || fallbackCurrency))
+        : null;
+    const native = row.native_display || null;
+
+    if (!normalized) {
+        return { primary: native || '--', secondary: null };
+    }
+
+    return {
+        primary: normalized,
+        secondary: native && native !== normalized ? native : null,
+    };
+}
+
+function ContributionBar({ value, tone = 'teal' }) {
+    const width = Math.max(2, Math.min(100, asNumber(value)));
+    const fill = tone === 'package' ? 'bg-indigo-500' : 'bg-teal-600';
+
+    return (
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className={`h-full rounded-full ${fill}`} style={{ width: `${width}%` }} />
+        </div>
+    );
+}
+
+function ContributionRow({ item, type, targetCurrency }) {
+    const money = contributionMoney(item, targetCurrency);
+    const isPlatform = type === 'platform';
+    const label = isPlatform
+        ? `${getCountryFlag(item.country)} ${item.name}`
+        : item.label;
+    const meta = isPlatform
+        ? `${formatCount(item.payments_count)} payments · ${formatCount(item.clients_count)} clients`
+        : `${formatCount(item.payments_count)} payments · ${formatCount(item.platforms?.length)} markets`;
+
+    return (
+        <article className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{label}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{meta}</p>
+                </div>
+                <div className="text-right">
+                    <p className="crm-mono text-sm font-semibold text-slate-900">{money.primary}</p>
+                    {money.secondary ? <p className="mt-0.5 text-[11px] font-medium text-slate-500">{money.secondary}</p> : null}
+                </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                <ContributionBar value={item.share_percent} tone={isPlatform ? 'teal' : 'package'} />
+                <span className="crm-mono text-xs font-semibold text-slate-600">{formatShare(item.share_percent)}</span>
+            </div>
+            {isPlatform && item.top_packages?.length ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                    {item.top_packages.slice(0, 3).map((pkg) => (
+                        <span key={`${item.platform_id}-${pkg.key}`} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                            {pkg.label} {formatShare(pkg.share_percent)}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
+            {!isPlatform && item.platforms?.length ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                    {item.platforms.slice(0, 4).map((platform) => (
+                        <span key={`${item.key}-${platform.platform_id}`} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                            {getCountryFlag(platform.country)} {platform.name} {formatShare(platform.share_percent)}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
+        </article>
+    );
+}
+
+function RevenueContributionPanel({ contribution }) {
+    const platforms = Array.isArray(contribution?.platforms) ? contribution.platforms : [];
+    const packages = Array.isArray(contribution?.packages) ? contribution.packages : [];
+    const targetCurrency = contribution?.target_currency || 'USD';
+    const total = contribution?.total_normalized !== null && contribution?.total_normalized !== undefined
+        ? (contribution.total_display || formatCurrency(contribution.total_normalized, targetCurrency))
+        : '--';
+    const topPlatform = contribution?.summary?.top_platform;
+    const topPackage = contribution?.summary?.top_package;
+
+    if (!platforms.length && !packages.length) {
+        return (
+            <TeamEmptyState
+                title="No contribution mix yet"
+                message="Collected subscription payments assigned to this member will appear here by market and package."
+            />
+        );
+    }
+
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+                <article className="rounded-xl border border-slate-200 bg-slate-950 px-4 py-4 text-white">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Attributed revenue</p>
+                    <p className="mt-2 crm-mono text-2xl font-semibold">{total}</p>
+                    <p className="mt-2 text-xs text-slate-400">{formatCount(contribution?.summary?.platform_count)} markets · {formatCount(contribution?.summary?.package_count)} packages</p>
+                </article>
+                <article className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-teal-700">Leading market</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-900">
+                        {topPlatform ? `${getCountryFlag(topPlatform.country)} ${topPlatform.name}` : '--'}
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-teal-800">{topPlatform ? `${formatShare(topPlatform.share_percent)} of this member's revenue` : 'No market leader yet'}</p>
+                </article>
+                <article className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-700">Leading package</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-900">{topPackage?.label || '--'}</p>
+                    <p className="mt-2 text-sm font-medium text-indigo-800">{topPackage ? `${formatShare(topPackage.share_percent)} of package mix` : 'No package leader yet'}</p>
+                </article>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+                <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">Platform contribution</p>
+                        <p className="text-xs text-slate-500">Share of member total</p>
+                    </div>
+                    <div className="space-y-2.5">
+                        {platforms.map((item) => (
+                            <ContributionRow key={item.platform_id} item={item} type="platform" targetCurrency={targetCurrency} />
+                        ))}
+                    </div>
+                </div>
+                <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">Package contribution</p>
+                        <p className="text-xs text-slate-500">All markets combined</p>
+                    </div>
+                    <div className="space-y-2.5">
+                        {packages.map((item) => (
+                            <ContributionRow key={item.key} item={item} type="package" targetCurrency={targetCurrency} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function paymentAmountDisplay(payment) {
     if (!payment) {
         return { primary: '--', secondary: null };
@@ -1268,6 +1421,7 @@ export default function Team() {
     const agentSummary = agentStatsQuery.data?.summary || {};
     const agentTrend = agentStatsQuery.data?.trend || {};
     const agentGoals = agentStatsQuery.data?.goals || [];
+    const agentContribution = agentStatsQuery.data?.contribution || {};
     const managerGoals = useMemo(() => [...defaultGoals, ...individualGoals], [defaultGoals, individualGoals]);
 
     const topLevelManagerMetrics = useMemo(() => [
@@ -2594,6 +2748,20 @@ export default function Team() {
                                     ))}
                                 </div>
                             </div>
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title="Revenue mix"
+                        subtitle="Platform and package contribution for the selected member."
+                    >
+                        {agentStatsQuery.isError ? (
+                            <TeamErrorState
+                                message={getApiErrorMessage(agentStatsQuery.error, 'Contribution data could not be loaded.')}
+                                onRetry={() => agentStatsQuery.refetch()}
+                            />
+                        ) : (
+                            <RevenueContributionPanel contribution={agentContribution} />
                         )}
                     </SectionFrame>
 
