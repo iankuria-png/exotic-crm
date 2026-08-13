@@ -401,6 +401,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
 
             <ProfileMovementWidget
                 data={movementQuery.data}
+                summaryMetrics={summaryQuery.data?.metrics}
                 isLoading={movementQuery.isLoading}
                 errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
                 bucket={movementBucket}

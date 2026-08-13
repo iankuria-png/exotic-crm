@@ -105,6 +105,78 @@ function comparisonLine(comparison, key, noun) {
     return `${formatPercent(entry.percent)} vs prior ${noun}`;
 }
 
+function hasPaymentCount(summaryMetrics, key) {
+    return Object.prototype.hasOwnProperty.call(summaryMetrics?.[key]?.value || {}, 'payments_count');
+}
+
+function summaryAlignedMovementStats(summaryMetrics) {
+    if (
+        !summaryMetrics
+        || !hasPaymentCount(summaryMetrics, 'collected_revenue')
+        || !hasPaymentCount(summaryMetrics, 'new_user_revenue')
+        || !hasPaymentCount(summaryMetrics, 'existing_user_revenue')
+    ) {
+        return null;
+    }
+
+    return {
+        successfulPayments: asNumber(summaryMetrics.collected_revenue?.value?.payments_count),
+        newUserPayments: asNumber(summaryMetrics.new_user_revenue?.value?.payments_count),
+        newUserClients: asNumber(summaryMetrics.new_user_revenue?.value?.clients_count),
+        existingUserPayments: asNumber(summaryMetrics.existing_user_revenue?.value?.payments_count),
+        existingUserClients: asNumber(summaryMetrics.existing_user_revenue?.value?.clients_count),
+    };
+}
+
+function alignMovementTotalsWithSummary(totals, summaryStats) {
+    if (!summaryStats) return totals;
+
+    const newPaid = summaryStats.newUserPayments;
+    const existingPaid = summaryStats.existingUserPayments;
+    const reactivated = asNumber(totals.reactivated_profiles);
+    const freeTrials = asNumber(totals.free_trial_activations);
+    const exits = asNumber(totals.inactive_profiles);
+    const baseGain = newPaid + reactivated + freeTrials;
+
+    return {
+        ...totals,
+        active_profiles: newPaid + existingPaid + reactivated,
+        activation_events: newPaid + existingPaid + reactivated,
+        new_paid_activations: newPaid,
+        renewed_profiles: existingPaid,
+        base_gain: baseGain,
+        net_active_movement: baseGain - exits,
+        successful_payments: summaryStats.successfulPayments,
+    };
+}
+
+function alignSinglePointWithSummary(point, summaryStats) {
+    if (!summaryStats) return point;
+
+    return alignMovementTotalsWithSummary(point, summaryStats);
+}
+
+function movementCopy(summaryStats) {
+    const aligned = Boolean(summaryStats);
+
+    return {
+        firstPaidLabel: aligned ? 'New-user payments' : 'First-time paid',
+        renewalLabel: aligned ? 'Existing payments' : 'Renewals',
+        firstPaidDefinition: aligned
+            ? 'Successful payment events counted in the New User Revenue card for this same dashboard window.'
+            : TERM_HELP.firstPaid,
+        renewalDefinition: aligned
+            ? 'Successful payment events counted in the Existing User Revenue card for this same dashboard window.'
+            : TERM_HELP.renewals,
+        paymentHelper: aligned
+            ? 'Matches the CEO stat cards: collected revenue payments, new-user payments, and existing-user payments.'
+            : VIEW_HELPERS.payments,
+        mixHelper: aligned
+            ? 'Uses the same new-user and existing-user payment counts shown in the CEO stat cards, with trials and paid exits layered in.'
+            : VIEW_HELPERS.mix,
+    };
+}
+
 function EmptyState({ title, message }) {
     return (
         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-5 py-10 text-center">
@@ -161,11 +233,14 @@ function DefinitionTooltip({ label, text }) {
     );
 }
 
-function tooltipRows(point, view) {
+function tooltipRows(point, view, labels = {}) {
+    const firstPaidLabel = labels.firstPaidLabel || 'First-time paid';
+    const renewalLabel = labels.renewalLabel || 'Renewals';
+
     if (view === 'mix') {
         return [
-            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
-            ['Renewals', point.renewed_profiles, 'text-sky-700'],
+            [firstPaidLabel, point.new_paid_activations, 'text-teal-700'],
+            [renewalLabel, point.renewed_profiles, 'text-slate-700'],
             ['Won-back', point.reactivated_profiles, 'text-amber-700'],
             ['Free trials', point.free_trial_activations, 'text-slate-700'],
             ['Paid exits', point.inactive_profiles, 'text-rose-700'],
@@ -175,7 +250,7 @@ function tooltipRows(point, view) {
     if (view === 'trials') {
         return [
             ['Free trials', point.free_trial_activations, 'text-slate-700'],
-            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
+            [firstPaidLabel, point.new_paid_activations, 'text-teal-700'],
             ['Profile additions', point.base_gain, 'text-slate-900'],
         ];
     }
@@ -183,23 +258,23 @@ function tooltipRows(point, view) {
     if (view === 'payments') {
         return [
             ['Successful payments', point.successful_payments, 'text-slate-900'],
-            ['Renewals', point.renewed_profiles, 'text-sky-700'],
-            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
+            [renewalLabel, point.renewed_profiles, 'text-slate-700'],
+            [firstPaidLabel, point.new_paid_activations, 'text-teal-700'],
         ];
     }
 
     return [
         ['Profile additions', point.base_gain, 'text-teal-700'],
         ['Paid exits', point.inactive_profiles, 'text-rose-700'],
-        ['Renewals', point.renewed_profiles, 'text-sky-700'],
+        [renewalLabel, point.renewed_profiles, 'text-slate-700'],
         ['Net change', point.net_active_movement, 'text-slate-900', true],
     ];
 }
 
-function MovementTooltip({ active, payload, label, view }) {
+function MovementTooltip({ active, payload, label, view, labels }) {
     if (!active || !payload?.length) return null;
     const point = payload[0]?.payload || {};
-    const rows = tooltipRows(point, view);
+    const rows = tooltipRows(point, view, labels);
 
     return (
         <div className="rounded-xl border border-slate-200 bg-white/95 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
@@ -530,7 +605,9 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
     );
 }
 
-function ChartViewSwitcher({ chartView, onChange, hasSnapshot }) {
+function ChartViewSwitcher({ chartView, onChange, hasSnapshot, viewHelpers = VIEW_HELPERS }) {
+    const helperText = viewHelpers[chartView] || VIEW_HELPERS[chartView];
+
     return (
         <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="inline-flex w-fit flex-wrap rounded-lg bg-white p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement analysis view">
@@ -549,12 +626,12 @@ function ChartViewSwitcher({ chartView, onChange, hasSnapshot }) {
                     </button>
                 ))}
             </div>
-            <p className="max-w-3xl text-xs leading-5 text-slate-500">{VIEW_HELPERS[chartView]}</p>
+            <p className="max-w-3xl text-xs leading-5 text-slate-500">{helperText}</p>
         </div>
     );
 }
 
-function CurrentBaseRail({ currentScope, totals, comparison, data }) {
+function CurrentBaseRail({ currentScope, totals, comparison, data, labels = movementCopy(null) }) {
     const active = asNumber(currentScope.active_profiles);
     const inactive = asNumber(currentScope.inactive_profiles);
     const total = asNumber(currentScope.total_profiles);
@@ -622,12 +699,12 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
                     </span>
                     <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.base_gain)}</span>
                 </div>
-                <div className="flex items-center justify-between rounded-xl bg-sky-50 px-3 py-2 text-sm">
-                    <span className="flex items-center font-medium text-sky-800">
-                        Renewals
-                        <DefinitionTooltip label="Renewals" text={TERM_HELP.renewals} />
+                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                    <span className="flex items-center font-medium text-slate-700">
+                        {labels.renewalLabel}
+                        <DefinitionTooltip label={labels.renewalLabel} text={labels.renewalDefinition} />
                     </span>
-                    <span className="crm-mono font-semibold text-sky-900">{formatNumber(totals.renewed_profiles)}</span>
+                    <span className="crm-mono font-semibold text-slate-900">{formatNumber(totals.renewed_profiles)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-rose-50 px-3 py-2 text-sm">
                     <span className="flex items-center font-medium text-rose-800">
@@ -650,13 +727,21 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
 
 export default function ProfileMovementWidget({
     data,
+    summaryMetrics = null,
     isLoading = false,
     errorMessage = null,
     bucket = 'day',
     onBucketChange,
     className = '',
 }) {
-    const [chartView, setChartView] = useState('base');
+    const [chartView, setChartView] = useState('snapshot');
+    const summaryStats = useMemo(() => summaryAlignedMovementStats(summaryMetrics), [summaryMetrics]);
+    const labels = useMemo(() => movementCopy(summaryStats), [summaryStats]);
+    const viewHelpers = useMemo(() => ({
+        ...VIEW_HELPERS,
+        mix: labels.mixHelper,
+        payments: labels.paymentHelper,
+    }), [labels]);
     const points = useMemo(() => (
         Array.isArray(data?.points)
             ? data.points.map((point) => ({
@@ -672,11 +757,13 @@ export default function ProfileMovementWidget({
                 created_profiles: asNumber(point.created_profiles),
                 net_active_movement: asNumber(point.net_active_movement),
                 successful_payments: asNumber(point.successful_payments),
-            }))
+            })).map((point, _index, allPoints) => (
+                allPoints.length === 1 ? alignSinglePointWithSummary(point, summaryStats) : point
+            ))
             : []
-    ), [data?.points]);
+    ), [data?.points, summaryStats]);
     const totals = data?.totals || {};
-    const normalizedTotals = {
+    const baseNormalizedTotals = {
         ...totals,
         active_profiles: asNumber(totals.active_profiles),
         new_paid_activations: asNumber(totals.new_paid_activations ?? totals.active_profiles),
@@ -688,6 +775,7 @@ export default function ProfileMovementWidget({
         net_active_movement: asNumber(totals.net_active_movement),
         successful_payments: asNumber(totals.successful_payments),
     };
+    const normalizedTotals = alignMovementTotalsWithSummary(baseNormalizedTotals, summaryStats);
     const comparison = data?.comparison || {};
     const currentScope = data?.current_scope || {};
     const subscriberHistory = data?.subscriber_history || {};
@@ -726,7 +814,7 @@ export default function ProfileMovementWidget({
                     title="No subscriber movement in this window"
                     message="The selected scope has no paid profile activations, free-trial activations, or paid exits for this bucket. Successful payments can still happen here as repeat payments."
                 />
-                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} />
+                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} labels={labels} />
             </div>
         );
     } else {
@@ -754,14 +842,15 @@ export default function ProfileMovementWidget({
                                 </div>
                                 <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-400">
                                     Profile additions, paid exits, renewals, trials, and payment volume across the selected window.
+                                    {summaryStats ? ' Payment counts match the CEO stat cards above.' : ''}
                                 </p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">
-                                    First-time paid {formatNumber(normalizedTotals.new_paid_activations)}
+                                    {labels.firstPaidLabel} {formatNumber(normalizedTotals.new_paid_activations)}
                                 </span>
-                                <span className="rounded-full bg-sky-400/12 px-2.5 py-1 font-semibold text-sky-100 ring-1 ring-sky-300/20">
-                                    Renewals {formatNumber(normalizedTotals.renewed_profiles)}
+                                <span className="rounded-full bg-slate-400/12 px-2.5 py-1 font-semibold text-slate-100 ring-1 ring-slate-300/20">
+                                    {labels.renewalLabel} {formatNumber(normalizedTotals.renewed_profiles)}
                                 </span>
                                 {normalizedTotals.reactivated_profiles > 0 ? (
                                     <span className="rounded-full bg-amber-400/12 px-2.5 py-1 font-semibold text-amber-100 ring-1 ring-amber-300/20">
@@ -806,7 +895,7 @@ export default function ProfileMovementWidget({
                                         width={52}
                                         tickFormatter={(value) => Number(value || 0).toLocaleString()}
                                     />
-                                    <Tooltip content={<MovementTooltip view={effectiveChartView} />} />
+                                    <Tooltip content={<MovementTooltip view={effectiveChartView} labels={labels} />} />
                                     <ReferenceLine y={0} stroke="rgba(226,232,240,0.34)" strokeDasharray="4 4" />
                                     {effectiveChartView === 'base' ? (
                                         <>
@@ -842,8 +931,8 @@ export default function ProfileMovementWidget({
                                     ) : null}
                                     {effectiveChartView === 'mix' ? (
                                         <>
-                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First-time paid" />
-                                            <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewals" />
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name={labels.firstPaidLabel} />
+                                            <Bar dataKey="renewed_profiles" fill="#94a3b8" fillOpacity={0.72} radius={[5, 5, 0, 0]} barSize={12} name={labels.renewalLabel} />
                                             <Line type="monotone" dataKey="reactivated_profiles" stroke="#f59e0b" strokeWidth={2.4} dot={false} name="Won-back" />
                                             <Line type="monotone" dataKey="free_trial_activations" stroke="#94a3b8" strokeWidth={2.4} dot={false} name="Free trials" />
                                             <Line type="monotone" dataKey="inactive_profiles" stroke="#fb7185" strokeWidth={2.2} dot={false} name="Paid exits" />
@@ -852,15 +941,15 @@ export default function ProfileMovementWidget({
                                     {effectiveChartView === 'trials' ? (
                                         <>
                                             <Bar dataKey="free_trial_activations" fill="#94a3b8" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
-                                            <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First-time paid" />
+                                            <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name={labels.firstPaidLabel} />
                                             <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Profile additions" />
                                         </>
                                     ) : null}
                                     {effectiveChartView === 'payments' ? (
                                         <>
                                             <Area type="monotone" dataKey="successful_payments" stroke="#e2e8f0" strokeWidth={2.6} fill="url(#profileMovementPayments)" dot={false} name="Successful payments" />
-                                            <Line type="monotone" dataKey="renewed_profiles" stroke="#38bdf8" strokeWidth={2.6} dot={false} name="Renewals" />
-                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.76} radius={[5, 5, 0, 0]} barSize={14} name="First-time paid" />
+                                            <Line type="monotone" dataKey="renewed_profiles" stroke="#94a3b8" strokeWidth={2.6} dot={false} name={labels.renewalLabel} />
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.76} radius={[5, 5, 0, 0]} barSize={14} name={labels.firstPaidLabel} />
                                         </>
                                     ) : null}
                                 </ComposedChart>
@@ -869,7 +958,7 @@ export default function ProfileMovementWidget({
                     </div>
                 </div>
 
-                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} />
+                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} labels={labels} />
             </div>
         );
     }
@@ -904,18 +993,22 @@ export default function ProfileMovementWidget({
             {!isLoading && hasLoadedPayload && hasActivityContext ? (
                 <div className="grid gap-x-5 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
                     <MicroMetric
-                        label="First-time paid"
+                        label={labels.firstPaidLabel}
                         value={formatNumber(normalizedTotals.new_paid_activations)}
-                        helper={comparisonLine(comparison, 'new_paid_activations', 'first-time paid')}
+                        helper={summaryStats
+                            ? `${formatNumber(summaryStats.newUserClients)} clients from New User Revenue`
+                            : comparisonLine(comparison, 'new_paid_activations', 'first-time paid')}
                         tone="active"
-                        definition={TERM_HELP.firstPaid}
+                        definition={labels.firstPaidDefinition}
                     />
                     <MicroMetric
-                        label="Renewals"
+                        label={labels.renewalLabel}
                         value={formatNumber(normalizedTotals.renewed_profiles)}
-                        helper={comparisonLine(comparison, 'renewed_profiles', 'renewals')}
-                        tone="renewal"
-                        definition={TERM_HELP.renewals}
+                        helper={summaryStats
+                            ? `${formatNumber(summaryStats.existingUserClients)} clients from Existing User Revenue`
+                            : comparisonLine(comparison, 'renewed_profiles', 'renewals')}
+                        tone={summaryStats ? 'neutral' : 'renewal'}
+                        definition={labels.renewalDefinition}
                     />
                     <MicroMetric
                         label="Free trials"
@@ -953,6 +1046,7 @@ export default function ProfileMovementWidget({
                     chartView={effectiveChartView}
                     onChange={setChartView}
                     hasSnapshot={hasSubscriberHistory}
+                    viewHelpers={viewHelpers}
                 />
             ) : null}
 
