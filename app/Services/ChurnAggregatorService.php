@@ -133,15 +133,15 @@ class ChurnAggregatorService
             ],
             'current_scope' => $currentCounts,
             'definition' => [
-                'active_profiles' => 'Reportable paid profile activation events in the selected window: first paid, renewed, and reactivated profiles.',
-                'new_paid_activations' => 'Clients whose first reportable successful payment happened in the selected window.',
-                'renewed_profiles' => 'Paid clients with a later successful payment in the selected window after an earlier successful payment.',
-                'reactivated_profiles' => 'Successful payments marked as reactivation or win-back, or attached to a client that had churned before the payment.',
+                'active_profiles' => 'Reportable paid profile activity in the selected window: first-time paid, renewals, and won-back clients.',
+                'new_paid_activations' => 'Clients whose first reportable successful paid subscription happened in the selected window.',
+                'renewed_profiles' => 'Existing paying clients who paid again or extended in the selected window. This is retained work, not new profile growth.',
+                'reactivated_profiles' => 'Previously inactive or churned paid clients who returned with a successful payment. This is shown as won-back in the UI.',
                 'free_trial_activations' => 'Free-trial deals activated in the selected window. They activate profiles but do not count as paid revenue.',
-                'base_gain' => 'New paid activations, reactivations, and free trials. Renewals are retained activity, not new base growth.',
+                'base_gain' => 'Profile additions: first-time paid subscriptions, won-back clients, and free trials. Renewals are excluded because the client was already paying.',
                 'inactive_profiles' => 'Paid clients stamped with churned_at in the selected window.',
-                'successful_payments' => 'All reportable successful payment events in the selected window, including renewals and repeat payments.',
-                'net_active_movement' => 'Base gain minus paid subscriber exits.',
+                'successful_payments' => 'All reportable successful payment events in the selected window, including first payments, renewals, and repeat payments.',
+                'net_active_movement' => 'Net change: profile additions minus paid exits.',
             ],
         ];
     }

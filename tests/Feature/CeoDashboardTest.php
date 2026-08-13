@@ -782,6 +782,10 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(1, data_get($payload, 'points.2.renewed_profiles'));
         $this->assertSame(1, data_get($payload, 'points.2.free_trial_activations'));
         $this->assertSame(1, data_get($payload, 'points.2.successful_payments'));
+        $this->assertSame('Profile additions: first-time paid subscriptions, won-back clients, and free trials. Renewals are excluded because the client was already paying.', data_get($payload, 'definition.base_gain'));
+        $this->assertSame('Net change: profile additions minus paid exits.', data_get($payload, 'definition.net_active_movement'));
+        $this->assertStringContainsString('Existing paying clients', data_get($payload, 'definition.renewed_profiles'));
+        $this->assertStringContainsString('won-back', data_get($payload, 'definition.reactivated_profiles'));
     }
 
     private function user(array $overrides = []): User

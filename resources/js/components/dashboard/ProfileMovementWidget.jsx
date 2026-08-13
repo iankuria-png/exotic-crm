@@ -20,16 +20,27 @@ const BUCKETS = [
     { key: 'month', label: 'Month' },
 ];
 const CHART_VIEWS = [
-    { key: 'base', label: 'Base shift' },
-    { key: 'mix', label: 'Activation mix' },
-    { key: 'trials', label: 'Trials' },
-    { key: 'payments', label: 'Payment volume' },
+    { key: 'base', label: 'Net change' },
+    { key: 'mix', label: 'Breakdown' },
+    { key: 'trials', label: 'Free trials' },
+    { key: 'payments', label: 'Payments' },
 ];
 const VIEW_HELPERS = {
-    base: 'New paid, reactivated, and trial profiles against exits. Renewals are shown as retained work, not new base.',
-    mix: 'Profile activation categories split by first paid, renewed, reactivated, and free trial.',
-    trials: 'Free-trial activations alongside first paid conversion intake.',
-    payments: 'All successful payment events compared with renewed profile activity.',
+    base: 'Profile additions minus paid exits. Additions are first-time paid, won-back clients, and free trials. Renewals are retained work, not new additions.',
+    mix: 'Shows what kind of movement happened: first-time paid, renewals, won-back clients, free trials, and exits.',
+    trials: 'Free-trial activations alongside first-time paid subscriptions. Trials activate profiles but do not count as paid revenue.',
+    payments: 'All successful payment events compared with renewals and first-time paid subscriptions.',
+};
+const TERM_HELP = {
+    firstPaid: 'Clients whose first successful paid subscription happened in this selected period.',
+    renewals: 'Existing paying clients who paid again or extended in this period. They are retention, not new profile growth.',
+    wonBack: 'Previously inactive or churned paid clients who returned with a successful payment. This is separate from a normal renewal.',
+    trials: 'Profiles activated on a free trial. They increase profile activity but do not count as paid revenue.',
+    paidExits: 'Paid clients whose profile moved inactive or churned in this period.',
+    additions: 'Profiles added to the active profile pool: first-time paid + won-back + free trials. Renewals are excluded because the client was already paying.',
+    netChange: 'Profile additions minus paid exits. Positive means additions were higher than exits; negative means exits were higher.',
+    totalEvents: 'All movement events in the period: paid activations, renewals, free trials, and paid exits.',
+    successfulPayments: 'All reportable successful payments in the period, including first payments, renewals, and repeat payments.',
 };
 
 function asNumber(value) {
@@ -76,9 +87,9 @@ function movementTone(value) {
 
 function movementLabel(value) {
     const tone = movementTone(value);
-    if (tone === 'positive') return 'Paid base expanding';
-    if (tone === 'negative') return 'Paid exits outpacing base additions';
-    return 'No paid base movement';
+    if (tone === 'positive') return 'Additions ahead of exits';
+    if (tone === 'negative') return 'Exits ahead of additions';
+    return 'Additions and exits balanced';
 }
 
 function comparisonLine(comparison, key, noun) {
@@ -123,12 +134,35 @@ function ErrorState({ message }) {
     );
 }
 
+function DefinitionTooltip({ label, text }) {
+    if (!text) return null;
+
+    return (
+        <span className="group relative inline-flex align-middle">
+            <button
+                type="button"
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold leading-none text-slate-500 transition hover:border-slate-400 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                aria-label={`${label} explanation`}
+            >
+                ?
+            </button>
+            <span
+                role="tooltip"
+                className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-72 -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs font-medium normal-case leading-5 tracking-normal text-slate-600 shadow-[0_18px_48px_rgba(15,23,42,0.16)] group-hover:block group-focus-within:block"
+            >
+                <span className="block font-semibold text-slate-900">{label}</span>
+                <span className="mt-1 block">{text}</span>
+            </span>
+        </span>
+    );
+}
+
 function tooltipRows(point, view) {
     if (view === 'mix') {
         return [
-            ['First paid', point.new_paid_activations, 'text-teal-700'],
-            ['Renewed', point.renewed_profiles, 'text-sky-700'],
-            ['Reactivated', point.reactivated_profiles, 'text-amber-700'],
+            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
+            ['Renewals', point.renewed_profiles, 'text-sky-700'],
+            ['Won-back', point.reactivated_profiles, 'text-amber-700'],
             ['Free trials', point.free_trial_activations, 'text-violet-700'],
             ['Paid exits', point.inactive_profiles, 'text-rose-700'],
         ];
@@ -137,24 +171,24 @@ function tooltipRows(point, view) {
     if (view === 'trials') {
         return [
             ['Free trials', point.free_trial_activations, 'text-violet-700'],
-            ['First paid', point.new_paid_activations, 'text-teal-700'],
-            ['Base gain', point.base_gain, 'text-slate-900'],
+            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
+            ['Profile additions', point.base_gain, 'text-slate-900'],
         ];
     }
 
     if (view === 'payments') {
         return [
             ['Successful payments', point.successful_payments, 'text-slate-900'],
-            ['Renewed profiles', point.renewed_profiles, 'text-sky-700'],
-            ['First paid', point.new_paid_activations, 'text-teal-700'],
+            ['Renewals', point.renewed_profiles, 'text-sky-700'],
+            ['First-time paid', point.new_paid_activations, 'text-teal-700'],
         ];
     }
 
     return [
-        ['Base gain', point.base_gain, 'text-teal-700'],
+        ['Profile additions', point.base_gain, 'text-teal-700'],
         ['Paid exits', point.inactive_profiles, 'text-rose-700'],
-        ['Renewals retained', point.renewed_profiles, 'text-sky-700'],
-        ['Net base shift', point.net_active_movement, 'text-slate-900', true],
+        ['Renewals', point.renewed_profiles, 'text-sky-700'],
+        ['Net change', point.net_active_movement, 'text-slate-900', true],
     ];
 }
 
@@ -198,7 +232,7 @@ function MovementSkeleton() {
     );
 }
 
-function MicroMetric({ label, value, helper, tone = 'neutral' }) {
+function MicroMetric({ label, value, helper, tone = 'neutral', definition = null }) {
     const toneClass = {
         active: 'text-teal-700',
         inactive: 'text-rose-700',
@@ -210,7 +244,10 @@ function MicroMetric({ label, value, helper, tone = 'neutral' }) {
 
     return (
         <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</p>
+            <p className="flex items-center text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                <span>{label}</span>
+                <DefinitionTooltip label={label} text={definition} />
+            </p>
             <p className={`mt-1 crm-mono text-xl font-semibold ${toneClass}`}>{value}</p>
             <p className="mt-1 truncate text-xs text-slate-500">{helper}</p>
         </div>
@@ -230,7 +267,7 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
     return (
         <aside className="rounded-[1.2rem] bg-white p-4 ring-1 ring-slate-200">
             <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Paying subscriber base</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Paid subscriber snapshot</p>
                 <div className="mt-3 flex items-end justify-between gap-3">
                     <div>
                         <p className="crm-mono text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(total)}</p>
@@ -279,19 +316,31 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
 
             <div className="mt-3 grid gap-2">
                 <div className="flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-teal-800">Base additions</span>
+                    <span className="flex items-center font-medium text-teal-800">
+                        Profile additions
+                        <DefinitionTooltip label="Profile additions" text={TERM_HELP.additions} />
+                    </span>
                     <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.base_gain)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-sky-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-sky-800">Renewed profiles</span>
+                    <span className="flex items-center font-medium text-sky-800">
+                        Renewals
+                        <DefinitionTooltip label="Renewals" text={TERM_HELP.renewals} />
+                    </span>
                     <span className="crm-mono font-semibold text-sky-900">{formatNumber(totals.renewed_profiles)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-rose-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-rose-800">Paid exits</span>
+                    <span className="flex items-center font-medium text-rose-800">
+                        Paid exits
+                        <DefinitionTooltip label="Paid exits" text={TERM_HELP.paidExits} />
+                    </span>
                     <span className="crm-mono font-semibold text-rose-900">{formatNumber(totals.inactive_profiles)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2 text-sm">
-                    <span className="font-medium text-slate-700">Successful payments</span>
+                    <span className="flex items-center font-medium text-slate-700">
+                        Successful payments
+                        <DefinitionTooltip label="Successful payments" text={TERM_HELP.successfulPayments} />
+                    </span>
                     <span className="crm-mono font-semibold text-slate-900">{formatNumber(totals.successful_payments)}</span>
                 </div>
             </div>
@@ -376,7 +425,10 @@ export default function ProfileMovementWidget({
                     <div className="rounded-[1rem] bg-[radial-gradient(circle_at_20%_0%,rgba(20,184,166,0.22),transparent_32%),linear-gradient(145deg,#07111f,#0f172a_60%,#111827)] p-4 ring-1 ring-white/10">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Movement ledger</p>
+                                <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                    Profile flow
+                                    <DefinitionTooltip label="Profile flow" text="A period-by-period count of profiles added, renewed, trialed, and moved inactive. It is movement during the window, not a historical reconstruction." />
+                                </p>
                                 <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
                                     <p className="crm-mono text-4xl font-semibold tracking-tight">{formatSigned(normalizedTotals.net_active_movement)}</p>
                                     <p className={`pb-1 text-sm font-semibold ${
@@ -389,17 +441,24 @@ export default function ProfileMovementWidget({
                                         {movementLabel(normalizedTotals.net_active_movement)}
                                     </p>
                                 </div>
-                                <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-400">{VIEW_HELPERS[chartView]}</p>
+                                <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-400">
+                                    {VIEW_HELPERS[chartView]} Net change = profile additions - paid exits.
+                                </p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">
-                                    New paid {formatNumber(normalizedTotals.new_paid_activations)}
+                                    First-time paid {formatNumber(normalizedTotals.new_paid_activations)}
                                 </span>
                                 <span className="rounded-full bg-sky-400/12 px-2.5 py-1 font-semibold text-sky-100 ring-1 ring-sky-300/20">
-                                    Renewed {formatNumber(normalizedTotals.renewed_profiles)}
+                                    Renewals {formatNumber(normalizedTotals.renewed_profiles)}
                                 </span>
+                                {normalizedTotals.reactivated_profiles > 0 ? (
+                                    <span className="rounded-full bg-amber-400/12 px-2.5 py-1 font-semibold text-amber-100 ring-1 ring-amber-300/20">
+                                        Won-back {formatNumber(normalizedTotals.reactivated_profiles)}
+                                    </span>
+                                ) : null}
                                 <span className="rounded-full bg-violet-400/12 px-2.5 py-1 font-semibold text-violet-100 ring-1 ring-violet-300/20">
-                                    Trials {formatNumber(normalizedTotals.free_trial_activations)}
+                                    Free trials {formatNumber(normalizedTotals.free_trial_activations)}
                                 </span>
                                 <span className="rounded-full bg-rose-400/12 px-2.5 py-1 font-semibold text-rose-200 ring-1 ring-rose-300/20">
                                     Exits {formatNumber(normalizedTotals.inactive_profiles)}
@@ -472,7 +531,7 @@ export default function ProfileMovementWidget({
                                                 stroke="#2dd4bf"
                                                 strokeWidth={2.75}
                                                 fill="url(#profileMovementBaseGain)"
-                                                name="Base gain"
+                                                name="Profile additions"
                                                 dot={false}
                                                 activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#5eead4' }}
                                             />
@@ -489,9 +548,9 @@ export default function ProfileMovementWidget({
                                     ) : null}
                                     {chartView === 'mix' ? (
                                         <>
-                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First paid" />
-                                            <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewed" />
-                                            <Line type="monotone" dataKey="reactivated_profiles" stroke="#f59e0b" strokeWidth={2.4} dot={false} name="Reactivated" />
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First-time paid" />
+                                            <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewals" />
+                                            <Line type="monotone" dataKey="reactivated_profiles" stroke="#f59e0b" strokeWidth={2.4} dot={false} name="Won-back" />
                                             <Line type="monotone" dataKey="free_trial_activations" stroke="#a78bfa" strokeWidth={2.4} dot={false} name="Free trials" />
                                             <Line type="monotone" dataKey="inactive_profiles" stroke="#fb7185" strokeWidth={2.2} dot={false} name="Paid exits" />
                                         </>
@@ -499,15 +558,15 @@ export default function ProfileMovementWidget({
                                     {chartView === 'trials' ? (
                                         <>
                                             <Bar dataKey="free_trial_activations" fill="#a78bfa" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
-                                            <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First paid" />
-                                            <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Base gain" />
+                                            <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First-time paid" />
+                                            <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Profile additions" />
                                         </>
                                     ) : null}
                                     {chartView === 'payments' ? (
                                         <>
                                             <Area type="monotone" dataKey="successful_payments" stroke="#e2e8f0" strokeWidth={2.6} fill="url(#profileMovementPayments)" dot={false} name="Successful payments" />
-                                            <Line type="monotone" dataKey="renewed_profiles" stroke="#38bdf8" strokeWidth={2.6} dot={false} name="Renewed profiles" />
-                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.76} radius={[5, 5, 0, 0]} barSize={14} name="First paid" />
+                                            <Line type="monotone" dataKey="renewed_profiles" stroke="#38bdf8" strokeWidth={2.6} dot={false} name="Renewals" />
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.76} radius={[5, 5, 0, 0]} barSize={14} name="First-time paid" />
                                         </>
                                     ) : null}
                                 </ComposedChart>
@@ -524,8 +583,8 @@ export default function ProfileMovementWidget({
     return (
         <SectionFrame
             title="Profile Movement"
-            subtitle="New paid, renewals, reactivations, free trials, exits, and payment volume across the selected window."
-            className={`overflow-hidden ${className}`}
+            subtitle="First-time paid subscriptions, renewals, won-back clients, free trials, exits, and payment volume across the selected window."
+            className={className}
             contentClassName="space-y-4 bg-slate-50/50"
             action={(
                 <div className="inline-flex rounded-xl bg-slate-100 p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement bucket">
@@ -551,40 +610,46 @@ export default function ProfileMovementWidget({
             {!isLoading && hasLoadedPayload && hasActivityContext ? (
                 <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                     <MicroMetric
-                        label="New paid"
+                        label="First-time paid"
                         value={formatNumber(normalizedTotals.new_paid_activations)}
-                        helper={comparisonLine(comparison, 'new_paid_activations', 'first paid')}
+                        helper={comparisonLine(comparison, 'new_paid_activations', 'first-time paid')}
                         tone="active"
+                        definition={TERM_HELP.firstPaid}
                     />
                     <MicroMetric
-                        label="Renewed"
+                        label="Renewals"
                         value={formatNumber(normalizedTotals.renewed_profiles)}
-                        helper={comparisonLine(comparison, 'renewed_profiles', 'renewal')}
+                        helper={comparisonLine(comparison, 'renewed_profiles', 'renewals')}
                         tone="renewal"
+                        definition={TERM_HELP.renewals}
                     />
                     <MicroMetric
-                        label="Trials"
+                        label="Free trials"
                         value={formatNumber(normalizedTotals.free_trial_activations)}
                         helper="Profile activation, no payment"
                         tone="trial"
+                        definition={TERM_HELP.trials}
                     />
                     <MicroMetric
                         label="Paid exits"
                         value={formatNumber(normalizedTotals.inactive_profiles)}
-                        helper={comparisonLine(comparison, 'inactive_profiles', 'inactive')}
+                        helper={comparisonLine(comparison, 'inactive_profiles', 'paid exits')}
                         tone="inactive"
+                        definition={TERM_HELP.paidExits}
                     />
                     <MicroMetric
-                        label="Net swing"
+                        label="Net change"
                         value={formatSigned(normalizedTotals.net_active_movement)}
                         helper={`${formatSigned(comparison.net_active_movement?.delta)} vs prior window`}
                         tone="net"
+                        definition={TERM_HELP.netChange}
                     />
                     <MicroMetric
-                        label="Activity total"
+                        label="Total events"
                         value={formatNumber(totalProfileActivity)}
                         helper={`${formatNumber(normalizedTotals.successful_payments)} successful payments`}
                         tone="neutral"
+                        definition={TERM_HELP.totalEvents}
                     />
                 </div>
             ) : null}
