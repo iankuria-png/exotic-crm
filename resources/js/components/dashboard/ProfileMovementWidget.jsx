@@ -107,7 +107,7 @@ function comparisonLine(comparison, key, noun) {
 
 function EmptyState({ title, message }) {
     return (
-        <div className="rounded-[1.15rem] border border-dashed border-slate-200 bg-slate-50/80 px-5 py-10 text-center">
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">{title}</p>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">{message}</p>
         </div>
@@ -118,7 +118,7 @@ function ErrorState({ message }) {
     const routeMissing = /route .*profile-movement.*could not be found/i.test(String(message || ''));
 
     return (
-        <div className="rounded-[1.15rem] border border-rose-200 bg-rose-50 px-5 py-5">
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-5 py-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                     <p className="text-sm font-semibold text-rose-950">
@@ -167,14 +167,14 @@ function tooltipRows(point, view) {
             ['First-time paid', point.new_paid_activations, 'text-teal-700'],
             ['Renewals', point.renewed_profiles, 'text-sky-700'],
             ['Won-back', point.reactivated_profiles, 'text-amber-700'],
-            ['Free trials', point.free_trial_activations, 'text-violet-700'],
+            ['Free trials', point.free_trial_activations, 'text-slate-700'],
             ['Paid exits', point.inactive_profiles, 'text-rose-700'],
         ];
     }
 
     if (view === 'trials') {
         return [
-            ['Free trials', point.free_trial_activations, 'text-violet-700'],
+            ['Free trials', point.free_trial_activations, 'text-slate-700'],
             ['First-time paid', point.new_paid_activations, 'text-teal-700'],
             ['Profile additions', point.base_gain, 'text-slate-900'],
         ];
@@ -220,16 +220,16 @@ function MovementTooltip({ active, payload, label, view }) {
 function MovementSkeleton() {
     return (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-            <div className="rounded-[1.25rem] bg-slate-100 p-4">
+            <div className="rounded-xl bg-slate-100 p-4">
                 <div className="h-8 w-48 animate-pulse rounded-lg bg-white" />
-                <div className="mt-6 h-72 animate-pulse rounded-2xl bg-white" />
+                <div className="mt-6 h-72 animate-pulse rounded-xl bg-white" />
             </div>
-            <div className="rounded-[1.25rem] bg-slate-100 p-4">
+            <div className="rounded-xl bg-slate-100 p-4">
                 <div className="h-8 w-36 animate-pulse rounded-lg bg-white" />
                 <div className="mt-6 space-y-3">
-                    <div className="h-20 animate-pulse rounded-2xl bg-white" />
-                    <div className="h-20 animate-pulse rounded-2xl bg-white" />
-                    <div className="h-20 animate-pulse rounded-2xl bg-white" />
+                    <div className="h-20 animate-pulse rounded-xl bg-white" />
+                    <div className="h-20 animate-pulse rounded-xl bg-white" />
+                    <div className="h-20 animate-pulse rounded-xl bg-white" />
                 </div>
             </div>
         </div>
@@ -242,7 +242,7 @@ function MicroMetric({ label, value, helper, tone = 'neutral', definition = null
         inactive: 'text-rose-700',
         net: 'text-slate-950',
         renewal: 'text-sky-700',
-        trial: 'text-violet-700',
+        trial: 'text-slate-700',
         neutral: 'text-slate-800',
     }[tone] || 'text-slate-800';
 
@@ -305,6 +305,56 @@ function SnapshotCheckpoint({ item, maxCount, emphasis = false }) {
     );
 }
 
+function snapshotSeries(history) {
+    const preferred = [
+        history?.thirty_days_ago,
+        history?.seven_days_ago,
+        history?.yesterday,
+        history?.range_start,
+        history?.range_end,
+        history?.current,
+    ].filter((item) => item?.date);
+    const byDate = new Map();
+
+    preferred.forEach((item) => {
+        byDate.set(item.date, {
+            ...item,
+            active_count: asNumber(item.count),
+            inactive_count: asNumber(item.inactive_count),
+            total_paid_profiles: asNumber(item.total_paid_profiles),
+        });
+    });
+
+    return Array.from(byDate.values())
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+}
+
+function SnapshotTooltip({ active, payload, label }) {
+    if (!active || !payload?.length) return null;
+    const point = payload[0]?.payload || {};
+
+    return (
+        <div className="rounded-lg border border-slate-200 bg-white/95 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+            <p className="text-xs font-semibold text-slate-900">{point.label || label}</p>
+            <p className="mt-0.5 text-[11px] font-medium text-slate-400">{snapshotDateLine(point)}</p>
+            <div className="mt-3 grid min-w-48 gap-2 text-sm">
+                <p className="flex items-center justify-between gap-8 text-teal-700">
+                    <span>Active paying</span>
+                    <span className="crm-mono font-semibold">{formatNumber(point.active_count)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-700">
+                    <span>Paid but inactive</span>
+                    <span className="crm-mono font-semibold">{formatNumber(point.inactive_count)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-900">
+                    <span>Total paid profiles</span>
+                    <span className="crm-mono font-semibold">{formatNumber(point.total_paid_profiles)}</span>
+                </p>
+            </div>
+        </div>
+    );
+}
+
 function SubscriberSnapshotPanel({ history, currentScope, data }) {
     const current = history?.current || history?.range_end || null;
     const rangeStart = history?.range_start || null;
@@ -329,11 +379,12 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
     const inactive = asNumber(current?.inactive_count ?? currentScope.inactive_profiles);
     const total = asNumber(current?.total_paid_profiles ?? currentScope.total_profiles);
     const share = total > 0 ? clampPercent((active / total) * 100) : 0;
+    const series = snapshotSeries(history);
 
     return (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-            <div className="rounded-[1.25rem] bg-white p-5 ring-1 ring-slate-200">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="rounded-xl bg-white p-5 ring-1 ring-slate-200">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                             Paid subscriber snapshot
@@ -348,58 +399,104 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
                     </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
-                    <div className="rounded-[1.15rem] bg-slate-950 p-5 text-white shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current snapshot</p>
-                        <p className="mt-3 crm-mono text-5xl font-semibold tracking-tight">{formatNumber(active)}</p>
-                        <p className="mt-2 text-sm leading-6 text-slate-300">
-                            active paying clients
-                            {current?.date ? <span> on {current.date}</span> : null}
-                            {current?.approximate && current?.as_of ? <span> using {current.as_of}</span> : null}
-                        </p>
+                <div className="mt-5 grid gap-5 xl:grid-cols-[17rem_minmax(0,1fr)]">
+                    <div className="rounded-xl bg-slate-950 p-5 text-white shadow-[0_18px_48px_rgba(15,23,42,0.14)]">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current snapshot</p>
+                            <p className="mt-3 crm-mono text-5xl font-semibold tracking-tight">{formatNumber(active)}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-300">
+                                active paying clients
+                                {current?.date ? <span> on {current.date}</span> : null}
+                                {current?.approximate && current?.as_of ? <span> using {current.as_of}</span> : null}
+                            </p>
+                        </div>
 
-                        <div className="mt-5 border-t border-white/10 pt-4">
+                        <div className="mt-6 border-t border-white/10 pt-4">
                             <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                                 Range change
                                 <DefinitionTooltip label="Range change" text={TERM_HELP.rangeChange} />
                             </p>
-                            <div className="mt-2 flex items-end justify-between gap-4">
-                                <p className={`crm-mono text-3xl font-semibold ${
-                                    deltaTone === 'positive'
-                                        ? 'text-teal-200'
-                                        : deltaTone === 'negative'
-                                            ? 'text-rose-200'
-                                            : 'text-slate-200'
-                                }`}>
-                                    {formatSigned(rangeChange.change)}
-                                </p>
-                                <p className="text-right text-xs leading-5 text-slate-400">
-                                    {rangeChange.from_date || '--'} to {rangeChange.to_date || '--'}
-                                </p>
-                            </div>
+                            <p className={`mt-2 crm-mono text-3xl font-semibold ${
+                                deltaTone === 'positive'
+                                    ? 'text-teal-200'
+                                    : deltaTone === 'negative'
+                                        ? 'text-rose-200'
+                                        : 'text-slate-200'
+                            }`}>
+                                {formatSigned(rangeChange.change)}
+                            </p>
+                            <p className="mt-1 text-xs leading-5 text-slate-400">
+                                {rangeChange.from_date || '--'} to {rangeChange.to_date || '--'}
+                            </p>
                         </div>
                     </div>
 
-                    <div className="grid gap-4">
-                        <div className="grid gap-4 sm:grid-cols-2">
-                            <SnapshotCheckpoint item={current} maxCount={maxCount} emphasis />
+                    <div className="rounded-xl border border-slate-200 p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-950">Snapshot trend</p>
+                                <p className="mt-1 text-xs leading-5 text-slate-500">
+                                    Point-in-time active paying base across available checkpoints.
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs font-semibold text-slate-500">
+                                <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-teal-600" /> Active</span>
+                                <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-400" /> Inactive</span>
+                            </div>
+                        </div>
+                        <div className="mt-4 h-64">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={series} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 6" vertical={false} />
+                                    <XAxis
+                                        dataKey="date"
+                                        tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
+                                        tickLine={false}
+                                        axisLine={false}
+                                        minTickGap={14}
+                                    />
+                                    <YAxis
+                                        tick={{ fontSize: 11, fill: '#94a3b8' }}
+                                        tickLine={false}
+                                        axisLine={false}
+                                        width={50}
+                                        tickFormatter={(value) => Number(value || 0).toLocaleString()}
+                                    />
+                                    <Tooltip content={<SnapshotTooltip />} />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="active_count"
+                                        stroke="#0f766e"
+                                        strokeWidth={2.5}
+                                        fill="#ccfbf1"
+                                        fillOpacity={0.55}
+                                        name="Active paying"
+                                        dot={{ r: 3, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }}
+                                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }}
+                                    />
+                                    <Line
+                                        type="monotone"
+                                        dataKey="inactive_count"
+                                        stroke="#94a3b8"
+                                        strokeWidth={2}
+                                        strokeDasharray="5 5"
+                                        dot={false}
+                                        name="Paid but inactive"
+                                    />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <div className="mt-4 grid gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2 xl:grid-cols-4">
                             <SnapshotCheckpoint item={history?.yesterday} maxCount={maxCount} />
                             <SnapshotCheckpoint item={history?.seven_days_ago} maxCount={maxCount} />
                             <SnapshotCheckpoint item={history?.thirty_days_ago} maxCount={maxCount} />
-                        </div>
-
-                        <div className="rounded-[1.15rem] border border-slate-200 p-4">
-                            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center">
-                                <SnapshotCheckpoint item={rangeStart} maxCount={maxCount} />
-                                <div className="hidden h-px bg-slate-200 sm:block" aria-hidden="true" />
-                                <SnapshotCheckpoint item={rangeEnd} maxCount={maxCount} emphasis />
-                            </div>
+                            <SnapshotCheckpoint item={rangeStart} maxCount={maxCount} />
                         </div>
                     </div>
                 </div>
             </div>
 
-            <aside className="rounded-[1.2rem] bg-white p-4 ring-1 ring-slate-200">
+            <aside className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Base composition</p>
                 <div className="mt-4 flex items-end justify-between gap-3">
                     <div>
@@ -435,14 +532,14 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
 
 function ChartViewSwitcher({ chartView, onChange, hasSnapshot }) {
     return (
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div className="inline-flex w-fit flex-wrap rounded-xl bg-white p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement analysis view">
+        <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="inline-flex w-fit flex-wrap rounded-lg bg-white p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement analysis view">
                 {CHART_VIEWS.filter((item) => item.key !== 'snapshot' || hasSnapshot).map((item) => (
                     <button
                         key={item.key}
                         type="button"
                         onClick={() => onChange(item.key)}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
+                        className={`rounded-md px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
                             chartView === item.key
                                 ? 'bg-slate-950 text-white shadow-sm'
                                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -468,7 +565,7 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
     const netTone = movementTone(totals.net_active_movement);
 
     return (
-        <aside className="rounded-[1.2rem] bg-white p-4 ring-1 ring-slate-200">
+        <aside className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
             <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Paid subscriber snapshot</p>
                 <div className="mt-3 flex items-end justify-between gap-3">
@@ -507,7 +604,7 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
                 </div>
             </div>
 
-            <div className="mt-5 rounded-2xl bg-slate-50 p-3">
+            <div className="mt-5 rounded-xl bg-slate-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Window</p>
                 <p className="mt-2 crm-mono text-sm font-semibold text-slate-900">
                     {data?.range?.from || '--'} to {data?.range?.to || '--'}
@@ -635,8 +732,8 @@ export default function ProfileMovementWidget({
     } else {
         content = (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-                <div className="rounded-[1.25rem] bg-slate-950 p-1.5 text-white shadow-[0_22px_60px_rgba(15,23,42,0.18)]">
-                    <div className="rounded-[1rem] bg-[linear-gradient(145deg,#07111f,#0f172a_58%,#10212b)] p-4 ring-1 ring-white/10">
+                <div className="rounded-xl bg-slate-950 p-1.5 text-white shadow-[0_22px_60px_rgba(15,23,42,0.16)]">
+                    <div className="rounded-lg bg-[linear-gradient(145deg,#07111f,#0f172a_58%,#10212b)] p-4 ring-1 ring-white/10">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                                 <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
@@ -671,7 +768,7 @@ export default function ProfileMovementWidget({
                                         Won-back {formatNumber(normalizedTotals.reactivated_profiles)}
                                     </span>
                                 ) : null}
-                                <span className="rounded-full bg-violet-400/12 px-2.5 py-1 font-semibold text-violet-100 ring-1 ring-violet-300/20">
+                                <span className="rounded-full bg-slate-400/12 px-2.5 py-1 font-semibold text-slate-100 ring-1 ring-slate-300/20">
                                     Free trials {formatNumber(normalizedTotals.free_trial_activations)}
                                 </span>
                                 <span className="rounded-full bg-rose-400/12 px-2.5 py-1 font-semibold text-rose-200 ring-1 ring-rose-300/20">
@@ -680,7 +777,7 @@ export default function ProfileMovementWidget({
                             </div>
                         </div>
 
-                        <div className="mt-5 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
+                        <div className="mt-5 h-80 rounded-lg bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
                             <ResponsiveContainer width="100%" height="100%">
                                 <ComposedChart data={points} margin={{ top: 14, right: 14, left: 0, bottom: 0 }}>
                                     <defs>
@@ -748,13 +845,13 @@ export default function ProfileMovementWidget({
                                             <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First-time paid" />
                                             <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewals" />
                                             <Line type="monotone" dataKey="reactivated_profiles" stroke="#f59e0b" strokeWidth={2.4} dot={false} name="Won-back" />
-                                            <Line type="monotone" dataKey="free_trial_activations" stroke="#a78bfa" strokeWidth={2.4} dot={false} name="Free trials" />
+                                            <Line type="monotone" dataKey="free_trial_activations" stroke="#94a3b8" strokeWidth={2.4} dot={false} name="Free trials" />
                                             <Line type="monotone" dataKey="inactive_profiles" stroke="#fb7185" strokeWidth={2.2} dot={false} name="Paid exits" />
                                         </>
                                     ) : null}
                                     {effectiveChartView === 'trials' ? (
                                         <>
-                                            <Bar dataKey="free_trial_activations" fill="#a78bfa" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
+                                            <Bar dataKey="free_trial_activations" fill="#94a3b8" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
                                             <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First-time paid" />
                                             <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Profile additions" />
                                         </>
@@ -784,13 +881,13 @@ export default function ProfileMovementWidget({
             className={className}
             contentClassName="space-y-4 bg-slate-50/50"
             action={(
-                <div className="inline-flex rounded-xl bg-slate-100 p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement bucket">
+                <div className="inline-flex rounded-lg bg-slate-100 p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement bucket">
                     {BUCKETS.map((item) => (
                         <button
                             key={item.key}
                             type="button"
                             onClick={() => onBucketChange?.(item.key)}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
+                            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
                                 resolvedBucket === item.key
                                     ? 'bg-slate-950 text-white shadow-sm'
                                     : 'text-slate-600 hover:bg-white hover:text-slate-900'
@@ -805,7 +902,7 @@ export default function ProfileMovementWidget({
             {!errorMessage || !hasLoadedPayload ? null : <ErrorState message={errorMessage} />}
 
             {!isLoading && hasLoadedPayload && hasActivityContext ? (
-                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <div className="grid gap-x-5 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
                     <MicroMetric
                         label="First-time paid"
                         value={formatNumber(normalizedTotals.new_paid_activations)}
