@@ -51,6 +51,10 @@ function formatDate(value) {
     return date.toLocaleDateString();
 }
 
+function apiErrorMessage(error, fallback) {
+    return error?.response?.data?.message || fallback;
+}
+
 function toInputDateString(date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -846,7 +850,7 @@ function OperationsDashboard() {
             <ProfileMovementWidget
                 data={profileMovementQuery.data}
                 isLoading={profileMovementQuery.isLoading}
-                errorMessage={profileMovementQuery.isError ? 'Profile movement could not be loaded for this scope right now.' : null}
+                errorMessage={profileMovementQuery.isError ? apiErrorMessage(profileMovementQuery.error, 'Profile movement could not be loaded for this scope right now.') : null}
                 bucket={movementBucket}
                 onBucketChange={setMovementBucket}
             />
