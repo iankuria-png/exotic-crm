@@ -72,11 +72,11 @@ class ChurnAggregatorService
     }
 
     /**
-     * Build dashboard-ready paid subscriber movement.
+     * Build dashboard-ready subscriber movement.
      *
-     * Activations are first successful paid events per client; inactive movement comes from
-     * paid clients stamped with churned_at. The current base uses the same active subscriber
-     * snapshot source as the CEO KPI, so the dashboard does not show competing totals.
+     * Paid movement is split into first paid activations, renewals, and reactivations so
+     * repeat work is visible without confusing renewals for new base growth. Free trials are
+     * surfaced separately because they activate profiles without creating payment revenue.
      *
      * @param  array<int>  $platformIds  Empty = all accessible platforms
      */
@@ -107,26 +107,41 @@ class ChurnAggregatorService
             'points' => $this->bucketMovementDaily($daily, $from, $to, $bucket),
             'totals' => [
                 'created_profiles' => (int) $totals['signups'],
-                'active_profiles' => (int) $totals['activations'],
+                'active_profiles' => (int) $totals['activation_events'],
+                'new_paid_activations' => (int) $totals['new_paid_activations'],
+                'renewed_profiles' => (int) $totals['renewed_profiles'],
+                'reactivated_profiles' => (int) $totals['reactivated_profiles'],
+                'free_trial_activations' => (int) $totals['free_trial_activations'],
+                'base_gain' => (int) $totals['base_gain'],
                 'inactive_profiles' => (int) $totals['churn'],
-                'net_active_movement' => (int) ($totals['activations'] - $totals['churn']),
+                'net_active_movement' => (int) ($totals['base_gain'] - $totals['churn']),
                 'successful_payments' => (int) $totals['successful_payments'],
             ],
             'comparison' => [
                 'created_profiles' => $this->movementComparison((int) $totals['signups'], (int) $previousTotals['signups']),
-                'active_profiles' => $this->movementComparison((int) $totals['activations'], (int) $previousTotals['activations']),
+                'active_profiles' => $this->movementComparison((int) $totals['activation_events'], (int) $previousTotals['activation_events']),
+                'new_paid_activations' => $this->movementComparison((int) $totals['new_paid_activations'], (int) $previousTotals['new_paid_activations']),
+                'renewed_profiles' => $this->movementComparison((int) $totals['renewed_profiles'], (int) $previousTotals['renewed_profiles']),
+                'reactivated_profiles' => $this->movementComparison((int) $totals['reactivated_profiles'], (int) $previousTotals['reactivated_profiles']),
+                'free_trial_activations' => $this->movementComparison((int) $totals['free_trial_activations'], (int) $previousTotals['free_trial_activations']),
+                'base_gain' => $this->movementComparison((int) $totals['base_gain'], (int) $previousTotals['base_gain']),
                 'inactive_profiles' => $this->movementComparison((int) $totals['churn'], (int) $previousTotals['churn']),
                 'net_active_movement' => $this->movementComparison(
-                    (int) ($totals['activations'] - $totals['churn']),
-                    (int) ($previousTotals['activations'] - $previousTotals['churn']),
+                    (int) ($totals['base_gain'] - $totals['churn']),
+                    (int) ($previousTotals['base_gain'] - $previousTotals['churn']),
                 ),
             ],
             'current_scope' => $currentCounts,
             'definition' => [
-                'active_profiles' => 'Clients whose first reportable successful payment happened in the selected window.',
+                'active_profiles' => 'Reportable paid profile activation events in the selected window: first paid, renewed, and reactivated profiles.',
+                'new_paid_activations' => 'Clients whose first reportable successful payment happened in the selected window.',
+                'renewed_profiles' => 'Paid clients with a later successful payment in the selected window after an earlier successful payment.',
+                'reactivated_profiles' => 'Successful payments marked as reactivation or win-back, or attached to a client that had churned before the payment.',
+                'free_trial_activations' => 'Free-trial deals activated in the selected window. They activate profiles but do not count as paid revenue.',
+                'base_gain' => 'New paid activations, reactivations, and free trials. Renewals are retained activity, not new base growth.',
                 'inactive_profiles' => 'Paid clients stamped with churned_at in the selected window.',
                 'successful_payments' => 'All reportable successful payment events in the selected window, including renewals and repeat payments.',
-                'net_active_movement' => 'First paid activations minus paid subscriber exits.',
+                'net_active_movement' => 'Base gain minus paid subscriber exits.',
             ],
         ];
     }
@@ -141,24 +156,35 @@ class ChurnAggregatorService
         bool $includeRevenueRisk = true,
         bool $usePaidActivationIntake = false,
     ): array {
+        $fromStart = $from->copy()->startOfDay();
+        $toEnd = $to->copy()->endOfDay();
+
         // Signups per day
         $signupsQuery = Client::query()
             ->selectRaw('DATE(created_at) as date, COUNT(*) as cnt')
-            ->whereBetween('created_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
+            ->whereBetween('created_at', [$fromStart->copy(), $toEnd->copy()])
             ->groupBy(DB::raw('DATE(created_at)'));
         if (! empty($platformIds)) {
             $signupsQuery->whereIn('platform_id', $platformIds);
         }
         $signups = $signupsQuery->pluck('cnt', 'date');
+        $paidBreakdown = [
+            'new_paid_activations' => collect(),
+            'renewed_profiles' => collect(),
+            'reactivated_profiles' => collect(),
+        ];
+        $freeTrials = collect();
 
         if ($usePaidActivationIntake) {
-            $activations = $this->firstPaidActivationCounts($from, $to, $platformIds);
+            $paidBreakdown = $this->paidActivationBreakdown($fromStart, $toEnd, $platformIds);
+            $activations = collect();
+            $freeTrials = $this->freeTrialActivationCounts($fromStart, $toEnd, $platformIds);
         } else {
             // Activations per day (first_activated_at)
             $activationsQuery = Client::query()
                 ->selectRaw('DATE(first_activated_at) as date, COUNT(*) as cnt')
                 ->whereNotNull('first_activated_at')
-                ->whereBetween('first_activated_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
+                ->whereBetween('first_activated_at', [$fromStart->copy(), $toEnd->copy()])
                 ->groupBy(DB::raw('DATE(first_activated_at)'));
             if (! empty($platformIds)) {
                 $activationsQuery->whereIn('platform_id', $platformIds);
@@ -170,7 +196,7 @@ class ChurnAggregatorService
         $churnQuery = Client::query()
             ->selectRaw('DATE(churned_at) as date, COUNT(*) as cnt')
             ->whereNotNull('churned_at')
-            ->whereBetween('churned_at', [$from->startOfDay()->copy(), $to->endOfDay()->copy()])
+            ->whereBetween('churned_at', [$fromStart->copy(), $toEnd->copy()])
             ->groupBy(DB::raw('DATE(churned_at)'));
         if ($usePaidActivationIntake) {
             $churnQuery->whereIn('clients.id', $this->successfulPaymentClientIdsQuery($platformIds));
@@ -180,25 +206,45 @@ class ChurnAggregatorService
         }
         $churn = $churnQuery->pluck('cnt', 'date');
         $tickets = $includeRevenueRisk
-            ? $this->dailyAverageTickets($from, $to, $platformIds)
+            ? $this->dailyAverageTickets($fromStart, $toEnd, $platformIds)
             : [];
 
         // Fill every day in the range (including days with 0s)
-        $period = CarbonPeriod::create($from->copy()->startOfDay(), '1 day', $to->copy()->endOfDay());
+        $period = CarbonPeriod::create($fromStart->copy(), '1 day', $toEnd->copy());
         $series = [];
         foreach ($period as $day) {
             $dateStr = $day->toDateString();
+            $newPaidActivations = (int) ($paidBreakdown['new_paid_activations'][$dateStr] ?? 0);
+            $renewedProfiles = (int) ($paidBreakdown['renewed_profiles'][$dateStr] ?? 0);
+            $reactivatedProfiles = (int) ($paidBreakdown['reactivated_profiles'][$dateStr] ?? 0);
+            $freeTrialActivations = (int) ($freeTrials[$dateStr] ?? 0);
+            $legacyActivations = (int) ($activations[$dateStr] ?? 0);
+            $activationEvents = $usePaidActivationIntake
+                ? $newPaidActivations + $renewedProfiles + $reactivatedProfiles
+                : $legacyActivations;
+            $baseGain = $usePaidActivationIntake
+                ? $newPaidActivations + $reactivatedProfiles + $freeTrialActivations
+                : $legacyActivations;
+            $churnCount = (int) ($churn[$dateStr] ?? 0);
+
             $series[] = [
                 'date' => $dateStr,
                 'signups' => (int) ($signups[$dateStr] ?? 0),
-                'activations' => (int) ($activations[$dateStr] ?? 0),
-                'churn' => (int) ($churn[$dateStr] ?? 0),
+                'activations' => $activationEvents,
+                'new_paid_activations' => $newPaidActivations,
+                'renewed_profiles' => $renewedProfiles,
+                'reactivated_profiles' => $reactivatedProfiles,
+                'free_trial_activations' => $freeTrialActivations,
+                'activation_events' => $activationEvents,
+                'base_gain' => $baseGain,
+                'churn' => $churnCount,
+                'net_active_movement' => $baseGain - $churnCount,
                 'average_ticket_usd' => $tickets[$dateStr]['average_ticket_usd'] ?? null,
                 'successful_payments' => (int) ($tickets[$dateStr]['payments_count'] ?? 0),
                 'collected_revenue_usd' => $tickets[$dateStr]['collected_revenue_usd'] ?? null,
                 'collected_partial' => (bool) ($tickets[$dateStr]['collected_partial'] ?? false),
                 'estimated_revenue_at_risk_usd' => isset($tickets[$dateStr]['average_ticket_usd'])
-                    ? round((float) $tickets[$dateStr]['average_ticket_usd'] * (int) ($churn[$dateStr] ?? 0), 2)
+                    ? round((float) $tickets[$dateStr]['average_ticket_usd'] * $churnCount, 2)
                     : null,
             ];
         }
@@ -213,12 +259,24 @@ class ChurnAggregatorService
     {
         $signups = array_sum(array_column($daily, 'signups'));
         $activations = array_sum(array_column($daily, 'activations'));
+        $newPaidActivations = array_sum(array_column($daily, 'new_paid_activations'));
+        $renewedProfiles = array_sum(array_column($daily, 'renewed_profiles'));
+        $reactivatedProfiles = array_sum(array_column($daily, 'reactivated_profiles'));
+        $freeTrialActivations = array_sum(array_column($daily, 'free_trial_activations'));
+        $activationEvents = array_sum(array_column($daily, 'activation_events'));
+        $baseGain = array_sum(array_column($daily, 'base_gain'));
         $churn = array_sum(array_column($daily, 'churn'));
         $successfulPayments = array_sum(array_column($daily, 'successful_payments'));
 
         return [
             'signups' => $signups,
             'activations' => $activations,
+            'new_paid_activations' => $newPaidActivations,
+            'renewed_profiles' => $renewedProfiles,
+            'reactivated_profiles' => $reactivatedProfiles,
+            'free_trial_activations' => $freeTrialActivations,
+            'activation_events' => $activationEvents,
+            'base_gain' => $baseGain,
             'churn' => $churn,
             'successful_payments' => $successfulPayments,
             'net' => $signups - $churn,
@@ -238,7 +296,12 @@ class ChurnAggregatorService
                 $bucketFrom = $this->movementBucketStart($key, $bucket)->max($from->copy()->startOfDay());
                 $bucketTo = $this->movementBucketEnd($key, $bucket)->min($to->copy()->endOfDay());
                 $created = (int) $rows->sum('signups');
-                $active = (int) $rows->sum('activations');
+                $newPaidActivations = (int) $rows->sum('new_paid_activations');
+                $renewedProfiles = (int) $rows->sum('renewed_profiles');
+                $reactivatedProfiles = (int) $rows->sum('reactivated_profiles');
+                $freeTrialActivations = (int) $rows->sum('free_trial_activations');
+                $activationEvents = (int) $rows->sum('activation_events');
+                $baseGain = (int) $rows->sum('base_gain');
                 $inactive = (int) $rows->sum('churn');
 
                 return [
@@ -246,9 +309,15 @@ class ChurnAggregatorService
                     'from' => $bucketFrom->toDateString(),
                     'to' => $bucketTo->toDateString(),
                     'created_profiles' => $created,
-                    'active_profiles' => $active,
+                    'active_profiles' => $activationEvents,
+                    'new_paid_activations' => $newPaidActivations,
+                    'renewed_profiles' => $renewedProfiles,
+                    'reactivated_profiles' => $reactivatedProfiles,
+                    'free_trial_activations' => $freeTrialActivations,
+                    'activation_events' => $activationEvents,
+                    'base_gain' => $baseGain,
                     'inactive_profiles' => $inactive,
-                    'net_active_movement' => $active - $inactive,
+                    'net_active_movement' => $baseGain - $inactive,
                     'successful_payments' => (int) $rows->sum('successful_payments'),
                 ];
             })
@@ -279,6 +348,144 @@ class ChurnAggregatorService
             ->selectRaw('COUNT(*) as cnt')
             ->groupByRaw($dateExpression)
             ->pluck('cnt', 'date');
+    }
+
+    private function paidActivationBreakdown(Carbon $from, Carbon $to, array $platformIds): array
+    {
+        $rows = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('clients', function ($join) {
+                $join->on('clients.id', '=', DB::raw('COALESCE(payments.client_id, deals.client_id)'));
+            })
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$from->copy()->startOfDay()->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) <= ?', [$to->copy()->endOfDay()->toDateTimeString()])
+            ->when(! empty($platformIds), function (Builder $query) use ($platformIds) {
+                $query->where(function (Builder $scope) use ($platformIds) {
+                    $scope->whereIn('payments.platform_id', $platformIds)
+                        ->orWhereIn('deals.platform_id', $platformIds);
+                });
+            })
+            ->selectRaw('payments.id as payment_id')
+            ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
+            ->selectRaw('COALESCE(payments.completed_at, payments.created_at) as event_at')
+            ->selectRaw('clients.churned_at as client_churned_at')
+            ->selectRaw('deals.subscription_lifecycle as deal_subscription_lifecycle')
+            ->selectRaw('payments.subscription_lifecycle as payment_subscription_lifecycle')
+            ->orderByRaw('COALESCE(payments.completed_at, payments.created_at) ASC')
+            ->orderBy('payments.id')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return [
+                'new_paid_activations' => collect(),
+                'renewed_profiles' => collect(),
+                'reactivated_profiles' => collect(),
+            ];
+        }
+
+        $clientIds = $rows
+            ->pluck('client_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $firstPaidByClient = $clientIds->isEmpty()
+            ? collect()
+            : Payment::query()
+                ->reportableSuccessful()
+                ->excludingWalletTopups()
+                ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
+                ->whereIn(DB::raw('COALESCE(payments.client_id, deals.client_id)'), $clientIds)
+                ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
+                ->selectRaw('MIN(COALESCE(payments.completed_at, payments.created_at)) as first_paid_at')
+                ->groupByRaw('COALESCE(payments.client_id, deals.client_id)')
+                ->pluck('first_paid_at', 'client_id');
+
+        $counts = [
+            'new_paid_activations' => [],
+            'renewed_profiles' => [],
+            'reactivated_profiles' => [],
+        ];
+        $seen = [
+            'new_paid_activations' => [],
+            'renewed_profiles' => [],
+            'reactivated_profiles' => [],
+        ];
+
+        foreach ($rows as $row) {
+            $clientId = (int) ($row->client_id ?? 0);
+            if ($clientId <= 0) {
+                continue;
+            }
+
+            $eventAt = Carbon::parse($row->event_at);
+            $date = $eventAt->toDateString();
+            $category = $this->paidActivationCategory($row, $eventAt, $firstPaidByClient->get($clientId));
+
+            if (isset($seen[$category][$date][$clientId])) {
+                continue;
+            }
+
+            $seen[$category][$date][$clientId] = true;
+            $counts[$category][$date] = ($counts[$category][$date] ?? 0) + 1;
+        }
+
+        return [
+            'new_paid_activations' => collect($counts['new_paid_activations']),
+            'renewed_profiles' => collect($counts['renewed_profiles']),
+            'reactivated_profiles' => collect($counts['reactivated_profiles']),
+        ];
+    }
+
+    private function paidActivationCategory(object $row, Carbon $eventAt, mixed $firstPaidAt): string
+    {
+        $dealLifecycle = strtolower((string) ($row->deal_subscription_lifecycle ?? ''));
+        $paymentLifecycle = strtolower((string) ($row->payment_subscription_lifecycle ?? ''));
+        $churnedAt = $row->client_churned_at ? Carbon::parse($row->client_churned_at) : null;
+
+        if (
+            in_array($dealLifecycle, ['reactivation', 'win_back', 'winback'], true)
+            || in_array($paymentLifecycle, ['reactivation', 'win_back', 'winback'], true)
+            || ($churnedAt && $churnedAt->lt($eventAt))
+        ) {
+            return 'reactivated_profiles';
+        }
+
+        if ($firstPaidAt && Carbon::parse($firstPaidAt)->equalTo($eventAt)) {
+            return 'new_paid_activations';
+        }
+
+        return 'renewed_profiles';
+    }
+
+    private function freeTrialActivationCounts(Carbon $from, Carbon $to, array $platformIds): \Illuminate\Support\Collection
+    {
+        $rows = Deal::query()
+            ->where('is_free_trial', true)
+            ->whereNotNull('activated_at')
+            ->whereBetween('activated_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->get(['id', 'client_id', 'activated_at']);
+
+        $counts = [];
+        $seen = [];
+
+        foreach ($rows as $row) {
+            $date = Carbon::parse($row->activated_at)->toDateString();
+            $identity = $row->client_id ? 'client:'.(int) $row->client_id : 'deal:'.(int) $row->id;
+
+            if (isset($seen[$date][$identity])) {
+                continue;
+            }
+
+            $seen[$date][$identity] = true;
+            $counts[$date] = ($counts[$date] ?? 0) + 1;
+        }
+
+        return collect($counts);
     }
 
     private function successfulPaymentClientIdsQuery(array $platformIds): Builder

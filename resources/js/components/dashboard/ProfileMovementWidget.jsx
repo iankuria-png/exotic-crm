@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
     Area,
     Bar,
@@ -19,6 +19,18 @@ const BUCKETS = [
     { key: 'week', label: 'Week' },
     { key: 'month', label: 'Month' },
 ];
+const CHART_VIEWS = [
+    { key: 'base', label: 'Base shift' },
+    { key: 'mix', label: 'Activation mix' },
+    { key: 'trials', label: 'Trials' },
+    { key: 'payments', label: 'Payment volume' },
+];
+const VIEW_HELPERS = {
+    base: 'New paid, reactivated, and trial profiles against exits. Renewals are shown as retained work, not new base.',
+    mix: 'Profile activation categories split by first paid, renewed, reactivated, and free trial.',
+    trials: 'Free-trial activations alongside first paid conversion intake.',
+    payments: 'All successful payment events compared with renewed profile activity.',
+};
 
 function asNumber(value) {
     const parsed = Number(value);
@@ -65,7 +77,7 @@ function movementTone(value) {
 function movementLabel(value) {
     const tone = movementTone(value);
     if (tone === 'positive') return 'Paid base expanding';
-    if (tone === 'negative') return 'Paid exits outpacing first activations';
+    if (tone === 'negative') return 'Paid exits outpacing base additions';
     return 'No paid base movement';
 }
 
@@ -111,31 +123,57 @@ function ErrorState({ message }) {
     );
 }
 
-function MovementTooltip({ active, payload, label }) {
+function tooltipRows(point, view) {
+    if (view === 'mix') {
+        return [
+            ['First paid', point.new_paid_activations, 'text-teal-700'],
+            ['Renewed', point.renewed_profiles, 'text-sky-700'],
+            ['Reactivated', point.reactivated_profiles, 'text-amber-700'],
+            ['Free trials', point.free_trial_activations, 'text-violet-700'],
+            ['Paid exits', point.inactive_profiles, 'text-rose-700'],
+        ];
+    }
+
+    if (view === 'trials') {
+        return [
+            ['Free trials', point.free_trial_activations, 'text-violet-700'],
+            ['First paid', point.new_paid_activations, 'text-teal-700'],
+            ['Base gain', point.base_gain, 'text-slate-900'],
+        ];
+    }
+
+    if (view === 'payments') {
+        return [
+            ['Successful payments', point.successful_payments, 'text-slate-900'],
+            ['Renewed profiles', point.renewed_profiles, 'text-sky-700'],
+            ['First paid', point.new_paid_activations, 'text-teal-700'],
+        ];
+    }
+
+    return [
+        ['Base gain', point.base_gain, 'text-teal-700'],
+        ['Paid exits', point.inactive_profiles, 'text-rose-700'],
+        ['Renewals retained', point.renewed_profiles, 'text-sky-700'],
+        ['Net base shift', point.net_active_movement, 'text-slate-900', true],
+    ];
+}
+
+function MovementTooltip({ active, payload, label, view }) {
     if (!active || !payload?.length) return null;
     const point = payload[0]?.payload || {};
+    const rows = tooltipRows(point, view);
 
     return (
         <div className="rounded-xl border border-slate-200 bg-white/95 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
             <p className="text-xs font-semibold text-slate-900">{label}</p>
             <p className="mt-0.5 text-[11px] font-medium text-slate-400">{formatRange(point)}</p>
             <div className="mt-3 grid min-w-48 gap-2 text-sm">
-                <p className="flex items-center justify-between gap-8 text-teal-700">
-                    <span>First paid activations</span>
-                    <span className="crm-mono font-semibold">{formatNumber(point.active_profiles)}</span>
-                </p>
-                <p className="flex items-center justify-between gap-8 text-rose-700">
-                    <span>Paid exits</span>
-                    <span className="crm-mono font-semibold">{formatNumber(point.inactive_profiles)}</span>
-                </p>
-                <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-600">
-                    <span>Successful payments</span>
-                    <span className="crm-mono font-semibold">{formatNumber(point.successful_payments)}</span>
-                </p>
-                <p className="flex items-center justify-between gap-8 border-t border-slate-100 pt-2 text-slate-900">
-                    <span>Net movement</span>
-                    <span className="crm-mono font-semibold">{formatSigned(point.net_active_movement)}</span>
-                </p>
+                {rows.map(([rowLabel, rowValue, rowClass, signed]) => (
+                    <p key={rowLabel} className={`flex items-center justify-between gap-8 ${signed ? 'border-t border-slate-100 pt-2' : ''} ${rowClass}`}>
+                        <span>{rowLabel}</span>
+                        <span className="crm-mono font-semibold">{signed ? formatSigned(rowValue) : formatNumber(rowValue)}</span>
+                    </p>
+                ))}
             </div>
         </div>
     );
@@ -165,6 +203,8 @@ function MicroMetric({ label, value, helper, tone = 'neutral' }) {
         active: 'text-teal-700',
         inactive: 'text-rose-700',
         net: 'text-slate-950',
+        renewal: 'text-sky-700',
+        trial: 'text-violet-700',
         neutral: 'text-slate-800',
     }[tone] || 'text-slate-800';
 
@@ -239,8 +279,12 @@ function CurrentBaseRail({ currentScope, totals, comparison, data }) {
 
             <div className="mt-3 grid gap-2">
                 <div className="flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2 text-sm">
-                    <span className="font-medium text-teal-800">First paid activations</span>
-                    <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.active_profiles)}</span>
+                    <span className="font-medium text-teal-800">Base additions</span>
+                    <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.base_gain)}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-sky-50 px-3 py-2 text-sm">
+                    <span className="font-medium text-sky-800">Renewed profiles</span>
+                    <span className="crm-mono font-semibold text-sky-900">{formatNumber(totals.renewed_profiles)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-rose-50 px-3 py-2 text-sm">
                     <span className="font-medium text-rose-800">Paid exits</span>
@@ -263,11 +307,18 @@ export default function ProfileMovementWidget({
     onBucketChange,
     className = '',
 }) {
+    const [chartView, setChartView] = useState('base');
     const points = useMemo(() => (
         Array.isArray(data?.points)
             ? data.points.map((point) => ({
                 ...point,
                 active_profiles: asNumber(point.active_profiles),
+                new_paid_activations: asNumber(point.new_paid_activations),
+                renewed_profiles: asNumber(point.renewed_profiles),
+                reactivated_profiles: asNumber(point.reactivated_profiles),
+                free_trial_activations: asNumber(point.free_trial_activations),
+                activation_events: asNumber(point.activation_events ?? point.active_profiles),
+                base_gain: asNumber(point.base_gain ?? point.active_profiles),
                 inactive_profiles: asNumber(point.inactive_profiles),
                 created_profiles: asNumber(point.created_profiles),
                 net_active_movement: asNumber(point.net_active_movement),
@@ -276,17 +327,32 @@ export default function ProfileMovementWidget({
             : []
     ), [data?.points]);
     const totals = data?.totals || {};
+    const normalizedTotals = {
+        ...totals,
+        active_profiles: asNumber(totals.active_profiles),
+        new_paid_activations: asNumber(totals.new_paid_activations ?? totals.active_profiles),
+        renewed_profiles: asNumber(totals.renewed_profiles),
+        reactivated_profiles: asNumber(totals.reactivated_profiles),
+        free_trial_activations: asNumber(totals.free_trial_activations),
+        base_gain: asNumber(totals.base_gain ?? totals.active_profiles),
+        inactive_profiles: asNumber(totals.inactive_profiles),
+        net_active_movement: asNumber(totals.net_active_movement),
+        successful_payments: asNumber(totals.successful_payments),
+    };
     const comparison = data?.comparison || {};
     const currentScope = data?.current_scope || {};
     const hasMovement = points.some((point) => (
-        point.active_profiles > 0
+        point.activation_events > 0
+        || point.base_gain > 0
+        || point.free_trial_activations > 0
         || point.inactive_profiles > 0
         || point.net_active_movement !== 0
     ));
-    const hasActivityContext = hasMovement || asNumber(totals.successful_payments) > 0;
+    const hasActivityContext = hasMovement || normalizedTotals.successful_payments > 0;
     const hasLoadedPayload = Boolean(data?.range || points.length || currentScope.total_profiles !== undefined);
     const resolvedBucket = BUCKETS.some((item) => item.key === bucket) ? bucket : (data?.bucket || 'day');
-    const netTone = movementTone(totals.net_active_movement);
+    const netTone = movementTone(normalizedTotals.net_active_movement);
+    const totalProfileActivity = normalizedTotals.active_profiles + normalizedTotals.free_trial_activations + normalizedTotals.inactive_profiles;
 
     let content;
     if (isLoading) {
@@ -297,10 +363,10 @@ export default function ProfileMovementWidget({
         content = (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
                 <EmptyState
-                    title="No paid subscriber movement in this window"
-                    message="The selected scope has no first-payment activations or paid subscriber exits for this bucket. Successful payments can still happen here as renewals or repeat payments."
+                    title="No subscriber movement in this window"
+                    message="The selected scope has no paid profile activations, free-trial activations, or paid exits for this bucket. Successful payments can still happen here as repeat payments."
                 />
-                <CurrentBaseRail currentScope={currentScope} totals={totals} comparison={comparison} data={data} />
+                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} />
             </div>
         );
     } else {
@@ -312,7 +378,7 @@ export default function ProfileMovementWidget({
                             <div>
                                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Movement ledger</p>
                                 <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
-                                    <p className="crm-mono text-4xl font-semibold tracking-tight">{formatSigned(totals.net_active_movement)}</p>
+                                    <p className="crm-mono text-4xl font-semibold tracking-tight">{formatSigned(normalizedTotals.net_active_movement)}</p>
                                     <p className={`pb-1 text-sm font-semibold ${
                                         netTone === 'positive'
                                             ? 'text-teal-300'
@@ -320,30 +386,55 @@ export default function ProfileMovementWidget({
                                                 ? 'text-rose-300'
                                                 : 'text-slate-300'
                                     }`}>
-                                        {movementLabel(totals.net_active_movement)}
+                                        {movementLabel(normalizedTotals.net_active_movement)}
                                     </p>
                                 </div>
+                                <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-400">{VIEW_HELPERS[chartView]}</p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">
-                                    First activations {formatNumber(totals.active_profiles)}
+                                    New paid {formatNumber(normalizedTotals.new_paid_activations)}
+                                </span>
+                                <span className="rounded-full bg-sky-400/12 px-2.5 py-1 font-semibold text-sky-100 ring-1 ring-sky-300/20">
+                                    Renewed {formatNumber(normalizedTotals.renewed_profiles)}
+                                </span>
+                                <span className="rounded-full bg-violet-400/12 px-2.5 py-1 font-semibold text-violet-100 ring-1 ring-violet-300/20">
+                                    Trials {formatNumber(normalizedTotals.free_trial_activations)}
                                 </span>
                                 <span className="rounded-full bg-rose-400/12 px-2.5 py-1 font-semibold text-rose-200 ring-1 ring-rose-300/20">
-                                    Paid exits {formatNumber(totals.inactive_profiles)}
-                                </span>
-                                <span className="rounded-full bg-white/8 px-2.5 py-1 font-semibold text-slate-200 ring-1 ring-white/15">
-                                    Payments {formatNumber(totals.successful_payments)}
+                                    Exits {formatNumber(normalizedTotals.inactive_profiles)}
                                 </span>
                             </div>
                         </div>
 
-                        <div className="mt-5 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
+                        <div className="mt-5 flex flex-wrap gap-2">
+                            {CHART_VIEWS.map((item) => (
+                                <button
+                                    key={item.key}
+                                    type="button"
+                                    onClick={() => setChartView(item.key)}
+                                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
+                                        chartView === item.key
+                                            ? 'bg-white text-slate-950'
+                                            : 'bg-white/7 text-slate-300 ring-1 ring-white/10 hover:bg-white/12 hover:text-white'
+                                    }`}
+                                >
+                                    {item.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="mt-4 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
                             <ResponsiveContainer width="100%" height="100%">
                                 <ComposedChart data={points} margin={{ top: 14, right: 14, left: 0, bottom: 0 }}>
                                     <defs>
-                                        <linearGradient id="profileMovementActive" x1="0" x2="0" y1="0" y2="1">
+                                        <linearGradient id="profileMovementBaseGain" x1="0" x2="0" y1="0" y2="1">
                                             <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.34} />
                                             <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0.02} />
+                                        </linearGradient>
+                                        <linearGradient id="profileMovementPayments" x1="0" x2="0" y1="0" y2="1">
+                                            <stop offset="5%" stopColor="#e2e8f0" stopOpacity={0.26} />
+                                            <stop offset="95%" stopColor="#e2e8f0" stopOpacity={0.02} />
                                         </linearGradient>
                                     </defs>
                                     <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 6" vertical={false} />
@@ -362,43 +453,70 @@ export default function ProfileMovementWidget({
                                         width={52}
                                         tickFormatter={(value) => Number(value || 0).toLocaleString()}
                                     />
-                                    <Tooltip content={<MovementTooltip />} />
+                                    <Tooltip content={<MovementTooltip view={chartView} />} />
                                     <ReferenceLine y={0} stroke="rgba(226,232,240,0.34)" strokeDasharray="4 4" />
-                                    <Bar dataKey="net_active_movement" radius={[6, 6, 0, 0]} barSize={18} name="Net movement">
-                                        {points.map((point) => (
-                                            <Cell
-                                                key={`net-${point.label}`}
-                                                fill={point.net_active_movement >= 0 ? '#5eead4' : '#fb7185'}
-                                                fillOpacity={point.net_active_movement === 0 ? 0.35 : 0.82}
+                                    {chartView === 'base' ? (
+                                        <>
+                                            <Bar dataKey="net_active_movement" radius={[6, 6, 0, 0]} barSize={18} name="Net movement">
+                                                {points.map((point) => (
+                                                    <Cell
+                                                        key={`net-${point.label}`}
+                                                        fill={point.net_active_movement >= 0 ? '#5eead4' : '#fb7185'}
+                                                        fillOpacity={point.net_active_movement === 0 ? 0.35 : 0.82}
+                                                    />
+                                                ))}
+                                            </Bar>
+                                            <Area
+                                                type="monotone"
+                                                dataKey="base_gain"
+                                                stroke="#2dd4bf"
+                                                strokeWidth={2.75}
+                                                fill="url(#profileMovementBaseGain)"
+                                                name="Base gain"
+                                                dot={false}
+                                                activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#5eead4' }}
                                             />
-                                        ))}
-                                    </Bar>
-                                    <Area
-                                        type="monotone"
-                                        dataKey="active_profiles"
-                                        stroke="#2dd4bf"
-                                        strokeWidth={2.75}
-                                        fill="url(#profileMovementActive)"
-                                        name="First paid activations"
-                                        dot={false}
-                                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#5eead4' }}
-                                    />
-                                    <Line
-                                        type="monotone"
-                                        dataKey="inactive_profiles"
-                                        stroke="#fb7185"
-                                        strokeWidth={2.4}
-                                        dot={false}
-                                        name="Paid exits"
-                                        activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#fb7185' }}
-                                    />
+                                            <Line
+                                                type="monotone"
+                                                dataKey="inactive_profiles"
+                                                stroke="#fb7185"
+                                                strokeWidth={2.4}
+                                                dot={false}
+                                                name="Paid exits"
+                                                activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#fb7185' }}
+                                            />
+                                        </>
+                                    ) : null}
+                                    {chartView === 'mix' ? (
+                                        <>
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First paid" />
+                                            <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewed" />
+                                            <Line type="monotone" dataKey="reactivated_profiles" stroke="#f59e0b" strokeWidth={2.4} dot={false} name="Reactivated" />
+                                            <Line type="monotone" dataKey="free_trial_activations" stroke="#a78bfa" strokeWidth={2.4} dot={false} name="Free trials" />
+                                            <Line type="monotone" dataKey="inactive_profiles" stroke="#fb7185" strokeWidth={2.2} dot={false} name="Paid exits" />
+                                        </>
+                                    ) : null}
+                                    {chartView === 'trials' ? (
+                                        <>
+                                            <Bar dataKey="free_trial_activations" fill="#a78bfa" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
+                                            <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First paid" />
+                                            <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Base gain" />
+                                        </>
+                                    ) : null}
+                                    {chartView === 'payments' ? (
+                                        <>
+                                            <Area type="monotone" dataKey="successful_payments" stroke="#e2e8f0" strokeWidth={2.6} fill="url(#profileMovementPayments)" dot={false} name="Successful payments" />
+                                            <Line type="monotone" dataKey="renewed_profiles" stroke="#38bdf8" strokeWidth={2.6} dot={false} name="Renewed profiles" />
+                                            <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.76} radius={[5, 5, 0, 0]} barSize={14} name="First paid" />
+                                        </>
+                                    ) : null}
                                 </ComposedChart>
                             </ResponsiveContainer>
                         </div>
                     </div>
                 </div>
 
-                <CurrentBaseRail currentScope={currentScope} totals={totals} comparison={comparison} data={data} />
+                <CurrentBaseRail currentScope={currentScope} totals={normalizedTotals} comparison={comparison} data={data} />
             </div>
         );
     }
@@ -406,7 +524,7 @@ export default function ProfileMovementWidget({
     return (
         <SectionFrame
             title="Profile Movement"
-            subtitle="First paid activations, paid subscriber exits, and the resulting base shift."
+            subtitle="New paid, renewals, reactivations, free trials, exits, and payment volume across the selected window."
             className={`overflow-hidden ${className}`}
             contentClassName="space-y-4 bg-slate-50/50"
             action={(
@@ -431,29 +549,41 @@ export default function ProfileMovementWidget({
             {!errorMessage || !hasLoadedPayload ? null : <ErrorState message={errorMessage} />}
 
             {!isLoading && hasLoadedPayload && hasActivityContext ? (
-                <div className="grid gap-3 md:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                     <MicroMetric
-                        label="First paid activations"
-                        value={formatNumber(totals.active_profiles)}
-                        helper={comparisonLine(comparison, 'active_profiles', 'activation')}
+                        label="New paid"
+                        value={formatNumber(normalizedTotals.new_paid_activations)}
+                        helper={comparisonLine(comparison, 'new_paid_activations', 'first paid')}
                         tone="active"
                     />
                     <MicroMetric
+                        label="Renewed"
+                        value={formatNumber(normalizedTotals.renewed_profiles)}
+                        helper={comparisonLine(comparison, 'renewed_profiles', 'renewal')}
+                        tone="renewal"
+                    />
+                    <MicroMetric
+                        label="Trials"
+                        value={formatNumber(normalizedTotals.free_trial_activations)}
+                        helper="Profile activation, no payment"
+                        tone="trial"
+                    />
+                    <MicroMetric
                         label="Paid exits"
-                        value={formatNumber(totals.inactive_profiles)}
+                        value={formatNumber(normalizedTotals.inactive_profiles)}
                         helper={comparisonLine(comparison, 'inactive_profiles', 'inactive')}
                         tone="inactive"
                     />
                     <MicroMetric
                         label="Net swing"
-                        value={formatSigned(totals.net_active_movement)}
+                        value={formatSigned(normalizedTotals.net_active_movement)}
                         helper={`${formatSigned(comparison.net_active_movement?.delta)} vs prior window`}
                         tone="net"
                     />
                     <MicroMetric
-                        label="Successful payments"
-                        value={formatNumber(totals.successful_payments)}
-                        helper="Renewals and repeat payments included"
+                        label="Activity total"
+                        value={formatNumber(totalProfileActivity)}
+                        helper={`${formatNumber(normalizedTotals.successful_payments)} successful payments`}
                         tone="neutral"
                     />
                 </div>

@@ -714,6 +714,23 @@ class CeoDashboardTest extends TestCase
             'first_activated_at' => '2026-05-12 10:00:00',
             'churned_at' => null,
         ]);
+        $trialClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-12 08:00:00',
+            'first_activated_at' => '2026-05-12 11:00:00',
+            'churned_at' => null,
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $trialClient->id,
+            'product_id' => $product->id,
+            'amount' => 0,
+            'is_free_trial' => true,
+            'activated_at' => '2026-05-12 11:00:00',
+        ]);
         ClientActiveSnapshot::query()->create([
             'date' => '2026-05-12',
             'platform_id' => $platform->id,
@@ -746,9 +763,14 @@ class CeoDashboardTest extends TestCase
             ->assertOk()
             ->json();
 
-        $this->assertSame(1, data_get($payload, 'totals.active_profiles'));
+        $this->assertSame(2, data_get($payload, 'totals.active_profiles'));
+        $this->assertSame(1, data_get($payload, 'totals.new_paid_activations'));
+        $this->assertSame(1, data_get($payload, 'totals.renewed_profiles'));
+        $this->assertSame(0, data_get($payload, 'totals.reactivated_profiles'));
+        $this->assertSame(1, data_get($payload, 'totals.free_trial_activations'));
+        $this->assertSame(2, data_get($payload, 'totals.base_gain'));
         $this->assertSame(1, data_get($payload, 'totals.inactive_profiles'));
-        $this->assertSame(0, data_get($payload, 'totals.net_active_movement'));
+        $this->assertSame(1, data_get($payload, 'totals.net_active_movement'));
         $this->assertSame(2, data_get($payload, 'totals.successful_payments'));
         $this->assertSame(1, data_get($payload, 'current_scope.active_profiles'));
         $this->assertSame(1, data_get($payload, 'current_scope.inactive_profiles'));
@@ -757,6 +779,8 @@ class CeoDashboardTest extends TestCase
         $this->assertSame('2026-05-12', data_get($payload, 'current_scope.as_of'));
         $this->assertSame('2026-05-11', data_get($payload, 'points.1.label'));
         $this->assertSame(1, data_get($payload, 'points.1.inactive_profiles'));
+        $this->assertSame(1, data_get($payload, 'points.2.renewed_profiles'));
+        $this->assertSame(1, data_get($payload, 'points.2.free_trial_activations'));
         $this->assertSame(1, data_get($payload, 'points.2.successful_payments'));
     }
 

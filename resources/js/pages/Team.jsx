@@ -320,7 +320,7 @@ function contributionMoney(row, fallbackCurrency = 'USD') {
 
 function ContributionBar({ value, tone = 'teal' }) {
     const width = Math.max(2, Math.min(100, asNumber(value)));
-    const fill = tone === 'package' ? 'bg-indigo-500' : 'bg-teal-600';
+    const fill = tone === 'package' ? 'bg-slate-700' : 'bg-teal-600';
 
     return (
         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -340,11 +340,14 @@ function ContributionRow({ item, type, targetCurrency }) {
         : `${formatCount(item.payments_count)} payments · ${formatCount(item.platforms?.length)} markets`;
 
     return (
-        <article className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <article className="rounded-xl border border-slate-200 bg-white px-4 py-3 transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 hover:border-slate-300">
             <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{label}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">{meta}</p>
+                <div className="grid min-w-0 grid-cols-[auto_1fr] gap-2">
+                    <span className={`mt-1.5 h-2 w-2 rounded-full ${isPlatform ? 'bg-teal-500' : 'bg-slate-700'}`} aria-hidden="true" />
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{label}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{meta}</p>
+                    </div>
                 </div>
                 <div className="text-right">
                     <p className="crm-mono text-sm font-semibold text-slate-900">{money.primary}</p>
@@ -358,7 +361,7 @@ function ContributionRow({ item, type, targetCurrency }) {
             {isPlatform && item.top_packages?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {item.top_packages.slice(0, 3).map((pkg) => (
-                        <span key={`${item.platform_id}-${pkg.key}`} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                        <span key={`${item.platform_id}-${pkg.key}`} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600">
                             {pkg.label} {formatShare(pkg.share_percent)}
                         </span>
                     ))}
@@ -367,7 +370,7 @@ function ContributionRow({ item, type, targetCurrency }) {
             {!isPlatform && item.platforms?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {item.platforms.slice(0, 4).map((platform) => (
-                        <span key={`${item.key}-${platform.platform_id}`} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                        <span key={`${item.key}-${platform.platform_id}`} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600">
                             {getCountryFlag(platform.country)} {platform.name} {formatShare(platform.share_percent)}
                         </span>
                     ))}
@@ -378,8 +381,11 @@ function ContributionRow({ item, type, targetCurrency }) {
 }
 
 function RevenueContributionPanel({ contribution }) {
+    const [platformsExpanded, setPlatformsExpanded] = useState(false);
     const platforms = Array.isArray(contribution?.platforms) ? contribution.platforms : [];
     const packages = Array.isArray(contribution?.packages) ? contribution.packages : [];
+    const visiblePlatforms = platformsExpanded ? platforms : platforms.slice(0, 5);
+    const hiddenPlatformCount = Math.max(0, platforms.length - visiblePlatforms.length);
     const targetCurrency = contribution?.target_currency || 'USD';
     const total = contribution?.total_normalized !== null && contribution?.total_normalized !== undefined
         ? (contribution.total_display || formatCurrency(contribution.total_normalized, targetCurrency))
@@ -399,22 +405,28 @@ function RevenueContributionPanel({ contribution }) {
     return (
         <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-3">
-                <article className="rounded-xl border border-slate-200 bg-slate-950 px-4 py-4 text-white">
+                <article className="rounded-xl border border-slate-900 bg-slate-950 px-4 py-4 text-white">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Attributed revenue</p>
                     <p className="mt-2 crm-mono text-2xl font-semibold">{total}</p>
                     <p className="mt-2 text-xs text-slate-400">{formatCount(contribution?.summary?.platform_count)} markets · {formatCount(contribution?.summary?.package_count)} packages</p>
                 </article>
-                <article className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-teal-700">Leading market</p>
+                <article className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                    <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <span className="h-2 w-2 rounded-full bg-teal-500" aria-hidden="true" />
+                        Leading market
+                    </p>
                     <p className="mt-2 text-lg font-semibold text-slate-900">
                         {topPlatform ? `${getCountryFlag(topPlatform.country)} ${topPlatform.name}` : '--'}
                     </p>
-                    <p className="mt-2 text-sm font-medium text-teal-800">{topPlatform ? `${formatShare(topPlatform.share_percent)} of this member's revenue` : 'No market leader yet'}</p>
+                    <p className="mt-2 text-sm font-medium text-slate-600">{topPlatform ? `${formatShare(topPlatform.share_percent)} of this member's revenue` : 'No market leader yet'}</p>
                 </article>
-                <article className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-700">Leading package</p>
+                <article className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                    <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <span className="h-2 w-2 rounded-full bg-slate-700" aria-hidden="true" />
+                        Leading package
+                    </p>
                     <p className="mt-2 text-lg font-semibold text-slate-900">{topPackage?.label || '--'}</p>
-                    <p className="mt-2 text-sm font-medium text-indigo-800">{topPackage ? `${formatShare(topPackage.share_percent)} of package mix` : 'No package leader yet'}</p>
+                    <p className="mt-2 text-sm font-medium text-slate-600">{topPackage ? `${formatShare(topPackage.share_percent)} of package mix` : 'No package leader yet'}</p>
                 </article>
             </div>
 
@@ -422,13 +434,24 @@ function RevenueContributionPanel({ contribution }) {
                 <div>
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <p className="text-sm font-semibold text-slate-900">Platform contribution</p>
-                        <p className="text-xs text-slate-500">Share of member total</p>
+                        <p className="text-xs text-slate-500">
+                            {platforms.length > 5 && !platformsExpanded ? 'Top 5 shown' : 'Share of member total'}
+                        </p>
                     </div>
                     <div className="space-y-2.5">
-                        {platforms.map((item) => (
+                        {visiblePlatforms.map((item) => (
                             <ContributionRow key={item.platform_id} item={item} type="platform" targetCurrency={targetCurrency} />
                         ))}
                     </div>
+                    {platforms.length > 5 ? (
+                        <button
+                            type="button"
+                            onClick={() => setPlatformsExpanded((value) => !value)}
+                            className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:border-teal-300 hover:text-teal-800 active:scale-[0.99]"
+                        >
+                            {platformsExpanded ? 'Collapse to top 5 markets' : `Show ${formatCount(hiddenPlatformCount)} more markets`}
+                        </button>
+                    ) : null}
                 </div>
                 <div>
                     <div className="mb-2 flex items-center justify-between gap-3">
@@ -491,17 +514,21 @@ function ClientSegmentRow({ segment, tone = 'teal' }) {
 
 function ClientPerformanceStat({ label, value, detail, tone = 'slate' }) {
     const toneClass = {
-        teal: 'bg-teal-50 text-teal-800 ring-teal-100',
-        rose: 'bg-rose-50 text-rose-800 ring-rose-100',
-        amber: 'bg-amber-50 text-amber-800 ring-amber-100',
-        slate: 'bg-slate-50 text-slate-800 ring-slate-200',
-    }[tone] || 'bg-slate-50 text-slate-800 ring-slate-200';
+        teal: 'bg-teal-500 text-teal-700',
+        rose: 'bg-rose-500 text-rose-700',
+        amber: 'bg-amber-500 text-amber-700',
+        slate: 'bg-slate-500 text-slate-700',
+    }[tone] || 'bg-slate-500 text-slate-700';
+    const [dotClass, valueClass] = toneClass.split(' ');
 
     return (
-        <div className={`rounded-2xl px-4 py-3 ring-1 ${toneClass}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">{label}</p>
-            <p className="mt-2 crm-mono text-2xl font-semibold leading-none">{value}</p>
-            <p className="mt-2 text-xs font-medium leading-5 opacity-75">{detail}</p>
+        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200">
+            <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span className={`h-2 w-2 rounded-full ${dotClass}`} aria-hidden="true" />
+                {label}
+            </p>
+            <p className={`mt-2 crm-mono text-2xl font-semibold leading-none ${valueClass}`}>{value}</p>
+            <p className="mt-2 text-xs font-medium leading-5 text-slate-500">{detail}</p>
         </div>
     );
 }
@@ -603,7 +630,7 @@ function ClientPerformancePanel({ performance }) {
                     </div>
                 </div>
 
-                <aside className="rounded-[1.25rem] bg-slate-50 p-4 ring-1 ring-slate-200">
+                <aside className="rounded-[1.25rem] bg-white p-4 ring-1 ring-slate-200">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Workload benchmark</p>
                     <p className="mt-3 crm-mono text-3xl font-semibold text-slate-950">
                         {workload.rank ? `#${workload.rank}` : '--'}
