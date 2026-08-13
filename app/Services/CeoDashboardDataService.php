@@ -34,6 +34,7 @@ class CeoDashboardDataService
         $priorRevenue = $this->revenueTotal($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
         $currentActive = $this->activeClientSnapshot($context['to'], $context['platform_id']);
         $startActive = $this->activeClientSnapshot($context['from']->copy()->subDay(), $context['platform_id']);
+        $activeHistory = $this->activeClientSnapshotHistory($context);
         $currentCustomerMix = $this->customerRevenueMix($context['from'], $context['to'], $context['platform_id'], $context['target_currency']);
         $priorCustomerMix = $this->customerRevenueMix($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
         $platformIds = $context['platform_id'] ? [(int) $context['platform_id']] : null;
@@ -58,7 +59,10 @@ class CeoDashboardDataService
                 ],
                 'active_clients' => [
                     'label' => 'Active Subscribers',
-                    'value' => $currentActive,
+                    'value' => [
+                        ...$currentActive,
+                        'history' => $activeHistory,
+                    ],
                     'prior_value' => $startActive,
                     'delta_percent' => $this->percentDelta($currentActive['count'], $startActive['count']),
                     'href' => '/clients',
@@ -839,6 +843,73 @@ class CeoDashboardDataService
         ];
     }
 
+    private function activeClientSnapshotHistory(array $context): array
+    {
+        $toDate = $this->contextDisplayDate($context, 'to');
+        $fromDate = $this->contextDisplayDate($context, 'from');
+
+        $items = [
+            'current' => [
+                'label' => 'Now',
+                'date' => $toDate,
+            ],
+            'yesterday' => [
+                'label' => 'Yesterday',
+                'date' => $toDate->copy()->subDay(),
+            ],
+            'seven_days_ago' => [
+                'label' => '7 days ago',
+                'date' => $toDate->copy()->subDays(7),
+            ],
+            'thirty_days_ago' => [
+                'label' => '30 days ago',
+                'date' => $toDate->copy()->subDays(30),
+            ],
+            'range_start' => [
+                'label' => 'Range start',
+                'date' => $fromDate,
+            ],
+            'range_end' => [
+                'label' => 'Range end',
+                'date' => $toDate,
+            ],
+        ];
+
+        $history = [];
+        foreach ($items as $key => $item) {
+            $snapshot = $this->activeClientSnapshot($item['date']->copy()->endOfDay(), $context['platform_id']);
+            $history[$key] = [
+                'key' => $key,
+                'label' => $item['label'],
+                'date' => $item['date']->toDateString(),
+                ...$snapshot,
+            ];
+        }
+
+        $history['range_change'] = [
+            'label' => 'Range change',
+            'from_date' => $history['range_start']['date'],
+            'to_date' => $history['range_end']['date'],
+            'change' => (int) $history['range_end']['count'] - (int) $history['range_start']['count'],
+            'percent' => $this->percentDelta($history['range_end']['count'], $history['range_start']['count']),
+        ];
+
+        return $history;
+    }
+
+    private function contextDisplayDate(array $context, string $edge): Carbon
+    {
+        if ((bool) ($context['is_single_day'] ?? false)) {
+            return Carbon::parse((string) ($context['day_date'] ?? now()->toDateString()))->startOfDay();
+        }
+
+        $value = $edge === 'from' ? $context['from'] : $context['to'];
+
+        return $value instanceof Carbon
+            ? $value->copy()->startOfDay()
+            : Carbon::parse((string) $value)->startOfDay();
+    }
+
     private function customerRevenueMix(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
     {
         $baseQuery = $this->baseCollectedPayments($from, $to, $platformId);
@@ -967,7 +1038,7 @@ class CeoDashboardDataService
 
     /**
      * @return array<int,array{value:float,payments_count:int,average_ticket:float,source_breakdown:array,future:bool}>
-     *         Indexed 0–23 by reporting-timezone hour, every hour seeded.
+     * Indexed 0–23 by reporting-timezone hour, every hour seeded.
      */
     private function hourlyBuckets(Carbon $dayStart, Carbon $dayEnd, ?int $platformId, string $targetCurrency, int $maxHour): array
     {

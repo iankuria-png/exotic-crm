@@ -101,6 +101,16 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(400.0, (float) data_get($summary, 'metrics.collected_revenue.value.normalized_total'));
         $this->assertSame(2, (int) data_get($summary, 'metrics.collected_revenue.value.payments_count'));
         $this->assertSame(12, (int) data_get($summary, 'metrics.active_clients.value.count'));
+        $this->assertSame(12, (int) data_get($summary, 'metrics.active_clients.value.history.current.count'));
+        $this->assertSame('2026-05-10', data_get($summary, 'metrics.active_clients.value.history.current.date'));
+        $this->assertSame(10, (int) data_get($summary, 'metrics.active_clients.value.history.yesterday.count'));
+        $this->assertSame('2026-05-09', data_get($summary, 'metrics.active_clients.value.history.yesterday.date'));
+        $this->assertTrue((bool) data_get($summary, 'metrics.active_clients.value.history.yesterday.approximate'));
+        $this->assertSame('2026-05-01', data_get($summary, 'metrics.active_clients.value.history.yesterday.as_of'));
+        $this->assertSame(10, (int) data_get($summary, 'metrics.active_clients.value.history.seven_days_ago.count'));
+        $this->assertSame('2026-05-03', data_get($summary, 'metrics.active_clients.value.history.seven_days_ago.date'));
+        $this->assertSame(0, (int) data_get($summary, 'metrics.active_clients.value.history.thirty_days_ago.count'));
+        $this->assertSame(0, (int) data_get($summary, 'metrics.active_clients.value.history.range_change.change'));
 
         $recent = $this->getJson('/api/crm/dashboard/ceo/recent-payments?platform_id='.$platform->id.'&reporting_currency=USD')
             ->assertOk()
