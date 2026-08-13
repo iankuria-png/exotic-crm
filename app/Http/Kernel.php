@@ -84,6 +84,7 @@ class Kernel extends HttpKernel
         'verify.kyc.upload' => \App\Http\Middleware\VerifyKycUploadToken::class,
         'wp.service.auth' => \App\Http\Middleware\WpServiceAuth::class,
         'whatsapp.sidecar.hmac' => \App\Http\Middleware\VerifyWhatsAppSidecarHmac::class,
+        'legacy.payment.callback' => \App\Http\Middleware\VerifyLegacyPaymentCallback::class,
     ];
     
     protected function schedule(Schedule $schedule)

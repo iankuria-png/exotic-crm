@@ -16,5 +16,7 @@ class VerifyCsrfToken extends Middleware
         // requiring an authenticated web session inside the controller; the SPA
         // cannot carry a CSRF token across the Google OAuth redirect round-trip.
         'crm/auth/exchange',
+        'response',
+        'cancel',
     ];
 }

@@ -192,6 +192,11 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
 
         $this->fakeProvisioningApis($platform, $client);
 
+        Sanctum::actingAs(User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+        ]));
+
         $response = $this->postJson('/api/manual-update', [
             'payment_id' => $payment->id,
             'status' => 'completed',

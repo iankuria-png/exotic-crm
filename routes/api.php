@@ -831,11 +831,13 @@ Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallbac
 Route::put('/users/{id}', [AuthController::class, 'updateUser']);
 Route::get('/users', [AuthController::class, 'getUsers']);
 
-// Platform routes (public)
+// Platform routes
 Route::get('/platforms', [PlatformController::class, 'platform']);
-Route::post('/platforms', [PlatformController::class, 'store']);
-Route::put('/platforms/{id}', [PlatformController::class, 'update']);
-Route::delete('/platforms/{id}', [PlatformController::class, 'destroy']);
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin'])->group(function () {
+    Route::post('/platforms', [PlatformController::class, 'store']);
+    Route::put('/platforms/{id}', [PlatformController::class, 'update']);
+    Route::delete('/platforms/{id}', [PlatformController::class, 'destroy']);
+});
 
 // Sales user specific routes (public)
 Route::get('/my-platforms', [AuthController::class, 'getMyPlatforms']);
@@ -846,11 +848,13 @@ Route::post('/summary', [DashboardController::class, 'summary']);
 Route::post('/escort-posts', [DashboardController::class, 'escortPosts']);
 Route::get('/recent-users', [DashboardController::class, 'recentUsers']);
 
-// Product routes (public)
+// Product routes
 Route::get('/products', [ProductController::class, 'index']);
-Route::post('/products', [ProductController::class, 'store']);
-Route::put('/products/{id}', [ProductController::class, 'update']);
-Route::delete('/products/{id}', [ProductController::class, 'destroy']);
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+    Route::post('/products', [ProductController::class, 'store']);
+    Route::put('/products/{id}', [ProductController::class, 'update']);
+    Route::delete('/products/{id}', [ProductController::class, 'destroy']);
+});
 
 // Payment routes (public)
 Route::post('/initiate-stk-payment', [PaymentController::class, 'initiate']);
@@ -872,7 +876,8 @@ Route::get('/payments', [PaymentController::class, 'list']);
 Route::get('/payments/{user_id}', [PaymentController::class, 'getPayments'])->name('payment.history');
 
 // Payment callbacks/webhooks (public)
-Route::post('/payment-callback', [PaymentController::class, 'callback']);
+Route::post('/payment-callback', [PaymentController::class, 'callback'])
+    ->middleware('legacy.payment.callback');
 Route::post('/callback', [PaymentController::class, 'paybillCallback']);
 Route::post('/cybersource/notifications', [PaymentController::class, 'handleNotification']);
 Route::post('/payment/notification', [PaymentController::class, 'handleNotification'])->name('payment.notification');
@@ -884,9 +889,11 @@ Route::post('/billing/pawapay/callback', [BillingController::class, 'pawaPayCall
 // SMS logs (public)
 Route::get('/sms-logs', [SmsLogController::class, 'messages']);
 
-// Profile activation/deactivation (public)
-Route::post('/activate-profile', [PaymentController::class, 'manualActivate']);
-Route::post('/deactivate-profile', [PaymentController::class, 'manualDeactivate']);
+// Profile activation/deactivation (staff only)
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+    Route::post('/activate-profile', [PaymentController::class, 'manualActivate']);
+    Route::post('/deactivate-profile', [PaymentController::class, 'manualDeactivate']);
+});
 
 // Activity logs (public)
 Route::get('/activity-logs', [ActivityLogController::class, 'activityLogs']);
@@ -895,10 +902,12 @@ Route::get('/activity-logs', [ActivityLogController::class, 'activityLogs']);
 Route::get('/activated-profiles', [PaymentController::class, 'listActivatedProfiles']);
 Route::get('/deactivated-profiles', [PaymentController::class, 'listDeactivatedProfiles']);
 
-// Manual operations (public)
-Route::post('/manual-stk-push', [PaymentController::class, 'manualStkPush']);
-Route::post('/payment/update', [PaymentController::class, 'updatePaymentStatus']);
-Route::post('/manual-update', [PaymentController::class, 'manuallyUpdatePaymentStatus']);
+Route::post('/payment/update', [PaymentController::class, 'updatePaymentStatus'])
+    ->middleware('legacy.payment.callback');
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+    Route::post('/manual-stk-push', [PaymentController::class, 'manualStkPush']);
+    Route::post('/manual-update', [PaymentController::class, 'manuallyUpdatePaymentStatus']);
+});
 
 
 // African countries routes (public)
@@ -906,83 +915,75 @@ Route::get('/african-countries', [AfricanCountryController::class, 'index']);
 Route::get('/african-countries/currency/{currencyCode}', [AfricanCountryController::class, 'getByCurrencyCode']);
 Route::get('/african-countries/search', [AfricanCountryController::class, 'search']);
 
-// Debug routes (public)
+// Payment status and protected diagnostics
 Route::post('/check-payment-status', [PaymentController::class, 'checkStatus']);
-Route::get('/debug-kopokopo', [PaymentController::class, 'debugKopokopo']);
-Route::post('/clear-pending-payments', [PaymentController::class, 'clearPendingPayments']);
-Route::any('/test-webhook', [PaymentController::class, 'testWebhook']);
-Route::post('/subscribe-webhooks', [PaymentController::class, 'subscribeToWebhooks']);
-Route::get('/webhook-info', function () {
-    return response()->json([
-        'webhook_url' => url('/api/payment-callback'),
-        'test_webhook_url' => url('/api/test-webhook'),
-        'server_info' => [
-            'https' => request()->isSecure(),
-            'host' => request()->getHost(),
-            'full_url' => request()->fullUrl(),
-            'server_ip' => $_SERVER['SERVER_ADDR'] ?? 'unknown',
-            'php_version' => PHP_VERSION,
-            'timestamp' => now()->toDateTimeString()
-        ],
-        'kopokopo_config' => [
-            'base_url' => config('kopokopo.base_url'),
-            'till_number' => config('kopokopo.till_number'),
-            'is_production' => config('kopokopo.base_url') === 'https://api.kopokopo.com'
-        ]
-    ]);
-});
-
-Route::post('/simulate-webhook', function (Request $request) {
-    if (!config('app.debug')) {
-        return response()->json(['error' => 'Debug mode required'], 403);
-    }
-
-    $paymentId = $request->input('payment_id');
-    $eventType = $request->input('event_type', 'buygoods_transaction_received');
-
-    if (!$paymentId) {
-        return response()->json(['error' => 'payment_id required'], 400);
-    }
-
-    $payment = \App\Models\Payment::find($paymentId);
-    if (!$payment) {
-        return response()->json(['error' => 'Payment not found'], 404);
-    }
-
-    // Simulate webhook payload
-    $webhookPayload = [
-        'event_type' => $eventType,
-        'resource' => [
-            'id' => 'test_' . time(),
-            'reference' => 'TEST_REF_' . $paymentId,
-            'origination_time' => now()->toISOString(),
-            'sender_phone_number' => $payment->phone,
-            'amount' => $payment->amount,
-            'currency' => 'KES',
-            'metadata' => [
-                'payment_id' => $paymentId,
-                'platform_id' => $payment->platform_id,
-                'product_id' => $payment->product_id,
-                'user_id' => $payment->user_id,
-                'duration' => $payment->duration
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+    Route::get('/debug-kopokopo', [PaymentController::class, 'debugKopokopo']);
+    Route::post('/clear-pending-payments', [PaymentController::class, 'clearPendingPayments']);
+    Route::any('/test-webhook', [PaymentController::class, 'testWebhook']);
+    Route::post('/subscribe-webhooks', [PaymentController::class, 'subscribeToWebhooks']);
+    Route::get('/webhook-info', function () {
+        return response()->json([
+            'webhook_url' => url('/api/billing/mpesa/callback'),
+            'legacy_webhook_url' => url('/api/payment-callback'),
+            'test_webhook_url' => url('/api/test-webhook'),
+            'server_info' => [
+                'https' => request()->isSecure(),
+                'host' => request()->getHost(),
+                'full_url' => request()->fullUrl(),
+                'server_ip' => $_SERVER['SERVER_ADDR'] ?? 'unknown',
+                'php_version' => PHP_VERSION,
+                'timestamp' => now()->toDateTimeString()
+            ],
+            'kopokopo_config' => [
+                'base_url' => config('kopokopo.base_url'),
+                'till_number' => config('kopokopo.till_number'),
+                'is_production' => config('kopokopo.base_url') === 'https://api.kopokopo.com'
             ]
-        ],
-        'timestamp' => now()->toISOString()
-    ];
+        ]);
+    });
 
-    // Call the webhook handler directly
-    $webhookRequest = Request::create('/api/payment-callback', 'POST', [], [], [], [
-        'CONTENT_TYPE' => 'application/json',
-        'HTTP_X_KOPOKOPO_SIGNATURE' => 'test_signature'
-    ], json_encode($webhookPayload));
+    Route::post('/simulate-webhook', function (Request $request) {
+        if (!config('app.debug')) {
+            return response()->json(['error' => 'Debug mode required'], 403);
+        }
 
-    $controller = new \App\Http\Controllers\API\PaymentController();
-    $response = $controller->handleCallback($webhookRequest);
+        $paymentId = $request->input('payment_id');
+        $eventType = $request->input('event_type', 'buygoods_transaction_received');
 
-    return response()->json([
-        'status' => 'success',
-        'message' => 'Webhook simulated',
-        'payload' => $webhookPayload,
-        'response' => $response->getData()
-    ]);
+        if (!$paymentId) {
+            return response()->json(['error' => 'payment_id required'], 400);
+        }
+
+        $payment = \App\Models\Payment::find($paymentId);
+        if (!$payment) {
+            return response()->json(['error' => 'Payment not found'], 404);
+        }
+
+        $webhookPayload = [
+            'event_type' => $eventType,
+            'resource' => [
+                'id' => 'test_' . time(),
+                'reference' => 'TEST_REF_' . $paymentId,
+                'origination_time' => now()->toISOString(),
+                'sender_phone_number' => $payment->phone,
+                'amount' => $payment->amount,
+                'currency' => 'KES',
+                'metadata' => [
+                    'payment_id' => $paymentId,
+                    'platform_id' => $payment->platform_id,
+                    'product_id' => $payment->product_id,
+                    'user_id' => $payment->user_id,
+                    'duration' => $payment->duration
+                ]
+            ],
+            'timestamp' => now()->toISOString()
+        ];
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Webhook payload generated; no payment mutation was performed.',
+            'payload' => $webhookPayload,
+        ]);
+    });
 });

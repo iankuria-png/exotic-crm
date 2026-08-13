@@ -47,7 +47,7 @@ class LegacyStkService
         ];
 
         if ($transport === 'direct_provider') {
-            return $this->initiateDirectProvider($payment, $platform, $environment, $payload);
+            return $this->initiateDirectProvider($payment, $platform, $environment, $payload, $credentials);
         }
 
         return $this->initiateDjangoProxy($environment, $credentials, $payload);
@@ -156,12 +156,23 @@ class LegacyStkService
         ];
     }
 
-    private function initiateDirectProvider(Payment $payment, Platform $platform, string $environment, array $payload): array
+    private function initiateDirectProvider(
+        Payment $payment,
+        Platform $platform,
+        string $environment,
+        array $payload,
+        array $credentials
+    ): array
     {
+        $callbackBaseUrl = rtrim((string) ($credentials['callback_base_url'] ?? ''), '/');
+        $callbackUrl = $callbackBaseUrl !== ''
+            ? $callbackBaseUrl . '/api/billing/mpesa/callback'
+            : url('/api/billing/mpesa/callback');
+
         $result = $this->kopokopoCompatibilityAdapter->initiateStkPush(
             $payload['phone'],
             $payload['amount'],
-            url('/api/payment-callback'),
+            $callbackUrl,
             [
                 'payment_id' => (int) $payment->id,
                 'platform_id' => (int) $platform->id,

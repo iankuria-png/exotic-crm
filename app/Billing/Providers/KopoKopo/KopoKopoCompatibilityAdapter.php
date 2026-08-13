@@ -18,7 +18,7 @@ class KopoKopoCompatibilityAdapter
         array $metadata = [],
         array $configOverride = []
     ): array {
-        return $this->kopokopoService->initiateStkPush(
+        return $this->service()->initiateStkPush(
             $phone,
             $amount,
             $callbackUrl,
@@ -29,6 +29,11 @@ class KopoKopoCompatibilityAdapter
 
     public function handleWebhook(string $rawBody, string $signature): array
     {
-        return $this->kopokopoService->handleWebhook($rawBody, $signature);
+        return $this->service()->handleWebhook($rawBody, $signature);
+    }
+
+    private function service(): KopokopoService
+    {
+        return app(KopokopoService::class) ?: $this->kopokopoService;
     }
 }

@@ -61,6 +61,10 @@ return [
 
     'django' => [
         'base_url' => env('DJANGO_API_BASE', 'https://polytech.co.ke/payment_service/api/payments'),
+        'callback_secret' => env('DJANGO_CALLBACK_SECRET'),
+        'callback_previous_secret' => env('DJANGO_CALLBACK_PREVIOUS_SECRET'),
+        'callback_clock_skew_seconds' => (int) env('DJANGO_CALLBACK_CLOCK_SKEW_SECONDS', 300),
+        'callback_replay_ttl_seconds' => (int) env('DJANGO_CALLBACK_REPLAY_TTL_SECONDS', 600),
     ],
 
     'payment_link' => [
