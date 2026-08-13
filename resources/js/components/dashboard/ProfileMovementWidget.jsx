@@ -24,12 +24,14 @@ const CHART_VIEWS = [
     { key: 'mix', label: 'Breakdown' },
     { key: 'trials', label: 'Free trials' },
     { key: 'payments', label: 'Payments' },
+    { key: 'snapshot', label: 'Subscriber snapshot' },
 ];
 const VIEW_HELPERS = {
     base: 'Profile additions minus paid exits. Additions are first-time paid, won-back clients, and free trials. Renewals are retained work, not new additions.',
     mix: 'Shows what kind of movement happened: first-time paid, renewals, won-back clients, free trials, and exits.',
     trials: 'Free-trial activations alongside first-time paid subscriptions. Trials activate profiles but do not count as paid revenue.',
     payments: 'All successful payment events compared with renewals and first-time paid subscriptions.',
+    snapshot: 'Point-in-time paid subscriber base. This answers how many paying clients existed now, yesterday, 7 days ago, 30 days ago, and at the selected range edges.',
 };
 const TERM_HELP = {
     firstPaid: 'Clients whose first successful paid subscription happened in this selected period.',
@@ -41,6 +43,8 @@ const TERM_HELP = {
     netChange: 'Profile additions minus paid exits. Positive means additions were higher than exits; negative means exits were higher.',
     totalEvents: 'All movement events in the period: paid activations, renewals, free trials, and paid exits.',
     successfulPayments: 'All reportable successful payments in the period, including first payments, renewals, and repeat payments.',
+    subscriberSnapshot: 'A date-based count of active paying clients from the active-client snapshot table. If an exact date has no snapshot, the nearest earlier captured snapshot is used.',
+    rangeChange: 'Range end subscriber count minus range start subscriber count. This is a base count comparison, not the same thing as payment volume.',
 };
 
 function asNumber(value) {
@@ -254,6 +258,205 @@ function MicroMetric({ label, value, helper, tone = 'neutral', definition = null
     );
 }
 
+function snapshotDateLine(item) {
+    if (!item) return '--';
+    const date = item.date || '--';
+
+    if (item.approximate && item.as_of) {
+        return `${date} - nearest ${item.as_of}`;
+    }
+
+    return date;
+}
+
+function snapshotTitle(item) {
+    if (!item) return '';
+    if (item.approximate && item.as_of) {
+        return `No exact snapshot for ${item.date}. Showing nearest earlier snapshot from ${item.as_of}.`;
+    }
+
+    return `Snapshot for ${item.date || 'selected date'}.`;
+}
+
+function SnapshotCheckpoint({ item, maxCount, emphasis = false }) {
+    const count = asNumber(item?.count);
+    const width = maxCount > 0 ? clampPercent((count / maxCount) * 100) : 0;
+
+    return (
+        <div className="group" title={snapshotTitle(item)}>
+            <div className="flex items-end justify-between gap-4">
+                <div className="min-w-0">
+                    <p className={`truncate text-sm font-semibold ${emphasis ? 'text-slate-950' : 'text-slate-700'}`}>
+                        {item?.label || '--'}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-slate-500">{snapshotDateLine(item)}</p>
+                </div>
+                <p className={`crm-mono shrink-0 font-semibold ${emphasis ? 'text-lg text-teal-700' : 'text-sm text-slate-900'}`}>
+                    {formatNumber(count)}
+                </p>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                    className={`h-full rounded-full transition-all duration-300 ${emphasis ? 'bg-teal-600' : 'bg-slate-400'}`}
+                    style={{ width: `${width}%` }}
+                />
+            </div>
+        </div>
+    );
+}
+
+function SubscriberSnapshotPanel({ history, currentScope, data }) {
+    const current = history?.current || history?.range_end || null;
+    const rangeStart = history?.range_start || null;
+    const rangeEnd = history?.range_end || current;
+    const rangeChange = history?.range_change || {
+        change: asNumber(rangeEnd?.count) - asNumber(rangeStart?.count),
+        from_date: rangeStart?.date,
+        to_date: rangeEnd?.date,
+        percent: null,
+    };
+    const checkpoints = [
+        current,
+        history?.yesterday,
+        history?.seven_days_ago,
+        history?.thirty_days_ago,
+        rangeStart,
+        rangeEnd,
+    ].filter(Boolean);
+    const maxCount = checkpoints.reduce((max, item) => Math.max(max, asNumber(item?.count)), 1);
+    const deltaTone = movementTone(rangeChange.change);
+    const active = asNumber(current?.count ?? currentScope.active_profiles);
+    const inactive = asNumber(current?.inactive_count ?? currentScope.inactive_profiles);
+    const total = asNumber(current?.total_paid_profiles ?? currentScope.total_profiles);
+    const share = total > 0 ? clampPercent((active / total) * 100) : 0;
+
+    return (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
+            <div className="rounded-[1.25rem] bg-white p-5 ring-1 ring-slate-200">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Paid subscriber snapshot
+                            <DefinitionTooltip label="Paid subscriber snapshot" text={TERM_HELP.subscriberSnapshot} />
+                        </p>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                            Snapshot counts answer how many active paying clients existed on a date. Payment totals answer how many payment events happened during the window.
+                        </p>
+                    </div>
+                    <div className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600">
+                        Stock count, not event volume
+                    </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
+                    <div className="rounded-[1.15rem] bg-slate-950 p-5 text-white shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current snapshot</p>
+                        <p className="mt-3 crm-mono text-5xl font-semibold tracking-tight">{formatNumber(active)}</p>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                            active paying clients
+                            {current?.date ? <span> on {current.date}</span> : null}
+                            {current?.approximate && current?.as_of ? <span> using {current.as_of}</span> : null}
+                        </p>
+
+                        <div className="mt-5 border-t border-white/10 pt-4">
+                            <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                Range change
+                                <DefinitionTooltip label="Range change" text={TERM_HELP.rangeChange} />
+                            </p>
+                            <div className="mt-2 flex items-end justify-between gap-4">
+                                <p className={`crm-mono text-3xl font-semibold ${
+                                    deltaTone === 'positive'
+                                        ? 'text-teal-200'
+                                        : deltaTone === 'negative'
+                                            ? 'text-rose-200'
+                                            : 'text-slate-200'
+                                }`}>
+                                    {formatSigned(rangeChange.change)}
+                                </p>
+                                <p className="text-right text-xs leading-5 text-slate-400">
+                                    {rangeChange.from_date || '--'} to {rangeChange.to_date || '--'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid gap-4">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <SnapshotCheckpoint item={current} maxCount={maxCount} emphasis />
+                            <SnapshotCheckpoint item={history?.yesterday} maxCount={maxCount} />
+                            <SnapshotCheckpoint item={history?.seven_days_ago} maxCount={maxCount} />
+                            <SnapshotCheckpoint item={history?.thirty_days_ago} maxCount={maxCount} />
+                        </div>
+
+                        <div className="rounded-[1.15rem] border border-slate-200 p-4">
+                            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center">
+                                <SnapshotCheckpoint item={rangeStart} maxCount={maxCount} />
+                                <div className="hidden h-px bg-slate-200 sm:block" aria-hidden="true" />
+                                <SnapshotCheckpoint item={rangeEnd} maxCount={maxCount} emphasis />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <aside className="rounded-[1.2rem] bg-white p-4 ring-1 ring-slate-200">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Base composition</p>
+                <div className="mt-4 flex items-end justify-between gap-3">
+                    <div>
+                        <p className="crm-mono text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(total)}</p>
+                        <p className="mt-1 text-sm text-slate-500">paid profiles ever seen in scope</p>
+                    </div>
+                    <p className="crm-mono text-sm font-semibold text-teal-700">{share.toFixed(1)}%</p>
+                </div>
+                <div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-100">
+                    <div className="flex h-full">
+                        <div className="bg-teal-600" style={{ width: `${share}%` }} />
+                        <div className="bg-slate-300" style={{ width: `${clampPercent(100 - share)}%` }} />
+                    </div>
+                </div>
+                <div className="mt-4 grid gap-2">
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                        <span className="text-slate-500">Active paying</span>
+                        <span className="crm-mono font-semibold text-teal-700">{formatNumber(active)}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                        <span className="text-slate-500">Paid but inactive</span>
+                        <span className="crm-mono font-semibold text-slate-900">{formatNumber(inactive)}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                        <span className="text-slate-500">Selected window</span>
+                        <span className="crm-mono text-xs font-semibold text-slate-900">{data?.range?.from || '--'} to {data?.range?.to || '--'}</span>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    );
+}
+
+function ChartViewSwitcher({ chartView, onChange, hasSnapshot }) {
+    return (
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="inline-flex w-fit flex-wrap rounded-xl bg-white p-1 ring-1 ring-slate-200" role="group" aria-label="Profile movement analysis view">
+                {CHART_VIEWS.filter((item) => item.key !== 'snapshot' || hasSnapshot).map((item) => (
+                    <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => onChange(item.key)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
+                            chartView === item.key
+                                ? 'bg-slate-950 text-white shadow-sm'
+                                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                        }`}
+                    >
+                        {item.label}
+                    </button>
+                ))}
+            </div>
+            <p className="max-w-3xl text-xs leading-5 text-slate-500">{VIEW_HELPERS[chartView]}</p>
+        </div>
+    );
+}
+
 function CurrentBaseRail({ currentScope, totals, comparison, data }) {
     const active = asNumber(currentScope.active_profiles);
     const inactive = asNumber(currentScope.inactive_profiles);
@@ -390,6 +593,9 @@ export default function ProfileMovementWidget({
     };
     const comparison = data?.comparison || {};
     const currentScope = data?.current_scope || {};
+    const subscriberHistory = data?.subscriber_history || {};
+    const hasSubscriberHistory = Boolean(subscriberHistory.current || subscriberHistory.range_end);
+    const effectiveChartView = chartView === 'snapshot' && !hasSubscriberHistory ? 'base' : chartView;
     const hasMovement = points.some((point) => (
         point.activation_events > 0
         || point.base_gain > 0
@@ -408,6 +614,14 @@ export default function ProfileMovementWidget({
         content = <MovementSkeleton />;
     } else if (errorMessage && !hasLoadedPayload) {
         content = <ErrorState message={errorMessage} />;
+    } else if (effectiveChartView === 'snapshot' && hasSubscriberHistory) {
+        content = (
+            <SubscriberSnapshotPanel
+                history={subscriberHistory}
+                currentScope={currentScope}
+                data={data}
+            />
+        );
     } else if (!hasMovement) {
         content = (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
@@ -422,7 +636,7 @@ export default function ProfileMovementWidget({
         content = (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
                 <div className="rounded-[1.25rem] bg-slate-950 p-1.5 text-white shadow-[0_22px_60px_rgba(15,23,42,0.18)]">
-                    <div className="rounded-[1rem] bg-[radial-gradient(circle_at_20%_0%,rgba(20,184,166,0.22),transparent_32%),linear-gradient(145deg,#07111f,#0f172a_60%,#111827)] p-4 ring-1 ring-white/10">
+                    <div className="rounded-[1rem] bg-[linear-gradient(145deg,#07111f,#0f172a_58%,#10212b)] p-4 ring-1 ring-white/10">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                                 <p className="flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
@@ -442,7 +656,7 @@ export default function ProfileMovementWidget({
                                     </p>
                                 </div>
                                 <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-400">
-                                    {VIEW_HELPERS[chartView]} Net change = profile additions - paid exits.
+                                    Profile additions, paid exits, renewals, trials, and payment volume across the selected window.
                                 </p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
@@ -466,24 +680,7 @@ export default function ProfileMovementWidget({
                             </div>
                         </div>
 
-                        <div className="mt-5 flex flex-wrap gap-2">
-                            {CHART_VIEWS.map((item) => (
-                                <button
-                                    key={item.key}
-                                    type="button"
-                                    onClick={() => setChartView(item.key)}
-                                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] ${
-                                        chartView === item.key
-                                            ? 'bg-white text-slate-950'
-                                            : 'bg-white/7 text-slate-300 ring-1 ring-white/10 hover:bg-white/12 hover:text-white'
-                                    }`}
-                                >
-                                    {item.label}
-                                </button>
-                            ))}
-                        </div>
-
-                        <div className="mt-4 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
+                        <div className="mt-5 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
                             <ResponsiveContainer width="100%" height="100%">
                                 <ComposedChart data={points} margin={{ top: 14, right: 14, left: 0, bottom: 0 }}>
                                     <defs>
@@ -512,9 +709,9 @@ export default function ProfileMovementWidget({
                                         width={52}
                                         tickFormatter={(value) => Number(value || 0).toLocaleString()}
                                     />
-                                    <Tooltip content={<MovementTooltip view={chartView} />} />
+                                    <Tooltip content={<MovementTooltip view={effectiveChartView} />} />
                                     <ReferenceLine y={0} stroke="rgba(226,232,240,0.34)" strokeDasharray="4 4" />
-                                    {chartView === 'base' ? (
+                                    {effectiveChartView === 'base' ? (
                                         <>
                                             <Bar dataKey="net_active_movement" radius={[6, 6, 0, 0]} barSize={18} name="Net movement">
                                                 {points.map((point) => (
@@ -546,7 +743,7 @@ export default function ProfileMovementWidget({
                                             />
                                         </>
                                     ) : null}
-                                    {chartView === 'mix' ? (
+                                    {effectiveChartView === 'mix' ? (
                                         <>
                                             <Bar dataKey="new_paid_activations" fill="#2dd4bf" fillOpacity={0.82} radius={[5, 5, 0, 0]} barSize={12} name="First-time paid" />
                                             <Bar dataKey="renewed_profiles" fill="#38bdf8" fillOpacity={0.78} radius={[5, 5, 0, 0]} barSize={12} name="Renewals" />
@@ -555,14 +752,14 @@ export default function ProfileMovementWidget({
                                             <Line type="monotone" dataKey="inactive_profiles" stroke="#fb7185" strokeWidth={2.2} dot={false} name="Paid exits" />
                                         </>
                                     ) : null}
-                                    {chartView === 'trials' ? (
+                                    {effectiveChartView === 'trials' ? (
                                         <>
                                             <Bar dataKey="free_trial_activations" fill="#a78bfa" fillOpacity={0.84} radius={[6, 6, 0, 0]} barSize={18} name="Free trials" />
                                             <Line type="monotone" dataKey="new_paid_activations" stroke="#2dd4bf" strokeWidth={2.75} dot={false} name="First-time paid" />
                                             <Line type="monotone" dataKey="base_gain" stroke="#e2e8f0" strokeWidth={2} strokeDasharray="5 6" dot={false} name="Profile additions" />
                                         </>
                                     ) : null}
-                                    {chartView === 'payments' ? (
+                                    {effectiveChartView === 'payments' ? (
                                         <>
                                             <Area type="monotone" dataKey="successful_payments" stroke="#e2e8f0" strokeWidth={2.6} fill="url(#profileMovementPayments)" dot={false} name="Successful payments" />
                                             <Line type="monotone" dataKey="renewed_profiles" stroke="#38bdf8" strokeWidth={2.6} dot={false} name="Renewals" />
@@ -652,6 +849,14 @@ export default function ProfileMovementWidget({
                         definition={TERM_HELP.totalEvents}
                     />
                 </div>
+            ) : null}
+
+            {!isLoading && hasLoadedPayload && (hasActivityContext || hasSubscriberHistory) ? (
+                <ChartViewSwitcher
+                    chartView={effectiveChartView}
+                    onChange={setChartView}
+                    hasSnapshot={hasSubscriberHistory}
+                />
             ) : null}
 
             {content}

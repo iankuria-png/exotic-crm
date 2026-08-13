@@ -742,6 +742,24 @@ class CeoDashboardTest extends TestCase
             'activated_at' => '2026-05-12 11:00:00',
         ]);
         ClientActiveSnapshot::query()->create([
+            'date' => '2026-05-05',
+            'platform_id' => $platform->id,
+            'count' => 3,
+            'created_at' => now(),
+        ]);
+        ClientActiveSnapshot::query()->create([
+            'date' => '2026-05-10',
+            'platform_id' => $platform->id,
+            'count' => 4,
+            'created_at' => now(),
+        ]);
+        ClientActiveSnapshot::query()->create([
+            'date' => '2026-05-11',
+            'platform_id' => $platform->id,
+            'count' => 2,
+            'created_at' => now(),
+        ]);
+        ClientActiveSnapshot::query()->create([
             'date' => '2026-05-12',
             'platform_id' => $platform->id,
             'count' => 1,
@@ -787,6 +805,14 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(2, data_get($payload, 'current_scope.total_profiles'));
         $this->assertSame('client_active_snapshots', data_get($payload, 'current_scope.source'));
         $this->assertSame('2026-05-12', data_get($payload, 'current_scope.as_of'));
+        $this->assertSame(1, data_get($payload, 'subscriber_history.current.count'));
+        $this->assertSame('2026-05-12', data_get($payload, 'subscriber_history.current.date'));
+        $this->assertSame(2, data_get($payload, 'subscriber_history.yesterday.count'));
+        $this->assertSame('2026-05-11', data_get($payload, 'subscriber_history.yesterday.date'));
+        $this->assertSame(3, data_get($payload, 'subscriber_history.seven_days_ago.count'));
+        $this->assertSame('2026-05-05', data_get($payload, 'subscriber_history.seven_days_ago.date'));
+        $this->assertSame(4, data_get($payload, 'subscriber_history.range_start.count'));
+        $this->assertSame(-3, data_get($payload, 'subscriber_history.range_change.change'));
         $this->assertSame('2026-05-11', data_get($payload, 'points.1.label'));
         $this->assertSame(1, data_get($payload, 'points.1.inactive_profiles'));
         $this->assertSame(1, data_get($payload, 'points.2.renewed_profiles'));

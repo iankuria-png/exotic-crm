@@ -93,6 +93,7 @@ class ChurnAggregatorService
         $previousDaily = $this->dailySeries($previousFrom->copy(), $previousTo->copy(), $platformIds, true, true);
         $previousTotals = $this->totals($previousDaily);
         $currentCounts = $this->currentSubscriberCounts($platformIds, $to);
+        $subscriberHistory = $this->subscriberSnapshotHistory($platformIds, $from, $to);
 
         return [
             'range' => [
@@ -132,6 +133,7 @@ class ChurnAggregatorService
                 ),
             ],
             'current_scope' => $currentCounts,
+            'subscriber_history' => $subscriberHistory,
             'definition' => [
                 'active_profiles' => 'Reportable paid profile activity in the selected window: first-time paid, renewals, and won-back clients.',
                 'new_paid_activations' => 'Clients whose first reportable successful paid subscription happened in the selected window.',
@@ -499,7 +501,7 @@ class ChurnAggregatorService
             ->distinct();
     }
 
-    private function currentSubscriberCounts(array $platformIds, Carbon $asOf): array
+    private function currentSubscriberCounts(array $platformIds, Carbon $asOf, ?int $paidClientTotal = null): array
     {
         $snapshotQuery = ClientActiveSnapshot::query()
             ->whereDate('date', '<=', $asOf->toDateString())
@@ -517,13 +519,7 @@ class ChurnAggregatorService
             ->values()
             ->all();
 
-        $paidClientTotal = (int) Payment::query()
-            ->reportableSuccessful()
-            ->excludingWalletTopups()
-            ->whereNotNull('payments.client_id')
-            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
-            ->distinct('payments.client_id')
-            ->count('payments.client_id');
+        $paidClientTotal ??= $this->paidClientTotal($platformIds);
 
         $total = max($paidClientTotal, $active);
 
@@ -536,6 +532,60 @@ class ChurnAggregatorService
             'approximate' => count($snapshotDates) !== 1 || ($snapshotDates[0] ?? null) !== $asOf->toDateString(),
             'source' => 'client_active_snapshots',
         ];
+    }
+
+    private function subscriberSnapshotHistory(array $platformIds, Carbon $from, Carbon $to): array
+    {
+        $fromDate = $from->copy()->startOfDay();
+        $toDate = $to->copy()->startOfDay();
+        $paidClientTotal = $this->paidClientTotal($platformIds);
+        $items = [
+            'current' => ['label' => 'Now', 'date' => $toDate],
+            'yesterday' => ['label' => 'Yesterday', 'date' => $toDate->copy()->subDay()],
+            'seven_days_ago' => ['label' => '7 days ago', 'date' => $toDate->copy()->subDays(7)],
+            'thirty_days_ago' => ['label' => '30 days ago', 'date' => $toDate->copy()->subDays(30)],
+            'range_start' => ['label' => 'Range start', 'date' => $fromDate],
+            'range_end' => ['label' => 'Range end', 'date' => $toDate],
+        ];
+
+        $history = [];
+        foreach ($items as $key => $item) {
+            $snapshot = $this->currentSubscriberCounts($platformIds, $item['date'], $paidClientTotal);
+            $history[$key] = [
+                'label' => $item['label'],
+                'date' => $item['date']->toDateString(),
+                'count' => (int) $snapshot['active_profiles'],
+                'inactive_count' => (int) $snapshot['inactive_profiles'],
+                'total_paid_profiles' => (int) $snapshot['total_profiles'],
+                'active_share_percent' => (float) $snapshot['active_share_percent'],
+                'as_of' => $snapshot['as_of'],
+                'approximate' => (bool) $snapshot['approximate'],
+                'source' => $snapshot['source'],
+            ];
+        }
+
+        $rangeStart = (int) ($history['range_start']['count'] ?? 0);
+        $rangeEnd = (int) ($history['range_end']['count'] ?? 0);
+        $history['range_change'] = [
+            'label' => 'Range change',
+            'from_date' => $history['range_start']['date'],
+            'to_date' => $history['range_end']['date'],
+            'change' => $rangeEnd - $rangeStart,
+            'percent' => $rangeStart !== 0 ? round((($rangeEnd - $rangeStart) / abs($rangeStart)) * 100, 1) : null,
+        ];
+
+        return $history;
+    }
+
+    private function paidClientTotal(array $platformIds): int
+    {
+        return (int) Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->whereNotNull('payments.client_id')
+            ->when(! empty($platformIds), fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+            ->distinct('payments.client_id')
+            ->count('payments.client_id');
     }
 
     private function movementComparison(int $current, int $previous): array
