@@ -71,6 +71,63 @@ class ChurnAggregatorService
     }
 
     /**
+     * Build dashboard-ready active/inactive profile movement.
+     *
+     * Activations come from first_activated_at; inactive movement comes from churned_at.
+     * This matches the Retention Pulse definition used by the Clients workspace.
+     *
+     * @param  array<int>  $platformIds  Empty = all accessible platforms
+     */
+    public function movement(Carbon $from, Carbon $to, array $platformIds = [], string $bucket = 'day'): array
+    {
+        $bucket = in_array($bucket, ['day', 'week', 'month'], true) ? $bucket : 'day';
+        $from = $from->copy()->startOfDay();
+        $to = $to->copy()->endOfDay();
+        $daily = $this->dailySeries($from->copy(), $to->copy(), $platformIds, false);
+        $totals = $this->totals($daily);
+        $dayCount = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
+        $previousTo = $from->copy()->subDay()->endOfDay();
+        $previousFrom = $previousTo->copy()->subDays($dayCount - 1)->startOfDay();
+        $previousDaily = $this->dailySeries($previousFrom->copy(), $previousTo->copy(), $platformIds, false);
+        $previousTotals = $this->totals($previousDaily);
+        $currentCounts = $this->currentProfileCounts($platformIds);
+
+        return [
+            'range' => [
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+            ],
+            'previous_range' => [
+                'from' => $previousFrom->toDateString(),
+                'to' => $previousTo->toDateString(),
+            ],
+            'bucket' => $bucket,
+            'points' => $this->bucketMovementDaily($daily, $from, $to, $bucket),
+            'totals' => [
+                'created_profiles' => (int) $totals['signups'],
+                'active_profiles' => (int) $totals['activations'],
+                'inactive_profiles' => (int) $totals['churn'],
+                'net_active_movement' => (int) ($totals['activations'] - $totals['churn']),
+            ],
+            'comparison' => [
+                'created_profiles' => $this->movementComparison((int) $totals['signups'], (int) $previousTotals['signups']),
+                'active_profiles' => $this->movementComparison((int) $totals['activations'], (int) $previousTotals['activations']),
+                'inactive_profiles' => $this->movementComparison((int) $totals['churn'], (int) $previousTotals['churn']),
+                'net_active_movement' => $this->movementComparison(
+                    (int) ($totals['activations'] - $totals['churn']),
+                    (int) ($previousTotals['activations'] - $previousTotals['churn']),
+                ),
+            ],
+            'current_scope' => $currentCounts,
+            'definition' => [
+                'active_profiles' => 'Profiles with first_activated_at in the selected window.',
+                'inactive_profiles' => 'Paid profiles stamped with churned_at in the selected window.',
+                'net_active_movement' => 'Active profile entries minus inactive profile exits.',
+            ],
+        ];
+    }
+
+    /**
      * Build a daily time series of signups, activations, and churn.
      */
     public function dailySeries(
@@ -152,6 +209,109 @@ class ChurnAggregatorService
             'churn' => $churn,
             'net' => $signups - $churn,
         ];
+    }
+
+    private function bucketMovementDaily(array $daily, Carbon $from, Carbon $to, string $bucket): array
+    {
+        $groups = collect($daily)->groupBy(function (array $row) use ($bucket) {
+            $date = Carbon::parse($row['date'])->startOfDay();
+
+            return $this->movementBucketKey($date, $bucket);
+        });
+
+        return $groups
+            ->map(function ($rows, string $key) use ($bucket, $from, $to): array {
+                $bucketFrom = $this->movementBucketStart($key, $bucket)->max($from->copy()->startOfDay());
+                $bucketTo = $this->movementBucketEnd($key, $bucket)->min($to->copy()->endOfDay());
+                $created = (int) $rows->sum('signups');
+                $active = (int) $rows->sum('activations');
+                $inactive = (int) $rows->sum('churn');
+
+                return [
+                    'label' => $this->movementBucketLabel($key, $bucket),
+                    'from' => $bucketFrom->toDateString(),
+                    'to' => $bucketTo->toDateString(),
+                    'created_profiles' => $created,
+                    'active_profiles' => $active,
+                    'inactive_profiles' => $inactive,
+                    'net_active_movement' => $active - $inactive,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function currentProfileCounts(array $platformIds): array
+    {
+        $activeQuery = Client::query()->active();
+        $totalQuery = Client::query();
+
+        if (! empty($platformIds)) {
+            $activeQuery->whereIn('platform_id', $platformIds);
+            $totalQuery->whereIn('platform_id', $platformIds);
+        }
+
+        $active = (int) $activeQuery->count();
+        $total = (int) $totalQuery->count();
+
+        return [
+            'active_profiles' => $active,
+            'inactive_profiles' => max(0, $total - $active),
+            'total_profiles' => $total,
+            'active_share_percent' => $total > 0 ? round(($active / $total) * 100, 1) : 0.0,
+        ];
+    }
+
+    private function movementComparison(int $current, int $previous): array
+    {
+        return [
+            'current' => $current,
+            'previous' => $previous,
+            'delta' => $current - $previous,
+            'percent' => $previous !== 0 ? round((($current - $previous) / abs($previous)) * 100, 1) : null,
+        ];
+    }
+
+    private function movementBucketKey(Carbon $date, string $bucket): string
+    {
+        return match ($bucket) {
+            'week' => $date->copy()->startOfWeek(Carbon::MONDAY)->toDateString(),
+            'month' => $date->copy()->startOfMonth()->toDateString(),
+            default => $date->toDateString(),
+        };
+    }
+
+    private function movementBucketStart(string $key, string $bucket): Carbon
+    {
+        $date = Carbon::parse($key)->startOfDay();
+
+        return match ($bucket) {
+            'week' => $date->startOfWeek(Carbon::MONDAY),
+            'month' => $date->startOfMonth(),
+            default => $date,
+        };
+    }
+
+    private function movementBucketEnd(string $key, string $bucket): Carbon
+    {
+        $date = Carbon::parse($key)->endOfDay();
+
+        return match ($bucket) {
+            'week' => $date->endOfWeek(Carbon::SUNDAY),
+            'month' => $date->endOfMonth(),
+            default => $date,
+        };
+    }
+
+    private function movementBucketLabel(string $key, string $bucket): string
+    {
+        $date = Carbon::parse($key);
+
+        return match ($bucket) {
+            'week' => 'Week of '.$date->format('M j'),
+            'month' => $date->format('M Y'),
+            default => $date->toDateString(),
+        };
     }
 
     /**

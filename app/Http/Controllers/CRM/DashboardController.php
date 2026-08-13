@@ -18,6 +18,7 @@ use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSyncRunService;
+use App\Services\ChurnAggregatorService;
 use App\Services\MarketAuthorizationService;
 use App\Services\PaymentRecoveryMetricService;
 use App\Services\RenewalService;
@@ -47,7 +48,8 @@ class DashboardController extends Controller
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly ClientSyncRunService $clientSyncRunService,
-        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService
+        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
+        private readonly ChurnAggregatorService $churnAggregatorService
     ) {
     }
 
@@ -457,6 +459,84 @@ class DashboardController extends Controller
 
             throw $exception;
         }
+    }
+
+    public function profileMovement(Request $request)
+    {
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'bucket' => 'nullable|in:day,week,month',
+        ]);
+
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this dashboard market.'
+        );
+
+        $platformIds = $selectedPlatformId
+            ? [(int) $selectedPlatformId]
+            : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $from = ! empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : now()->subDays(29)->startOfDay();
+        $to = ! empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : now()->endOfDay();
+
+        $days = max(1, $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1);
+        $bucket = $validated['bucket'] ?? ($days <= 31 ? 'day' : ($days <= 100 ? 'week' : 'month'));
+
+        if (is_array($platformIds) && empty($platformIds)) {
+            return response()->json([
+                'range' => [
+                    'from' => $from->toDateString(),
+                    'to' => $to->toDateString(),
+                ],
+                'previous_range' => null,
+                'bucket' => $bucket,
+                'points' => [],
+                'totals' => [
+                    'created_profiles' => 0,
+                    'active_profiles' => 0,
+                    'inactive_profiles' => 0,
+                    'net_active_movement' => 0,
+                ],
+                'comparison' => [],
+                'current_scope' => [
+                    'active_profiles' => 0,
+                    'inactive_profiles' => 0,
+                    'total_profiles' => 0,
+                    'active_share_percent' => 0,
+                ],
+                'definition' => [
+                    'active_profiles' => 'Profiles with first_activated_at in the selected window.',
+                    'inactive_profiles' => 'Paid profiles stamped with churned_at in the selected window.',
+                    'net_active_movement' => 'Active profile entries minus inactive profile exits.',
+                ],
+                'filters' => [
+                    'platform_id' => null,
+                    'bucket' => $bucket,
+                ],
+            ]);
+        }
+
+        $movement = $this->churnAggregatorService->movement(
+            $from,
+            $to,
+            is_array($platformIds) ? $platformIds : [],
+            $bucket
+        );
+
+        return response()->json([
+            ...$movement,
+            'filters' => [
+                'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'bucket' => $bucket,
+            ],
+        ]);
     }
 
     public function myMarkets(Request $request)

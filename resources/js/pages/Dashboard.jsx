@@ -8,6 +8,7 @@ import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
 import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
 import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
+import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
 import RevenueByPackageWidget from '../components/dashboard/RevenueByPackageWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
 import CeoDashboard from './CeoDashboard';
@@ -385,6 +386,7 @@ function OperationsDashboard() {
     const fromDateInputRef = useRef(null);
     const [fromDate, setFromDate] = useState(() => buildRelativeDaysWindow(30).from);
     const [toDate, setToDate] = useState(() => buildRelativeDaysWindow(30).to);
+    const [movementBucket, setMovementBucket] = useState('day');
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data, error, isError, isLoading, refetch } = useQuery({
@@ -411,6 +413,21 @@ function OperationsDashboard() {
                     from: fromDate,
                     to: toDate,
                     ...reportingCurrency.queryParams,
+                },
+            }).then((response) => response.data),
+        retry: false,
+        refetchInterval: (query) => (query.state.status === 'error' ? false : DASHBOARD_REFRESH_MS),
+    });
+
+    const profileMovementQuery = useQuery({
+        queryKey: ['dashboard-profile-movement', platformFilter, fromDate, toDate, movementBucket],
+        queryFn: () =>
+            api.get('/crm/dashboard/profile-movement', {
+                params: {
+                    ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    from: fromDate,
+                    to: toDate,
+                    bucket: movementBucket,
                 },
             }).then((response) => response.data),
         retry: false,
@@ -825,6 +842,14 @@ function OperationsDashboard() {
             </section>
 
             <p className="px-1 text-xs text-slate-500">Click any metric card to open the relevant action queue.</p>
+
+            <ProfileMovementWidget
+                data={profileMovementQuery.data}
+                isLoading={profileMovementQuery.isLoading}
+                errorMessage={profileMovementQuery.isError ? 'Profile movement could not be loaded for this scope right now.' : null}
+                bucket={movementBucket}
+                onBucketChange={setMovementBucket}
+            />
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">

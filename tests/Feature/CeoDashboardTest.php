@@ -680,6 +680,52 @@ class CeoDashboardTest extends TestCase
         $this->assertEqualsWithDelta($collected, $hourlySum, 0.001);
     }
 
+    public function test_profile_movement_reports_activations_inactive_profiles_and_current_scope(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya']);
+        Sanctum::actingAs($this->user(['role' => 'admin', 'status' => 'active']));
+
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-01 09:00:00',
+            'first_activated_at' => '2026-05-10 09:00:00',
+            'churned_at' => null,
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'needs_payment' => false,
+            'notactive' => true,
+            'created_at' => '2026-04-20 09:00:00',
+            'first_activated_at' => '2026-04-21 09:00:00',
+            'churned_at' => '2026-05-11 09:00:00',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-12 09:00:00',
+            'first_activated_at' => '2026-05-12 10:00:00',
+            'churned_at' => null,
+        ]);
+
+        $payload = $this->getJson("/api/crm/dashboard/profile-movement?platform_id={$platform->id}&from=2026-05-10&to=2026-05-12&bucket=day")
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(2, data_get($payload, 'totals.active_profiles'));
+        $this->assertSame(1, data_get($payload, 'totals.inactive_profiles'));
+        $this->assertSame(1, data_get($payload, 'totals.net_active_movement'));
+        $this->assertSame(2, data_get($payload, 'current_scope.active_profiles'));
+        $this->assertSame(1, data_get($payload, 'current_scope.inactive_profiles'));
+        $this->assertSame('2026-05-11', data_get($payload, 'points.1.label'));
+        $this->assertSame(1, data_get($payload, 'points.1.inactive_profiles'));
+    }
+
     private function user(array $overrides = []): User
     {
         return User::query()->create(array_merge([

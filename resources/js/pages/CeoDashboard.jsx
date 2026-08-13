@@ -13,6 +13,7 @@ import RecentPaymentsWidget from '../components/dashboard/RecentPaymentsWidget';
 import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import MarketHealthWidget from '../components/dashboard/MarketHealthWidget';
+import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
@@ -66,6 +67,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [focusedAgentId, setFocusedAgentId] = useState(null);
     const [trendMetric, setTrendMetric] = useState('revenue');
     const [trendBucket, setTrendBucket] = useState('auto');
+    const [movementBucket, setMovementBucket] = useState('day');
     const [trendComparison, setTrendComparison] = useState(true);
     const [trendView, setTrendView] = useState('trend');
     const [recentLimit, setRecentLimit] = useState(10);
@@ -107,6 +109,20 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 ...(trendBucket !== 'auto' ? { bucket: trendBucket } : {}),
             },
         }).then((response) => response.data),
+        staleTime: 45_000,
+    });
+
+    const movementQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'profile-movement', queryParams, movementBucket],
+        queryFn: () => api.get('/crm/dashboard/profile-movement', {
+            params: {
+                ...(platformFilter ? { platform_id: platformFilter } : {}),
+                from: summaryQuery.data?.window?.from,
+                to: summaryQuery.data?.window?.to,
+                bucket: movementBucket,
+            },
+        }).then((response) => response.data),
+        enabled: Boolean(summaryQuery.data?.window?.from && summaryQuery.data?.window?.to),
         staleTime: 45_000,
     });
 
@@ -312,6 +328,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 isLoading={summaryQuery.isLoading}
                 onMarketClick={handleMarketScope}
                 onAgentClick={setFocusedAgentId}
+            />
+
+            <ProfileMovementWidget
+                data={movementQuery.data}
+                isLoading={movementQuery.isLoading}
+                errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
+                bucket={movementBucket}
+                onBucketChange={setMovementBucket}
             />
 
             <RevenueTrendWidget

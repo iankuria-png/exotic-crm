@@ -196,6 +196,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
+    Route::get('/dashboard/profile-movement', [CrmDashboardController::class, 'profileMovement'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/dashboard/country-revenue', [CrmDashboardController::class, 'countryRevenue']);
     Route::get('/dashboard/country-performance/{platform}', [CrmDashboardController::class, 'countryPerformance']);
     Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
