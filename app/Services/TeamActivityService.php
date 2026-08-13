@@ -486,6 +486,7 @@ class TeamActivityService
         $previousRevenue = $this->aggregateRevenueByUser([$agent->id], $previousRange['start'], $previousRange['end'], $viewerForScope, $platformId, $targetCurrency);
         $contribution = $this->agentRevenueContribution($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $clientPerformance = $this->agentClientPerformance($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
+        $workflow = $this->agentWorkflowRhythm($agent, $start, $end, $viewerForScope, $platformId, $targetCurrency);
         $goalProgress = $this->getGoalProgress($agent, $platformId);
 
         $currentSummary = $this->buildUserSummary(
@@ -517,6 +518,7 @@ class TeamActivityService
             'goals' => $goalProgress,
             'contribution' => $contribution,
             'client_performance' => $clientPerformance,
+            'workflow' => $workflow,
         ];
     }
 
@@ -1450,6 +1452,11 @@ class TeamActivityService
             'total_normalized' => $total['normalized_total'],
             'total_display' => $total['normalized_display'],
             'normalization_meta' => $total['normalization_meta'],
+            'reconciliation' => [
+                'successful_payments' => (int) $rows->sum('payments_count'),
+                'paying_clients' => $this->countUniqueContributionClients($rows),
+                'definition' => 'Revenue mix counts successful payment records and distinct paying clients; Subs Activated counts activation audit actions and does not include renewals or repeat payments.',
+            ],
             'platforms' => $platformRows,
             'packages' => $packageRows,
             'summary' => [
@@ -1675,6 +1682,11 @@ class TeamActivityService
             'total_normalized' => 0.0,
             'total_display' => $targetCurrency.' '.$this->formatMoney(0),
             'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
+            'reconciliation' => [
+                'successful_payments' => 0,
+                'paying_clients' => 0,
+                'definition' => 'Revenue mix counts successful payment records and distinct paying clients; Subs Activated counts activation audit actions and does not include renewals or repeat payments.',
+            ],
             'platforms' => [],
             'packages' => [],
             'summary' => [
@@ -1684,6 +1696,209 @@ class TeamActivityService
                 'top_package' => null,
             ],
         ];
+    }
+
+    private function agentWorkflowRhythm(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $targetCurrency
+    ): array {
+        $timezone = (string) config('ceo.peak_hours_timezone', 'Africa/Nairobi');
+        $hours = collect(range(0, 23))->mapWithKeys(fn (int $hour) => [$hour => [
+            'hour' => $hour,
+            'label' => $this->hourWindowLabel($hour),
+            'active_seconds' => 0,
+            'active_minutes' => 0,
+            'actions' => 0,
+            'payments' => 0,
+            'revenue_normalized' => 0.0,
+            'revenue_display' => $targetCurrency.' '.$this->formatMoney(0),
+            'revenue_per_active_hour' => null,
+        ]])->all();
+
+        foreach ($this->agentHourlySessionSeconds($agent, $start, $end, $timezone) as $hour => $seconds) {
+            $hours[(int) $hour]['active_seconds'] = (int) $seconds;
+            $hours[(int) $hour]['active_minutes'] = round(((int) $seconds) / 60, 1);
+        }
+
+        foreach ($this->agentHourlyActionCounts($agent, $start, $end, $viewer, $platformId, $timezone) as $hour => $count) {
+            $hours[(int) $hour]['actions'] = (int) $count;
+        }
+
+        foreach ($this->agentHourlyRevenueRows($agent, $start, $end, $viewer, $platformId, $timezone, $targetCurrency) as $hour => $rows) {
+            $normalized = $this->reportingCurrencyService->normalizeEventRows($rows, $targetCurrency);
+            $hours[(int) $hour]['payments'] = count($rows);
+            $hours[(int) $hour]['revenue_normalized'] = round((float) ($normalized['normalized_total'] ?? 0), 2);
+            $hours[(int) $hour]['revenue_display'] = $normalized['normalized_display'] ?? ($targetCurrency.' '.$this->formatMoney(0));
+        }
+
+        foreach ($hours as $hour => $row) {
+            $activeHours = ((int) $row['active_seconds']) / 3600;
+            $hours[$hour]['revenue_per_active_hour'] = $activeHours > 0
+                ? round(((float) $row['revenue_normalized']) / $activeHours, 2)
+                : null;
+        }
+
+        $points = array_values($hours);
+        $peakRevenue = collect($points)->sortByDesc('revenue_normalized')->first();
+        $peakFocus = collect($points)->sortByDesc('active_seconds')->first();
+        $workingHours = collect($points)->where('active_seconds', '>', 0)->count();
+        $activeSeconds = (int) collect($points)->sum('active_seconds');
+        $revenueTotal = round((float) collect($points)->sum('revenue_normalized'), 2);
+
+        return [
+            'timezone' => $timezone,
+            'points' => $points,
+            'summary' => [
+                'active_seconds' => $activeSeconds,
+                'active_hours' => round($activeSeconds / 3600, 2),
+                'working_hours' => $workingHours,
+                'total_actions' => (int) collect($points)->sum('actions'),
+                'successful_payments' => (int) collect($points)->sum('payments'),
+                'revenue_normalized' => $revenueTotal,
+                'revenue_display' => $targetCurrency.' '.$this->formatMoney($revenueTotal),
+                'revenue_per_active_hour' => $activeSeconds > 0 ? round($revenueTotal / ($activeSeconds / 3600), 2) : null,
+                'peak_revenue_hour' => $peakRevenue && (float) $peakRevenue['revenue_normalized'] > 0 ? $peakRevenue : null,
+                'peak_focus_hour' => $peakFocus && (int) $peakFocus['active_seconds'] > 0 ? $peakFocus : null,
+            ],
+        ];
+    }
+
+    private function agentHourlySessionSeconds(User $agent, CarbonInterface $start, CarbonInterface $end, string $timezone): array
+    {
+        $sessions = AgentSession::query()
+            ->where('user_id', (int) $agent->id)
+            ->where('started_at', '<', $end)
+            ->where(function ($query) use ($start) {
+                $query->where(function ($subQuery) use ($start) {
+                    $subQuery->whereNull('ended_at')
+                        ->where('last_heartbeat_at', '>', $start);
+                })->orWhere('ended_at', '>', $start);
+            })
+            ->get(['started_at', 'last_heartbeat_at', 'ended_at']);
+
+        $hours = array_fill(0, 24, 0);
+
+        foreach ($sessions as $session) {
+            $effectiveEnd = $session->ended_at ?: $session->last_heartbeat_at;
+            if (! $session->started_at || ! $effectiveEnd) {
+                continue;
+            }
+
+            $cursor = $session->started_at->greaterThan($start) ? $session->started_at->copy() : Carbon::instance($start);
+            $sessionEnd = $effectiveEnd->lessThan($end) ? $effectiveEnd->copy() : Carbon::instance($end);
+
+            while ($cursor->lt($sessionEnd)) {
+                $localCursor = $cursor->copy()->setTimezone($timezone);
+                $nextHourLocal = $localCursor->copy()->startOfHour()->addHour();
+                $nextBoundary = $nextHourLocal->copy()->setTimezone($cursor->getTimezone());
+                $sliceEnd = $nextBoundary->lt($sessionEnd) ? $nextBoundary : $sessionEnd;
+                $hour = (int) $localCursor->format('G');
+                $hours[$hour] += max(0, $cursor->diffInSeconds($sliceEnd));
+                $cursor = $sliceEnd;
+            }
+        }
+
+        return $hours;
+    }
+
+    private function agentHourlyActionCounts(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $timezone
+    ): array {
+        $query = AuditLog::query()
+            ->where('actor_id', (int) $agent->id)
+            ->where('created_at', '>=', $start)
+            ->where('created_at', '<', $end);
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
+        }
+
+        return $query
+            ->get(['created_at'])
+            ->reduce(function (array $hours, AuditLog $log) use ($timezone): array {
+                if ($log->created_at instanceof CarbonInterface) {
+                    $hour = (int) $log->created_at->copy()->setTimezone($timezone)->format('G');
+                    $hours[$hour] = ($hours[$hour] ?? 0) + 1;
+                }
+
+                return $hours;
+            }, array_fill(0, 24, 0));
+    }
+
+    private function agentHourlyRevenueRows(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        string $timezone,
+        string $targetCurrency
+    ): array {
+        $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
+
+        $query = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->where('deals.assigned_to', (int) $agent->id)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$start->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) < ?', [$end->toDateTimeString()]);
+
+        if ($platformId) {
+            $query->where('payments.platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
+        }
+
+        return $query
+            ->selectRaw('payments.id as payment_id')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("COALESCE(platforms.name, 'Unassigned market') as platform_name")
+            ->selectRaw("COALESCE(platforms.country, '') as platform_country")
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('payments.amount as amount')
+            ->selectRaw('COALESCE(payments.completed_at, payments.created_at) as event_at')
+            ->orderByRaw('COALESCE(payments.completed_at, payments.created_at) ASC')
+            ->get()
+            ->reduce(function (array $hours, Payment $payment) use ($timezone, $targetCurrency): array {
+                $eventAt = $payment->event_at ? Carbon::parse($payment->event_at) : null;
+                if (! $eventAt) {
+                    return $hours;
+                }
+
+                $hour = (int) $eventAt->copy()->setTimezone($timezone)->format('G');
+                $hours[$hour] ??= [];
+                $hours[$hour][] = [
+                    'event_date' => $eventAt->copy()->setTimezone($timezone)->toDateString(),
+                    'platform_id' => $payment->platform_id,
+                    'platform_country' => $payment->platform_country,
+                    'platform_name' => $payment->platform_name,
+                    'currency' => strtoupper((string) ($payment->currency ?: $targetCurrency)),
+                    'amount' => (float) $payment->amount,
+                ];
+
+                return $hours;
+            }, array_fill_keys(range(0, 23), []));
+    }
+
+    private function hourWindowLabel(int $hour): string
+    {
+        $start = Carbon::createFromTime($hour, 0, 0);
+        $end = $start->copy()->addHour();
+
+        return strtolower($start->format('ga').'-'.$end->format('ga'));
     }
 
     private function agentClientPerformance(

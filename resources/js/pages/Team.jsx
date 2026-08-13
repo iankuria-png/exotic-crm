@@ -1,6 +1,16 @@
 import React, { startTransition, useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import {
+    Bar,
+    CartesianGrid,
+    ComposedChart,
+    Line,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from 'recharts';
 import api from '../services/api';
 import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
@@ -380,7 +390,7 @@ function ContributionRow({ item, type, targetCurrency }) {
     );
 }
 
-function RevenueContributionPanel({ contribution }) {
+function RevenueContributionPanel({ contribution, activationActions = 0 }) {
     const [platformsExpanded, setPlatformsExpanded] = useState(false);
     const platforms = Array.isArray(contribution?.platforms) ? contribution.platforms : [];
     const packages = Array.isArray(contribution?.packages) ? contribution.packages : [];
@@ -392,6 +402,7 @@ function RevenueContributionPanel({ contribution }) {
         : '--';
     const topPlatform = contribution?.summary?.top_platform;
     const topPackage = contribution?.summary?.top_package;
+    const reconciliation = contribution?.reconciliation || {};
 
     if (!platforms.length && !packages.length) {
         return (
@@ -404,6 +415,10 @@ function RevenueContributionPanel({ contribution }) {
 
     return (
         <div className="space-y-4">
+            <ContributionReconciliationStrip
+                activations={activationActions}
+                reconciliation={reconciliation}
+            />
             <div className="grid gap-3 md:grid-cols-3">
                 <article className="rounded-xl border border-slate-900 bg-slate-950 px-4 py-4 text-white">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Attributed revenue</p>
@@ -462,6 +477,43 @@ function RevenueContributionPanel({ contribution }) {
                         {packages.map((item) => (
                             <ContributionRow key={item.key} item={item} type="package" targetCurrency={targetCurrency} />
                         ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ContributionReconciliationStrip({ activations, reconciliation }) {
+    const paymentCount = asNumber(reconciliation?.successful_payments);
+    const clientCount = asNumber(reconciliation?.paying_clients);
+    const activationCount = asNumber(activations);
+
+    if (!paymentCount && !clientCount && !activationCount) {
+        return null;
+    }
+
+    return (
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                    <p className="text-sm font-semibold text-slate-900">Why activation count can differ from revenue mix</p>
+                    <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-500">
+                        Revenue mix is payment-led: it counts successful payment records and distinct paying clients. Subs Activated is action-led: it counts activation events only.
+                    </p>
+                </div>
+                <div className="grid min-w-full gap-2 sm:grid-cols-3 xl:min-w-[28rem]">
+                    <div className="rounded-xl border border-slate-200 px-3 py-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Activated</p>
+                        <p className="mt-1 crm-mono text-lg font-semibold text-slate-950">{formatCount(activationCount)}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 px-3 py-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Payments</p>
+                        <p className="mt-1 crm-mono text-lg font-semibold text-slate-950">{formatCount(paymentCount)}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 px-3 py-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Paying clients</p>
+                        <p className="mt-1 crm-mono text-lg font-semibold text-slate-950">{formatCount(clientCount)}</p>
                     </div>
                 </div>
             </div>
@@ -669,6 +721,179 @@ function ClientPerformancePanel({ performance }) {
                     ))}
                 </div>
             ) : null}
+        </div>
+    );
+}
+
+function formatWorkflowMoney(value, currency = 'USD') {
+    const numeric = asNumber(value);
+    return formatCurrency(numeric, currency);
+}
+
+function WorkflowTooltip({ active, payload, label, currency }) {
+    if (!active || !payload?.length) return null;
+    const point = payload[0]?.payload || {};
+
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white/95 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+            <p className="text-xs font-semibold text-slate-900">{label}</p>
+            <div className="mt-3 grid min-w-52 gap-2 text-sm">
+                <p className="flex items-center justify-between gap-8 text-slate-700">
+                    <span>Active time</span>
+                    <span className="crm-mono font-semibold">{formatDuration(point.active_seconds)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 text-teal-700">
+                    <span>Revenue</span>
+                    <span className="crm-mono font-semibold">{point.revenue_display || formatWorkflowMoney(point.revenue_normalized, currency)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 text-slate-600">
+                    <span>Actions</span>
+                    <span className="crm-mono font-semibold">{formatCount(point.actions)}</span>
+                </p>
+                <p className="flex items-center justify-between gap-8 text-slate-600">
+                    <span>Payments</span>
+                    <span className="crm-mono font-semibold">{formatCount(point.payments)}</span>
+                </p>
+            </div>
+        </div>
+    );
+}
+
+function WorkflowRhythmPanel({ workflow, currency = 'USD' }) {
+    const points = Array.isArray(workflow?.points) ? workflow.points.map((point) => ({
+        ...point,
+        active_minutes: asNumber(point.active_minutes),
+        active_seconds: asNumber(point.active_seconds),
+        actions: asNumber(point.actions),
+        payments: asNumber(point.payments),
+        revenue_normalized: asNumber(point.revenue_normalized),
+        revenue_per_active_hour: point.revenue_per_active_hour === null || point.revenue_per_active_hour === undefined
+            ? null
+            : asNumber(point.revenue_per_active_hour),
+    })) : [];
+    const summary = workflow?.summary || {};
+    const hasWorkflow = points.some((point) => point.active_minutes > 0 || point.revenue_normalized > 0 || point.actions > 0);
+
+    if (!hasWorkflow) {
+        return (
+            <TeamEmptyState
+                title="No work rhythm captured yet"
+                message="Active sessions, CRM actions, and successful payments will form an hourly workflow map once this member has activity in the selected window."
+            />
+        );
+    }
+
+    const peakRevenue = summary.peak_revenue_hour;
+    const peakFocus = summary.peak_focus_hour;
+    const revenuePerHour = summary.revenue_per_active_hour === null || summary.revenue_per_active_hour === undefined
+        ? '--'
+        : formatWorkflowMoney(summary.revenue_per_active_hour, currency);
+
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Active time</p>
+                    <p className="mt-2 crm-mono text-xl font-semibold text-slate-950">{formatDuration(summary.active_seconds)}</p>
+                    <p className="mt-1 text-xs text-slate-500">{formatCount(summary.working_hours)} working hour buckets</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Revenue / active hour</p>
+                    <p className="mt-2 crm-mono text-xl font-semibold text-teal-700">{revenuePerHour}</p>
+                    <p className="mt-1 text-xs text-slate-500">{summary.revenue_display || formatWorkflowMoney(summary.revenue_normalized, currency)} total</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Peak revenue</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-950">{peakRevenue?.label || '--'}</p>
+                    <p className="mt-1 text-xs text-slate-500">{peakRevenue?.revenue_display || 'No revenue peak yet'}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Peak focus</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-950">{peakFocus?.label || '--'}</p>
+                    <p className="mt-1 text-xs text-slate-500">{peakFocus ? formatDuration(peakFocus.active_seconds) : 'No active-time peak yet'}</p>
+                </div>
+            </div>
+
+            <div className="rounded-[1.25rem] border border-slate-200 bg-slate-950 p-1.5 text-white shadow-[0_20px_54px_rgba(15,23,42,0.16)]">
+                <div className="rounded-[1rem] bg-[radial-gradient(circle_at_12%_0%,rgba(20,184,166,0.20),transparent_32%),linear-gradient(145deg,#06111d,#101827_68%,#151923)] p-4 ring-1 ring-white/10">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Work rhythm</p>
+                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                                Active minutes, CRM actions, and collected revenue by {workflow?.timezone || 'Africa/Nairobi'} hour.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-full bg-white/8 px-2.5 py-1 font-semibold text-slate-200 ring-1 ring-white/15">Active minutes</span>
+                            <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">Revenue</span>
+                            <span className="rounded-full bg-sky-400/12 px-2.5 py-1 font-semibold text-sky-100 ring-1 ring-sky-300/20">Actions</span>
+                        </div>
+                    </div>
+
+                    <div className="mt-5 h-80 rounded-2xl bg-white/[0.03] px-2 py-3 ring-1 ring-white/10">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={points} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                                <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 6" vertical={false} />
+                                <XAxis
+                                    dataKey="label"
+                                    tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    interval={1}
+                                    minTickGap={12}
+                                />
+                                <YAxis
+                                    yAxisId="time"
+                                    tick={{ fontSize: 11, fill: '#94a3b8' }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    width={52}
+                                    tickFormatter={(value) => `${Number(value || 0).toLocaleString()}m`}
+                                />
+                                <YAxis
+                                    yAxisId="money"
+                                    orientation="right"
+                                    tick={{ fontSize: 11, fill: '#94a3b8' }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    width={68}
+                                    tickFormatter={(value) => Number(value || 0).toLocaleString()}
+                                />
+                                <Tooltip content={<WorkflowTooltip currency={currency} />} />
+                                <Bar
+                                    yAxisId="time"
+                                    dataKey="active_minutes"
+                                    fill="#cbd5e1"
+                                    fillOpacity={0.46}
+                                    radius={[6, 6, 0, 0]}
+                                    barSize={18}
+                                    name="Active minutes"
+                                />
+                                <Line
+                                    yAxisId="money"
+                                    type="monotone"
+                                    dataKey="revenue_normalized"
+                                    stroke="#2dd4bf"
+                                    strokeWidth={2.8}
+                                    dot={false}
+                                    name="Revenue"
+                                    activeDot={{ r: 5, strokeWidth: 2, stroke: '#07111f', fill: '#5eead4' }}
+                                />
+                                <Line
+                                    yAxisId="time"
+                                    type="monotone"
+                                    dataKey="actions"
+                                    stroke="#38bdf8"
+                                    strokeWidth={2}
+                                    strokeDasharray="5 6"
+                                    dot={false}
+                                    name="Actions"
+                                />
+                            </ComposedChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </div>
         </div>
     );
 }
@@ -1650,6 +1875,7 @@ export default function Team() {
     const agentGoals = agentStatsQuery.data?.goals || [];
     const agentContribution = agentStatsQuery.data?.contribution || {};
     const agentClientPerformance = agentStatsQuery.data?.client_performance || {};
+    const agentWorkflow = agentStatsQuery.data?.workflow || {};
     const managerGoals = useMemo(() => [...defaultGoals, ...individualGoals], [defaultGoals, individualGoals]);
 
     const topLevelManagerMetrics = useMemo(() => [
@@ -2980,6 +3206,20 @@ export default function Team() {
                     </SectionFrame>
 
                     <SectionFrame
+                        title="Work rhythm"
+                        subtitle="Active hours, CRM actions, and collected revenue by hour for the selected member."
+                    >
+                        {agentStatsQuery.isError ? (
+                            <TeamErrorState
+                                message={getApiErrorMessage(agentStatsQuery.error, 'Workflow data could not be loaded.')}
+                                onRetry={() => agentStatsQuery.refetch()}
+                            />
+                        ) : (
+                            <WorkflowRhythmPanel workflow={agentWorkflow} currency={reportingCurrency.targetCurrency} />
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
                         title="Revenue mix"
                         subtitle="Platform and package contribution for the selected member."
                     >
@@ -2989,7 +3229,7 @@ export default function Team() {
                                 onRetry={() => agentStatsQuery.refetch()}
                             />
                         ) : (
-                            <RevenueContributionPanel contribution={agentContribution} />
+                            <RevenueContributionPanel contribution={agentContribution} activationActions={agentSummary.subs_activated} />
                         )}
                     </SectionFrame>
 

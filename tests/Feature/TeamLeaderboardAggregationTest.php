@@ -615,6 +615,11 @@ class TeamLeaderboardAggregationTest extends TestCase
             'after_state' => ['deal_status' => 'active'],
             'created_at' => now()->subHour(),
         ]);
+        $this->createTeamSession($agent, 'workflow-agent-session', [
+            'started_at' => '2026-06-02 07:00:00',
+            'last_heartbeat_at' => '2026-06-02 09:00:00',
+            'ended_at' => '2026-06-02 09:00:00',
+        ]);
         foreach (range(1, 4) as $index) {
             $this->createTeamAudit([
                 'platform_id' => $platform->id,
@@ -642,9 +647,22 @@ class TeamLeaderboardAggregationTest extends TestCase
             ->assertJsonPath('client_performance.winback.won_back_clients', 1)
             ->assertJsonPath('client_performance.workload.rank', 2)
             ->assertJsonPath('client_performance.workload.team_size', 2)
-            ->assertJsonPath('client_performance.workload.band', 'Least busy visible team member');
+            ->assertJsonPath('client_performance.workload.band', 'Least busy visible team member')
+            ->assertJsonPath('contribution.reconciliation.successful_payments', 4)
+            ->assertJsonPath('contribution.reconciliation.paying_clients', 4)
+            ->assertJsonPath('workflow.timezone', 'Africa/Nairobi')
+            ->assertJsonPath('workflow.summary.active_seconds', 7200)
+            ->assertJsonPath('workflow.summary.working_hours', 2)
+            ->assertJsonPath('workflow.summary.successful_payments', 4)
+            ->assertJsonPath('workflow.summary.peak_revenue_hour.label', '2pm-3pm')
+            ->assertJsonPath('workflow.points.10.active_minutes', 60)
+            ->assertJsonPath('workflow.points.11.active_minutes', 60)
+            ->assertJsonPath('workflow.points.14.actions', 1)
+            ->assertJsonPath('workflow.points.14.payments', 2);
 
         $this->assertEqualsWithDelta(300.0, (float) $response->json('client_performance.total_normalized'), 0.01);
+        $this->assertEqualsWithDelta(300.0, (float) $response->json('workflow.summary.revenue_normalized'), 0.01);
+        $this->assertEqualsWithDelta(150.0, (float) $response->json('workflow.summary.revenue_per_active_hour'), 0.01);
         $this->assertEqualsWithDelta(33.3, (float) $response->json('client_performance.customer_mix.0.share_percent'), 0.1);
         $this->assertEqualsWithDelta(66.7, (float) $response->json('client_performance.customer_mix.1.share_percent'), 0.1);
         $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.conversion.rate'), 0.01);
