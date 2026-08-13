@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\Lead;
 use App\Models\Product;
 use App\Models\ReportingFxRate;
 use Carbon\Carbon;
@@ -200,7 +199,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/leaderboard?period=week&platform_id=' . $platform->id);
+        $response = $this->getJson('/api/crm/team/leaderboard?period=week&platform_id='.$platform->id);
 
         $response->assertOk()
             ->assertJsonPath('data.0.user_id', $agent->id)
@@ -262,7 +261,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($adminViewer);
 
-        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id);
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id);
 
         $response->assertOk()
             ->assertJsonPath('role_filter', 'all');
@@ -270,25 +269,25 @@ class TeamLeaderboardAggregationTest extends TestCase
         $allIds = collect($response->json('data'))->pluck('user_id')->sort()->values()->all();
         $this->assertSame([$peerAdmin->id, $subAdmin->id, $sales->id, $marketing->id], $allIds);
 
-        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=admin')
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id.'&role_filter=admin')
             ->assertOk()
             ->assertJsonPath('role_filter', 'admin')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.user_id', $peerAdmin->id);
 
-        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=sub_admin')
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id.'&role_filter=sub_admin')
             ->assertOk()
             ->assertJsonPath('role_filter', 'sub_admin')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.user_id', $subAdmin->id);
 
-        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=sales')
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id.'&role_filter=sales')
             ->assertOk()
             ->assertJsonPath('role_filter', 'sales')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.user_id', $sales->id);
 
-        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=marketing')
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id.'&role_filter=marketing')
             ->assertOk()
             ->assertJsonPath('role_filter', 'marketing')
             ->assertJsonCount(1, 'data')
@@ -379,7 +378,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&currency_mode=flat&reporting_currency=USD');
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id='.$platform->id.'&currency_mode=flat&reporting_currency=USD');
 
         $response->assertOk()
             ->assertJsonPath('data.0.user_id', $agent->id)
@@ -417,7 +416,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/leaderboard?from=2026-05-06&to=2026-06-04&platform_id=' . $platform->id . '&currency_mode=flat&reporting_currency=USD');
+        $response = $this->getJson('/api/crm/team/leaderboard?from=2026-05-06&to=2026-06-04&platform_id='.$platform->id.'&currency_mode=flat&reporting_currency=USD');
 
         $response->assertOk()
             ->assertJsonPath('from', '2026-05-06')
@@ -514,7 +513,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/' . $agent->id . '/stats?from=2026-06-02&to=2026-06-02&reporting_currency=USD');
+        $response = $this->getJson('/api/crm/team/'.$agent->id.'/stats?from=2026-06-02&to=2026-06-02&reporting_currency=USD');
 
         $response->assertOk()
             ->assertJsonPath('contribution.target_currency', 'USD')
@@ -629,7 +628,7 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/' . $agent->id . '/stats?from=2026-06-02&to=2026-06-02&platform_id=' . $platform->id . '&reporting_currency=USD');
+        $response = $this->getJson('/api/crm/team/'.$agent->id.'/stats?from=2026-06-02&to=2026-06-02&platform_id='.$platform->id.'&reporting_currency=USD');
 
         $response->assertOk()
             ->assertJsonPath('client_performance.customer_mix.0.key', 'new_users')
@@ -655,6 +654,76 @@ class TeamLeaderboardAggregationTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_agent_payment_recovery_credits_phone_matched_failed_attempts_without_deals(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform([
+            'name' => 'Zambia',
+            'country' => 'Zambia',
+            'currency_code' => 'ZMW',
+        ]);
+        $agent = $this->createTeamUser('sales', [$platform->id], [
+            'name' => 'Recovery Agent',
+            'email' => 'recovery-agent@example.test',
+        ]);
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'currency' => 'ZMW',
+            'tier' => 'vip',
+            'name' => 'VIP',
+            'display_name' => 'VIP',
+            'slug' => 'vip',
+        ]);
+        $client = $this->createTeamClient($platform, [
+            'assigned_to' => $agent->id,
+            'phone_normalized' => '260778877298',
+            'created_at' => now()->subMonth(),
+            'first_activated_at' => now()->subMonth()->addDay(),
+        ]);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'client' => $client,
+            'product' => $product,
+            'amount' => 250,
+            'currency' => 'ZMW',
+        ]);
+
+        $this->createTeamPayment($platform, null, [
+            'product_id' => $product->id,
+            'deal_id' => null,
+            'client_id' => null,
+            'phone' => '+260 778 877 298',
+            'amount' => 250,
+            'currency' => 'ZMW',
+            'status' => 'failed',
+            'created_at' => now()->subHours(2),
+            'completed_at' => null,
+        ]);
+        $this->createTeamPayment($platform, $deal, [
+            'phone' => '260778877298',
+            'amount' => 250,
+            'currency' => 'ZMW',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subHour(),
+        ]);
+        $this->createRate('ZMW', 'USD', now(), 0.04);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/'.$agent->id.'/stats?from=2026-06-02&to=2026-06-02&platform_id='.$platform->id.'&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('client_performance.payment_recovery.failed_payments', 1)
+            ->assertJsonPath('client_performance.payment_recovery.failed_clients', 1)
+            ->assertJsonPath('client_performance.payment_recovery.recovered_clients', 1);
+
+        $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.payment_recovery.rate'), 0.01);
+        $this->assertEqualsWithDelta(100.0, (float) $response->json('client_performance.plays.0.share_percent'), 0.01);
+
+        Carbon::setTestNow();
+    }
+
     private function createRate(string $source, string $target, Carbon $date, float $rate): void
     {
         ReportingFxRate::query()->create([
@@ -664,7 +733,7 @@ class TeamLeaderboardAggregationTest extends TestCase
             'rate_date' => $date->toDateString(),
             'rate' => $rate,
             'fetched_at' => $date,
-            'payload_hash' => sha1($source . $target . $date->toDateString() . $rate),
+            'payload_hash' => sha1($source.$target.$date->toDateString().$rate),
         ]);
     }
 }

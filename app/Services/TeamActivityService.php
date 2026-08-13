@@ -23,11 +23,15 @@ use Illuminate\Support\Facades\DB;
 class TeamActivityService
 {
     public const PERIOD_TODAY = 'today';
+
     public const PERIOD_WEEK = 'week';
+
     public const PERIOD_MONTH = 'month';
+
     public const PERIOD_30_DAYS = '30d';
 
     public const GOAL_PERIOD_WEEKLY = 'weekly';
+
     public const GOAL_PERIOD_MONTHLY = 'monthly';
 
     public const AGENT_ROLES = [
@@ -69,8 +73,11 @@ class TeamActivityService
     ];
 
     public const GOAL_ROLE_SCOPE_SALES = MarketAuthorizationService::ROLE_SALES;
+
     public const GOAL_ROLE_SCOPE_MARKETING = MarketAuthorizationService::ROLE_MARKETING;
+
     public const GOAL_ROLE_SCOPE_SUB_ADMIN = MarketAuthorizationService::ROLE_SUB_ADMIN;
+
     public const GOAL_ROLE_SCOPE_ALL = 'all';
 
     public const GOAL_ROLE_SCOPES = [
@@ -143,8 +150,7 @@ class TeamActivityService
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly PaymentPresenter $paymentPresenter
-    ) {
-    }
+    ) {}
 
     public function recordHeartbeat(User $user, string $sessionToken, string $ip, string $ua): AgentSession
     {
@@ -208,7 +214,7 @@ class TeamActivityService
             ->latest('id')
             ->first();
 
-        if (!$session) {
+        if (! $session) {
             return;
         }
 
@@ -345,8 +351,7 @@ class TeamActivityService
         ?string $targetCurrency = null,
         ?CarbonInterface $from = null,
         ?CarbonInterface $to = null
-    ): array
-    {
+    ): array {
         $this->assertManager($viewer);
         $this->assertPlatformAccessible($viewer, $platformId);
 
@@ -385,7 +390,7 @@ class TeamActivityService
             ->map(function (int $userId) use ($agents, $actionMetrics, $sessionTotals, $revenueTotals, $presenceFlags, $platformId) {
                 /** @var User|null $agent */
                 $agent = $agents->firstWhere('id', $userId);
-                if (!$agent) {
+                if (! $agent) {
                     return null;
                 }
 
@@ -522,8 +527,7 @@ class TeamActivityService
         ?string $targetCurrency = null,
         ?CarbonInterface $from = null,
         ?CarbonInterface $to = null
-    ): array
-    {
+    ): array {
         $this->assertPlatformAccessible($user, $platformId);
 
         ['start' => $start, 'end' => $end] = $this->resolveReportingRange($period, $from, $to);
@@ -611,7 +615,7 @@ class TeamActivityService
         $search = trim((string) ($options['search'] ?? ''));
         if ($search !== '') {
             $query->where(function ($searchQuery) use ($search) {
-                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
                 $searchQuery
                     ->where('action', 'like', $like)
                     ->orWhere('reason', 'like', $like);
@@ -622,7 +626,7 @@ class TeamActivityService
             });
         }
 
-        if (!((bool) ($options['include_system'] ?? false))) {
+        if (! ((bool) ($options['include_system'] ?? false))) {
             $query->whereNotIn('action', self::SYSTEM_ACTIONS);
         }
 
@@ -685,7 +689,7 @@ class TeamActivityService
         $search = trim((string) ($options['search'] ?? ''));
         if ($search !== '') {
             $query->where(function ($searchQuery) use ($search) {
-                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
                 $searchQuery
                     ->where('payments.transaction_reference', 'like', $like)
                     ->orWhere('payments.reference_number', 'like', $like)
@@ -781,7 +785,7 @@ class TeamActivityService
             ->where('period', $period)
             ->first();
 
-        if (!$marketTarget) {
+        if (! $marketTarget) {
             $marketTarget = new MarketRevenueTarget([
                 'platform_id' => $platformId,
                 'period' => $period,
@@ -825,7 +829,7 @@ class TeamActivityService
             ->where('period', $period)
             ->first();
 
-        if (!$goal) {
+        if (! $goal) {
             $goal = new AgentGoal([
                 'platform_id' => $platformId,
                 'role_scope' => $roleScope,
@@ -876,7 +880,7 @@ class TeamActivityService
             ->where('period', $period)
             ->first();
 
-        if (!$goalOverride) {
+        if (! $goalOverride) {
             $goalOverride = new AgentGoalOverride([
                 'user_id' => $user->id,
                 'platform_id' => $platformId,
@@ -915,10 +919,11 @@ class TeamActivityService
 
                 if ($platformId) {
                     $query->orWhere('platform_id', $platformId);
+
                     return;
                 }
 
-                if (is_array($accessiblePlatforms) && !empty($accessiblePlatforms)) {
+                if (is_array($accessiblePlatforms) && ! empty($accessiblePlatforms)) {
                     $query->orWhereIn('platform_id', $accessiblePlatforms);
                 } elseif ($accessiblePlatforms === null) {
                     $query->orWhereNotNull('platform_id');
@@ -937,6 +942,7 @@ class TeamActivityService
             ->when($platformId === null && is_array($accessiblePlatforms), function ($query) use ($accessiblePlatforms) {
                 if (empty($accessiblePlatforms)) {
                     $query->whereRaw('1 = 0');
+
                     return;
                 }
 
@@ -950,7 +956,7 @@ class TeamActivityService
         $effectiveGoals = [];
 
         foreach ($defaults as $goal) {
-            if (!$this->goalAppliesToUser($goal, $user)) {
+            if (! $this->goalAppliesToUser($goal, $user)) {
                 continue;
             }
 
@@ -1210,7 +1216,7 @@ class TeamActivityService
 
         foreach ($logs as $log) {
             $key = $groupByPlatform
-                ? ((int) $log->actor_id . ':' . (int) $log->platform_id)
+                ? ((int) $log->actor_id.':'.(int) $log->platform_id)
                 : (int) $log->actor_id;
 
             $entry = $metrics[$key] ?? $this->emptyMetricRow();
@@ -1306,11 +1312,11 @@ class TeamActivityService
 
         $driver = DB::connection()->getDriverName();
         $dateExpression = $driver === 'sqlite'
-            ? "date(COALESCE(payments.completed_at, payments.created_at))"
-            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
         $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '{$targetCurrency}')";
-        $platformCountryExpression = "(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
-        $platformNameExpression = "(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
+        $platformCountryExpression = '(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)';
+        $platformNameExpression = '(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)';
 
         $query = Payment::query()
             ->reportableSuccessful()
@@ -1396,7 +1402,7 @@ class TeamActivityService
         $grouped = [];
 
         foreach ($rows as $row) {
-            $key = (int) $row->assigned_to . ':' . (int) $row->platform_id;
+            $key = (int) $row->assigned_to.':'.(int) $row->platform_id;
             $grouped[$key] ??= [
                 'revenue' => 0.0,
                 'revenue_currency' => strtoupper((string) ($row->currency ?: '')),
@@ -1478,8 +1484,8 @@ class TeamActivityService
     ): Collection {
         $driver = DB::connection()->getDriverName();
         $dateExpression = $driver === 'sqlite'
-            ? "date(COALESCE(payments.completed_at, payments.created_at))"
-            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
         $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
         $clientExpression = 'COALESCE(payments.client_id, deals.client_id)';
 
@@ -1639,7 +1645,7 @@ class TeamActivityService
         }
 
         return collect($breakdown)
-            ->map(fn (float $amount, string $currency) => $currency . ' ' . $this->formatMoney($amount))
+            ->map(fn (float $amount, string $currency) => $currency.' '.$this->formatMoney($amount))
             ->implode(' | ');
     }
 
@@ -1667,7 +1673,7 @@ class TeamActivityService
         return [
             'target_currency' => $targetCurrency,
             'total_normalized' => 0.0,
-            'total_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'total_display' => $targetCurrency.' '.$this->formatMoney(0),
             'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
             'platforms' => [],
             'packages' => [],
@@ -1765,8 +1771,8 @@ class TeamActivityService
     ): Collection {
         $driver = DB::connection()->getDriverName();
         $dateExpression = $driver === 'sqlite'
-            ? "date(COALESCE(payments.completed_at, payments.created_at))"
-            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
         $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
 
         $query = Payment::query()
@@ -1796,6 +1802,7 @@ class TeamActivityService
             ->selectRaw("COALESCE(platforms.country, '') as platform_country")
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('payments.amount as amount')
+            ->selectRaw('payments.phone as phone')
             ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
             ->selectRaw('clients.created_at as client_created_at')
             ->selectRaw('clients.first_activated_at as client_first_activated_at')
@@ -1840,7 +1847,7 @@ class TeamActivityService
                 'source_breakdown' => [],
                 'normalized_total' => 0.0,
                 'normalized_currency' => $targetCurrency,
-                'normalized_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+                'normalized_display' => $targetCurrency.' '.$this->formatMoney(0),
                 'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
             ];
         }
@@ -1859,7 +1866,7 @@ class TeamActivityService
         return [
             ...$normalized,
             'normalized_total' => $normalized['normalized_total'] ?? 0.0,
-            'normalized_display' => $normalized['normalized_display'] ?? ($targetCurrency . ' ' . $this->formatMoney(0)),
+            'normalized_display' => $normalized['normalized_display'] ?? ($targetCurrency.' '.$this->formatMoney(0)),
         ];
     }
 
@@ -1937,17 +1944,31 @@ class TeamActivityService
             ->map(fn ($id) => (int) $id)
             ->unique()
             ->values();
-        $recoveredRows = $successfulPayments
-            ->filter(fn ($row) => $failedClientIds->contains((int) $row->client_id))
+        $failedPhones = $failedRows
+            ->map(fn ($row) => $this->normalizeRecoveryPhone($row->phone ?? null))
+            ->filter()
+            ->unique()
             ->values();
-        $recoveredClients = $this->countUniqueRowValues($recoveredRows, 'client_id');
-        $failedClients = $failedClientIds->count();
-        $rate = $failedClients > 0 ? round(($recoveredClients / $failedClients) * 100, 1) : null;
+        $recoveredRows = $successfulPayments
+            ->filter(function ($row) use ($failedClientIds, $failedPhones): bool {
+                $clientId = (int) ($row->client_id ?? 0);
+                if ($clientId > 0 && $failedClientIds->contains($clientId)) {
+                    return true;
+                }
+
+                $phone = $this->normalizeRecoveryPhone($row->phone ?? null);
+
+                return $phone !== null && $failedPhones->contains($phone);
+            })
+            ->values();
+        $recoveredIdentityCount = $this->countRecoveryIdentities($recoveredRows);
+        $failedIdentityCount = $this->countRecoveryIdentities($failedRows);
+        $rate = $failedIdentityCount > 0 ? round(($recoveredIdentityCount / $failedIdentityCount) * 100, 1) : null;
 
         return [
             'failed_payments' => $failedRows->count(),
-            'failed_clients' => $failedClients,
-            'recovered_clients' => $recoveredClients,
+            'failed_clients' => $failedIdentityCount,
+            'recovered_clients' => $recoveredIdentityCount,
             'rate' => $rate,
             'revenue_rows' => $recoveredRows,
         ];
@@ -1962,13 +1983,13 @@ class TeamActivityService
         string $targetCurrency
     ): Collection {
         $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')";
+        $agentIdentities = $this->agentRecoveryIdentitySets($agent, $viewer, $platformId);
 
         $query = Payment::query()
             ->businessVisible()
             ->excludingWalletTopups()
-            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-            ->where('deals.assigned_to', (int) $agent->id)
             ->where('payments.status', 'failed')
             ->where('payments.created_at', '>=', $start)
             ->where('payments.created_at', '<', $end);
@@ -1987,8 +2008,84 @@ class TeamActivityService
             ->selectRaw("COALESCE(platforms.country, '') as platform_country")
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('payments.amount as amount')
+            ->selectRaw('payments.phone as phone')
             ->selectRaw('COALESCE(payments.client_id, deals.client_id) as client_id')
-            ->get();
+            ->selectRaw('deals.assigned_to as deal_assigned_to')
+            ->get()
+            ->filter(function ($row) use ($agent, $agentIdentities): bool {
+                if ((int) ($row->deal_assigned_to ?? 0) === (int) $agent->id) {
+                    return true;
+                }
+
+                $clientId = (int) ($row->client_id ?? 0);
+                if ($clientId > 0 && $agentIdentities['client_ids']->contains($clientId)) {
+                    return true;
+                }
+
+                $phone = $this->normalizeRecoveryPhone($row->phone ?? null);
+
+                return $phone !== null && $agentIdentities['phones']->contains($phone);
+            })
+            ->values();
+    }
+
+    private function agentRecoveryIdentitySets(User $agent, ?User $viewer, ?int $platformId): array
+    {
+        $query = Client::query()
+            ->where('assigned_to', (int) $agent->id);
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        } elseif ($viewer) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'clients.platform_id');
+        }
+
+        $clients = $query->get(['id', 'phone_normalized']);
+
+        return [
+            'client_ids' => $clients
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->unique()
+                ->values(),
+            'phones' => $clients
+                ->map(fn (Client $client) => $this->normalizeRecoveryPhone($client->phone_normalized))
+                ->filter()
+                ->unique()
+                ->values(),
+        ];
+    }
+
+    private function countRecoveryIdentities(Collection $rows): int
+    {
+        return $rows
+            ->map(function ($row): ?string {
+                $clientId = (int) ($row->client_id ?? 0);
+                if ($clientId > 0) {
+                    return 'client:'.$clientId;
+                }
+
+                $phone = $this->normalizeRecoveryPhone($row->phone ?? null);
+
+                return $phone ? 'phone:'.$phone : null;
+            })
+            ->filter()
+            ->unique()
+            ->count();
+    }
+
+    private function normalizeRecoveryPhone(?string $phone): ?string
+    {
+        $value = preg_replace('/\D/', '', (string) $phone);
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = ltrim($value, '0');
+
+        return $value !== '' ? $value : null;
     }
 
     private function agentWinbackPerformance(
@@ -2144,7 +2241,7 @@ class TeamActivityService
 
     private function workloadBand(?int $rank, int $teamSize): string
     {
-        if (!$rank || $teamSize <= 0) {
+        if (! $rank || $teamSize <= 0) {
             return 'No team benchmark';
         }
 
@@ -2179,7 +2276,7 @@ class TeamActivityService
 
     private function formatRateLabel(?float $rate): string
     {
-        return $rate === null ? 'No baseline' : number_format($rate, $rate >= 10 ? 0 : 1) . '%';
+        return $rate === null ? 'No baseline' : number_format($rate, $rate >= 10 ? 0 : 1).'%';
     }
 
     private function emptyClientPerformancePayload(string $targetCurrency): array
@@ -2192,7 +2289,7 @@ class TeamActivityService
             'native_display' => '--',
             'normalized_total' => 0.0,
             'normalized_currency' => $targetCurrency,
-            'normalized_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'normalized_display' => $targetCurrency.' '.$this->formatMoney(0),
             'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
             'share_percent' => 0.0,
         ];
@@ -2200,7 +2297,7 @@ class TeamActivityService
         return [
             'target_currency' => $targetCurrency,
             'total_normalized' => 0.0,
-            'total_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+            'total_display' => $targetCurrency.' '.$this->formatMoney(0),
             'normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
             'customer_mix' => [
                 $emptySegment('new_users', 'New users'),
@@ -2222,14 +2319,14 @@ class TeamActivityService
                 'recovered_clients' => 0,
                 'rate' => null,
                 'rate_label' => 'No baseline',
-                'recovered_revenue_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+                'recovered_revenue_display' => $targetCurrency.' '.$this->formatMoney(0),
             ],
             'winback' => [
                 'lost_clients_at_start' => 0,
                 'won_back_clients' => 0,
                 'rate' => null,
                 'rate_label' => 'No baseline',
-                'revenue_display' => $targetCurrency . ' ' . $this->formatMoney(0),
+                'revenue_display' => $targetCurrency.' '.$this->formatMoney(0),
             ],
             'workload' => [
                 'rank' => null,
@@ -2266,7 +2363,7 @@ class TeamActivityService
 
         foreach ($sessions as $session) {
             $effectiveEnd = $session->ended_at ?: $session->last_heartbeat_at;
-            if (!$effectiveEnd || !$session->started_at) {
+            if (! $effectiveEnd || ! $session->started_at) {
                 continue;
             }
 
@@ -2305,7 +2402,7 @@ class TeamActivityService
         }
 
         $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
-        if (!is_array($viewerPlatforms) || empty($viewerPlatforms)) {
+        if (! is_array($viewerPlatforms) || empty($viewerPlatforms)) {
             return collect();
         }
 
@@ -2344,7 +2441,7 @@ class TeamActivityService
         }
 
         $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
-        if (!is_array($viewerPlatforms) || empty($viewerPlatforms)) {
+        if (! is_array($viewerPlatforms) || empty($viewerPlatforms)) {
             return collect();
         }
 
@@ -2385,7 +2482,7 @@ class TeamActivityService
             return true;
         }
 
-        return !empty(array_intersect($viewerPlatformIds, $candidatePlatforms));
+        return ! empty(array_intersect($viewerPlatformIds, $candidatePlatforms));
     }
 
     private function accessiblePlatformIdsForUser(User $user): ?array
@@ -2412,6 +2509,7 @@ class TeamActivityService
             ->when(is_array($platformIds), function ($query) use ($platformIds) {
                 if (empty($platformIds)) {
                     $query->whereRaw('1 = 0');
+
                     return;
                 }
 
@@ -2439,7 +2537,7 @@ class TeamActivityService
         $this->assertManager($viewer);
 
         $visibleRoles = $this->visibleTeamRolesForViewer($viewer);
-        if (!in_array($teamMember->role, $visibleRoles, true) || !$teamMember->isActive()) {
+        if (! in_array($teamMember->role, $visibleRoles, true) || ! $teamMember->isActive()) {
             abort(404, 'Agent not found.');
         }
 
@@ -2448,7 +2546,7 @@ class TeamActivityService
         }
 
         $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
-        if (!is_array($viewerPlatforms) || empty($viewerPlatforms) || !$this->userHasPlatformOverlap($viewerPlatforms, $teamMember)) {
+        if (! is_array($viewerPlatforms) || empty($viewerPlatforms) || ! $this->userHasPlatformOverlap($viewerPlatforms, $teamMember)) {
             abort(403, 'You do not have access to this agent.');
         }
     }
@@ -2457,7 +2555,7 @@ class TeamActivityService
     {
         $this->assertManager($viewer);
 
-        if (!in_array($agent->role, self::AGENT_ROLES, true) || !$agent->isActive()) {
+        if (! in_array($agent->role, self::AGENT_ROLES, true) || ! $agent->isActive()) {
             abort(404, 'Agent not found.');
         }
 
@@ -2466,7 +2564,7 @@ class TeamActivityService
         }
 
         $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
-        if (!is_array($viewerPlatforms) || empty($viewerPlatforms) || !$this->userHasPlatformOverlap($viewerPlatforms, $agent)) {
+        if (! is_array($viewerPlatforms) || empty($viewerPlatforms) || ! $this->userHasPlatformOverlap($viewerPlatforms, $agent)) {
             abort(403, 'You do not have access to this agent.');
         }
     }
@@ -2565,8 +2663,7 @@ class TeamActivityService
         ?User $viewer,
         ?int $platformId,
         int $limit = 20
-    ): array
-    {
+    ): array {
         $query = AuditLog::query()
             ->where('actor_id', $agent->id)
             ->where('created_at', '>=', $start)
@@ -2743,7 +2840,7 @@ class TeamActivityService
             'amount' => $deal?->amount !== null ? (float) $deal->amount : null,
             'currency' => $currency,
             'amount_display' => $deal?->amount !== null && $currency !== ''
-                ? ($currency . ' ' . $this->formatMoney((float) $deal->amount))
+                ? ($currency.' '.$this->formatMoney((float) $deal->amount))
                 : null,
             'status' => $deal?->status,
             'expires_at' => $deal?->expires_at?->toIso8601String(),
@@ -2821,7 +2918,7 @@ class TeamActivityService
                 'amount' => $deal->amount !== null ? (float) $deal->amount : null,
                 'currency' => strtoupper((string) ($deal->currency ?: $deal->platform?->currency_code ?: $payment->currency)),
                 'amount_display' => $deal->amount !== null
-                    ? (strtoupper((string) ($deal->currency ?: $deal->platform?->currency_code ?: $payment->currency)) . ' ' . $this->formatMoney((float) $deal->amount))
+                    ? (strtoupper((string) ($deal->currency ?: $deal->platform?->currency_code ?: $payment->currency)).' '.$this->formatMoney((float) $deal->amount))
                     : null,
                 'status' => $deal->status,
                 'expires_at' => $deal->expires_at?->toIso8601String(),
@@ -2910,10 +3007,10 @@ class TeamActivityService
     private function entityUrl(string $entityType, int $entityId): ?string
     {
         return match ($entityType) {
-            'client' => '/clients/' . $entityId,
-            'lead' => '/leads/' . $entityId,
-            'deal' => '/deals/' . $entityId,
-            'payment' => '/payments/' . $entityId,
+            'client' => '/clients/'.$entityId,
+            'lead' => '/leads/'.$entityId,
+            'deal' => '/deals/'.$entityId,
+            'payment' => '/payments/'.$entityId,
             default => null,
         };
     }
@@ -3122,16 +3219,18 @@ class TeamActivityService
 
                 if ($platformId) {
                     $query->orWhere('platform_id', $platformId);
+
                     return;
                 }
 
                 $accessiblePlatforms = $this->accessiblePlatformIdsForUser($viewer);
                 if ($accessiblePlatforms === null) {
                     $query->orWhereNotNull('platform_id');
+
                     return;
                 }
 
-                if (!empty($accessiblePlatforms)) {
+                if (! empty($accessiblePlatforms)) {
                     $query->orWhereIn('platform_id', $accessiblePlatforms);
                 }
             });
@@ -3146,7 +3245,7 @@ class TeamActivityService
         return AgentGoalOverride::query()
             ->where('period', $period)
             ->when(empty($visibleAgentIds), fn ($query) => $query->whereRaw('1 = 0'))
-            ->when(!empty($visibleAgentIds), fn ($query) => $query->whereIn('user_id', $visibleAgentIds))
+            ->when(! empty($visibleAgentIds), fn ($query) => $query->whereIn('user_id', $visibleAgentIds))
             ->when($platformId !== null, fn ($query) => $query->where('platform_id', $platformId))
             ->when($platformId === null, function ($query) use ($viewer) {
                 $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
@@ -3209,7 +3308,7 @@ class TeamActivityService
 
     private function goalAppliesToUser(AgentGoal $goal, User $user): bool
     {
-        if (!$this->goalRoleScopeMatchesUser($goal->role_scope, $user)) {
+        if (! $this->goalRoleScopeMatchesUser($goal->role_scope, $user)) {
             return false;
         }
 
@@ -3237,7 +3336,7 @@ class TeamActivityService
 
     private function goalMetricAllowedForRole(string $metric, string $role): bool
     {
-        if (!in_array($role, self::AGENT_ROLES, true)) {
+        if (! in_array($role, self::AGENT_ROLES, true)) {
             return false;
         }
 
@@ -3247,14 +3346,14 @@ class TeamActivityService
 
     private function assertGoalMetricAllowedForRoleScope(string $metric, string $roleScope): void
     {
-        if (!$this->goalMetricAllowedForRoleScope($metric, $roleScope)) {
+        if (! $this->goalMetricAllowedForRoleScope($metric, $roleScope)) {
             abort(422, 'This metric is not supported for the selected role scope.');
         }
     }
 
     private function assertGoalMetricAllowedForRole(string $metric, string $role): void
     {
-        if (!$this->goalMetricAllowedForRole($metric, $role)) {
+        if (! $this->goalMetricAllowedForRole($metric, $role)) {
             abort(422, 'This metric is not supported for the selected user role.');
         }
     }
@@ -3263,7 +3362,7 @@ class TeamActivityService
     {
         $this->assertAgentVisibleToViewer($viewer, $agent);
 
-        if (!$this->userHasPlatform($agent, $platformId)) {
+        if (! $this->userHasPlatform($agent, $platformId)) {
             abort(422, 'The selected user does not have access to this market.');
         }
     }
@@ -3402,7 +3501,7 @@ class TeamActivityService
             ->all();
 
         $display = collect($rows)
-            ->map(fn (array $row) => $row['currency'] . ' ' . $this->formatMoney((float) $row['amount']))
+            ->map(fn (array $row) => $row['currency'].' '.$this->formatMoney((float) $row['amount']))
             ->implode(' | ');
 
         $normalized ??= $this->reportingCurrencyService->normalizeBreakdown($currencyBreakdown);
@@ -3425,7 +3524,7 @@ class TeamActivityService
                 'revenue_currency' => $single['currency'],
                 'revenue_by_currency' => $rows,
                 'revenue_display' => $single['currency']
-                    ? ($single['currency'] . ' ' . $this->formatMoney((float) $single['amount']))
+                    ? ($single['currency'].' '.$this->formatMoney((float) $single['amount']))
                     : '--',
             ], $normalizedFields);
         }
@@ -3504,7 +3603,7 @@ class TeamActivityService
     private function formatGoalValue(string $metric, float $value, ?string $targetCurrency): string
     {
         if ($metric === 'revenue') {
-            return ($targetCurrency ?: $this->reportingCurrencyService->resolveTargetCurrency()) . ' ' . $this->formatMoney($value);
+            return ($targetCurrency ?: $this->reportingCurrencyService->resolveTargetCurrency()).' '.$this->formatMoney($value);
         }
 
         return number_format((int) round($value));
@@ -3586,7 +3685,7 @@ class TeamActivityService
     {
         $metric = strtolower(trim($metric));
 
-        if (!in_array($metric, self::GOAL_METRICS, true)) {
+        if (! in_array($metric, self::GOAL_METRICS, true)) {
             abort(422, 'Unsupported goal metric.');
         }
 
