@@ -31,7 +31,7 @@ const VIEW_HELPERS = {
     mix: 'Shows what kind of movement happened: first-time paid, renewals, won-back clients, free trials, and exits.',
     trials: 'Free-trial activations alongside first-time paid subscriptions. Trials activate profiles but do not count as paid revenue.',
     payments: 'All successful payment events compared with renewals and first-time paid subscriptions.',
-    snapshot: 'Point-in-time paid subscriber base. This answers how many paying clients existed now, yesterday, 7 days ago, 30 days ago, and at the selected range edges.',
+    snapshot: 'Point-in-time paid subscriber base within the selected dashboard window. It is a stock count, not payment-event volume.',
 };
 const TERM_HELP = {
     firstPaid: 'Clients whose first successful paid subscription happened in this selected period.',
@@ -80,6 +80,23 @@ function formatRange(point) {
     }
 
     return `${point.from} to ${point.to}`;
+}
+
+function parseDateTime(value) {
+    const time = value ? new Date(value).getTime() : NaN;
+    return Number.isFinite(time) ? time : null;
+}
+
+function isSnapshotInsideRange(item, range) {
+    const date = parseDateTime(item?.date);
+    const from = parseDateTime(range?.from);
+    const to = parseDateTime(range?.to);
+
+    if (date === null || from === null || to === null) {
+        return Boolean(item?.date);
+    }
+
+    return date >= from && date <= to;
 }
 
 function movementTone(value) {
@@ -380,15 +397,15 @@ function SnapshotCheckpoint({ item, maxCount, emphasis = false }) {
     );
 }
 
-function snapshotSeries(history) {
+function snapshotSeries(history, range) {
     const preferred = [
-        history?.thirty_days_ago,
-        history?.seven_days_ago,
-        history?.yesterday,
         history?.range_start,
-        history?.range_end,
+        history?.yesterday,
+        history?.seven_days_ago,
+        history?.thirty_days_ago,
         history?.current,
-    ].filter((item) => item?.date);
+        history?.range_end,
+    ].filter((item) => item?.date && isSnapshotInsideRange(item, range));
     const byDate = new Map();
 
     preferred.forEach((item) => {
@@ -441,20 +458,19 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
         percent: null,
     };
     const checkpoints = [
-        current,
+        rangeStart,
         history?.yesterday,
         history?.seven_days_ago,
         history?.thirty_days_ago,
-        rangeStart,
         rangeEnd,
-    ].filter(Boolean);
+    ].filter((item) => item && isSnapshotInsideRange(item, data?.range));
     const maxCount = checkpoints.reduce((max, item) => Math.max(max, asNumber(item?.count)), 1);
     const deltaTone = movementTone(rangeChange.change);
     const active = asNumber(current?.count ?? currentScope.active_profiles);
     const inactive = asNumber(current?.inactive_count ?? currentScope.inactive_profiles);
     const total = asNumber(current?.total_paid_profiles ?? currentScope.total_profiles);
     const share = total > 0 ? clampPercent((active / total) * 100) : 0;
-    const series = snapshotSeries(history);
+    const series = snapshotSeries(history, data?.range);
 
     return (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
@@ -477,7 +493,7 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
                 <div className="mt-5 grid gap-5 xl:grid-cols-[17rem_minmax(0,1fr)]">
                     <div className="rounded-xl bg-slate-950 p-5 text-white shadow-[0_18px_48px_rgba(15,23,42,0.14)]">
                         <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current snapshot</p>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Range end snapshot</p>
                             <p className="mt-3 crm-mono text-5xl font-semibold tracking-tight">{formatNumber(active)}</p>
                             <p className="mt-2 text-sm leading-6 text-slate-300">
                                 active paying clients
@@ -572,11 +588,21 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
             </div>
 
             <aside className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Base composition</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Window snapshot</p>
                 <div className="mt-4 flex items-end justify-between gap-3">
                     <div>
-                        <p className="crm-mono text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(total)}</p>
-                        <p className="mt-1 text-sm text-slate-500">paid profiles ever seen in scope</p>
+                        <p className={`crm-mono text-3xl font-semibold tracking-tight ${
+                            deltaTone === 'positive'
+                                ? 'text-teal-700'
+                                : deltaTone === 'negative'
+                                    ? 'text-rose-700'
+                                    : 'text-slate-950'
+                        }`}>
+                            {formatSigned(rangeChange.change)}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-500">
+                            active subscriber change in selected window
+                        </p>
                     </div>
                     <p className="crm-mono text-sm font-semibold text-teal-700">{share.toFixed(1)}%</p>
                 </div>
@@ -592,12 +618,16 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
                         <span className="crm-mono font-semibold text-teal-700">{formatNumber(active)}</span>
                     </div>
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
-                        <span className="text-slate-500">Paid but inactive</span>
-                        <span className="crm-mono font-semibold text-slate-900">{formatNumber(inactive)}</span>
+                        <span className="text-slate-500">Range start</span>
+                        <span className="crm-mono font-semibold text-slate-900">{formatNumber(rangeStart?.count)}</span>
                     </div>
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
-                        <span className="text-slate-500">Selected window</span>
-                        <span className="crm-mono text-xs font-semibold text-slate-900">{data?.range?.from || '--'} to {data?.range?.to || '--'}</span>
+                        <span className="text-slate-500">Range end</span>
+                        <span className="crm-mono font-semibold text-slate-900">{formatNumber(rangeEnd?.count)}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                        <span className="text-slate-500">Paid profiles tracked</span>
+                        <span className="crm-mono font-semibold text-slate-900">{formatNumber(total)}</span>
                     </div>
                 </div>
             </aside>
@@ -734,7 +764,7 @@ export default function ProfileMovementWidget({
     onBucketChange,
     className = '',
 }) {
-    const [chartView, setChartView] = useState('snapshot');
+    const [chartView, setChartView] = useState('base');
     const summaryStats = useMemo(() => summaryAlignedMovementStats(summaryMetrics), [summaryMetrics]);
     const labels = useMemo(() => movementCopy(summaryStats), [summaryStats]);
     const viewHelpers = useMemo(() => ({
