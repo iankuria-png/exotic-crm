@@ -23,6 +23,7 @@ use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
+use App\Http\Controllers\CRM\ComplianceController as CrmComplianceController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\LifecycleRestoreController;
 use App\Http\Controllers\CRM\LifecycleSmsController;
@@ -81,6 +82,7 @@ use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleCont
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
 use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\SeoController;
+use App\Http\Controllers\Wp\ComplianceController as WpComplianceController;
 use App\Http\Controllers\Wp\WpSeoController;
 use App\Http\Middleware\WpServiceAuth;
 
@@ -91,6 +93,12 @@ Route::get('/ping', function () {
 // ==================== SEO ENGINE — WP service routes (HMAC auth) ====================
 Route::middleware(['wp.service.auth'])->prefix('wp-svc/seo')->group(function () {
     Route::post('/generate-bio', [WpSeoController::class, 'generateBio']);
+});
+
+Route::middleware(['wp.service.auth'])->prefix('wp-svc/compliance')->group(function () {
+    Route::get('/creator-agreement/current', [WpComplianceController::class, 'currentAgreement']);
+    Route::post('/creator-agreement/acceptances', [WpComplianceController::class, 'storeAgreementAcceptance']);
+    Route::post('/content-declarations', [WpComplianceController::class, 'storeContentDeclaration']);
 });
 
 // ==================== CRM ROUTES ====================
@@ -724,6 +732,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::put('/settings', [KycSettingsController::class, 'update'])->middleware('role:admin,sub_admin');
         Route::post('/settings/test-s3', [KycSettingsController::class, 'testS3Connectivity'])->middleware('role:admin,sub_admin');
     });
+
+    Route::get('/clients/{client}/compliance', [CrmComplianceController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::post('/clients/{client}/compliance/evidence-pack', [CrmComplianceController::class, 'export'])->middleware('role:admin,sub_admin');
+    Route::get('/compliance/evidence-exports/{export}', [CrmComplianceController::class, 'download'])
+        ->middleware(['role:admin,sub_admin', 'signed'])
+        ->name('api.crm.compliance.evidence-exports.show');
+
     Route::get('/settings/integrations/wp-shared-key', [SettingsController::class, 'showWpSharedKey'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/wp-shared-key/rotate', [SettingsController::class, 'rotateWpSharedKey'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/integrations/wp-shared-key', [SettingsController::class, 'clearWpSharedKey'])->middleware('role:admin,sub_admin');

@@ -20,6 +20,7 @@ import GenerateBioButton from '../components/seo/GenerateBioButton';
 import SeoQualityPanel from '../components/seo/SeoQualityPanel';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import KycPanel from '../components/kyc/KycPanel';
+import CompliancePanel from '../components/compliance/CompliancePanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 import { getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
@@ -866,7 +867,7 @@ export default function ClientDetail() {
     const { startClientMediaUpload, uploadsForClient, retryUpload, dismissUpload } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'kyc', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -1873,6 +1874,7 @@ export default function ClientDetail() {
         const links = [
             { key: 'overview', label: 'Overview' },
             { key: 'kyc', label: 'KYC', badge: kycBadge },
+            { key: 'compliance', label: 'Compliance' },
             { key: 'analytics', label: 'Analytics' },
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
@@ -3447,6 +3449,10 @@ export default function ClientDetail() {
 
             {activeTab === 'kyc' ? (
                 <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''))} />
+            ) : null}
+
+            {activeTab === 'compliance' ? (
+                <CompliancePanel client={client} canExport={['admin', 'sub_admin'].includes(String(currentUser?.role || ''))} />
             ) : null}
 
             {activeTab === 'overview' ? (

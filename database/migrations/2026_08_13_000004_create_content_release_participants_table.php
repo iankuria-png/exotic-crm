@@ -1,0 +1,31 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('content_release_participants', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('content_declaration_id')->constrained('content_compliance_declarations')->cascadeOnDelete();
+            $table->string('display_name')->nullable();
+            $table->string('release_status', 80)->default('pending');
+            $table->foreignId('id_document_id')->nullable()->constrained('kyc_documents')->nullOnDelete();
+            $table->foreignId('release_document_id')->nullable()->constrained('kyc_documents')->nullOnDelete();
+            $table->foreignId('reviewed_by_user_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->timestamp('reviewed_at')->nullable();
+            $table->text('review_note')->nullable();
+            $table->timestamps();
+
+            $table->index(['content_declaration_id', 'release_status']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('content_release_participants');
+    }
+};

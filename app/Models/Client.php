@@ -219,6 +219,21 @@ class Client extends Model
         return $this->hasMany(Commission::class);
     }
 
+    public function creatorAgreementAcceptances()
+    {
+        return $this->hasMany(CreatorAgreementAcceptance::class);
+    }
+
+    public function contentComplianceDeclarations()
+    {
+        return $this->hasMany(ContentComplianceDeclaration::class);
+    }
+
+    public function complianceEvidenceExports()
+    {
+        return $this->hasMany(ComplianceEvidenceExport::class);
+    }
+
     public function riskMarkedBy()
     {
         return $this->belongsTo(User::class, 'risk_marked_by');
