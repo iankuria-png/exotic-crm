@@ -22,6 +22,7 @@ class Platform extends Model
         'sync_last_error', 'sync_last_result', 'payment_link_providers', 'support_chat_url',
         'support_board_api_url', 'support_board_token', 'support_board_sender_id',
         'wallet_settings',
+        'wp_compatibility_settings',
         'client_sync_checkpoint_at', 'client_sync_checkpoint_post_id',
         'client_sync_tombstone_checkpoint_at', 'client_sync_tombstone_checkpoint_post_id',
         'client_sync_protocol', 'client_sync_contract_version',
@@ -65,6 +66,7 @@ class Platform extends Model
         'multi_currency_wallet_enabled' => 'boolean',
         'support_board_token' => 'encrypted',
         'wallet_settings' => 'array',
+        'wp_compatibility_settings' => 'array',
         'field_activation_deposit_minor' => 'integer',
         'field_trial_duration_days' => 'integer',
         'field_trial_product_id' => 'integer',
@@ -175,6 +177,29 @@ class Platform extends Model
     public function isMultiCurrencyWalletEnabled(): bool
     {
         return (bool) $this->multi_currency_wallet_enabled;
+    }
+
+    public static function defaultWpCompatibilitySettings(): array
+    {
+        return [
+            'legacy_self_upload_secret_option' => false,
+        ];
+    }
+
+    public function wpCompatibilitySettings(): array
+    {
+        $settings = is_array($this->wp_compatibility_settings)
+            ? $this->wp_compatibility_settings
+            : [];
+
+        return array_merge(self::defaultWpCompatibilitySettings(), [
+            'legacy_self_upload_secret_option' => (bool) ($settings['legacy_self_upload_secret_option'] ?? false),
+        ]);
+    }
+
+    public function writesLegacySelfUploadSecretOption(): bool
+    {
+        return (bool) ($this->wpCompatibilitySettings()['legacy_self_upload_secret_option'] ?? false);
     }
 
     public function effectiveCurrencies(): array

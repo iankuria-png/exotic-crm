@@ -77,6 +77,11 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame(['2', '8'], unserialize($meta['services'] ?? '', ['allowed_classes' => false]));
         $this->assertSame(['1', '2'], unserialize($meta['availability'] ?? '', ['allowed_classes' => false]));
         $this->assertSame(['1'], unserialize($meta['phone_available_on'] ?? '', ['allowed_classes' => false]));
+        $this->assertNotEmpty($meta['secret'] ?? '');
+        $this->assertFalse(DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', $meta['secret'])
+            ->exists());
 
         $post = DB::connection($connectionName)
             ->table('posts')
@@ -98,6 +103,37 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame('Nairobi', $taxonomy->name);
         $this->assertSame('nairobi', $taxonomy->slug);
         $this->assertSame(1, (int) $taxonomy->count);
+    }
+
+    public function test_direct_provisioning_writes_legacy_self_upload_secret_option_when_market_flag_is_enabled(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        $platform->forceFill([
+            'wp_compatibility_settings' => [
+                'legacy_self_upload_secret_option' => true,
+            ],
+        ])->save();
+
+        $result = (new WpDirectProvisioningService($platform->fresh(), $connectionConfig))->provisionEscort([
+            'name' => 'Legacy Upload Demo',
+            'email' => 'legacy.upload@example.test',
+            'phone' => '254733333333',
+            'post_status' => 'private',
+            'password' => 'password123',
+            'provision_request_id' => 'req-legacy-upload-1',
+        ]);
+
+        $secret = (string) DB::connection($connectionName)
+            ->table('postmeta')
+            ->where('post_id', $result['wp_post_id'])
+            ->where('meta_key', 'secret')
+            ->value('meta_value');
+
+        $this->assertNotSame('', $secret);
+        $this->assertSame((string) $result['wp_user_id'], DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', $secret)
+            ->value('option_value'));
     }
 
     public function test_direct_provisioning_reuses_the_same_wordpress_profile_for_retries_with_matching_request_id(): void
@@ -123,6 +159,48 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame($first['wp_post_id'], $second['wp_post_id']);
         $this->assertSame(1, DB::connection($connectionName)->table('posts')->count());
         $this->assertSame(1, DB::connection($connectionName)->table('exotic_crm_provisions')->count());
+    }
+
+    public function test_direct_provisioning_retry_repairs_legacy_self_upload_secret_option_when_flag_is_enabled_later(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+
+        $payload = [
+            'name' => 'Legacy Retry Demo',
+            'email' => 'legacy.retry@example.test',
+            'phone' => '254744444444',
+            'post_status' => 'private',
+            'password' => 'password123',
+            'provision_request_id' => 'req-legacy-retry-1',
+        ];
+
+        $first = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort($payload);
+
+        $secret = (string) DB::connection($connectionName)
+            ->table('postmeta')
+            ->where('post_id', $first['wp_post_id'])
+            ->where('meta_key', 'secret')
+            ->value('meta_value');
+
+        $this->assertNotSame('', $secret);
+        $this->assertFalse(DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', $secret)
+            ->exists());
+
+        $platform->forceFill([
+            'wp_compatibility_settings' => [
+                'legacy_self_upload_secret_option' => true,
+            ],
+        ])->save();
+
+        $second = (new WpDirectProvisioningService($platform->fresh(), $connectionConfig))->provisionEscort($payload);
+
+        $this->assertSame($first['wp_post_id'], $second['wp_post_id']);
+        $this->assertSame((string) $first['wp_user_id'], DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', $secret)
+            ->value('option_value'));
     }
 
     public function test_direct_provisioning_rejects_changed_payload_for_the_same_request_id(): void

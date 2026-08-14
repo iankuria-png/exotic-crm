@@ -1203,6 +1203,8 @@ class SettingsController extends Controller
             'support_board_api_url' => 'nullable|url|max:500',
             'support_board_token' => 'nullable|string',
             'support_board_sender_id' => 'nullable|integer',
+            'wp_compatibility_settings' => 'nullable|array',
+            'wp_compatibility_settings.legacy_self_upload_secret_option' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -3103,6 +3105,8 @@ class SettingsController extends Controller
             'support_board_api_url' => 'sometimes|nullable|url|max:500',
             'support_board_token' => 'sometimes|nullable|string',
             'support_board_sender_id' => 'sometimes|nullable|integer',
+            'wp_compatibility_settings' => 'sometimes|nullable|array',
+            'wp_compatibility_settings.legacy_self_upload_secret_option' => 'sometimes|nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -5424,6 +5428,7 @@ class SettingsController extends Controller
                 'db_prefix' => $platform->db_prefix,
                 'db_pass_configured' => !empty($platform->db_pass),
             ],
+            'wp_compatibility' => $platform->wpCompatibilitySettings(),
             'sync' => [
                 'last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
                 'last_scope' => $platform->sync_last_scope,
@@ -5470,6 +5475,17 @@ class SettingsController extends Controller
             $payload['db_prefix'] = $payload['db_prefix'] ?? 'wp_';
         }
 
+        if (array_key_exists('wp_compatibility_settings', $payload)) {
+            $settings = is_array($payload['wp_compatibility_settings'])
+                ? $payload['wp_compatibility_settings']
+                : [];
+            $payload['wp_compatibility_settings'] = array_merge(Platform::defaultWpCompatibilitySettings(), [
+                'legacy_self_upload_secret_option' => (bool) ($settings['legacy_self_upload_secret_option'] ?? false),
+            ]);
+        } elseif (!$isPatch) {
+            $payload['wp_compatibility_settings'] = Platform::defaultWpCompatibilitySettings();
+        }
+
         if (array_key_exists('timezone', $payload)) {
             $normalizedTimezone = MarketTimezone::normalize(is_string($payload['timezone']) ? $payload['timezone'] : null);
             if ($normalizedTimezone === null) {
@@ -5499,6 +5515,7 @@ class SettingsController extends Controller
             'is_active' => (bool) $platform->is_active,
             'lifecycle_policy_enabled' => (bool) $platform->lifecycle_policy_enabled,
             'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
+            'wp_compatibility' => $platform->wpCompatibilitySettings(),
             'wp_api_url' => $platform->wp_api_url,
             'wp_api_user' => $platform->wp_api_user,
             'phone_prefix' => $platform->phone_prefix,

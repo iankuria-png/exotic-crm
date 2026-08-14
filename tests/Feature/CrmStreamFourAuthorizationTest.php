@@ -1274,12 +1274,16 @@ CSV;
             'currency_code' => 'kes',
             'timezone' => 'Africa/Nairobi',
             'phone_prefix' => '254',
+            'wp_compatibility_settings' => [
+                'legacy_self_upload_secret_option' => true,
+            ],
             'reason' => 'Onboarding new market',
         ]);
 
         $createResponse->assertCreated()
             ->assertJsonPath('platform.platform_name', 'Exotic Kenya')
             ->assertJsonPath('platform.currency', 'KES')
+            ->assertJsonPath('platform.wp_compatibility.legacy_self_upload_secret_option', true)
             ->assertJsonPath('platform.wp_sync.status', 'connected');
 
         $platformId = (int) $createResponse->json('platform.platform_id');
@@ -1287,12 +1291,16 @@ CSV;
         $updateResponse = $this->patchJson("/api/crm/settings/integrations/platforms/{$platformId}", [
             'country' => 'Kenya East',
             'is_active' => false,
+            'wp_compatibility_settings' => [
+                'legacy_self_upload_secret_option' => false,
+            ],
             'reason' => 'Updated market profile details',
         ]);
 
         $updateResponse->assertOk()
             ->assertJsonPath('platform.country', 'Kenya East')
-            ->assertJsonPath('platform.is_active', false);
+            ->assertJsonPath('platform.is_active', false)
+            ->assertJsonPath('platform.wp_compatibility.legacy_self_upload_secret_option', false);
 
         Http::fake([
             'https://kenya-api.test/wp-json/exotic-crm-sync/v1/stats*' => Http::response([

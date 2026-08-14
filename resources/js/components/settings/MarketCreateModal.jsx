@@ -35,6 +35,26 @@ export default function MarketCreateModal({
                     <input value={createForm.db_user} onChange={(event) => onUpdateForm((current) => ({ ...current, db_user: event.target.value }))} className="crm-input" placeholder="WordPress DB user" />
                     <input value={createForm.db_pass} onChange={(event) => onUpdateForm((current) => ({ ...current, db_pass: event.target.value }))} className="crm-input" type="password" placeholder="WordPress DB password" />
                     <input value={createForm.db_prefix} onChange={(event) => onUpdateForm((current) => ({ ...current, db_prefix: event.target.value }))} className="crm-input md:col-span-2" placeholder="WordPress table prefix (for example wp_)" />
+                    <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                        <input
+                            type="checkbox"
+                            checked={Boolean(createForm.wp_compatibility_settings?.legacy_self_upload_secret_option)}
+                            onChange={(event) => onUpdateForm((current) => ({
+                                ...current,
+                                wp_compatibility_settings: {
+                                    ...(current.wp_compatibility_settings || {}),
+                                    legacy_self_upload_secret_option: event.target.checked,
+                                },
+                            }))}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                        />
+                        <span>
+                            <span className="font-medium">Write legacy self-upload secret mapping</span>
+                            <span className="mt-0.5 block text-xs text-slate-500">
+                                Enable for markets still using the legacy WordPress profile media upload endpoint. Leave off for newer REST media flows.
+                            </span>
+                        </span>
+                    </label>
                     <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" checked={createForm.is_active} onChange={(event) => onUpdateForm((current) => ({ ...current, is_active: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
                         Market is active

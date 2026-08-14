@@ -121,7 +121,7 @@ class WpDirectProvisioningService
                 content: $bio
             );
 
-            $this->storeProfileMeta(
+            $profileMeta = $this->storeProfileMeta(
                 postId: $postId,
                 payload: $profilePayload,
                 postStatus: $postStatus,
@@ -135,6 +135,7 @@ class WpDirectProvisioningService
 
             $this->upsertOption('escortid' . $userId, $postType);
             $this->upsertOption('escortpostid' . $userId, (string) $postId);
+            $this->syncLegacySelfUploadSecretOption($postId, $userId, $profileMeta['secret'] ?? null);
             $this->completeProvisionRequest($requestId, $payloadHash, $postId, $userId);
 
             return [
@@ -294,7 +295,7 @@ class WpDirectProvisioningService
         array $payload,
         string $postStatus,
         string $signupSource = 'crm_provisioned'
-    ): void {
+    ): array {
         foreach ($this->profileMetaPayload($payload) as $key => $value) {
             if ($value === null || $value === '') {
                 continue;
@@ -307,18 +308,21 @@ class WpDirectProvisioningService
         $this->upsertPostMeta($postId, 'featured', '0');
         $this->upsertPostMeta($postId, 'verified', '0');
         $this->upsertPostMeta($postId, 'independent', 'yes');
-        $this->upsertPostMeta($postId, 'upload_folder', (string) (time() . random_int(100, 999)));
-        $this->upsertPostMeta(
-            $postId,
-            'secret',
-            hash('sha256', trim((string) ($payload['name'] ?? '')) . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20))
-        );
+        $uploadFolder = (string) (time() . random_int(100, 999));
+        $secret = hash('sha256', trim((string) ($payload['name'] ?? '')) . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20));
+        $this->upsertPostMeta($postId, 'upload_folder', $uploadFolder);
+        $this->upsertPostMeta($postId, 'secret', $secret);
 
         $this->upsertPostMeta($postId, 'signup_source', $signupSource);
 
         if ($postStatus !== 'publish') {
             $this->upsertPostMeta($postId, 'notactive', '1');
         }
+
+        return [
+            'upload_folder' => $uploadFolder,
+            'secret' => $secret,
+        ];
     }
 
     private function upsertPostMeta(int $postId, string $key, mixed $value): void
@@ -335,6 +339,25 @@ class WpDirectProvisioningService
             ['option_name' => $name],
             ['option_value' => $value, 'autoload' => 'yes']
         );
+    }
+
+    private function syncLegacySelfUploadSecretOption(int $postId, int $userId, ?string $secret = null): void
+    {
+        if (!$this->platform->writesLegacySelfUploadSecretOption()) {
+            return;
+        }
+
+        $secret = trim((string) ($secret ?: DB::connection($this->connectionName)
+            ->table('postmeta')
+            ->where('post_id', $postId)
+            ->where('meta_key', 'secret')
+            ->value('meta_value')));
+
+        if ($secret === '') {
+            return;
+        }
+
+        $this->upsertOption($secret, (string) $userId);
     }
 
     private function assignLocationTaxonomy(int $postId, ?int $regionId, ?int $cityId): void
@@ -589,6 +612,8 @@ class WpDirectProvisioningService
         if (!$post || !$user) {
             throw new \RuntimeException('Provision request exists but the linked WordPress profile could not be recovered.');
         }
+
+        $this->syncLegacySelfUploadSecretOption((int) $post->ID, (int) $user->ID);
 
         return [
             'wp_user_id' => (int) $user->ID,

@@ -46,6 +46,7 @@ class PlatformFactory extends Factory
             'payment_link_providers' => null,
             'support_chat_url' => null,
             'wallet_settings' => null,
+            'wp_compatibility_settings' => null,
         ];
     }
 }

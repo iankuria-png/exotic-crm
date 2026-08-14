@@ -184,6 +184,9 @@ function buildPlatformEditor(platform) {
         db_pass: '',
         db_prefix: platform.wp_provisioning?.db_prefix || 'wp_',
         db_pass_configured: Boolean(platform.wp_provisioning?.db_pass_configured),
+        wp_compatibility_settings: {
+            legacy_self_upload_secret_option: Boolean(platform.wp_compatibility?.legacy_self_upload_secret_option),
+        },
         currency_code: platform.currency || 'KES',
         timezone: platform.timezone || '',
         phone_prefix: platform.phone_prefix || '254',
@@ -209,6 +212,9 @@ function defaultPlatformForm() {
         db_user: '',
         db_pass: '',
         db_prefix: 'wp_',
+        wp_compatibility_settings: {
+            legacy_self_upload_secret_option: false,
+        },
         currency_code: 'KES',
         timezone: '',
         phone_prefix: '254',
@@ -5154,6 +5160,28 @@ function IntegrationsWorkspace({
                                         <p className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
                                             CRM “Provision in WordPress” uses the database connection from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
                                         </p>
+                                        <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(editor.wp_compatibility_settings?.legacy_self_upload_secret_option)}
+                                                onChange={(event) => setEditor((current) => ({
+                                                    ...current,
+                                                    wp_compatibility_settings: {
+                                                        ...(current.wp_compatibility_settings || {}),
+                                                        legacy_self_upload_secret_option: event.target.checked,
+                                                    },
+                                                }))}
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span>
+                                                <span className="font-medium">Write legacy self-upload secret mapping</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    For markets still using the legacy WordPress upload endpoint, CRM-created profiles need an option keyed by
+                                                    the profile secret so clients can upload media from their profile page. Leave off for markets using newer
+                                                    REST media flows.
+                                                </span>
+                                            </span>
+                                        </label>
                                         <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
                                             <input
                                                 type="checkbox"
