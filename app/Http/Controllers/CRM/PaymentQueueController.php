@@ -204,6 +204,17 @@ class PaymentQueueController extends Controller
             ->where('status', 'failed');
         $manualProofStatsQuery = (clone $statsQuery)
             ->whereHas('manualSubmission');
+        $manualSubmissionFilter = trim((string) ($validated['manual_submission'] ?? $request->input('manual_submission', '')));
+        $manualProofContributionQuery = $this->paymentQueueQueryBuilder->buildRowsQuery(
+            $request,
+            $validated,
+            [],
+            false,
+            $context
+        );
+        if ($manualSubmissionFilter === '') {
+            $manualProofContributionQuery->whereHas('manualSubmission');
+        }
         $failedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
         $pendingNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
@@ -264,6 +275,13 @@ class PaymentQueueController extends Controller
                     $builder->whereNull('review_decision');
                 })
                 ->count(),
+            'manual_proof_contribution' => $this->buildManualProofContributionStats(
+                clone $manualProofContributionQuery,
+                $manualSubmissionFilter,
+                $successfulStatuses,
+                $awaitingStatuses,
+                $targetCurrency
+            ),
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
             'unmatched_review' => (clone $confirmedStatsQuery)->whereNull('client_id')->count(),
@@ -3169,6 +3187,81 @@ class PaymentQueueController extends Controller
                 'payments_count_delta' => $confirmedPayments - $bucketPayments,
                 'amount_breakdown_delta' => $amountDelta,
             ],
+        ];
+    }
+
+    private function buildManualProofContributionStats(
+        Builder $query,
+        string $manualSubmissionFilter,
+        array $successfulStatuses,
+        array $awaitingStatuses,
+        string $targetCurrency
+    ): array {
+        $totalBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $query);
+        $totalNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $query, $targetCurrency);
+
+        $confirmedQuery = (clone $query)
+            ->whereIn('status', $successfulStatuses)
+            ->whereNull('resolution_code')
+            ->where(function (Builder $builder) {
+                $builder->whereNull('reconciliation_state')
+                    ->orWhere('reconciliation_state', '!=', 'manual_review');
+            });
+        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedQuery);
+        $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedQuery, $targetCurrency);
+
+        $awaitingQuery = (clone $query)->whereIn('status', $awaitingStatuses);
+        $awaitingBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $awaitingQuery);
+        $awaitingNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $awaitingQuery, $targetCurrency);
+
+        $failedQuery = (clone $query)->where('status', 'failed');
+        $failedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $failedQuery);
+        $failedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $failedQuery, $targetCurrency);
+
+        return [
+            'filter' => $manualSubmissionFilter ?: 'with_proof',
+            'total' => (clone $query)->count(),
+            'total_amount' => $totalBreakdown['scalar_amount'],
+            'total_amount_breakdown' => $totalBreakdown['breakdown'],
+            'total_currency_count' => $totalBreakdown['currency_count'],
+            'total_normalized_amount' => $totalNormalized['normalized_total'],
+            'total_normalization_meta' => $totalNormalized['normalization_meta'],
+            'confirmed' => (clone $confirmedQuery)->count(),
+            'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
+            'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
+            'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
+            'confirmed_normalized_amount' => $confirmedNormalized['normalized_total'],
+            'confirmed_normalization_meta' => $confirmedNormalized['normalization_meta'],
+            'awaiting' => (clone $awaitingQuery)->count(),
+            'awaiting_amount' => $awaitingBreakdown['scalar_amount'],
+            'awaiting_amount_breakdown' => $awaitingBreakdown['breakdown'],
+            'awaiting_currency_count' => $awaitingBreakdown['currency_count'],
+            'awaiting_normalized_amount' => $awaitingNormalized['normalized_total'],
+            'awaiting_normalization_meta' => $awaitingNormalized['normalization_meta'],
+            'failed' => (clone $failedQuery)->count(),
+            'failed_amount' => $failedBreakdown['scalar_amount'],
+            'failed_amount_breakdown' => $failedBreakdown['breakdown'],
+            'failed_currency_count' => $failedBreakdown['currency_count'],
+            'failed_normalized_amount' => $failedNormalized['normalized_total'],
+            'failed_normalization_meta' => $failedNormalized['normalization_meta'],
+            'pending_review' => (clone $query)
+                ->where('reconciliation_state', 'manual_review')
+                ->whereHas('manualSubmission', function (Builder $builder) {
+                    $builder->whereNull('review_decision');
+                })
+                ->count(),
+            'verified' => (clone $query)
+                ->whereHas('manualSubmission', function (Builder $builder) {
+                    $builder->where('review_decision', 'approved');
+                })
+                ->count(),
+            'rejected' => (clone $query)
+                ->whereHas('manualSubmission', function (Builder $builder) {
+                    $builder->where('review_decision', 'rejected');
+                })
+                ->count(),
+            'matched' => (clone $query)->whereNotNull('client_id')->count(),
+            'unmatched' => (clone $query)->whereNull('client_id')->count(),
         ];
     }
 

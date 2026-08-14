@@ -445,6 +445,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $pendingProof = $this->createPayment($platform, [
             'transaction_reference' => 'MANUAL-PROOF-PENDING-001',
             'reference_number' => 'MANUAL-PROOF-PENDING-001',
+            'amount' => 1200,
             'status' => 'pending',
             'reconciliation_state' => 'manual_review',
         ]);
@@ -453,6 +454,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $verifiedProof = $this->createPayment($platform, [
             'transaction_reference' => 'MANUAL-PROOF-VERIFIED-001',
             'reference_number' => 'MANUAL-PROOF-VERIFIED-001',
+            'amount' => 2400,
             'status' => 'completed',
             'reconciliation_state' => 'resolved',
         ]);
@@ -464,6 +466,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $gatewayPayment = $this->createPayment($platform, [
             'transaction_reference' => 'GATEWAY-NO-PROOF-001',
             'reference_number' => 'GATEWAY-NO-PROOF-001',
+            'amount' => 900,
             'status' => 'completed',
         ]);
 
@@ -473,7 +476,16 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $allProof->assertOk()
             ->assertJsonPath('total', 2)
             ->assertJsonPath('stats.manual_proof_uploads', 2)
-            ->assertJsonPath('stats.manual_proof_pending_review', 1);
+            ->assertJsonPath('stats.manual_proof_pending_review', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.filter', 'with_proof')
+            ->assertJsonPath('stats.manual_proof_contribution.total', 2)
+            ->assertJsonPath('stats.manual_proof_contribution.total_amount', 3600)
+            ->assertJsonPath('stats.manual_proof_contribution.confirmed', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.confirmed_amount', 2400)
+            ->assertJsonPath('stats.manual_proof_contribution.awaiting', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.awaiting_amount', 1200)
+            ->assertJsonPath('stats.manual_proof_contribution.pending_review', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.verified', 1);
         $proofReferences = collect($allProof->json('data'))->pluck('reference_number')->all();
         $this->assertContains('MANUAL-PROOF-PENDING-001', $proofReferences);
         $this->assertContains('MANUAL-PROOF-VERIFIED-001', $proofReferences);
@@ -482,16 +494,25 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $pendingReview = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=pending_review');
         $pendingReview->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.filter', 'pending_review')
+            ->assertJsonPath('stats.manual_proof_contribution.total', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.total_amount', 1200)
             ->assertJsonPath('data.0.reference_number', 'MANUAL-PROOF-PENDING-001');
 
         $verified = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=verified');
         $verified->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.filter', 'verified')
+            ->assertJsonPath('stats.manual_proof_contribution.confirmed', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.confirmed_amount', 2400)
             ->assertJsonPath('data.0.reference_number', 'MANUAL-PROOF-VERIFIED-001');
 
         $withoutProof = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=without_proof');
         $withoutProof->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.filter', 'without_proof')
+            ->assertJsonPath('stats.manual_proof_contribution.total', 1)
+            ->assertJsonPath('stats.manual_proof_contribution.total_amount', 900)
             ->assertJsonPath('data.0.id', $gatewayPayment->id);
     }
 

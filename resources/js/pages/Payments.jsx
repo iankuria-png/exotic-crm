@@ -23,6 +23,13 @@ import useReportingCurrency from '../hooks/useReportingCurrency';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SUCCESSFUL_PAYMENT_STATUSES = ['completed', 'expired'];
+const MANUAL_PROOF_FILTER_LABELS = {
+    with_proof: 'Manual proof uploads',
+    pending_review: 'Pending proof review',
+    verified: 'Verified proof',
+    rejected: 'Rejected proof',
+    without_proof: 'No proof upload',
+};
 
 function proofCacheKey(submission) {
     return submission?.id ? `submission:${submission.id}` : `url:${submission?.proof_url || ''}`;
@@ -2570,6 +2577,8 @@ export default function Payments() {
     const manualProofVisibleLabel = manualSubmissionFilter === 'without_proof'
         ? 'payments without proof shown'
         : 'manual proof rows shown';
+    const manualProofContribution = data?.stats?.manual_proof_contribution || null;
+    const manualProofContributionLabel = MANUAL_PROOF_FILTER_LABELS[manualSubmissionFilter || manualProofContribution?.filter] || 'Manual proof rows';
     const statsScope = String(data?.stats_scope || 'business');
     const visibilityMode = canViewTests ? testVisibility : 'hide';
     const normalizedCurrency = data?.stats?.normalized_currency || reportingCurrency.targetCurrency;
@@ -3586,6 +3595,96 @@ export default function Payments() {
                             ? 'Test inspection mode is active for this view.'
                             : 'Business view active: test and sandbox rows stay hidden from the table and summary cards unless an admin reveals them.'}
             </section>
+
+            {manualSubmissionFilter && manualProofContribution ? (
+                <section className="rounded-xl border border-teal-200 bg-white px-4 py-4 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-teal-500" />
+                                <h2 className="text-sm font-semibold text-slate-900">{manualProofContributionLabel} contribution</h2>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">
+                                {manualProofContribution.total.toLocaleString()} payment{manualProofContribution.total === 1 ? '' : 's'} in the current filter scope.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setManualSubmissionFilter('');
+                                setPage(1);
+                            }}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            Clear proof filter
+                        </button>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 lg:grid-cols-4 sm:grid-cols-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
+                            <div className="flex items-center gap-2">
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-slate-400" />
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Filtered total</p>
+                            </div>
+                            <p className="mt-2 text-2xl font-semibold leading-none text-slate-900">{manualProofContribution.total.toLocaleString()}</p>
+                            {renderSummaryAmount(
+                                manualProofContribution.total_amount_breakdown || {},
+                                toAmount(manualProofContribution.total_amount),
+                                manualProofContribution.total_normalized_amount,
+                                manualProofContribution.total_normalization_meta,
+                            )}
+                            <p className="mt-1 text-xs text-slate-500">
+                                {manualProofContribution.matched.toLocaleString()} matched · {manualProofContribution.unmatched.toLocaleString()} unmatched
+                            </p>
+                        </div>
+
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-3">
+                            <div className="flex items-center gap-2">
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-500" />
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700">Confirmed</p>
+                            </div>
+                            <p className="mt-2 text-2xl font-semibold leading-none text-slate-900">{manualProofContribution.confirmed.toLocaleString()}</p>
+                            {renderSummaryAmount(
+                                manualProofContribution.confirmed_amount_breakdown || {},
+                                toAmount(manualProofContribution.confirmed_amount),
+                                manualProofContribution.confirmed_normalized_amount,
+                                manualProofContribution.confirmed_normalization_meta,
+                            )}
+                            <p className="mt-1 text-xs text-emerald-700">{manualProofContribution.verified.toLocaleString()} verified proof rows</p>
+                        </div>
+
+                        <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-3">
+                            <div className="flex items-center gap-2">
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-amber-500" />
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-amber-700">Awaiting</p>
+                            </div>
+                            <p className="mt-2 text-2xl font-semibold leading-none text-slate-900">{manualProofContribution.awaiting.toLocaleString()}</p>
+                            {renderSummaryAmount(
+                                manualProofContribution.awaiting_amount_breakdown || {},
+                                toAmount(manualProofContribution.awaiting_amount),
+                                manualProofContribution.awaiting_normalized_amount,
+                                manualProofContribution.awaiting_normalization_meta,
+                            )}
+                            <p className="mt-1 text-xs text-amber-700">{manualProofContribution.pending_review.toLocaleString()} pending manual review</p>
+                        </div>
+
+                        <div className="rounded-lg border border-rose-200 bg-rose-50/50 px-3 py-3">
+                            <div className="flex items-center gap-2">
+                                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-rose-500" />
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-700">Failed or rejected</p>
+                            </div>
+                            <p className="mt-2 text-2xl font-semibold leading-none text-slate-900">{manualProofContribution.failed.toLocaleString()}</p>
+                            {renderSummaryAmount(
+                                manualProofContribution.failed_amount_breakdown || {},
+                                toAmount(manualProofContribution.failed_amount),
+                                manualProofContribution.failed_normalized_amount,
+                                manualProofContribution.failed_normalization_meta,
+                            )}
+                            <p className="mt-1 text-xs text-rose-700">{manualProofContribution.rejected.toLocaleString()} rejected proof rows</p>
+                        </div>
+                    </div>
+                </section>
+            ) : null}
 
             <section className="crm-filter-row space-y-3">
                 <div className="flex flex-wrap items-end gap-3">
