@@ -202,6 +202,8 @@ class PaymentQueueController extends Controller
         $reversedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedStatsQuery = (clone $statsQuery)
             ->where('status', 'failed');
+        $manualProofStatsQuery = (clone $statsQuery)
+            ->whereHas('manualSubmission');
         $failedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
         $pendingNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
@@ -255,6 +257,13 @@ class PaymentQueueController extends Controller
             'failed_currency_count' => $failedBreakdown['currency_count'],
             'failed_normalized_amount' => $failedNormalized['normalized_total'],
             'failed_normalization_meta' => $failedNormalized['normalization_meta'],
+            'manual_proof_uploads' => (clone $manualProofStatsQuery)->count(),
+            'manual_proof_pending_review' => (clone $manualProofStatsQuery)
+                ->where('reconciliation_state', 'manual_review')
+                ->whereHas('manualSubmission', function (Builder $builder) {
+                    $builder->whereNull('review_decision');
+                })
+                ->count(),
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
             'unmatched_review' => (clone $confirmedStatsQuery)->whereNull('client_id')->count(),

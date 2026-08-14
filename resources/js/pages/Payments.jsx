@@ -1494,6 +1494,7 @@ export default function Payments() {
     const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import', 'orphan_manual_import']);
     const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet']);
+    const allowedManualSubmissionFilters = new Set(['with_proof', 'without_proof', 'pending_review', 'verified', 'rejected']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
@@ -1537,6 +1538,10 @@ export default function Payments() {
     const [purposeFilter, setPurposeFilter] = useState(() => {
         const requested = (searchParams.get('purpose') || '').trim();
         return allowedPurposeFilters.has(requested) ? requested : '';
+    });
+    const [manualSubmissionFilter, setManualSubmissionFilter] = useState(() => {
+        const requested = (searchParams.get('manual_submission') || '').trim();
+        return allowedManualSubmissionFilters.has(requested) ? requested : '';
     });
     const [environmentFilter, setEnvironmentFilter] = useState(() => {
         const requested = (searchParams.get('environment') || '').trim().toLowerCase();
@@ -1692,6 +1697,7 @@ export default function Payments() {
         ...(platformFilter && { platform_id: Number(platformFilter) }),
         ...(sourceFilter && { source: sourceFilter }),
         ...(purposeFilter && { purpose: purposeFilter }),
+        ...(manualSubmissionFilter && { manual_submission: manualSubmissionFilter }),
         ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
         ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
         ...(confidenceFilter && { match_confidence: confidenceFilter }),
@@ -1710,6 +1716,7 @@ export default function Payments() {
         platformFilter,
         sourceFilter,
         purposeFilter,
+        manualSubmissionFilter,
         canViewTests,
         environmentFilter,
         testVisibility,
@@ -1723,7 +1730,7 @@ export default function Payments() {
     ]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -1737,6 +1744,7 @@ export default function Payments() {
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
                     ...(purposeFilter && { purpose: purposeFilter }),
+                    ...(manualSubmissionFilter && { manual_submission: manualSubmissionFilter }),
                     ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
                     ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
@@ -2556,6 +2564,12 @@ export default function Payments() {
         };
     }, [data?.stats, rows]);
 
+    const manualProofUploadsInScope = Number(data?.stats?.manual_proof_uploads || 0);
+    const manualProofPendingReviewInScope = Number(data?.stats?.manual_proof_pending_review || 0);
+    const manualProofVisibleCount = Number(data?.total || 0);
+    const manualProofVisibleLabel = manualSubmissionFilter === 'without_proof'
+        ? 'payments without proof shown'
+        : 'manual proof rows shown';
     const statsScope = String(data?.stats_scope || 'business');
     const visibilityMode = canViewTests ? testVisibility : 'hide';
     const normalizedCurrency = data?.stats?.normalized_currency || reportingCurrency.targetCurrency;
@@ -3640,6 +3654,20 @@ export default function Payments() {
                         ]}
                     />
 
+                    <FilterSelect
+                        label="Proof"
+                        value={manualSubmissionFilter}
+                        onChange={(event) => { setManualSubmissionFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All proof states' },
+                            { value: 'with_proof', label: 'Manual proof uploads' },
+                            { value: 'pending_review', label: 'Pending proof review' },
+                            { value: 'verified', label: 'Verified proof' },
+                            { value: 'rejected', label: 'Rejected proof' },
+                            { value: 'without_proof', label: 'No proof upload' },
+                        ]}
+                    />
+
                     <div className="flex flex-col gap-1">
                         <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="payments-from">From</label>
                         <input
@@ -3776,7 +3804,7 @@ export default function Payments() {
                         Hide SMS payment links
                     </label>
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -3789,6 +3817,7 @@ export default function Payments() {
                                 setPlatformFilter('');
                                 setSourceFilter('');
                                 setPurposeFilter('');
+                                setManualSubmissionFilter('');
                                 setEnvironmentFilter('');
                                 setTestVisibility('hide');
                                 setConfidenceFilter('');
@@ -3809,9 +3838,22 @@ export default function Payments() {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
-                    <p className="text-xs text-slate-400">
-                        <span className="crm-mono">Ctrl/Cmd+Enter</span> to confirm selected &middot; Import fields: <span className="crm-mono">payment_date</span>, <span className="crm-mono">amount</span>, + identifier
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs text-slate-400">
+                            <span className="crm-mono">Ctrl/Cmd+Enter</span> to confirm selected &middot; Import fields: <span className="crm-mono">payment_date</span>, <span className="crm-mono">amount</span>, + identifier
+                        </p>
+                        <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+                            manualSubmissionFilter
+                                ? 'border-teal-200 bg-teal-50 text-teal-800'
+                                : 'border-slate-200 bg-white text-slate-500'
+                        }`}>
+                            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${manualProofPendingReviewInScope > 0 ? 'bg-amber-500' : 'bg-teal-500'}`} />
+                            {manualSubmissionFilter
+                                ? `${manualProofVisibleCount.toLocaleString()} ${manualProofVisibleLabel}`
+                                : `${manualProofUploadsInScope.toLocaleString()} manual proof uploads in scope`}
+                            {manualProofPendingReviewInScope > 0 ? ` · ${manualProofPendingReviewInScope.toLocaleString()} pending` : ''}
+                        </span>
+                    </div>
                     <p className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                         <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                         Triage: link within 1h, retry STK within 24h, escalate after 72h

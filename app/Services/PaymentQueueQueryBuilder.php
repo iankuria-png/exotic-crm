@@ -12,8 +12,7 @@ class PaymentQueueQueryBuilder
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService
-    ) {
-    }
+    ) {}
 
     public function validationRules(): array
     {
@@ -26,6 +25,7 @@ class PaymentQueueQueryBuilder
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
             'purpose' => 'nullable|in:wallet_topup,non_wallet',
+            'manual_submission' => 'nullable|in:with_proof,without_proof,pending_review,verified,rejected',
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
             'has_discount' => 'nullable|in:0,1',
@@ -48,15 +48,15 @@ class PaymentQueueQueryBuilder
         $testVisibility = in_array($testVisibility, ['hide', 'include', 'only'], true) ? $testVisibility : 'hide';
         $canViewTests = $this->canViewTests($request);
 
-        if (($testVisibility !== 'hide' || $environmentFilter === 'sandbox') && !$canViewTests) {
+        if (($testVisibility !== 'hide' || $environmentFilter === 'sandbox') && ! $canViewTests) {
             abort(403, 'Only admin users can view test payments.');
         }
 
         $baselineCutoff = $this->resolveBaselineCutoff();
-        $from = !empty($validated['from'])
+        $from = ! empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
             : ($baselineCutoff ? $baselineCutoff->copy() : null);
-        $to = !empty($validated['to'])
+        $to = ! empty($validated['to'])
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
 
@@ -135,6 +135,27 @@ class PaymentQueueQueryBuilder
             $query->walletTopups();
         } elseif ($purposeFilter === 'non_wallet') {
             $query->excludingWalletTopups();
+        }
+
+        $manualSubmissionFilter = trim((string) ($validated['manual_submission'] ?? $request->input('manual_submission', '')));
+        if ($manualSubmissionFilter !== '') {
+            if ($manualSubmissionFilter === 'without_proof') {
+                $query->whereDoesntHave('manualSubmission');
+            } elseif ($manualSubmissionFilter === 'pending_review') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->whereNull('review_decision');
+                })->where('reconciliation_state', 'manual_review');
+            } elseif ($manualSubmissionFilter === 'verified') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->where('review_decision', 'approved');
+                });
+            } elseif ($manualSubmissionFilter === 'rejected') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->where('review_decision', 'rejected');
+                });
+            } else {
+                $query->whereHas('manualSubmission');
+            }
         }
 
         $hasDiscountFilter = trim((string) ($validated['has_discount'] ?? ''));
@@ -261,14 +282,14 @@ class PaymentQueueQueryBuilder
             return null;
         }
 
-        if (!is_array($value)) {
+        if (! is_array($value)) {
             return null;
         }
 
         $mode = $value['mode'] ?? 'fresh_start';
         $cutoffDate = $value['cutoff_date'] ?? null;
 
-        if ($mode !== 'fresh_start' || !$cutoffDate) {
+        if ($mode !== 'fresh_start' || ! $cutoffDate) {
             return null;
         }
 

@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\ManualPaymentBundle;
 use App\Models\Payment;
+use App\Models\PaymentManualSubmission;
 use App\Models\Platform;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -57,7 +58,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
 
         $response->assertOk()
             ->assertJsonPath('total', 2)
@@ -115,7 +116,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=include');
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&test_visibility=include');
 
         $response->assertOk()
             ->assertJsonPath('total', 4)
@@ -165,7 +166,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=only');
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&test_visibility=only');
 
         $response->assertOk()
             ->assertJsonPath('total', 2)
@@ -187,10 +188,10 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=include')
+        $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&test_visibility=include')
             ->assertForbidden();
 
-        $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&environment=sandbox')
+        $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&environment=sandbox')
             ->assertForbidden();
     }
 
@@ -219,7 +220,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
         ]);
 
-        $businessView = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $businessView = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
         $businessView->assertOk()->assertJsonPath('total', 0);
 
         $deleteResponse = $this->deleteJson("/api/crm/payments/{$payment->id}/delete-test", [
@@ -336,20 +337,20 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
         $summaryResponse->assertOk()
             ->assertJsonPath('stats.confirmed', 2)
             ->assertJsonPath('stats.confirmed_currency_count', 1);
         $this->assertSame(1559.2, (float) $summaryResponse->json('stats.confirmed_amount'));
 
-        $completedFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=completed');
+        $completedFilterResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&status=completed');
         $completedFilterResponse->assertOk()
             ->assertJsonPath('total', 2);
         $completedReferences = collect($completedFilterResponse->json('data'))->pluck('reference_number')->all();
         $this->assertContains('SUCCESS-COMPLETED-001', $completedReferences);
         $this->assertContains('SUCCESS-EXPIRED-001', $completedReferences);
 
-        $expiredFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=expired');
+        $expiredFilterResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&status=expired');
         $expiredFilterResponse->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.reference_number', 'SUCCESS-EXPIRED-001');
@@ -428,12 +429,70 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&resolution_code=reversed');
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&resolution_code=reversed');
 
         $response->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.reference_number', 'RESOLUTION-REV-001')
             ->assertJsonPath('data.0.resolution_code', 'reversed');
+    }
+
+    public function test_payment_workspace_can_filter_manual_proof_uploads(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $pendingProof = $this->createPayment($platform, [
+            'transaction_reference' => 'MANUAL-PROOF-PENDING-001',
+            'reference_number' => 'MANUAL-PROOF-PENDING-001',
+            'status' => 'pending',
+            'reconciliation_state' => 'manual_review',
+        ]);
+        $this->createManualSubmission($platform, $pendingProof);
+
+        $verifiedProof = $this->createPayment($platform, [
+            'transaction_reference' => 'MANUAL-PROOF-VERIFIED-001',
+            'reference_number' => 'MANUAL-PROOF-VERIFIED-001',
+            'status' => 'completed',
+            'reconciliation_state' => 'resolved',
+        ]);
+        $this->createManualSubmission($platform, $verifiedProof, [
+            'review_decision' => 'approved',
+            'reviewed_at' => now()->subMinute(),
+        ]);
+
+        $gatewayPayment = $this->createPayment($platform, [
+            'transaction_reference' => 'GATEWAY-NO-PROOF-001',
+            'reference_number' => 'GATEWAY-NO-PROOF-001',
+            'status' => 'completed',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $allProof = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=with_proof');
+        $allProof->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('stats.manual_proof_uploads', 2)
+            ->assertJsonPath('stats.manual_proof_pending_review', 1);
+        $proofReferences = collect($allProof->json('data'))->pluck('reference_number')->all();
+        $this->assertContains('MANUAL-PROOF-PENDING-001', $proofReferences);
+        $this->assertContains('MANUAL-PROOF-VERIFIED-001', $proofReferences);
+        $this->assertNotContains('GATEWAY-NO-PROOF-001', $proofReferences);
+
+        $pendingReview = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=pending_review');
+        $pendingReview->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'MANUAL-PROOF-PENDING-001');
+
+        $verified = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=verified');
+        $verified->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'MANUAL-PROOF-VERIFIED-001');
+
+        $withoutProof = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&manual_submission=without_proof');
+        $withoutProof->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $gatewayPayment->id);
     }
 
     public function test_reversed_stats_surface_resolved_reversals_and_reversed_status_rows(): void
@@ -467,7 +526,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
 
         $summaryResponse->assertOk()
             ->assertJsonPath('stats.confirmed', 1)
@@ -475,7 +534,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('stats.reversed', 2)
             ->assertJsonPath('stats.reversed_amount', 780);
 
-        $reversedFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=reversed');
+        $reversedFilterResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&status=reversed');
 
         $reversedFilterResponse->assertOk()
             ->assertJsonPath('total', 2);
@@ -513,7 +572,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
 
         $response->assertOk()
             ->assertJsonPath('total', 1)
@@ -523,7 +582,6 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $this->assertContains('LIVE-VISIBLE-001', $references);
         $this->assertNotContains('BUNDLE-HIDDEN-001', $references);
     }
-
 
     public function test_payment_workspace_surfaces_discounted_stats_and_filters(): void
     {
@@ -564,7 +622,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id);
 
         $summaryResponse->assertOk()
             ->assertJsonPath('stats.confirmed', 2)
@@ -573,7 +631,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('stats.discounted_currency_count', 1)
             ->assertJsonPath('data.0.deal.discount_source', 'self_service_incentive');
 
-        $discountedOnlyResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&has_discount=1');
+        $discountedOnlyResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&has_discount=1');
 
         $discountedOnlyResponse->assertOk()
             ->assertJsonPath('total', 1)
@@ -581,7 +639,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('data.0.deal.discount_percentage', '20.00')
             ->assertJsonPath('data.0.deal.discount_source', 'self_service_incentive');
 
-        $fullPriceResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&has_discount=0');
+        $fullPriceResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&has_discount=0');
 
         $fullPriceResponse->assertOk()
             ->assertJsonPath('total', 1)
@@ -674,7 +732,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         Sanctum::actingAs($salesUser);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07');
+        $response = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&from=2026-05-01&to=2026-05-07');
 
         $response->assertOk()
             ->assertJsonPath('stats.confirmed', 4)
@@ -693,12 +751,12 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('stats.customer_mix.buckets.unattributed.payments_count', 1)
             ->assertJsonPath('stats.customer_mix.buckets.unattributed.amount', 4000);
 
-        $newSegment = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07&customer_mix_segment=new_active');
+        $newSegment = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&from=2026-05-01&to=2026-05-07&customer_mix_segment=new_active');
         $newSegment->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.reference_number', 'MIX-NEW-ACTIVE-001');
 
-        $otherSegment = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07&customer_mix_segment=other_matched');
+        $otherSegment = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&from=2026-05-01&to=2026-05-07&customer_mix_segment=other_matched');
         $otherSegment->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.reference_number', 'MIX-OTHER-MATCHED-001');
@@ -707,8 +765,8 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([
-            'name' => $country . ' Sandbox Visibility Market',
-            'domain' => 'sandbox-visibility-' . Str::random(6) . '.example.test',
+            'name' => $country.' Sandbox Visibility Market',
+            'domain' => 'sandbox-visibility-'.Str::random(6).'.example.test',
             'country' => $country,
             'timezone' => 'Africa/Nairobi',
             'phone_prefix' => '254',
@@ -723,8 +781,8 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
     private function createUser(Platform $platform, string $role): User
     {
         return User::query()->create([
-            'name' => ucfirst(str_replace('_', ' ', $role)) . ' User',
-            'email' => strtolower($role) . '-' . Str::random(6) . '@example.test',
+            'name' => ucfirst(str_replace('_', ' ', $role)).' User',
+            'email' => strtolower($role).'-'.Str::random(6).'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'assigned_market_ids' => [$platform->id],
@@ -734,12 +792,12 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
     private function createPayment(Platform $platform, array $attributes = []): Payment
     {
-        $reference = $attributes['transaction_reference'] ?? ('PAY-' . Str::upper(Str::random(8)));
+        $reference = $attributes['transaction_reference'] ?? ('PAY-'.Str::upper(Str::random(8)));
         $createdAt = $attributes['created_at'] ?? now()->subMinutes(5);
 
         $payment = Payment::query()->create(array_merge([
             'platform_id' => $platform->id,
-            'phone' => '254700' . random_int(100000, 999999),
+            'phone' => '254700'.random_int(100000, 999999),
             'amount' => 1000,
             'currency' => 'KES',
             'transaction_uuid' => (string) Str::uuid(),
@@ -761,5 +819,27 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         }
 
         return $payment;
+    }
+
+    private function createManualSubmission(Platform $platform, Payment $payment, array $attributes = []): PaymentManualSubmission
+    {
+        return PaymentManualSubmission::query()->create(array_merge([
+            'payment_id' => $payment->id,
+            'client_id' => $payment->client_id,
+            'platform_id' => $platform->id,
+            'product_id' => $payment->product_id,
+            'duration_key' => 'monthly',
+            'manual_method_key' => 'bank_transfer',
+            'activated_on_submit' => false,
+            'destination_snapshot_json' => ['method_key' => 'bank_transfer'],
+            'instruction_snapshot_json' => ['instruction_intro' => 'Pay and upload proof.'],
+            'sender_name' => 'Manual Proof Tester',
+            'transaction_reference' => $payment->transaction_reference,
+            'customer_note' => 'Uploaded proof through checkout.',
+            'proof_disk' => 'local',
+            'proof_path' => 'manual-payment-proofs/test.png',
+            'proof_mime' => 'image/png',
+            'proof_size_bytes' => 11,
+        ], $attributes));
     }
 }
