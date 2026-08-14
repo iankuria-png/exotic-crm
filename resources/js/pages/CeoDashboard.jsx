@@ -48,10 +48,27 @@ function apiError(error, fallback) {
 
 function compactWindowLabel(window) {
     if (!window?.from || !window?.to) return 'Selected period';
+
+    const formatDate = (value, includeYear = false) => {
+        const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
+        if (!year || !month || !day) return value;
+
+        return new Intl.DateTimeFormat('en-GB', {
+            day: 'numeric',
+            month: 'short',
+            ...(includeYear ? { year: 'numeric' } : {}),
+        }).format(new Date(year, month - 1, day));
+    };
+
     if (window.is_single_day || window.from === window.to) {
-        return window.is_today ? `${window.from} (today, so far)` : window.from;
+        return window.is_today ? `${formatDate(window.from, true)} (today, so far)` : formatDate(window.from, true);
     }
-    return `${window.from} to ${window.to}`;
+
+    const fromDate = new Date(...String(window.from).slice(0, 10).split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
+    const toDate = new Date(...String(window.to).slice(0, 10).split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
+    const sameYear = Number.isFinite(fromDate.getTime()) && Number.isFinite(toDate.getTime()) && fromDate.getFullYear() === toDate.getFullYear();
+
+    return `${formatDate(window.from, !sameYear)} - ${formatDate(window.to, true)}`;
 }
 
 export default function CeoDashboard({ user, onSwitchAdminView }) {

@@ -65,6 +65,37 @@ function formatSigned(value) {
     return `${numeric > 0 ? '+' : ''}${numeric.toLocaleString()}`;
 }
 
+function parseDateOnly(value) {
+    if (!value) return null;
+    const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
+
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+}
+
+function formatHumanDate(value, includeYear = false) {
+    const date = parseDateOnly(value);
+    if (!date) return '--';
+
+    return new Intl.DateTimeFormat('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        ...(includeYear ? { year: 'numeric' } : {}),
+    }).format(date);
+}
+
+function formatHumanRange(range) {
+    if (!range?.from || !range?.to) return 'Selected period';
+    if (range.from === range.to) return formatHumanDate(range.to, true);
+
+    const from = parseDateOnly(range.from);
+    const to = parseDateOnly(range.to);
+    const sameYear = from && to && from.getFullYear() === to.getFullYear();
+
+    return `${formatHumanDate(range.from, !sameYear)} - ${formatHumanDate(range.to, true)}`;
+}
+
 function formatPercent(value) {
     if (value === null || value === undefined || !Number.isFinite(Number(value))) {
         return 'No baseline';
@@ -352,13 +383,55 @@ function MicroMetric({ label, value, helper, tone = 'neutral', definition = null
 
 function snapshotDateLine(item) {
     if (!item) return '--';
-    const date = item.date || '--';
+    const date = formatHumanDate(item.date, true);
 
     if (item.approximate && item.as_of) {
-        return `${date} - nearest ${item.as_of}`;
+        return `${date} - nearest ${formatHumanDate(item.as_of, true)}`;
     }
 
     return date;
+}
+
+function StatusDot({ tone = 'neutral', className = '' }) {
+    const toneClass = {
+        active: 'bg-teal-400',
+        inactive: 'bg-rose-400',
+        warning: 'bg-amber-300',
+        neutral: 'bg-slate-400',
+        light: 'bg-slate-300',
+    }[tone] || 'bg-slate-400';
+
+    return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${toneClass} ${className}`} />;
+}
+
+function MovementChip({ label, value, tone = 'neutral' }) {
+    return (
+        <span className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <StatusDot tone={tone} className="h-1.5 w-1.5" />
+            <span>{label}</span>
+            <span className="crm-mono text-slate-50">{formatNumber(value)}</span>
+        </span>
+    );
+}
+
+function LedgerRow({ label, value, definition, tone = 'neutral' }) {
+    const valueClass = {
+        active: 'text-teal-700',
+        inactive: 'text-rose-700',
+        warning: 'text-amber-700',
+        neutral: 'text-slate-900',
+    }[tone] || 'text-slate-900';
+
+    return (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+            <span className="flex min-w-0 items-center font-medium text-slate-700">
+                <StatusDot tone={tone} className="mr-2" />
+                <span className="truncate">{label}</span>
+                <DefinitionTooltip label={label} text={definition} />
+            </span>
+            <span className={`crm-mono shrink-0 font-semibold ${valueClass}`}>{formatNumber(value)}</span>
+        </div>
+    );
 }
 
 function snapshotTitle(item) {
@@ -517,7 +590,7 @@ function SubscriberSnapshotPanel({ history, currentScope, data }) {
                                 {formatSigned(rangeChange.change)}
                             </p>
                             <p className="mt-1 text-xs leading-5 text-slate-400">
-                                {rangeChange.from_date || '--'} to {rangeChange.to_date || '--'}
+                                {formatHumanRange({ from: rangeChange.from_date, to: rangeChange.to_date })}
                             </p>
                         </div>
                     </div>
@@ -680,16 +753,11 @@ function CurrentBaseRail({ currentScope, totals, comparison, data, labels = move
                         <p className="crm-mono text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(total)}</p>
                         <p className="mt-1 text-sm text-slate-500">
                             paid clients in selected scope
-                            {currentScope.as_of ? <span> - snapshot {currentScope.as_of}</span> : null}
+                            {currentScope.as_of ? <span> - snapshot {formatHumanDate(currentScope.as_of, true)}</span> : null}
                         </p>
                     </div>
-                    <div className={`rounded-xl px-2.5 py-1 text-xs font-semibold ${
-                        netTone === 'positive'
-                            ? 'bg-teal-50 text-teal-700'
-                            : netTone === 'negative'
-                                ? 'bg-rose-50 text-rose-700'
-                                : 'bg-slate-100 text-slate-600'
-                    }`}>
+                    <div className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        <StatusDot tone={netTone === 'positive' ? 'active' : netTone === 'negative' ? 'inactive' : 'neutral'} />
                         {movementLabel(totals.net_active_movement)}
                     </div>
                 </div>
@@ -713,8 +781,8 @@ function CurrentBaseRail({ currentScope, totals, comparison, data, labels = move
 
             <div className="mt-5 rounded-xl bg-slate-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Window</p>
-                <p className="mt-2 crm-mono text-sm font-semibold text-slate-900">
-                    {data?.range?.from || '--'} to {data?.range?.to || '--'}
+                <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {formatHumanRange(data?.range)}
                 </p>
                 <p className="mt-2 text-xs leading-5 text-slate-500">
                     {comparisonLine(comparison, 'net_active_movement', 'movement')}
@@ -722,34 +790,10 @@ function CurrentBaseRail({ currentScope, totals, comparison, data, labels = move
             </div>
 
             <div className="mt-3 grid gap-2">
-                <div className="flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2 text-sm">
-                    <span className="flex items-center font-medium text-teal-800">
-                        Profile additions
-                        <DefinitionTooltip label="Profile additions" text={TERM_HELP.additions} />
-                    </span>
-                    <span className="crm-mono font-semibold text-teal-900">{formatNumber(totals.base_gain)}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
-                    <span className="flex items-center font-medium text-slate-700">
-                        {labels.renewalLabel}
-                        <DefinitionTooltip label={labels.renewalLabel} text={labels.renewalDefinition} />
-                    </span>
-                    <span className="crm-mono font-semibold text-slate-900">{formatNumber(totals.renewed_profiles)}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl bg-rose-50 px-3 py-2 text-sm">
-                    <span className="flex items-center font-medium text-rose-800">
-                        Paid exits
-                        <DefinitionTooltip label="Paid exits" text={TERM_HELP.paidExits} />
-                    </span>
-                    <span className="crm-mono font-semibold text-rose-900">{formatNumber(totals.inactive_profiles)}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2 text-sm">
-                    <span className="flex items-center font-medium text-slate-700">
-                        Successful payments
-                        <DefinitionTooltip label="Successful payments" text={TERM_HELP.successfulPayments} />
-                    </span>
-                    <span className="crm-mono font-semibold text-slate-900">{formatNumber(totals.successful_payments)}</span>
-                </div>
+                <LedgerRow label="Profile additions" value={totals.base_gain} definition={TERM_HELP.additions} tone="active" />
+                <LedgerRow label={labels.renewalLabel} value={totals.renewed_profiles} definition={labels.renewalDefinition} tone="neutral" />
+                <LedgerRow label="Paid exits" value={totals.inactive_profiles} definition={TERM_HELP.paidExits} tone="inactive" />
+                <LedgerRow label="Successful payments" value={totals.successful_payments} definition={TERM_HELP.successfulPayments} tone="light" />
             </div>
         </aside>
     );
@@ -876,23 +920,13 @@ export default function ProfileMovementWidget({
                                 </p>
                             </div>
                             <div className="flex flex-wrap gap-2 text-xs">
-                                <span className="rounded-full bg-teal-400/12 px-2.5 py-1 font-semibold text-teal-200 ring-1 ring-teal-300/20">
-                                    {labels.firstPaidLabel} {formatNumber(normalizedTotals.new_paid_activations)}
-                                </span>
-                                <span className="rounded-full bg-slate-400/12 px-2.5 py-1 font-semibold text-slate-100 ring-1 ring-slate-300/20">
-                                    {labels.renewalLabel} {formatNumber(normalizedTotals.renewed_profiles)}
-                                </span>
+                                <MovementChip label={labels.firstPaidLabel} value={normalizedTotals.new_paid_activations} tone="active" />
+                                <MovementChip label={labels.renewalLabel} value={normalizedTotals.renewed_profiles} tone="neutral" />
                                 {normalizedTotals.reactivated_profiles > 0 ? (
-                                    <span className="rounded-full bg-amber-400/12 px-2.5 py-1 font-semibold text-amber-100 ring-1 ring-amber-300/20">
-                                        Won-back {formatNumber(normalizedTotals.reactivated_profiles)}
-                                    </span>
+                                    <MovementChip label="Won-back" value={normalizedTotals.reactivated_profiles} tone="warning" />
                                 ) : null}
-                                <span className="rounded-full bg-slate-400/12 px-2.5 py-1 font-semibold text-slate-100 ring-1 ring-slate-300/20">
-                                    Free trials {formatNumber(normalizedTotals.free_trial_activations)}
-                                </span>
-                                <span className="rounded-full bg-rose-400/12 px-2.5 py-1 font-semibold text-rose-200 ring-1 ring-rose-300/20">
-                                    Exits {formatNumber(normalizedTotals.inactive_profiles)}
-                                </span>
+                                <MovementChip label="Free trials" value={normalizedTotals.free_trial_activations} tone="light" />
+                                <MovementChip label="Exits" value={normalizedTotals.inactive_profiles} tone="inactive" />
                             </div>
                         </div>
 
