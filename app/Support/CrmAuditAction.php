@@ -5,142 +5,284 @@ namespace App\Support;
 final class CrmAuditAction
 {
     public const CLIENT_CREATE = 'client_create';
+
     public const LEAD_CREATE = 'lead_create';
+
     public const LEAD_ASSIGN = 'lead_assign';
+
     public const LEAD_STATUS_UPDATE = 'lead_status_update';
+
     public const LEAD_ARCHIVE = 'lead_archive';
+
     public const LEAD_DELETE = 'lead_delete';
+
     public const LEAD_SCRAPE_INTAKE = 'lead_scrape_intake';
+
     public const USER_CREATE = 'user_create';
+
     public const ROLE_UPDATE = 'role_update';
+
     public const USER_IMPERSONATION_START = 'user_impersonation_start';
+
     public const AUTH_LOGIN = 'auth_login';
+
     public const AUTH_LOGIN_FAILED = 'auth_login_failed';
+
     public const AUTH_LOGOUT = 'auth_logout';
+
     public const INTEGRATION_PLATFORM_CREATE = 'integration_platform_create';
+
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
+
     public const LIFECYCLE_SETTINGS_UPDATE = 'lifecycle_settings_update';
+
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
+
     public const INTEGRATION_SYNC_RUN = 'integration_sync_run';
+
     public const SYSTEM_DEPLOY_START = 'system_deploy_start';
+
     public const SYSTEM_DEPLOY_SUCCESS = 'system_deploy_success';
+
     public const SYSTEM_DEPLOY_FAILED = 'system_deploy_failed';
+
     public const SCRAPER_SOURCE_CREATE = 'scraper_source_create';
+
     public const SCRAPER_SOURCE_UPDATE = 'scraper_source_update';
+
     public const SCRAPER_RUN = 'scraper_run';
+
     public const DEAL_ACTIVATE = 'deal_activate';
+
     public const DEAL_DEACTIVATE = 'deal_deactivate';
+
     public const DEAL_EXTEND = 'deal_extend';
+
     public const DEAL_RENEW = 'deal_renew';
+
     public const DEAL_FREE_TRIAL = 'deal_free_trial';
+
     public const DEAL_SUBSIDIARY_TRIAL_ACTIVATE = 'deal_subsidiary_trial_activate';
+
     public const DEAL_SUBSIDIARY_TRIAL_REUSED = 'deal_subsidiary_trial_reused';
+
     public const DEAL_SUBSIDIARY_TRIAL_FAILED = 'deal_subsidiary_trial_failed';
+
     public const DEAL_DISCOUNT = 'deal_discount';
+
     public const DEAL_CREATE_CUSTOM = 'deal_create_custom';
+
     public const PRODUCT_CREATE_SALES = 'product_create_sales';
+
     public const CONVERSATION_SMS_SENT = 'conversation_sms_sent';
+
     public const CONVERSATION_SMS_FAILED = 'conversation_sms_failed';
+
     public const CONVERSATION_WHATSAPP_SENT = 'conversation_whatsapp_sent';
+
     public const CONVERSATION_WHATSAPP_FAILED = 'conversation_whatsapp_failed';
+
     public const WHATSAPP_SENT = 'whatsapp_sent';
+
     public const WHATSAPP_FAILED = 'whatsapp_failed';
+
     public const WHATSAPP_DELIVERED = 'whatsapp_delivered';
+
     public const WHATSAPP_READ = 'whatsapp_read';
+
     public const WHATSAPP_INBOUND_RECEIVED = 'whatsapp_inbound_received';
+
     public const MESSAGING_OPT_OUT_RECORDED = 'messaging_opt_out_recorded';
+
     public const MESSAGING_OPT_OUT_REVOKED = 'messaging_opt_out_revoked';
+
     public const WHATSAPP_PROFILE_UPDATED = 'whatsapp_profile_updated';
+
     public const WHATSAPP_ROUTING_RULE_UPDATED = 'whatsapp_routing_rule_updated';
+
     public const WHATSAPP_PROFILE_KILL_SWITCH_TOGGLED = 'whatsapp_profile_kill_switch_toggled';
+
     public const WHATSAPP_SENDER_PAIRED = 'whatsapp_sender_paired';
+
     public const WHATSAPP_SENDER_BANNED = 'whatsapp_sender_banned';
+
     public const WHATSAPP_SENDER_RETIRED = 'whatsapp_sender_retired';
+
     public const WHATSAPP_SENDER_QUARANTINED = 'whatsapp_sender_quarantined';
+
     public const WHATSAPP_SENDER_REPAIR_STARTED = 'whatsapp_sender_repair_started';
+
     public const WHATSAPP_SENDER_LOGGED_OUT = 'whatsapp_sender_logged_out';
+
     public const WHATSAPP_AUTH_BLOB_FETCH = 'whatsapp_auth_blob_fetch';
+
     public const LIFECYCLE_SMS_SENT = 'lifecycle_sms_sent';
+
     public const LIFECYCLE_SMS_FAILED = 'lifecycle_sms_failed';
+
     public const LIFECYCLE_SMS_CONFIG_UPDATE = 'lifecycle_sms_config_update';
+
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
+
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
+
     public const RENEWAL_WHATSAPP_SENT = 'renewal_whatsapp_sent';
+
     public const RENEWAL_WHATSAPP_FAILED = 'renewal_whatsapp_failed';
+
     public const RENEWAL_PAUSE = 'renewal_pause';
+
     public const RENEWAL_RESUME = 'renewal_resume';
+
     public const CAMPAIGN_RUN_CONFIGURED = 'campaign_run_configured';
+
     public const RENEWAL_CAMPAIGN_CREATE = 'renewal_campaign_create';
+
     public const RENEWAL_CAMPAIGN_UPDATE = 'renewal_campaign_update';
+
     public const RENEWAL_CAMPAIGN_DELETE = 'renewal_campaign_delete';
+
     public const RENEWAL_GUARD_UPDATE = 'renewal_guard_update';
+
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
+
     public const PAYMENT_MATCH_CONFIRM = 'payment_match_confirm';
+
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';
+
     public const PAYMENT_RETRY_STK = 'payment_retry_stk';
+
     public const PAYMENT_SEND_LINK = 'payment_send_link';
+
     public const PAYMENT_MARK_TEST = 'payment_mark_test';
+
     public const PAYMENT_DELETE_TEST = 'payment_delete_test';
+
     public const PAYMENT_SANDBOX_RECONCILE = 'payment_sandbox_reconcile';
+
     public const PAYMENT_CREATE_SUBSCRIPTION = 'payment_create_subscription';
+
     public const PAYMENT_MANUAL_APPROVE = 'payment_manual_approve';
+
     public const PAYMENT_MANUAL_VERIFY = 'payment_manual_verify';
+
     public const PAYMENT_MANUAL_REJECT = 'payment_manual_reject';
+
     public const PAYMENT_MANUAL_CLOSE = 'payment_manual_close';
+
     public const PAYMENT_IMPORT_PREVIEW = 'payment_import_preview';
+
     public const PAYMENT_IMPORT_COMMIT = 'payment_import_commit';
+
     public const PAYMENT_REVIEW_STATE_UPDATE = 'payment_review_state_update';
+
     public const PAYMENT_RECON_PREVIEW = 'payment_recon_preview';
+
     public const PAYMENT_RECON_ROW_REVIEW = 'payment_recon_row_review';
+
     public const PAYMENT_RECON_ROW_LINK = 'payment_recon_row_link';
+
     public const PAYMENT_RECON_BATCH_CLOSE = 'payment_recon_batch_close';
+
     public const MANUAL_PAYMENT_BUNDLE_PREVIEW = 'manual_payment_bundle_preview';
+
     public const MANUAL_PAYMENT_BUNDLE_COMMIT = 'manual_payment_bundle_commit';
+
     public const MANUAL_PAYMENT_BUNDLE_COMPENSATION_FAILED = 'manual_payment_bundle_compensation_failed';
+
     public const MANUAL_PAYMENT_BUNDLE_VOID = 'manual_payment_bundle_void';
+
     public const MANUAL_PAYMENT_BUNDLE_APPROVE = 'manual_payment_bundle_approve';
+
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
+
     public const CLIENT_VERIFIED_STATUS_UPDATE = 'client_verified_status_update';
+
     public const CLIENT_NEW_BADGE_UPDATE = 'client_new_badge_update';
+
+    public const CLIENT_RISK_MARK = 'client_risk_mark';
+
+    public const CLIENT_RISK_CLEAR = 'client_risk_clear';
+
     public const CLIENT_BOOST_SET = 'client_boost_set';
+
     public const CLIENT_BOOST_CLEAR = 'client_boost_clear';
+
     public const CLIENT_TOUR_ADD = 'client_tour_add';
+
     public const CLIENT_TOUR_DELETE = 'client_tour_delete';
+
     public const CLIENT_SUBSCRIPTION_DEACTIVATE = 'client_subscription_deactivate';
+
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
+
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
+
     public const CLIENT_CREDENTIAL_RESET = 'client_credential_reset';
+
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
+
     public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
+
     public const CLIENT_LOGIN_AS_CLIENT_LINK = 'client_login_as_client_link';
+
     public const FIELD_SALES_CLIENT_LOGIN_AS_CLIENT = 'field_sales_client_login_as_client';
+
     public const FIELD_SALES_TRIAL_ACTIVATE = 'field_sales_trial_activate';
+
     public const FIELD_SALES_SETTINGS_UPDATE = 'field_sales_settings_update';
+
     public const COMMISSION_MARK_PAID = 'commission_mark_paid';
+
     public const CLIENT_DELETE = 'client_delete';
+
     public const CLIENT_BULK_DELETE = 'client_bulk_delete';
+
     public const CLIENT_CLOSE_CASE = 'client_close_case';
+
     public const CLIENT_REOPEN = 'client_reopen';
+
     public const CLIENT_BULK_CLOSE_CASE = 'client_bulk_close_case';
+
     public const CLIENT_AUTO_PURGE = 'client_auto_purge';
+
     public const CLIENT_MARK_WON_BACK = 'client_mark_won_back';
+
     public const PAYMENT_CLOSE_VIA_CLIENT = 'payment_close_via_client';
+
     public const CLIENT_WALLET_TOPUP = 'client_wallet_topup';
+
     public const CLIENT_WALLET_ADJUSTMENT = 'client_wallet_adjustment';
+
     public const WALLET_PIN_UPDATE = 'wallet_pin_update';
+
     public const FREE_TRIAL_PIN_UPDATE = 'free_trial_pin_update';
+
     public const DISCOUNT_PIN_UPDATE = 'discount_pin_update';
+
     public const DISCOUNT_CONFIG_UPDATE = 'discount_config_update';
+
     public const LEAD_RECONCILE = 'lead_reconcile';
+
     public const LEAD_CONVERT_TO_CLIENT = 'lead_convert_to_client';
+
     public const LEAD_SB_IMPORT_PREVIEW = 'lead_sb_import_preview';
+
     public const LEAD_SB_IMPORT_COMMIT = 'lead_sb_import_commit';
+
     public const PUSH_CAMPAIGN_CREATE = 'push_campaign_create';
+
     public const PUSH_CAMPAIGN_EXECUTE = 'push_campaign_execute';
+
     public const PUSH_CAMPAIGN_SCHEDULE = 'push_campaign_schedule';
+
     public const PUSH_CAMPAIGN_CANCEL = 'push_campaign_cancel';
+
     public const PUSH_NOTIFICATION_SENT = 'push_notification_sent';
+
     public const PUSH_NOTIFICATION_FAILED = 'push_notification_failed';
+
     public const PAYMENT_IMPORT_MPESA_XML = 'payment_import_mpesa_xml';
+
     public const PAYMENT_MPESA_CONFIRM_SUBSCRIPTION = 'payment_mpesa_confirm_subscription';
 }

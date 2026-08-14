@@ -1,77 +1,77 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use Illuminate\Http\Request;
-use App\Http\Controllers\API\AuthController;
-use App\Http\Controllers\API\PlatformController;
-use App\Http\Controllers\API\DashboardController;
-use App\Http\Controllers\API\ProductController;
-use App\Http\Controllers\API\PaymentController;
-use App\Http\Controllers\API\WalletController;
-use App\Http\Controllers\API\BillingController;
-use App\Http\Controllers\API\SmsLogController;
-use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
+use App\Http\Controllers\API\ActivityLogController;
+use App\Http\Controllers\API\AuthController;
+use App\Http\Controllers\API\BillingController;
+use App\Http\Controllers\API\DashboardController;
+use App\Http\Controllers\API\Kyc\BlobUploadController;
+use App\Http\Controllers\API\Kyc\SiteAnnounceController;
+use App\Http\Controllers\API\Kyc\UploadController as KycUploadController;
+use App\Http\Controllers\API\PaymentController;
+use App\Http\Controllers\API\PlatformController;
+use App\Http\Controllers\API\ProductController;
+use App\Http\Controllers\API\SmsLogController;
+use App\Http\Controllers\API\WalletController;
+use App\Http\Controllers\CRM\AgentTodoController;
 use App\Http\Controllers\CRM\AiBriefingSettingsController;
 use App\Http\Controllers\CRM\AiBriefingShareController;
 use App\Http\Controllers\CRM\AiInsightsController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
 use App\Http\Controllers\CRM\AutoPushPlanController;
+use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\CeoDashboardController;
-use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
+use App\Http\Controllers\CRM\ClientErrorController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\ComplianceController as CrmComplianceController;
+use App\Http\Controllers\CRM\ConversationController;
+use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
+use App\Http\Controllers\CRM\DealController;
+use App\Http\Controllers\CRM\ErrorLogController;
+use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
+use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
+use App\Http\Controllers\CRM\Faq\ContextController as FaqContextController;
+use App\Http\Controllers\CRM\Faq\FeedbackCommentController as FaqFeedbackCommentController;
+use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
+use App\Http\Controllers\CRM\Faq\FeedbackVoteController as FaqFeedbackVoteController;
+use App\Http\Controllers\CRM\Faq\MediaController as FaqMediaController;
+use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughController;
+use App\Http\Controllers\CRM\FieldSalesController;
+use App\Http\Controllers\CRM\ImageProxyController;
+use App\Http\Controllers\CRM\Kyc\DocumentBlobController;
+use App\Http\Controllers\CRM\Kyc\QueueController as KycQueueController;
+use App\Http\Controllers\CRM\Kyc\ReviewController as KycReviewController;
+use App\Http\Controllers\CRM\Kyc\SettingsController as KycSettingsController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\LifecycleRestoreController;
 use App\Http\Controllers\CRM\LifecycleSmsController;
-use App\Http\Controllers\CRM\PaymentQueueController;
-use App\Http\Controllers\CRM\PaymentReconciliationController;
-use App\Http\Controllers\CRM\PaymentExportController;
-use App\Http\Controllers\CRM\PaymentLinkProxyController;
-use App\Http\Controllers\CRM\ClientErrorController;
-use App\Http\Controllers\CRM\DealController;
-use App\Http\Controllers\CRM\ErrorLogController;
-use App\Http\Controllers\CRM\FieldSalesController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\MessagingController;
 use App\Http\Controllers\CRM\MessagingSidecarController;
 use App\Http\Controllers\CRM\MessagingWebhookController;
-use App\Http\Controllers\CRM\SeoSettingsController;
-use App\Http\Controllers\CRM\SettingsController;
-use App\Http\Controllers\CRM\ConversationController;
-use App\Http\Controllers\CRM\ImageProxyController;
+use App\Http\Controllers\CRM\PaymentExportController;
+use App\Http\Controllers\CRM\PaymentLinkProxyController;
+use App\Http\Controllers\CRM\PaymentQueueController;
+use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 use App\Http\Controllers\CRM\ScorecardExportController;
 use App\Http\Controllers\CRM\SeoBoostController;
+use App\Http\Controllers\CRM\SeoController;
+use App\Http\Controllers\CRM\SeoSettingsController;
+use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\SetupController;
 use App\Http\Controllers\CRM\SupportBoardController;
-use App\Http\Controllers\CRM\TeamController;
 use App\Http\Controllers\CRM\SystemHealthUpdateController;
-use App\Http\Controllers\CRM\AgentTodoController;
-use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
-use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
-use App\Http\Controllers\CRM\Faq\ContextController as FaqContextController;
-use App\Http\Controllers\CRM\Faq\MediaController as FaqMediaController;
-use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughController;
-use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
-use App\Http\Controllers\CRM\Faq\FeedbackVoteController as FaqFeedbackVoteController;
-use App\Http\Controllers\CRM\Faq\FeedbackCommentController as FaqFeedbackCommentController;
-use App\Http\Controllers\API\Kyc\BlobUploadController;
-use App\Http\Controllers\API\Kyc\SiteAnnounceController;
-use App\Http\Controllers\API\Kyc\UploadController as KycUploadController;
-use App\Http\Controllers\CRM\Kyc\DocumentBlobController;
-use App\Http\Controllers\CRM\Kyc\QueueController as KycQueueController;
-use App\Http\Controllers\CRM\Kyc\ReviewController as KycReviewController;
-use App\Http\Controllers\CRM\Kyc\SettingsController as KycSettingsController;
+use App\Http\Controllers\CRM\TeamController;
 use App\Http\Controllers\CRM\University\AnalyticsController as UniversityAnalyticsController;
-use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCertSettingsController;
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
 use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
+use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCertSettingsController;
 use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
 use App\Http\Controllers\CRM\University\DailyDrillController as UniversityDailyDrillController;
 use App\Http\Controllers\CRM\University\DailyQuoteController as UniversityDailyQuoteController;
@@ -80,11 +80,10 @@ use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossary
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
-use App\Http\Controllers\CRM\BulkBioController;
-use App\Http\Controllers\CRM\SeoController;
 use App\Http\Controllers\Wp\ComplianceController as WpComplianceController;
 use App\Http\Controllers\Wp\WpSeoController;
-use App\Http\Middleware\WpServiceAuth;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -184,13 +183,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
         // Bulk bio generation
         Route::prefix('bulk')->group(function () {
-            Route::post('/preview',          [BulkBioController::class, 'preview']);
-            Route::get('/',                  [BulkBioController::class, 'index']);
-            Route::post('/',                 [BulkBioController::class, 'store']);
-            Route::get('/{batch}',           [BulkBioController::class, 'show']);
-            Route::post('/{batch}/accept',   [BulkBioController::class, 'accept']);
-            Route::post('/{batch}/cancel',   [BulkBioController::class, 'cancel']);
-            Route::delete('/{batch}',        [BulkBioController::class, 'destroy']);
+            Route::post('/preview', [BulkBioController::class, 'preview']);
+            Route::get('/', [BulkBioController::class, 'index']);
+            Route::post('/', [BulkBioController::class, 'store']);
+            Route::get('/{batch}', [BulkBioController::class, 'show']);
+            Route::post('/{batch}/accept', [BulkBioController::class, 'accept']);
+            Route::post('/{batch}/cancel', [BulkBioController::class, 'cancel']);
+            Route::delete('/{batch}', [BulkBioController::class, 'destroy']);
         });
     });
 
@@ -363,6 +362,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/quick-replies', [ClientController::class, 'quickReplies'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/risk-state', [ClientController::class, 'updateRiskState'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/delete-preview', [ClientController::class, 'deletePreview'])->middleware('role:admin,sub_admin');
     Route::delete('/clients/{client}', [ClientController::class, 'destroy'])->middleware('role:admin,sub_admin');
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
@@ -842,7 +842,6 @@ Route::post('/logout', [AuthController::class, 'logout']); // Even logout is pub
 Route::get('/auth/google/redirect', [AuthController::class, 'redirectToGoogle']);
 Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
 
-
 // User management routes (public)
 Route::put('/users/{id}', [AuthController::class, 'updateUser']);
 Route::get('/users', [AuthController::class, 'getUsers']);
@@ -925,7 +924,6 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admi
     Route::post('/manual-update', [PaymentController::class, 'manuallyUpdatePaymentStatus']);
 });
 
-
 // African countries routes (public)
 Route::get('/african-countries', [AfricanCountryController::class, 'index']);
 Route::get('/african-countries/currency/{currencyCode}', [AfricanCountryController::class, 'getByCurrencyCode']);
@@ -949,38 +947,38 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admi
                 'full_url' => request()->fullUrl(),
                 'server_ip' => $_SERVER['SERVER_ADDR'] ?? 'unknown',
                 'php_version' => PHP_VERSION,
-                'timestamp' => now()->toDateTimeString()
+                'timestamp' => now()->toDateTimeString(),
             ],
             'kopokopo_config' => [
                 'base_url' => config('kopokopo.base_url'),
                 'till_number' => config('kopokopo.till_number'),
-                'is_production' => config('kopokopo.base_url') === 'https://api.kopokopo.com'
-            ]
+                'is_production' => config('kopokopo.base_url') === 'https://api.kopokopo.com',
+            ],
         ]);
     });
 
     Route::post('/simulate-webhook', function (Request $request) {
-        if (!config('app.debug')) {
+        if (! config('app.debug')) {
             return response()->json(['error' => 'Debug mode required'], 403);
         }
 
         $paymentId = $request->input('payment_id');
         $eventType = $request->input('event_type', 'buygoods_transaction_received');
 
-        if (!$paymentId) {
+        if (! $paymentId) {
             return response()->json(['error' => 'payment_id required'], 400);
         }
 
         $payment = \App\Models\Payment::find($paymentId);
-        if (!$payment) {
+        if (! $payment) {
             return response()->json(['error' => 'Payment not found'], 404);
         }
 
         $webhookPayload = [
             'event_type' => $eventType,
             'resource' => [
-                'id' => 'test_' . time(),
-                'reference' => 'TEST_REF_' . $paymentId,
+                'id' => 'test_'.time(),
+                'reference' => 'TEST_REF_'.$paymentId,
                 'origination_time' => now()->toISOString(),
                 'sender_phone_number' => $payment->phone,
                 'amount' => $payment->amount,
@@ -990,10 +988,10 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admi
                     'platform_id' => $payment->platform_id,
                     'product_id' => $payment->product_id,
                     'user_id' => $payment->user_id,
-                    'duration' => $payment->duration
-                ]
+                    'duration' => $payment->duration,
+                ],
             ],
-            'timestamp' => now()->toISOString()
+            'timestamp' => now()->toISOString(),
         ];
 
         return response()->json([

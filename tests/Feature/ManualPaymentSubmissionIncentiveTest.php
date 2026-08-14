@@ -122,6 +122,61 @@ class ManualPaymentSubmissionIncentiveTest extends TestCase
         $this->assertNull($deal->discount_approved_by);
     }
 
+    public function test_high_risk_client_cannot_upload_manual_payment_proof(): void
+    {
+        Storage::fake('local');
+
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedContext();
+
+        $client->forceFill([
+            'is_high_risk' => true,
+            'risk_reason_code' => 'manual_proof_invalid',
+            'risk_marked_at' => now(),
+        ])->save();
+
+        BillingManualPaymentMethod::query()->create([
+            'market_id' => $platform->id,
+            'method_key' => 'mpesa',
+            'enabled' => true,
+            'display_name' => 'M-PESA',
+            'instruction_intro' => 'Pay with M-PESA and upload proof.',
+            'instruction_footer' => '',
+            'proof_required' => true,
+            'sender_name_required' => true,
+            'transaction_id_required' => true,
+            'auto_activate_on_submission' => false,
+            'details_json' => ['paybill' => '123456'],
+        ]);
+
+        $response = $this->post('/api/manual-payment-submissions', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => $client->wp_user_id,
+            'first_name' => 'Jane',
+            'last_name' => 'Escort',
+            'phone' => $client->phone_normalized,
+            'email' => $client->email,
+            'duration' => 'monthly',
+            'manual_method_key' => 'mpesa',
+            'sender_name' => 'Jane Sender',
+            'transaction_reference' => 'MPESA-REF-002',
+            'proof_image' => UploadedFile::fake()->image('proof.png'),
+        ], [
+            'Accept' => 'application/json',
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonPath('status', false)
+            ->assertJsonPath('error_code', 'manual_payment_invalid_request')
+            ->assertJsonPath('message', 'Manual payment proof upload is unavailable for this account. Please contact support for assisted payment review.');
+
+        $this->assertDatabaseCount('payments', 0);
+    }
+
     /**
      * @return array{platform:Platform,product:Product,client:Client}
      */
@@ -186,11 +241,11 @@ class ManualPaymentSubmissionIncentiveTest extends TestCase
     private function provisioningApiFakes(Platform $platform, Client $client): array
     {
         return [
-            $platform->wp_api_url . '/clients/' . $client->wp_post_id . '/activate' => Http::response([
+            $platform->wp_api_url.'/clients/'.$client->wp_post_id.'/activate' => Http::response([
                 'ok' => true,
                 'post_id' => $client->wp_post_id,
             ], 200),
-            $platform->wp_api_url . '/clients/' . $client->wp_post_id => Http::response([
+            $platform->wp_api_url.'/clients/'.$client->wp_post_id => Http::response([
                 'wp_post_id' => $client->wp_post_id,
                 'wp_user_id' => $client->wp_user_id,
                 'name' => $client->name,

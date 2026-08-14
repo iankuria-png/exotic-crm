@@ -40,6 +40,15 @@ import CurrencySelect, { formatCurrencyBadge } from '../components/clients/profi
 
 const mediaProxyAvailabilityCache = new Map();
 
+const RISK_REASON_OPTIONS = [
+    { value: 'manual_proof_invalid', label: 'Invalid manual proof' },
+    { value: 'repeated_invalid_proofs', label: 'Repeated invalid proofs' },
+    { value: 'suspicious_document', label: 'Suspicious document' },
+    { value: 'chargeback_or_reversal', label: 'Chargeback or reversal' },
+    { value: 'manual_crm_review', label: 'Manual CRM review' },
+    { value: 'other', label: 'Other' },
+];
+
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
 }
@@ -937,6 +946,12 @@ export default function ClientDetail() {
         reasonNotes: 'Deactivated from client profile',
         notifyClient: false,
     });
+    const [riskDialog, setRiskDialog] = useState({
+        open: false,
+        isHighRisk: false,
+        reasonCode: 'manual_proof_invalid',
+        reason: '',
+    });
     const [deactivationReasonCode, setDeactivationReasonCode] = useState('other');
     const [deactivationReasonNotes, setDeactivationReasonNotes] = useState('Deactivated from client profile');
     const [deactivationLinkedPaymentAction, setDeactivationLinkedPaymentAction] = useState('none');
@@ -990,6 +1005,7 @@ export default function ClientDetail() {
     });
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
     const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
+    const riskMarkerLabel = client?.risk_marked_by?.name || client?.risk_marked_by?.email || null;
 
     useEffect(() => {
         const failedDeal = (client?.deals || []).find((deal) => deal?.pending_subsidiary_trial?.status === 'failed');
@@ -1371,6 +1387,38 @@ export default function ClientDetail() {
         },
         onError: (error) => toast.error(error?.response?.data?.message || 'Reopen failed.'),
     });
+
+    const updateRiskStateMutation = useMutation({
+        mutationFn: ({ isHighRisk, reasonCode, reason }) => api.post(`/crm/clients/${id}/risk-state`, {
+            is_high_risk: isHighRisk,
+            reason_code: reasonCode,
+            reason,
+        }).then((r) => r.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setRiskDialog({
+                open: false,
+                isHighRisk: false,
+                reasonCode: 'manual_proof_invalid',
+                reason: '',
+            });
+            toast.success(payload?.message || 'Client risk status updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not update client risk status.');
+        },
+    });
+
+    const openRiskDialog = useCallback((isHighRisk) => {
+        setRiskDialog({
+            open: true,
+            isHighRisk,
+            reasonCode: isHighRisk ? 'manual_proof_invalid' : 'manual_crm_review',
+            reason: '',
+        });
+    }, []);
 
     const activateDealMutation = useMutation({
         mutationFn: ({ dealId, reason, paymentMethod, phone, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason, subsidiaryTrial }) =>
@@ -2897,6 +2945,22 @@ export default function ClientDetail() {
                                     {profileState.detail}
                                 </p>
                             ) : null}
+                            {client.is_high_risk ? (
+                                <div className="mt-3 max-w-2xl rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <span className="font-semibold">Manual proof upload blocked</span>
+                                        {client.risk_reason_code ? (
+                                            <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium text-rose-700 ring-1 ring-inset ring-rose-200">
+                                                {titleize(client.risk_reason_code)}
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                    <p className="mt-1 text-rose-700">
+                                        {riskMarkerLabel ? `Marked by ${riskMarkerLabel}` : 'Marked by CRM staff'}
+                                        {client.risk_marked_at ? ` on ${formatDateTime(client.risk_marked_at)}` : ''}.
+                                    </p>
+                                </div>
+                            ) : null}
                         </div>
                     </div>
 
@@ -2991,6 +3055,24 @@ export default function ClientDetail() {
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                                     </svg>
                                     Client access
+                                </button>
+
+                                {/* Risk state */}
+                                <button
+                                    type="button"
+                                    onClick={() => openRiskDialog(!client.is_high_risk)}
+                                    disabled={updateRiskStateMutation.isPending}
+                                    title={client.is_high_risk ? 'Clear the high-risk flag and allow manual proof upload again' : 'Mark high risk and block manual proof upload'}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                        client.is_high_risk
+                                            ? 'border-slate-200 bg-white text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700'
+                                            : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                    }`}
+                                >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                    </svg>
+                                    {client.is_high_risk ? 'Clear risk' : 'Mark high risk'}
                                 </button>
 
                                 {/* Lifecycle reminders */}
@@ -5584,6 +5666,75 @@ export default function ClientDetail() {
                     confirmDisabled={syncMutation.isPending}
                     isPending={syncMutation.isPending}
                 />
+            ) : null}
+
+            {!isReadOnly ? (
+                <ConfirmDialog
+                    open={riskDialog.open}
+                    title={riskDialog.isHighRisk ? 'Mark Client High Risk' : 'Clear High-Risk Flag'}
+                    message={riskDialog.isHighRisk
+                        ? 'Manual proof upload will stop working for this client until the flag is cleared.'
+                        : 'Manual proof upload will become available again for this client.'}
+                    confirmLabel={riskDialog.isHighRisk ? 'Mark high risk' : 'Clear flag'}
+                    tone={riskDialog.isHighRisk ? 'danger' : 'default'}
+                    onCancel={() => {
+                        if (updateRiskStateMutation.isPending) return;
+                        setRiskDialog({
+                            open: false,
+                            isHighRisk: false,
+                            reasonCode: 'manual_proof_invalid',
+                            reason: '',
+                        });
+                    }}
+                    onConfirm={() => updateRiskStateMutation.mutate({
+                        isHighRisk: riskDialog.isHighRisk,
+                        reasonCode: riskDialog.reasonCode,
+                        reason: riskDialog.reason.trim(),
+                    })}
+                    confirmDisabled={riskDialog.reason.trim().length < 8 || updateRiskStateMutation.isPending}
+                    isPending={updateRiskStateMutation.isPending}
+                >
+                    <div className="space-y-3">
+                        <label className="block space-y-1.5">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Reason category</span>
+                            <select
+                                value={riskDialog.reasonCode}
+                                onChange={(event) => setRiskDialog((current) => ({ ...current, reasonCode: event.target.value }))}
+                                disabled={updateRiskStateMutation.isPending}
+                                className="crm-input"
+                            >
+                                {RISK_REASON_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block space-y-1.5">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Operator note <span className="text-rose-500">*</span></span>
+                            <textarea
+                                value={riskDialog.reason}
+                                onChange={(event) => setRiskDialog((current) => ({ ...current, reason: event.target.value }))}
+                                rows={4}
+                                disabled={updateRiskStateMutation.isPending}
+                                className="crm-input min-h-[112px]"
+                                placeholder={riskDialog.isHighRisk
+                                    ? 'Example: Uploaded unrelated screenshots twice during manual payment review.'
+                                    : 'Example: Verified identity and cleared prior payment proof concern.'}
+                            />
+                        </label>
+
+                        <div className={`rounded-md border px-3 py-2 text-xs ${
+                            riskDialog.isHighRisk
+                                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                : 'border-teal-200 bg-teal-50 text-teal-700'
+                        }`}
+                        >
+                            {riskDialog.isHighRisk
+                                ? 'This blocks manual proof uploads. Existing payments and profile status are not changed.'
+                                : 'The audit trail and past timeline entries remain visible after the flag is cleared.'}
+                        </div>
+                    </div>
+                </ConfirmDialog>
             ) : null}
 
             {canDeleteClient ? (

@@ -7,10 +7,12 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Support\CrmAuditAction;
 use Carbon\Carbon;
-use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -18,6 +20,84 @@ use Tests\TestCase;
 class ClientControllerTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_client_risk_state_can_be_marked_and_cleared_with_reason(): void
+    {
+        $platform = Platform::factory()->create();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'is_high_risk' => false,
+            'risk_reason_code' => null,
+            'risk_marked_at' => null,
+            'risk_marked_by' => null,
+        ]);
+        $admin = $this->adminUser();
+
+        Sanctum::actingAs($admin);
+
+        $this->postJson("/api/crm/clients/{$client->id}/risk-state", [
+            'is_high_risk' => true,
+            'reason_code' => 'manual_proof_invalid',
+            'reason' => 'Uploaded an unrelated screenshot during manual payment review.',
+        ])
+            ->assertOk()
+            ->assertJsonPath('client.is_high_risk', true)
+            ->assertJsonPath('client.risk_reason_code', 'manual_proof_invalid')
+            ->assertJsonPath('client.risk_marked_by.name', $admin->name);
+
+        $client->refresh();
+        $this->assertTrue((bool) $client->is_high_risk);
+        $this->assertSame('manual_proof_invalid', $client->risk_reason_code);
+        $this->assertSame($admin->id, (int) $client->risk_marked_by);
+        $this->assertNotNull($client->risk_marked_at);
+
+        $markedEvent = TimelineEvent::query()
+            ->where('entity_type', 'client')
+            ->where('entity_id', $client->id)
+            ->where('event_type', 'client_risk_marked')
+            ->firstOrFail();
+        $this->assertSame('manual_proof_invalid', data_get($markedEvent->content, 'reason_code'));
+        $this->assertFalse((bool) data_get($markedEvent->content, 'manual_proof_upload_allowed'));
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'actor_id' => $admin->id,
+            'action' => CrmAuditAction::CLIENT_RISK_MARK,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+        ]);
+
+        $this->postJson("/api/crm/clients/{$client->id}/risk-state", [
+            'is_high_risk' => false,
+            'reason_code' => 'manual_crm_review',
+            'reason' => 'Verified the client and cleared the prior payment proof concern.',
+        ])
+            ->assertOk()
+            ->assertJsonPath('client.is_high_risk', false)
+            ->assertJsonPath('client.risk_reason_code', null);
+
+        $client->refresh();
+        $this->assertFalse((bool) $client->is_high_risk);
+        $this->assertNull($client->risk_reason_code);
+        $this->assertNull($client->risk_marked_at);
+        $this->assertNull($client->risk_marked_by);
+
+        $this->assertDatabaseHas('timeline_events', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => 'client_risk_cleared',
+            'actor_id' => $admin->id,
+        ]);
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'actor_id' => $admin->id,
+            'action' => CrmAuditAction::CLIENT_RISK_CLEAR,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+        ]);
+    }
 
     public function test_client_create_profile_payload_maps_bio_to_wordpress_content(): void
     {
@@ -85,7 +165,7 @@ class ClientControllerTest extends TestCase
                 ], 404);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());
@@ -120,7 +200,7 @@ class ClientControllerTest extends TestCase
                 ], 404);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());
@@ -158,7 +238,7 @@ class ClientControllerTest extends TestCase
                 ], 404);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());
@@ -212,7 +292,7 @@ class ClientControllerTest extends TestCase
                 ]);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());
@@ -255,7 +335,7 @@ class ClientControllerTest extends TestCase
                 ]);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());
@@ -311,7 +391,7 @@ class ClientControllerTest extends TestCase
                 ]);
             }
 
-            return Http::response(['message' => 'Unexpected request: ' . $url], 500);
+            return Http::response(['message' => 'Unexpected request: '.$url], 500);
         });
 
         Sanctum::actingAs($this->adminUser());

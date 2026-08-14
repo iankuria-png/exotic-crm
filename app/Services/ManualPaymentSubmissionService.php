@@ -25,8 +25,7 @@ class ManualPaymentSubmissionService
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly CommissionService $commissionService
-    ) {
-    }
+    ) {}
 
     /**
      * @return Collection<int, BillingManualPaymentMethod>
@@ -56,8 +55,12 @@ class ManualPaymentSubmissionService
         array $customer
     ): array {
         $method = $this->methodForMarket((int) $platform->id, $manualMethodKey, true);
-        if (!$method) {
+        if (! $method) {
             throw new InvalidArgumentException('Manual payment is not configured for this market.');
+        }
+
+        if ((bool) $client->is_high_risk) {
+            throw new InvalidArgumentException('Manual payment proof upload is unavailable for this account. Please contact support for assisted payment review.');
         }
 
         $normalizedMethodKey = strtolower(trim((string) $manualMethodKey));
@@ -168,7 +171,7 @@ class ManualPaymentSubmissionService
                             'transaction_reference' => $normalizedReference,
                             'activated_on_submit' => $activatedOnSubmit,
                         ],
-                        'self_service_incentive' => !empty($pricing['discount_percent']) ? [
+                        'self_service_incentive' => ! empty($pricing['discount_percent']) ? [
                             'original_amount' => (float) $pricing['original_amount'],
                             'percent' => (float) $pricing['discount_percent'],
                             'source' => 'self_service_incentive',
@@ -217,7 +220,7 @@ class ManualPaymentSubmissionService
                 ];
             });
         } catch (\Throwable $exception) {
-            if (is_array($storedProof) && !empty($storedProof['path'])) {
+            if (is_array($storedProof) && ! empty($storedProof['path'])) {
                 try {
                     Storage::disk($storedProof['disk'])->delete($storedProof['path']);
                 } catch (\Throwable $cleanupException) {
@@ -231,7 +234,7 @@ class ManualPaymentSubmissionService
             throw $exception;
         }
 
-        if (!$result['duplicate']) {
+        if (! $result['duplicate']) {
             $this->synchronizeWpState($result['payment']);
         }
 
@@ -244,12 +247,12 @@ class ManualPaymentSubmissionService
     {
         $payment->loadMissing(['client.platform', 'platform', 'product', 'deal']);
 
-        if (!$payment->client) {
+        if (! $payment->client) {
             throw new InvalidArgumentException('Payment must be matched to a client first.');
         }
 
         $deal = $payment->deal;
-        if (!$deal) {
+        if (! $deal) {
             $deal = $this->createPendingDeal($payment);
         }
 
@@ -273,7 +276,7 @@ class ManualPaymentSubmissionService
         ?string $reason = null
     ): PaymentManualSubmission {
         $normalizedDecision = strtolower(trim($decision));
-        if (!in_array($normalizedDecision, ['approved', 'rejected'], true)) {
+        if (! in_array($normalizedDecision, ['approved', 'rejected'], true)) {
             throw new InvalidArgumentException('Unsupported manual review decision.');
         }
 
@@ -297,7 +300,7 @@ class ManualPaymentSubmissionService
         $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform']);
         $submission = $payment->manualSubmission;
 
-        if (!$submission) {
+        if (! $submission) {
             return [
                 'state' => null,
                 'message' => null,
@@ -355,7 +358,7 @@ class ManualPaymentSubmissionService
         $platformId = (int) ($payment->platform_id ?: $client?->platform_id ?: 0);
         $wpPostId = (int) ($client?->wp_post_id ?? 0);
 
-        if (!$client || $platformId <= 0 || $wpPostId <= 0) {
+        if (! $client || $platformId <= 0 || $wpPostId <= 0) {
             return;
         }
 
@@ -384,12 +387,12 @@ class ManualPaymentSubmissionService
         $payment->loadMissing(['client.platform', 'product', 'platform']);
 
         $client = $payment->client;
-        if (!$client) {
+        if (! $client) {
             throw new InvalidArgumentException('Payment must be matched to a client first.');
         }
 
         $product = $payment->product;
-        if (!$product) {
+        if (! $product) {
             throw new InvalidArgumentException('Payment product is missing.');
         }
 
@@ -473,7 +476,7 @@ class ManualPaymentSubmissionService
             'image/webp' => 'webp',
         ];
 
-        if (!array_key_exists($mime, $allowedMimes)) {
+        if (! array_key_exists($mime, $allowedMimes)) {
             throw new InvalidArgumentException('Proof image must be a JPG, PNG, or WEBP file.');
         }
 
@@ -505,10 +508,10 @@ class ManualPaymentSubmissionService
             now()->format('Y'),
             now()->format('m')
         );
-        $filename = Str::uuid()->toString() . '.' . $extension;
+        $filename = Str::uuid()->toString().'.'.$extension;
         $path = Storage::disk('local')->putFileAs($directory, $proofImage, $filename);
 
-        if (!$path) {
+        if (! $path) {
             throw new InvalidArgumentException('Proof image could not be stored. Please try again.');
         }
 
@@ -560,6 +563,6 @@ class ManualPaymentSubmissionService
             $transactionUuid,
         ])), 0, 18));
 
-        return 'SUB-' . $hash;
+        return 'SUB-'.$hash;
     }
 }

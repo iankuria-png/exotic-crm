@@ -2,44 +2,43 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Exceptions\ClientCaseClosureException;
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\Lead;
 use App\Models\Payment;
-use App\Models\TimelineEvent;
 use App\Models\Platform;
+use App\Models\TimelineEvent;
 use App\Models\User;
-use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
 use App\Services\AutoPush\AutoPushBoostService;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientChurnStamper;
 use App\Services\ClientDeletionService;
-use App\Services\ClientLifecycleService;
 use App\Services\ClientFunnelService;
+use App\Services\ClientLifecycleService;
 use App\Services\ClientLifetimeValueService;
 use App\Services\ClientOutreachService;
+use App\Services\ClientProfileImageService;
+use App\Services\ClientProfileUrlSearchService;
+use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSegmentService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
+use App\Services\ClientSyncService;
 use App\Services\ClientWpLinkRepairService;
-use App\Services\ClientRetentionInsightService;
+use App\Services\CredentialDeliveryService;
 use App\Services\DealPaymentService;
+use App\Services\ExpiredSubscriptionReconciler;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
-use App\Services\CredentialDeliveryService;
-use App\Services\ClientSyncService;
-use App\Services\ExpiredSubscriptionReconciler;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
-use App\Services\ClientProfileUrlSearchService;
-use App\Services\ClientProfileImageService;
 use App\Services\SupportBoardService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
@@ -47,31 +46,36 @@ use App\Services\WpSyncService;
 use App\Support\CityNormalizer;
 use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
-use App\Support\CrmClientChurnReason;
 use App\Support\CrmClientCloseReason;
-use App\Support\DealDeactivationReason;
 use App\Support\DeactivationRequest;
+use App\Support\DealDeactivationReason;
 use App\Support\PhoneNormalizer;
 use App\Support\WpProfileFieldCatalog;
 use App\Support\WpProfileFieldValidator;
 use Carbon\Carbon;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Pagination\LengthAwarePaginator;
-use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ClientController extends Controller
 {
     private const PLAN_FILTER_NO_ACTIVE_SUBSCRIPTION = 'no-active-subscription';
+
     private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4';
+
     private const PROFILE_MEDIA_IMAGE_MAX_KB = 5120;
+
     private const PROFILE_MEDIA_VIDEO_MAX_KB = 51200;
+
     private const PROFILE_MEDIA_MAX_IMAGES = 20;
+
     private const PROFILE_MEDIA_MAX_VIDEOS = 5;
 
     public function __construct(
@@ -98,13 +102,12 @@ class ClientController extends Controller
         private readonly ClientChurnStamper $clientChurnStamper,
         private readonly ClientLifetimeValueService $clientLifetimeValueService,
         private readonly AutoPushBoostService $autoPushBoostService,
-    ) {
-    }
+    ) {}
 
     public function index(Request $request)
     {
         $validated = $request->validate([
-            'segment' => 'nullable|string|in:' . implode(',', ClientSegmentService::keys()),
+            'segment' => 'nullable|string|in:'.implode(',', ClientSegmentService::keys()),
             'city_key' => 'nullable|string|max:120',
             'per_page' => 'nullable|integer|in:25,50,100,150',
         ]);
@@ -230,12 +233,14 @@ class ClientController extends Controller
             $query->whereHas('retentionInsight', function ($builder) use ($retentionBand) {
                 if ($retentionBand === 'watch') {
                     $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
+
                     return;
                 }
 
                 $bands = array_values(array_filter(array_map('trim', explode(',', $retentionBand))));
                 if (count($bands) > 1) {
                     $builder->whereIn('band', $bands);
+
                     return;
                 }
 
@@ -293,7 +298,7 @@ class ClientController extends Controller
             $closedStatsBase->where('platform_id', $request->platform_id);
         }
 
-        if (!$request->filled('created_from') && !$request->filled('created_to')) {
+        if (! $request->filled('created_from') && ! $request->filled('created_to')) {
             $newUsersStatsQuery->where('created_at', '>=', now()->subDays(6)->startOfDay());
         }
 
@@ -505,7 +510,7 @@ class ClientController extends Controller
                     });
             });
 
-            if (!in_array($planKey, ['premium', 'featured', 'basic'], true)) {
+            if (! in_array($planKey, ['premium', 'featured', 'basic'], true)) {
                 return;
             }
 
@@ -516,11 +521,13 @@ class ClientController extends Controller
 
                 if ($planKey === 'premium') {
                     $legacyQuery->where('premium', true);
+
                     return;
                 }
 
                 if ($planKey === 'featured') {
                     $legacyQuery->where('featured', true);
+
                     return;
                 }
 
@@ -661,7 +668,7 @@ class ClientController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Client creation failed: ' . $exception->getMessage(),
+                'message' => 'Client creation failed: '.$exception->getMessage(),
             ], 500);
         }
 
@@ -726,7 +733,7 @@ class ClientController extends Controller
                 $this->createManualClient(
                     $request,
                     $payload,
-                    ($validated['reason'] ?? 'CSV client upload from CRM') . " (row {$rowNumber})"
+                    ($validated['reason'] ?? 'CSV client upload from CRM')." (row {$rowNumber})"
                 );
                 $totals['created'] += 1;
             } catch (\Throwable $exception) {
@@ -748,7 +755,7 @@ class ClientController extends Controller
     {
         $this->authorizeClientAccess($request, $client);
 
-        if ((bool) $client->kyc_required && !$client->kycSubject) {
+        if ((bool) $client->kyc_required && ! $client->kycSubject) {
             app(\App\Services\Kyc\KycSubjectService::class)->resolveOrCreateForClient($client);
             $client->refresh();
         }
@@ -757,9 +764,10 @@ class ClientController extends Controller
             'platform',
             'assignedAgent',
             'creator:id,name,email,role',
-            'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-            'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-            'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'riskMarkedBy:id,name,email,role',
+            'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+            'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
             'kycSubject.sites',
         ]);
@@ -781,6 +789,89 @@ class ClientController extends Controller
         $this->decorateLifetimeValue(collect([$client]));
 
         return response()->json($client);
+    }
+
+    public function updateRiskState(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'is_high_risk' => 'required|boolean',
+            'reason_code' => 'nullable|string|max:50',
+            'reason' => 'required|string|min:8|max:500',
+        ]);
+
+        $markHighRisk = (bool) $validated['is_high_risk'];
+        $reason = trim((string) $validated['reason']);
+        $reasonCode = trim((string) ($validated['reason_code'] ?? ''));
+        if ($reasonCode === '') {
+            $reasonCode = $markHighRisk ? 'manual_crm_review' : null;
+        }
+
+        $before = [
+            'is_high_risk' => (bool) $client->is_high_risk,
+            'risk_reason_code' => $client->risk_reason_code,
+            'risk_marked_at' => $client->risk_marked_at?->toIso8601String(),
+            'risk_marked_by' => $client->risk_marked_by,
+        ];
+
+        DB::transaction(function () use ($client, $markHighRisk, $reasonCode, $reason, $request, $before) {
+            $client->forceFill($markHighRisk ? [
+                'is_high_risk' => true,
+                'risk_reason_code' => $reasonCode,
+                'risk_marked_at' => now(),
+                'risk_marked_by' => (int) $request->user()->id,
+            ] : [
+                'is_high_risk' => false,
+                'risk_reason_code' => null,
+                'risk_marked_at' => null,
+                'risk_marked_by' => null,
+            ])->save();
+
+            $after = [
+                'is_high_risk' => (bool) $client->is_high_risk,
+                'risk_reason_code' => $client->risk_reason_code,
+                'risk_marked_at' => $client->risk_marked_at?->toIso8601String(),
+                'risk_marked_by' => $client->risk_marked_by,
+                'manual_proof_upload_allowed' => ! (bool) $client->is_high_risk,
+            ];
+
+            TimelineEvent::query()->create([
+                'platform_id' => (int) $client->platform_id,
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'event_type' => $markHighRisk ? 'client_risk_marked' : 'client_risk_cleared',
+                'actor_id' => (int) $request->user()->id,
+                'content' => [
+                    'reason' => $reason,
+                    'reason_code' => $reasonCode,
+                    'manual_proof_upload_allowed' => ! (bool) $client->is_high_risk,
+                    'before' => $before,
+                    'after' => $after,
+                ],
+                'created_at' => now(),
+            ]);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                $markHighRisk ? CrmAuditAction::CLIENT_RISK_MARK : CrmAuditAction::CLIENT_RISK_CLEAR,
+                'client',
+                (int) $client->id,
+                $before,
+                $after,
+                $reason
+            );
+        });
+
+        $client->refresh()->load(['platform', 'assignedAgent', 'creator:id,name,email,role', 'riskMarkedBy:id,name,email,role']);
+
+        return response()->json([
+            'message' => $markHighRisk
+                ? 'Client marked high risk. Manual proof upload is now blocked.'
+                : 'High-risk flag cleared. Manual proof upload is available again.',
+            'client' => $client,
+        ]);
     }
 
     /**
@@ -870,7 +961,7 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
         $client->loadMissing('platform');
 
-        if (!$this->expiredSubscriptionReconciler->isStuck($client)) {
+        if (! $this->expiredSubscriptionReconciler->isStuck($client)) {
             return response()->json([
                 'message' => 'This profile is not past its expiry, so it cannot be force-expired. Use Deactivate subscription instead.',
             ], 422);
@@ -1045,7 +1136,7 @@ class ClientController extends Controller
                 continue;
             }
             $client = $byId->get($row['client_id']);
-            if (!$client) {
+            if (! $client) {
                 continue;
             }
             $this->auditService->fromRequest(
@@ -1078,7 +1169,7 @@ class ClientController extends Controller
 
     private function hydrateBillingPlatformState(Client $client): void
     {
-        if (!$client->platform) {
+        if (! $client->platform) {
             return;
         }
 
@@ -1169,20 +1260,20 @@ class ClientController extends Controller
             ->whereKey((int) $validated['deal_id'])
             ->first();
 
-        if (!$deal) {
+        if (! $deal) {
             return response()->json([
                 'message' => 'Selected deal does not belong to this client.',
             ], 422);
         }
 
-        if (!in_array((string) $deal->status, ['pending', 'awaiting_payment'], true)) {
+        if (! in_array((string) $deal->status, ['pending', 'awaiting_payment'], true)) {
             return response()->json([
                 'message' => 'Only pending or awaiting-payment deals can receive payment links.',
             ], 422);
         }
 
         $payment = $deal->payment;
-        if ($deal->status === 'pending' && !$payment) {
+        if ($deal->status === 'pending' && ! $payment) {
             $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider, $paymentLinkSelection) {
                 return $this->dealPaymentService->startLinkPaymentForDeal(
                     $deal,
@@ -1200,7 +1291,7 @@ class ClientController extends Controller
             );
         }
 
-        if (!$payment) {
+        if (! $payment) {
             $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider, $paymentLinkSelection) {
                 return $this->dealPaymentService->startLinkPaymentForDeal(
                     $deal,
@@ -1245,7 +1336,7 @@ class ClientController extends Controller
                 'disabled_message' => 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.',
             ]);
 
-            if (!($sendResult['success'] ?? false) && empty($sendResult['payment_url'])) {
+            if (! ($sendResult['success'] ?? false) && empty($sendResult['payment_url'])) {
                 return response()->json([
                     'message' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
                 ], (int) ($sendResult['http_status'] ?? 500));
@@ -1339,7 +1430,7 @@ class ClientController extends Controller
             ], 422);
         }
 
-        if (!empty($filters['platform_id'])) {
+        if (! empty($filters['platform_id'])) {
             $this->marketAuthorizationService->ensureUserCanAccessPlatform(
                 $request->user(),
                 (int) $filters['platform_id'],
@@ -1463,11 +1554,11 @@ class ClientController extends Controller
             'email' => $client->email,
             'phone_normalized' => $client->phone_normalized,
         ];
-        $hadSupportBoardLink = !empty($client->sb_user_id);
+        $hadSupportBoardLink = ! empty($client->sb_user_id);
 
         if (array_key_exists('assigned_to', $validated) && $validated['assigned_to']) {
             $assignee = User::query()->find((int) $validated['assigned_to']);
-            if (!$assignee || !$assignee->isActive() || !$this->marketAuthorizationService->userCanAccessPlatform($assignee, (int) $client->platform_id)) {
+            if (! $assignee || ! $assignee->isActive() || ! $this->marketAuthorizationService->userCanAccessPlatform($assignee, (int) $client->platform_id)) {
                 return response()->json([
                     'message' => 'Assigned owner is not eligible for this market.',
                 ], 422);
@@ -1556,6 +1647,7 @@ class ClientController extends Controller
         ]);
 
         $note->load('author');
+
         return response()->json($note, 201);
     }
 
@@ -1579,9 +1671,9 @@ class ClientController extends Controller
             $client->load([
                 'platform',
                 'assignedAgent',
-                'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-                'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-                'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+                'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
                 'activeDeal.product',
                 'kycSubject.sites',
             ]);
@@ -1591,7 +1683,7 @@ class ClientController extends Controller
             return response()->json($client);
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Sync failed: ' . $e->getMessage(),
+                'message' => 'Sync failed: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -1613,7 +1705,7 @@ class ClientController extends Controller
             'source' => 'nullable|string',
             'reason' => 'nullable|string|max:2000',
         ]);
-        $verified  = (bool) $validated['verified'];
+        $verified = (bool) $validated['verified'];
 
         if ($verified) {
             $source = (string) ($validated['source'] ?? '');
@@ -1639,14 +1731,15 @@ class ClientController extends Controller
                 'verified' => $verified ? '1' : '0',
             ]);
         } catch (RequestException $e) {
-            $status  = $e->response?->status() ?? 502;
+            $status = $e->response?->status() ?? 502;
             $payload = $e->response?->json();
             if ($status >= 400 && $status < 500) {
                 return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
             }
-            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+
+            return response()->json(['message' => 'WordPress update failed: '.$e->getMessage()], 502);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+            return response()->json(['message' => 'WordPress update failed: '.$e->getMessage()], 502);
         }
 
         if ($verified) {
@@ -1685,9 +1778,9 @@ class ClientController extends Controller
         $client->load([
             'platform',
             'assignedAgent',
-            'deals'      => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-            'notes'      => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-            'payments'   => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+            'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
             'kycSubject.sites',
         ]);
@@ -1740,14 +1833,15 @@ class ClientController extends Controller
                 'force_new' => $forceNew ? '1' : '',
             ]);
         } catch (RequestException $e) {
-            $status  = $e->response?->status() ?? 502;
+            $status = $e->response?->status() ?? 502;
             $payload = $e->response?->json();
             if ($status >= 400 && $status < 500) {
                 return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
             }
-            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+
+            return response()->json(['message' => 'WordPress update failed: '.$e->getMessage()], 502);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+            return response()->json(['message' => 'WordPress update failed: '.$e->getMessage()], 502);
         }
 
         $client->update([
@@ -1775,9 +1869,9 @@ class ClientController extends Controller
         $client->load([
             'platform',
             'assignedAgent',
-            'deals'    => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-            'notes'    => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-            'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+            'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
         ]);
         $this->hydrateBillingPlatformState($client);
@@ -1911,10 +2005,11 @@ class ClientController extends Controller
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-            $data   = $wpSync->getTours((int) $client->wp_post_id);
+            $data = $wpSync->getTours((int) $client->wp_post_id);
+
             return response()->json($data);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Failed to fetch tours: ' . $e->getMessage()], 502);
+            return response()->json(['message' => 'Failed to fetch tours: '.$e->getMessage()], 502);
         }
     }
 
@@ -1927,24 +2022,25 @@ class ClientController extends Controller
         }
 
         $validated = $request->validate([
-            'city'  => 'required|string|max:255',
+            'city' => 'required|string|max:255',
             'start' => 'required|date_format:Y-m-d',
-            'end'   => 'required|date_format:Y-m-d|after_or_equal:start',
+            'end' => 'required|date_format:Y-m-d|after_or_equal:start',
             'phone' => 'required|string|max:50',
         ]);
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-            $tour   = $wpSync->addTour((int) $client->wp_post_id, $validated);
+            $tour = $wpSync->addTour((int) $client->wp_post_id, $validated);
         } catch (RequestException $e) {
-            $status  = $e->response?->status() ?? 502;
+            $status = $e->response?->status() ?? 502;
             $payload = $e->response?->json();
             if ($status >= 400 && $status < 500) {
                 return response()->json($payload ?? ['message' => 'WordPress rejected the tour.'], $status);
             }
-            return response()->json(['message' => 'Failed to create tour: ' . $e->getMessage()], 502);
+
+            return response()->json(['message' => 'Failed to create tour: '.$e->getMessage()], 502);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Failed to create tour: ' . $e->getMessage()], 502);
+            return response()->json(['message' => 'Failed to create tour: '.$e->getMessage()], 502);
         }
 
         $this->auditService->fromRequest(
@@ -1972,14 +2068,15 @@ class ClientController extends Controller
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             $wpSync->deleteTour((int) $client->wp_post_id, $tourId);
         } catch (RequestException $e) {
-            $status  = $e->response?->status() ?? 502;
+            $status = $e->response?->status() ?? 502;
             $payload = $e->response?->json();
             if ($status >= 400 && $status < 500) {
                 return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
             }
-            return response()->json(['message' => 'Failed to delete tour: ' . $e->getMessage()], 502);
+
+            return response()->json(['message' => 'Failed to delete tour: '.$e->getMessage()], 502);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Failed to delete tour: ' . $e->getMessage()], 502);
+            return response()->json(['message' => 'Failed to delete tour: '.$e->getMessage()], 502);
         }
 
         $this->auditService->fromRequest(
@@ -2044,6 +2141,7 @@ class ClientController extends Controller
                     'status' => 'skipped',
                     'message' => 'Client is not linked to WordPress.',
                 ];
+
                 continue;
             }
 
@@ -2093,7 +2191,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
-            'reason_code' => 'nullable|string|in:' . implode(',', $this->deactivationReasonValues()),
+            'reason_code' => 'nullable|string|in:'.implode(',', $this->deactivationReasonValues()),
             'reason_notes' => 'nullable|string|max:500',
             'notify_client' => 'nullable|boolean',
         ]);
@@ -2163,9 +2261,9 @@ class ClientController extends Controller
             $client->load([
                 'platform',
                 'assignedAgent',
-                'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-                'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-                'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+                'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
                 'activeDeal.product',
             ]);
             $this->hydrateBillingPlatformState($client);
@@ -2185,7 +2283,7 @@ class ClientController extends Controller
             DB::rollBack();
 
             return response()->json([
-                'message' => 'Subscription deactivation failed: ' . $exception->getMessage(),
+                'message' => 'Subscription deactivation failed: '.$exception->getMessage(),
             ], 500);
         }
     }
@@ -2277,7 +2375,7 @@ class ClientController extends Controller
         ];
 
         $attemptedBlocked = array_values(array_intersect(array_keys($requestedFields), $blockedFields));
-        if (!empty($attemptedBlocked)) {
+        if (! empty($attemptedBlocked)) {
             return response()->json([
                 'message' => 'Subscription and activation fields are not editable from profile management.',
                 'blocked_fields' => $attemptedBlocked,
@@ -2294,7 +2392,7 @@ class ClientController extends Controller
             $crmLastSyncedAt = $client->last_synced_at ? Carbon::parse($client->last_synced_at) : null;
             $force = (bool) ($validated['force'] ?? false);
 
-            if (!$force && $wpModifiedAt && $crmLastSyncedAt && $wpModifiedAt->gt($crmLastSyncedAt)) {
+            if (! $force && $wpModifiedAt && $crmLastSyncedAt && $wpModifiedAt->gt($crmLastSyncedAt)) {
                 return response()->json([
                     'message' => 'WordPress profile was updated after CRM last sync. Review and confirm to overwrite.',
                     'conflict' => [
@@ -2364,9 +2462,9 @@ class ClientController extends Controller
                 'client' => $client->load([
                     'platform',
                     'assignedAgent',
-                    'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
-                    'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
-                    'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                    'deals' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                    'notes' => fn ($q) => $q->with('author')->orderBy('created_at', 'desc'),
+                    'payments' => fn ($q) => $q->with('product')->orderBy('created_at', 'desc'),
                     'activeDeal.product',
                 ]),
                 'wp_profile' => $updatedProfile,
@@ -2388,7 +2486,7 @@ class ClientController extends Controller
         } catch (RequestException $exception) {
             $status = $exception->response?->status() ?? 502;
             $payload = $exception->response?->json();
-            if (!is_array($payload)) {
+            if (! is_array($payload)) {
                 $payload = [
                     'message' => $exception->response?->body() ?: 'WordPress profile update failed.',
                 ];
@@ -2422,6 +2520,7 @@ class ClientController extends Controller
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+
             return response()->json($wpSync->getClientMedia((int) $client->wp_post_id));
         } catch (RequestException $exception) {
             return $this->handleWpReadRequestException($exception, $client, 'Failed to fetch client media.');
@@ -2524,10 +2623,10 @@ class ClientController extends Controller
             'file' => [
                 'sometimes',
                 'file',
-                'mimes:' . self::PROFILE_MEDIA_ALLOWED_EXTENSIONS,
+                'mimes:'.self::PROFILE_MEDIA_ALLOWED_EXTENSIONS,
             ],
             'files' => ['sometimes', 'array', 'min:1'],
-            'files.*' => ['file', 'mimes:' . self::PROFILE_MEDIA_ALLOWED_EXTENSIONS],
+            'files.*' => ['file', 'mimes:'.self::PROFILE_MEDIA_ALLOWED_EXTENSIONS],
             'set_main' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ], [
@@ -2564,7 +2663,7 @@ class ClientController extends Controller
                 $results[] = $wpSync->uploadClientMedia(
                     (int) $client->wp_post_id,
                     $file,
-                    $setMain && count($uploadedFiles) === 1 && $index === 0 && !$this->isProfileMediaVideoUpload($file)
+                    $setMain && count($uploadedFiles) === 1 && $index === 0 && ! $this->isProfileMediaVideoUpload($file)
                 );
             }
 
@@ -2759,7 +2858,7 @@ class ClientController extends Controller
                 ]);
         }
 
-        $duplicateIds = $duplicates->pluck('id')->map(fn($id) => (int) $id)->all();
+        $duplicateIds = $duplicates->pluck('id')->map(fn ($id) => (int) $id)->all();
         $activeDealsByClient = empty($duplicateIds)
             ? collect()
             : Deal::query()
@@ -2858,7 +2957,7 @@ class ClientController extends Controller
                 $validated['new_phone_normalized'] ?? null,
                 $platformPhonePrefix
             );
-            if ($duplicateId <= 0 || !$normalizedPhone) {
+            if ($duplicateId <= 0 || ! $normalizedPhone) {
                 return response()->json([
                     'message' => 'duplicate_id and new_phone_normalized are required for update_phone.',
                 ], 422);
@@ -2870,7 +2969,7 @@ class ClientController extends Controller
                 ->where('id', '!=', (int) $client->id)
                 ->first();
 
-            if (!$duplicate) {
+            if (! $duplicate) {
                 return response()->json([
                     'message' => 'Duplicate client not found in this market.',
                 ], 422);
@@ -2900,13 +2999,13 @@ class ClientController extends Controller
                     ->whereNull('client_id')
                     ->where(function ($query) use ($normalizedPhone) {
                         $query->where('phone', $normalizedPhone)
-                            ->orWhere('phone', 'like', '%' . $normalizedPhone . '%');
+                            ->orWhere('phone', 'like', '%'.$normalizedPhone.'%');
                     })
                     ->get();
 
                 foreach ($candidatePayments as $payment) {
                     $matchResult = $matcher->matchPayment($payment, $platformPhonePrefix);
-                    if (!empty($matchResult['matched'])) {
+                    if (! empty($matchResult['matched'])) {
                         $result['auto_matched_payments'] += 1;
                     }
                 }
@@ -2921,8 +3020,8 @@ class ClientController extends Controller
             ];
         } else {
             $duplicateIds = collect($validated['duplicate_ids'] ?? [])
-                ->map(fn($id) => (int) $id)
-                ->filter(fn($id) => $id > 0)
+                ->map(fn ($id) => (int) $id)
+                ->filter(fn ($id) => $id > 0)
                 ->unique()
                 ->values();
 
@@ -2969,6 +3068,7 @@ class ClientController extends Controller
                             'duplicate_of' => (int) $client->id,
                         ]);
                         $result['duplicates_updated'] += 1;
+
                         continue;
                     }
 
@@ -3001,7 +3101,7 @@ class ClientController extends Controller
                                 'client_id' => (int) $client->id,
                                 'author_id' => (int) $request->user()->id,
                                 'note_type' => 'system',
-                                'content' => '[Merged from Client #' . $duplicate->id . '] ' . (string) $note->content,
+                                'content' => '[Merged from Client #'.$duplicate->id.'] '.(string) $note->content,
                                 'follow_up_at' => null,
                                 'created_at' => now(),
                             ]);
@@ -3172,7 +3272,7 @@ class ClientController extends Controller
             $result = $this->credentialDeliveryService->createClientSessionLink($client, [
                 'target' => $validated['target'] ?? 'edit_profile',
                 'reason' => $validated['reason'],
-                'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#' . (int) $request->user()?->id))),
+                'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#'.(int) $request->user()?->id))),
             ]);
         } catch (\InvalidArgumentException $exception) {
             return response()->json([
@@ -3373,7 +3473,7 @@ class ClientController extends Controller
             'reason' => 'required|string|max:500',
         ]);
 
-        if ((string) $dispatch->status === 'sent' && !((bool) ($validated['force'] ?? false))) {
+        if ((string) $dispatch->status === 'sent' && ! ((bool) ($validated['force'] ?? false))) {
             return response()->json([
                 'message' => 'Credentials were already delivered. Set force=true to resend intentionally.',
             ], 409);
@@ -3449,7 +3549,7 @@ class ClientController extends Controller
 
     private function authorizeClientAccess(Request $request, Client $client): void
     {
-        if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
+        if (! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
             abort(403, 'You do not have access to this client market.');
         }
     }
@@ -3480,7 +3580,7 @@ class ClientController extends Controller
         );
 
         $platform = Platform::query()->findOrFail($platformId);
-        if (!$this->platformHasWpDatabaseCredentials($platform)) {
+        if (! $this->platformHasWpDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
         $phonePrefix = (string) ($platform->phone_prefix ?: '254');
@@ -3491,7 +3591,7 @@ class ClientController extends Controller
         }
 
         $profileStatus = strtolower(trim((string) ($payload['profile_status'] ?? 'private')));
-        if (!in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+        if (! in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
             $profileStatus = 'private';
         }
 
@@ -3502,15 +3602,15 @@ class ClientController extends Controller
 
         $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
             'name' => $name,
-            'email' => !empty($payload['email']) ? trim((string) $payload['email']) : '',
+            'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : '',
             'phone' => $normalizedPhone,
             'whatsapp' => $normalizedPhone,
-            'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
+            'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : '',
             'post_status' => $profileStatus,
-            'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
-            'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
+            'username' => ! empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
+            'password' => ! empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
             'signup_source' => $signupSource,
-            'provision_request_id' => !empty($payload['provision_request_id'])
+            'provision_request_id' => ! empty($payload['provision_request_id'])
                 ? trim((string) $payload['provision_request_id'])
                 : (string) \Illuminate\Support\Str::uuid(),
             ...$this->extractProvisioningFields($payload),
@@ -3534,8 +3634,8 @@ class ClientController extends Controller
                 'client_type' => 'escort',
                 'name' => $name,
                 'phone_normalized' => $normalizedPhone !== '' ? $normalizedPhone : null,
-                'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
-                'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
+                'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : null,
+                'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : null,
                 'region' => null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
                 'assigned_to' => $assignedTo,
@@ -3646,7 +3746,7 @@ class ClientController extends Controller
         }
 
         $profileStatus = strtolower(trim((string) ($payload['profile_status'] ?? 'private')));
-        if (!in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+        if (! in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
             $profileStatus = 'private';
         }
 
@@ -3661,12 +3761,12 @@ class ClientController extends Controller
         $client = Client::create([
             'platform_id' => $platformId,
             'wp_post_id' => $manualWpPostId,
-            'wp_user_id' => !empty($payload['wp_user_id']) ? (int) $payload['wp_user_id'] : null,
+            'wp_user_id' => ! empty($payload['wp_user_id']) ? (int) $payload['wp_user_id'] : null,
             'client_type' => 'escort',
             'name' => $name,
             'phone_normalized' => $normalizedPhone,
-            'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
-            'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
+            'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : null,
+            'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : null,
             'profile_status' => $profileStatus,
             'assigned_to' => $assignedTo,
             'created_by' => (int) $request->user()->id,
@@ -3779,13 +3879,13 @@ class ClientController extends Controller
 
     private function resolveAssignedOwner(int $platformId, array $payload, string $name): ?int
     {
-        $assignedTo = !empty($payload['assigned_to']) ? (int) $payload['assigned_to'] : null;
+        $assignedTo = ! empty($payload['assigned_to']) ? (int) $payload['assigned_to'] : null;
         if ($assignedTo) {
             $assignee = User::query()->find($assignedTo);
             if (
-                !$assignee ||
-                !$assignee->isActive() ||
-                !$this->marketAuthorizationService->userCanAccessPlatform($assignee, $platformId)
+                ! $assignee ||
+                ! $assignee->isActive() ||
+                ! $this->marketAuthorizationService->userCanAccessPlatform($assignee, $platformId)
             ) {
                 throw new \InvalidArgumentException('Assigned owner is not eligible for this market.');
             }
@@ -3802,17 +3902,17 @@ class ClientController extends Controller
 
     private function platformHasWpDatabaseCredentials(Platform $platform): bool
     {
-        return !empty($platform->db_host)
-            && !empty($platform->db_name)
-            && !empty($platform->db_user)
-            && !empty($platform->db_pass);
+        return ! empty($platform->db_host)
+            && ! empty($platform->db_name)
+            && ! empty($platform->db_user)
+            && ! empty($platform->db_pass);
     }
 
     private function platformHasWpApiCredentials(Platform $platform): bool
     {
-        return !empty($platform->wp_api_url)
-            && !empty($platform->wp_api_user)
-            && !empty($platform->wp_api_password);
+        return ! empty($platform->wp_api_url)
+            && ! empty($platform->wp_api_user)
+            && ! empty($platform->wp_api_password);
     }
 
     private function handleWpReadRequestException(RequestException $exception, Client $client, string $failureMessage)
@@ -3820,7 +3920,7 @@ class ClientController extends Controller
         $status = $exception->response?->status() ?? 502;
         $payload = $exception->response?->json();
 
-        if (!is_array($payload)) {
+        if (! is_array($payload)) {
             $payload = [
                 'message' => $exception->response?->body() ?: $failureMessage,
             ];
@@ -3902,7 +4002,7 @@ class ClientController extends Controller
     private function parseCsvRows(string $path, bool $hasHeader): array
     {
         $handle = fopen($path, 'rb');
-        if (!$handle) {
+        if (! $handle) {
             throw new \RuntimeException('Unable to read uploaded CSV file.');
         }
 
@@ -3912,14 +4012,16 @@ class ClientController extends Controller
 
         if ($hasHeader) {
             $headerRow = fgetcsv($handle);
-            if (!is_array($headerRow) || empty($headerRow)) {
+            if (! is_array($headerRow) || empty($headerRow)) {
                 fclose($handle);
+
                 return [];
             }
 
             $header = array_map(function ($column) {
                 $normalized = strtolower(trim((string) $column));
                 $normalized = preg_replace('/[^a-z0-9_]+/', '_', $normalized) ?? '';
+
                 return trim($normalized, '_');
             }, $headerRow);
         }
@@ -3954,11 +4056,11 @@ class ClientController extends Controller
     private function extractWpModifiedAt(array $profile): ?Carbon
     {
         $value = data_get($profile, 'post.modified_at');
-        if (!$value) {
+        if (! $value) {
             $value = $profile['modified_at'] ?? null;
         }
 
-        if (!$value) {
+        if (! $value) {
             return null;
         }
 
@@ -3974,7 +4076,7 @@ class ClientController extends Controller
         $normalized = $fields;
 
         foreach (['gender', 'ethnicity', 'build'] as $field) {
-            if (!array_key_exists($field, $normalized)) {
+            if (! array_key_exists($field, $normalized)) {
                 continue;
             }
 
@@ -3983,7 +4085,7 @@ class ClientController extends Controller
         }
 
         foreach (['services', 'availability'] as $field) {
-            if (!array_key_exists($field, $normalized)) {
+            if (! array_key_exists($field, $normalized)) {
                 continue;
             }
 
@@ -4049,7 +4151,7 @@ class ClientController extends Controller
         }
 
         $fields = $this->normalizeWpProfileFields($input);
-        if (array_key_exists('bio', $fields) && !array_key_exists('content', $fields)) {
+        if (array_key_exists('bio', $fields) && ! array_key_exists('content', $fields)) {
             $fields['content'] = $fields['bio'];
         }
         unset($fields['bio']);
@@ -4063,7 +4165,7 @@ class ClientController extends Controller
             'currency_catalog_ids' => $currencyCatalogIds,
         ]);
 
-        if (!$this->profileFieldsIncludeLocation($validated)) {
+        if (! $this->profileFieldsIncludeLocation($validated)) {
             return $validated;
         }
 
@@ -4078,7 +4180,7 @@ class ClientController extends Controller
     {
         $fields = [];
         foreach (array_merge(WpProfileFieldCatalog::editableFields(), ['bio', 'content']) as $key) {
-            if (!array_key_exists($key, $payload)) {
+            if (! array_key_exists($key, $payload)) {
                 continue;
             }
 
@@ -4109,7 +4211,7 @@ class ClientController extends Controller
             ...$context,
         ]);
 
-        if (!$this->profileFieldsIncludeLocation($validated)) {
+        if (! $this->profileFieldsIncludeLocation($validated)) {
             return $validated;
         }
 
@@ -4191,7 +4293,7 @@ class ClientController extends Controller
             }
 
             // Keep numeric codes only to align with WordPress service storage.
-            if (!preg_match('/^\d+$/', $resolvedRaw)) {
+            if (! preg_match('/^\d+$/', $resolvedRaw)) {
                 continue;
             }
 
@@ -4200,7 +4302,7 @@ class ClientController extends Controller
                 continue;
             }
 
-            if (!in_array($resolvedCode, $normalized, true)) {
+            if (! in_array($resolvedCode, $normalized, true)) {
                 $normalized[] = $resolvedCode;
             }
         }
@@ -4249,6 +4351,7 @@ class ClientController extends Controller
     {
         $lower = strtolower($value);
         $normalized = preg_replace('/[^a-z0-9]+/', ' ', $lower) ?? '';
+
         return trim($normalized);
     }
 
@@ -4315,7 +4418,7 @@ class ClientController extends Controller
      */
     private function validateLocationHierarchy(array $fields, array $locations): array
     {
-        if (!array_key_exists('region_id', $fields) && !array_key_exists('city_id', $fields)) {
+        if (! array_key_exists('region_id', $fields) && ! array_key_exists('city_id', $fields)) {
             return $fields;
         }
 
@@ -4337,7 +4440,7 @@ class ClientController extends Controller
         $cityId = (int) ($fields['city_id'] ?? 0);
         $region = $regionsById[$regionId] ?? null;
 
-        if (!$region) {
+        if (! $region) {
             throw ValidationException::withMessages([
                 'region_id' => 'Selected region does not exist in the configured WordPress location catalog.',
             ]);
@@ -4358,7 +4461,7 @@ class ClientController extends Controller
         $city = $cities
             ->first(fn ($item): bool => (int) ($item['id'] ?? 0) === $cityId);
 
-        if (!$city) {
+        if (! $city) {
             throw ValidationException::withMessages([
                 'city_id' => 'That city is not in the selected region.',
             ]);
@@ -4414,11 +4517,13 @@ class ClientController extends Controller
         foreach (array_keys($requestedFields) as $field) {
             if ($field === 'name' || $field === 'post_title') {
                 $snapshot[$field] = data_get($profile, 'post.title');
+
                 continue;
             }
 
             if ($field === 'city') {
                 $snapshot[$field] = data_get($taxonomies, 'city.name') ?? ($profile['city'] ?? null);
+
                 continue;
             }
 
@@ -4459,19 +4564,19 @@ class ClientController extends Controller
         // Fields from WP meta — fetch with short cache to avoid hitting WP API on every page load
         $wpMeta = $this->getCachedWpMeta($client);
 
-        $fields[] = ['key' => 'gender', 'label' => 'Gender', 'filled' => !empty($wpMeta['gender'])];
-        $fields[] = ['key' => 'ethnicity', 'label' => 'Ethnicity', 'filled' => !empty($wpMeta['ethnicity'])];
-        $fields[] = ['key' => 'height', 'label' => 'Height', 'filled' => !empty($wpMeta['height'])];
-        $fields[] = ['key' => 'build', 'label' => 'Build', 'filled' => !empty($wpMeta['build'] ?? $wpMeta['body_type'] ?? null)];
-        $fields[] = ['key' => 'services', 'label' => 'Services', 'filled' => !empty($wpMeta['services'])];
-        $fields[] = ['key' => 'bio', 'label' => 'Bio / About', 'filled' => !empty($wpMeta['bio'] ?? $wpMeta['_post_content'] ?? null)];
-        $fields[] = ['key' => 'rates', 'label' => 'Rates', 'filled' => !empty($wpMeta['incall'] ?? $wpMeta['rate_incall'] ?? $wpMeta['outcall'] ?? $wpMeta['rate_outcall'] ?? $wpMeta['rate1h_incall'] ?? null)];
+        $fields[] = ['key' => 'gender', 'label' => 'Gender', 'filled' => ! empty($wpMeta['gender'])];
+        $fields[] = ['key' => 'ethnicity', 'label' => 'Ethnicity', 'filled' => ! empty($wpMeta['ethnicity'])];
+        $fields[] = ['key' => 'height', 'label' => 'Height', 'filled' => ! empty($wpMeta['height'])];
+        $fields[] = ['key' => 'build', 'label' => 'Build', 'filled' => ! empty($wpMeta['build'] ?? $wpMeta['body_type'] ?? null)];
+        $fields[] = ['key' => 'services', 'label' => 'Services', 'filled' => ! empty($wpMeta['services'])];
+        $fields[] = ['key' => 'bio', 'label' => 'Bio / About', 'filled' => ! empty($wpMeta['bio'] ?? $wpMeta['_post_content'] ?? null)];
+        $fields[] = ['key' => 'rates', 'label' => 'Rates', 'filled' => ! empty($wpMeta['incall'] ?? $wpMeta['rate_incall'] ?? $wpMeta['outcall'] ?? $wpMeta['rate_outcall'] ?? $wpMeta['rate1h_incall'] ?? null)];
 
-        $filledCount = count(array_filter($fields, fn($f) => $f['filled']));
+        $filledCount = count(array_filter($fields, fn ($f) => $f['filled']));
         $totalCount = count($fields);
         $missing = array_values(array_map(
-            fn($f) => $f['label'],
-            array_filter($fields, fn($f) => !$f['filled'])
+            fn ($f) => $f['label'],
+            array_filter($fields, fn ($f) => ! $f['filled'])
         ));
 
         return [
@@ -4500,7 +4605,7 @@ class ClientController extends Controller
 
                 $meta = $profile['meta'] ?? [];
                 // Include post content for bio completeness check
-                if (!empty($profile['post']['content'])) {
+                if (! empty($profile['post']['content'])) {
                     $meta['_post_content'] = $profile['post']['content'];
                 }
 
@@ -4518,13 +4623,14 @@ class ClientController extends Controller
 
     private function validateProfileMediaUpload($file, bool $setMain, \Closure $fail): void
     {
-        if (!$file instanceof \Illuminate\Http\UploadedFile) {
+        if (! $file instanceof \Illuminate\Http\UploadedFile) {
             return;
         }
 
         $isVideo = $this->isProfileMediaVideoUpload($file);
         if ($isVideo && strtolower((string) $file->getClientOriginalExtension()) !== 'mp4') {
             $fail('The file must be a JPEG, PNG, WEBP image, or MP4 video.');
+
             return;
         }
 
@@ -4546,7 +4652,7 @@ class ClientController extends Controller
     private function resolveProfileMediaUploadFiles(Request $request): array
     {
         $files = $request->file('files', []);
-        if (!is_array($files)) {
+        if (! is_array($files)) {
             $files = [];
         }
 
@@ -4564,14 +4670,14 @@ class ClientController extends Controller
     }
 
     /**
-     * @param array<int, UploadedFile> $files
+     * @param  array<int, UploadedFile>  $files
      */
     private function validateProfileMediaBatch(array $files, bool $setMain): void
     {
         $hasMultiple = count($files) > 1;
 
         foreach ($files as $file) {
-            $this->validateProfileMediaUpload($file, $setMain && !$hasMultiple, function (string $message): void {
+            $this->validateProfileMediaUpload($file, $setMain && ! $hasMultiple, function (string $message): void {
                 throw new InvalidArgumentException($message);
             });
         }
@@ -4607,8 +4713,8 @@ class ClientController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $existingMedia
-     * @param array<int, UploadedFile> $files
+     * @param  array<string, mixed>  $existingMedia
+     * @param  array<int, UploadedFile>  $files
      */
     private function ensureProfileMediaCapacity(array $existingMedia, array $files): void
     {
@@ -4640,13 +4746,13 @@ class ClientController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $payload
      * @return array{images:int,videos:int}
      */
     private function countCurrentProfileMedia(array $payload): array
     {
         $rows = data_get($payload, 'data');
-        if (!is_array($rows)) {
+        if (! is_array($rows)) {
             $rows = array_is_list($payload) ? $payload : [];
         }
 
@@ -4658,6 +4764,7 @@ class ClientController extends Controller
 
             if (str_starts_with($mimeType, 'image/') || preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url)) {
                 $counts['images']++;
+
                 continue;
             }
 
@@ -4738,7 +4845,7 @@ class ClientController extends Controller
         );
 
         $rangeDays = (int) $request->input('range_days', 30);
-        if (!in_array($rangeDays, [7, 30, 90], true)) {
+        if (! in_array($rangeDays, [7, 30, 90], true)) {
             $rangeDays = 30;
         }
 
@@ -4891,7 +4998,7 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $validated = $request->validate([
-            'reason_code' => 'required|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason_code' => 'required|string|in:'.implode(',', CrmClientCloseReason::ALL),
             'reason_note' => 'nullable|string|max:1000',
         ]);
 
@@ -4962,7 +5069,7 @@ class ClientController extends Controller
         $validated = $request->validate([
             'client_ids' => 'required|array|min:1|max:200',
             'client_ids.*' => 'integer|exists:clients,id',
-            'reason_code' => 'required|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason_code' => 'required|string|in:'.implode(',', CrmClientCloseReason::ALL),
             'reason_note' => 'nullable|string|max:1000',
         ]);
 
@@ -5168,6 +5275,7 @@ class ClientController extends Controller
                 $isManual = $p->manual_payment_bundle_id
                     || (string) $p->provider_key === 'manual_confirmation'
                     || (string) $p->reconciliation_state === 'manual_review';
+
                 return [
                     'id' => (int) $p->id,
                     'phone' => $p->phone,
@@ -5266,7 +5374,8 @@ class ClientController extends Controller
                     $start = $cap;
                 }
 
-                $label = sprintf('Custom · %s%s', $start->format('M j'), $end ? ' → ' . $end->format('M j') : ' → now');
+                $label = sprintf('Custom · %s%s', $start->format('M j'), $end ? ' → '.$end->format('M j') : ' → now');
+
                 return [$start, $end, $label];
             } catch (\Throwable) {
                 // Fall through to the preset path on parse error.
@@ -5275,7 +5384,7 @@ class ClientController extends Controller
 
         $rangeHours = (int) $request->input('range_hours', 48);
         $allowed = [24, 48, 168, 720]; // 1d, 2d, 7d, 30d
-        if (!in_array($rangeHours, $allowed, true)) {
+        if (! in_array($rangeHours, $allowed, true)) {
             $rangeHours = 48;
         }
 
@@ -5315,6 +5424,7 @@ class ClientController extends Controller
         if ($ageSeconds < 120 * 60) {
             return 'orange';
         }
+
         return 'red';
     }
 
@@ -5624,7 +5734,7 @@ class ClientController extends Controller
         $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%featured%' THEN 'featured'";
         $cases[] = "WHEN {$fallbackAllowed} AND {$fallback} LIKE '%basic%' THEN 'basic'";
 
-        return 'CASE ' . implode(' ', $cases) . " ELSE 'unknown' END";
+        return 'CASE '.implode(' ', $cases)." ELSE 'unknown' END";
     }
 
     private function decorateChurnLastPlans($clients): void
