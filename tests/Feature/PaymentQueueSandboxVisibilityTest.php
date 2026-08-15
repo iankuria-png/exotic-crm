@@ -516,6 +516,62 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('data.0.id', $gatewayPayment->id);
     }
 
+    public function test_payment_workspace_can_filter_collection_channels(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $selfService = $this->createPayment($platform, [
+            'transaction_reference' => 'CHANNEL-SELF-SERVICE-001',
+            'reference_number' => 'CHANNEL-SELF-SERVICE-001',
+            'amount' => 1500,
+            'status' => 'completed',
+            'provider_key' => 'kopokopo',
+            'source' => 'hosted_checkout',
+        ]);
+
+        $manual = $this->createPayment($platform, [
+            'transaction_reference' => 'CHANNEL-MANUAL-001',
+            'reference_number' => 'CHANNEL-MANUAL-001',
+            'amount' => 2300,
+            'status' => 'completed',
+            'provider_key' => 'manual_confirmation',
+            'source' => 'manual_confirmation',
+            'match_confidence' => 'manual',
+            'reconciliation_state' => 'manual_review',
+        ]);
+        $this->createManualSubmission($platform, $manual);
+
+        $other = $this->createPayment($platform, [
+            'transaction_reference' => 'CHANNEL-OTHER-001',
+            'reference_number' => 'CHANNEL-OTHER-001',
+            'amount' => 900,
+            'status' => 'completed',
+            'provider_key' => null,
+            'source' => 'excel_import',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $selfServiceResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=self_service');
+        $selfServiceResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $selfService->id)
+            ->assertJsonPath('data.0.reference_number', 'CHANNEL-SELF-SERVICE-001');
+
+        $manualResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=manual');
+        $manualResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $manual->id)
+            ->assertJsonPath('data.0.reference_number', 'CHANNEL-MANUAL-001');
+
+        $otherResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=other');
+        $otherResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $other->id)
+            ->assertJsonPath('data.0.reference_number', 'CHANNEL-OTHER-001');
+    }
+
     public function test_reversed_stats_surface_resolved_reversals_and_reversed_status_rows(): void
     {
         $platform = $this->createPlatform();

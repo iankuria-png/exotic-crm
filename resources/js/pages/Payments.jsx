@@ -1501,6 +1501,7 @@ export default function Payments() {
     const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import', 'orphan_manual_import']);
     const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet']);
+    const allowedCollectionChannelFilters = new Set(['self_service', 'manual', 'other']);
     const allowedManualSubmissionFilters = new Set(['with_proof', 'without_proof', 'pending_review', 'verified', 'rejected']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
@@ -1545,6 +1546,10 @@ export default function Payments() {
     const [purposeFilter, setPurposeFilter] = useState(() => {
         const requested = (searchParams.get('purpose') || '').trim();
         return allowedPurposeFilters.has(requested) ? requested : '';
+    });
+    const [collectionChannelFilter, setCollectionChannelFilter] = useState(() => {
+        const requested = (searchParams.get('collection_channel') || '').trim();
+        return allowedCollectionChannelFilters.has(requested) ? requested : '';
     });
     const [manualSubmissionFilter, setManualSubmissionFilter] = useState(() => {
         const requested = (searchParams.get('manual_submission') || '').trim();
@@ -1704,6 +1709,7 @@ export default function Payments() {
         ...(platformFilter && { platform_id: Number(platformFilter) }),
         ...(sourceFilter && { source: sourceFilter }),
         ...(purposeFilter && { purpose: purposeFilter }),
+        ...(collectionChannelFilter && { collection_channel: collectionChannelFilter }),
         ...(manualSubmissionFilter && { manual_submission: manualSubmissionFilter }),
         ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
         ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
@@ -1723,6 +1729,7 @@ export default function Payments() {
         platformFilter,
         sourceFilter,
         purposeFilter,
+        collectionChannelFilter,
         manualSubmissionFilter,
         canViewTests,
         environmentFilter,
@@ -1737,7 +1744,7 @@ export default function Payments() {
     ]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, collectionChannelFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -1751,6 +1758,7 @@ export default function Payments() {
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
                     ...(purposeFilter && { purpose: purposeFilter }),
+                    ...(collectionChannelFilter && { collection_channel: collectionChannelFilter }),
                     ...(manualSubmissionFilter && { manual_submission: manualSubmissionFilter }),
                     ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
                     ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
@@ -2577,6 +2585,12 @@ export default function Payments() {
     const manualProofVisibleLabel = manualSubmissionFilter === 'without_proof'
         ? 'payments without proof shown'
         : 'manual proof rows shown';
+    const collectionChannelLabels = {
+        self_service: 'self-service',
+        manual: 'manual',
+        other: 'other-channel',
+    };
+    const collectionChannelVisibleLabel = collectionChannelLabels[collectionChannelFilter] || '';
     const manualProofContribution = data?.stats?.manual_proof_contribution || null;
     const manualProofContributionLabel = MANUAL_PROOF_FILTER_LABELS[manualSubmissionFilter || manualProofContribution?.filter] || 'Manual proof rows';
     const statsScope = String(data?.stats_scope || 'business');
@@ -3754,6 +3768,18 @@ export default function Payments() {
                     />
 
                     <FilterSelect
+                        label="Channel"
+                        value={collectionChannelFilter}
+                        onChange={(event) => { setCollectionChannelFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All channels' },
+                            { value: 'self_service', label: 'Self-service' },
+                            { value: 'manual', label: 'Manual' },
+                            { value: 'other', label: 'Other' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Proof"
                         value={manualSubmissionFilter}
                         onChange={(event) => { setManualSubmissionFilter(event.target.value); setPage(1); }}
@@ -3903,7 +3929,7 @@ export default function Payments() {
                         Hide SMS payment links
                     </label>
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || collectionChannelFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -3916,6 +3942,7 @@ export default function Payments() {
                                 setPlatformFilter('');
                                 setSourceFilter('');
                                 setPurposeFilter('');
+                                setCollectionChannelFilter('');
                                 setManualSubmissionFilter('');
                                 setEnvironmentFilter('');
                                 setTestVisibility('hide');
@@ -3952,6 +3979,12 @@ export default function Payments() {
                                 : `${manualProofUploadsInScope.toLocaleString()} manual proof uploads in scope`}
                             {manualProofPendingReviewInScope > 0 ? ` · ${manualProofPendingReviewInScope.toLocaleString()} pending` : ''}
                         </span>
+                        {collectionChannelFilter ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                                {Number(data?.total || 0).toLocaleString()} {collectionChannelVisibleLabel} payments shown
+                            </span>
+                        ) : null}
                     </div>
                     <p className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                         <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />

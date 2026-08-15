@@ -25,6 +25,7 @@ class PaymentQueueQueryBuilder
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
             'purpose' => 'nullable|in:wallet_topup,non_wallet',
+            'collection_channel' => 'nullable|in:self_service,manual,other',
             'manual_submission' => 'nullable|in:with_proof,without_proof,pending_review,verified,rejected',
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
@@ -137,6 +138,11 @@ class PaymentQueueQueryBuilder
             $query->excludingWalletTopups();
         }
 
+        $collectionChannelFilter = trim((string) ($validated['collection_channel'] ?? $request->input('collection_channel', '')));
+        if ($collectionChannelFilter !== '') {
+            $this->applyCollectionChannelFilter($query, $collectionChannelFilter);
+        }
+
         $manualSubmissionFilter = trim((string) ($validated['manual_submission'] ?? $request->input('manual_submission', '')));
         if ($manualSubmissionFilter !== '') {
             if ($manualSubmissionFilter === 'without_proof') {
@@ -244,6 +250,91 @@ class PaymentQueueQueryBuilder
         }
 
         return $query;
+    }
+
+    private function applyCollectionChannelFilter(Builder $query, string $channel): void
+    {
+        if ($channel === 'manual') {
+            $this->whereManualChannel($query);
+
+            return;
+        }
+
+        if ($channel === 'self_service') {
+            $this->whereSelfServiceChannel($query);
+
+            return;
+        }
+
+        if ($channel === 'other') {
+            $query->where(function (Builder $builder) {
+                $builder->whereDoesntHave('manualSubmission')
+                    ->whereNull('manual_payment_bundle_id')
+                    ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
+                    ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+                    ->whereRaw("LOWER(COALESCE(match_confidence, '')) != ?", ['manual'])
+                    ->whereNull('confirmed_by')
+                    ->whereDoesntHave('routingDecisions', function (Builder $decisionQuery) {
+                        $decisionQuery->whereNotNull('provider_type_key')
+                            ->whereRaw("LOWER(COALESCE(provider_type_key, '')) NOT LIKE ?", ['%manual%']);
+                    })
+                    ->whereDoesntHave('providerTransactions')
+                    ->where(function (Builder $providerBuilder) {
+                        $providerBuilder->whereNull('provider_key')
+                            ->orWhere('provider_key', '');
+                    })
+                    ->where(function (Builder $sourceBuilder) {
+                        $sourceBuilder->whereNull('source')
+                            ->orWhereNotIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
+                    });
+            });
+        }
+    }
+
+    private function whereManualChannel(Builder $query): void
+    {
+        $query->where(function (Builder $builder) {
+            $builder->whereHas('manualSubmission')
+                ->orWhereNotNull('manual_payment_bundle_id')
+                ->orWhereRaw("LOWER(COALESCE(provider_key, '')) LIKE ?", ['%manual%'])
+                ->orWhereRaw("LOWER(COALESCE(source, '')) LIKE ?", ['%manual%'])
+                ->orWhereRaw("LOWER(COALESCE(match_confidence, '')) = ?", ['manual'])
+                ->orWhere(function (Builder $legacyAgentEntry) {
+                    $legacyAgentEntry->whereDoesntHave('routingDecisions')
+                        ->whereDoesntHave('providerTransactions')
+                        ->where(function (Builder $providerBuilder) {
+                            $providerBuilder->whereNull('provider_key')
+                                ->orWhere('provider_key', '');
+                        })
+                        ->where(function (Builder $referenceBuilder) {
+                            $referenceBuilder->whereRaw("UPPER(COALESCE(transaction_reference, '')) LIKE ?", ['UE%'])
+                                ->orWhereRaw("UPPER(COALESCE(reference_number, '')) LIKE ?", ['UE%']);
+                        });
+                });
+        });
+    }
+
+    private function whereSelfServiceChannel(Builder $query): void
+    {
+        $query
+            ->whereDoesntHave('manualSubmission')
+            ->whereNull('manual_payment_bundle_id')
+            ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
+            ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+            ->whereRaw("LOWER(COALESCE(match_confidence, '')) != ?", ['manual'])
+            ->where(function (Builder $builder) {
+                $builder->whereHas('routingDecisions', function (Builder $decisionQuery) {
+                    $decisionQuery->whereNotNull('provider_type_key')
+                        ->whereRaw("LOWER(COALESCE(provider_type_key, '')) NOT LIKE ?", ['%manual%']);
+                })
+                    ->orWhereHas('providerTransactions')
+                    ->orWhere(function (Builder $providerBuilder) {
+                        $providerBuilder->whereNotNull('provider_key')
+                            ->where('provider_key', '!=', '')
+                            ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%']);
+                    })
+                    ->orWhereIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
+            });
     }
 
     public function applyPaymentWorkspaceVisibility(Builder $query, string $testVisibility, string $environmentFilter): Builder
