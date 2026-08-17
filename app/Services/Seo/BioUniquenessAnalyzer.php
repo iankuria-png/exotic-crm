@@ -23,10 +23,26 @@ class BioUniquenessAnalyzer
     ];
 
     private const AI_SLOP_PATTERNS = [
+        'no_no_punchline' => [
+            '/\bno\s+[^.!?]{2,40},\s+no\s+[^.!?]{2,40}\.\s+(?:just|only)\b/i',
+            '/\bno\s+[^.!?]{2,40},\s+no\s+[^.!?]{2,40}\b/i',
+        ],
         'negative_parallelism' => [
             '/\bnot only\b.+\bbut also\b/i',
             '/\bnot just\b.+\bbut also\b/i',
             '/\brather than\b/i',
+        ],
+        'stock_seduction' => [
+            '/\bno games\b/i',
+            '/\bno wasting time\b/i',
+            '/\bno scripts\b/i',
+            '/\bfake attitude\b/i',
+            '/\bshe is the one\b/i',
+            '/\bsets? the pace\b/i',
+            '/\breads? you well\b/i',
+            '/\bon (?:his|your) toes\b/i',
+            '/\band so is (?:the|her|his)\b/i',
+            '/\bbetter vibe\b/i',
         ],
         'puffery' => [
             '/\bserves as\b/i',
@@ -81,8 +97,10 @@ class BioUniquenessAnalyzer
             default => 64,
         };
 
-        return (int) ($analysis['corpus_sample_size'] ?? 0) >= 3
-            && ((int) ($analysis['overuse_score'] ?? 0) >= $threshold || (int) ($analysis['ai_slop_score'] ?? 0) >= 55);
+        $overuseHigh = (int) ($analysis['corpus_sample_size'] ?? 0) >= 3
+            && (int) ($analysis['overuse_score'] ?? 0) >= $threshold;
+
+        return $overuseHigh || (int) ($analysis['ai_slop_score'] ?? 0) >= 55;
     }
 
     public function rewriteInstruction(array $analysis): string
@@ -186,7 +204,12 @@ class BioUniquenessAnalyzer
                 }
 
                 $count = count($matches[0]);
-                $impact = min(28, $count * ($type === 'formatting_artifact' ? 18 : 14));
+                $impact = min(42, $count * match ($type) {
+                    'formatting_artifact' => 18,
+                    'no_no_punchline' => 36,
+                    'stock_seduction' => 20,
+                    default => 14,
+                });
                 $score += $impact;
                 $flags[] = [
                     'type' => $type,

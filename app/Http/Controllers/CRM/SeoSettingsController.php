@@ -29,7 +29,14 @@ class SeoSettingsController extends Controller
         'claude'   => 'claude-3-5-sonnet-20241022',
         'openai'   => 'gpt-4o-mini',
         'gemini'   => 'gemini-2.5-flash',
-        'deepseek' => 'deepseek-chat',
+        'deepseek' => 'deepseek-v4-pro',
+    ];
+
+    private const DEFAULT_FALLBACK_MODELS = [
+        'claude' => [],
+        'openai' => [],
+        'gemini' => [],
+        'deepseek' => ['deepseek-v4-flash'],
     ];
 
     private const DEFAULT_GENERATION = [
@@ -95,6 +102,8 @@ class SeoSettingsController extends Controller
             'providers' => 'array',
             'providers.*.api_key' => 'nullable|string',
             'providers.*.model'   => 'nullable|string|max:100',
+            'providers.*.fallback_models' => 'nullable|array|max:5',
+            'providers.*.fallback_models.*' => 'string|max:100',
             'generation' => 'nullable|array',
             'generation.tone' => 'nullable|string|max:180',
             'generation.temperament' => 'nullable|string|max:180',
@@ -132,10 +141,16 @@ class SeoSettingsController extends Controller
             $model = isset($incoming['model']) && $incoming['model'] !== ''
                 ? (string) $incoming['model']
                 : ($existing['model'] ?: self::DEFAULT_MODELS[$name]);
+            $model = $this->normalizeProviderModel($name, $model);
+
+            $fallbackModels = array_key_exists('fallback_models', $incoming)
+                ? $incoming['fallback_models']
+                : ($existing['fallback_models'] ?? self::DEFAULT_FALLBACK_MODELS[$name]);
 
             $providers[$name] = [
                 'api_key' => $apiKey,
-                'model'   => $this->normalizeProviderModel($name, $model),
+                'model'   => $model,
+                'fallback_models' => $this->normalizeFallbackModels($name, is_array($fallbackModels) ? $fallbackModels : [], $model),
             ];
         }
 
@@ -269,6 +284,13 @@ class SeoSettingsController extends Controller
                 'api_key' => (string) ($stored['providers'][$name]['api_key'] ?? ''),
                 'model'   => $this->normalizeProviderModel($name, (string) ($stored['providers'][$name]['model'] ?? self::DEFAULT_MODELS[$name])),
             ];
+            $providers[$name]['fallback_models'] = $this->normalizeFallbackModels(
+                $name,
+                array_key_exists('fallback_models', $stored['providers'][$name] ?? [])
+                    ? (array) $stored['providers'][$name]['fallback_models']
+                    : self::DEFAULT_FALLBACK_MODELS[$name],
+                $providers[$name]['model']
+            );
         }
 
         return [
@@ -365,7 +387,23 @@ class SeoSettingsController extends Controller
             return self::DEFAULT_MODELS['gemini'];
         }
 
+        if ($provider === 'deepseek' && $model === 'deepseek-chat') {
+            return 'deepseek-v4-flash';
+        }
+
         return $model;
+    }
+
+    private function normalizeFallbackModels(string $provider, array $models, string $primaryModel): array
+    {
+        return collect($models)
+            ->map(fn($model) => $this->normalizeProviderModel($provider, (string) $model))
+            ->map(fn($model) => trim($model))
+            ->filter(fn($model) => $model !== '' && $model !== $primaryModel)
+            ->unique()
+            ->take(5)
+            ->values()
+            ->all();
     }
 
     /**
@@ -401,12 +439,14 @@ class SeoSettingsController extends Controller
         foreach (self::SUPPORTED_PROVIDERS as $name) {
             $key = $stored['providers'][$name]['api_key'] ?? '';
             $model = $stored['providers'][$name]['model'] ?? '';
+            $fallbackModels = $stored['providers'][$name]['fallback_models'] ?? [];
             if ($key !== '') {
                 config(["services.seo_engine.{$name}.api_key" => $key]);
             }
             if ($model !== '') {
                 config(["services.seo_engine.{$name}.model" => $model]);
             }
+            config(["services.seo_engine.{$name}.fallback_models" => is_array($fallbackModels) ? $fallbackModels : []]);
         }
     }
 }

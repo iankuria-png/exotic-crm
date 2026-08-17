@@ -64,6 +64,7 @@ class BioGenerationServiceTest extends TestCase
         $this->assertArrayHasKey('breakdown', $result);
         $this->assertSame('template_fallback', $result['provider_used']);
         $this->assertStringContainsString('Anna', $result['bio_html']);
+        $this->assertStringNotContainsString('African', $result['bio_html']);
         $this->assertStringNotContainsString('170cm', $result['bio_html']);
         $this->assertStringNotContainsString('height', strtolower($result['bio_html']));
     }

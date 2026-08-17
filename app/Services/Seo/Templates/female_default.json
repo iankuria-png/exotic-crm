@@ -1,16 +1,16 @@
 [
   {
-    "intro": "{name}, {age}, is a {ethnicity} escort based in {city}.",
+    "intro": "{name}, {age}, is a companion based in {city}.",
     "middle": "She has a {build} look and offers {top_service} for {availability_text} bookings.",
     "closer": "Message {name} for a direct, discreet booking in {neighborhood_or_city}."
   },
   {
-    "intro": "{name} is a {age}-year-old {ethnicity} companion in {city}.",
+    "intro": "{name} is a companion in {city}.",
     "middle": "Available for {availability_text}, she offers {top_service} with clear communication and a relaxed style.",
     "closer": "Contact {name} when you are ready to arrange a meeting in {neighborhood_or_city}."
   },
   {
-    "intro": "Looking for {top_service} in {city}? {name} is a {age}-year-old {ethnicity} escort.",
+    "intro": "Looking for {top_service} in {city}? {name} keeps her profile clear and easy to book.",
     "middle": "Her profile is simple: {build}, easy to reach, and available for {availability_text} bookings.",
     "closer": "Get in touch with {name} for genuine enquiries around {neighborhood_or_city}."
   }

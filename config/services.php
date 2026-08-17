@@ -196,7 +196,11 @@ return [
         ],
         'deepseek' => [
             'api_key' => env('DEEPSEEK_API_KEY'),
-            'model'   => env('SEO_DEEPSEEK_MODEL'),
+            'model'   => env('SEO_DEEPSEEK_MODEL', 'deepseek-v4-pro'),
+            'fallback_models' => array_filter(array_map(
+                'trim',
+                explode(',', env('SEO_DEEPSEEK_FALLBACK_MODELS', 'deepseek-v4-flash'))
+            )),
         ],
         'scorer_weights' => [
             'word_count'   => (int) env('SEO_WEIGHT_WORD_COUNT', 25),

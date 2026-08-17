@@ -43,8 +43,11 @@ class LinkCatalogService
      * Keep this list conservative: only include attributes that have canonical pages.
      */
     private const ATTRIBUTE_PAGES = [
-        'Black' => 'black-escorts',
         'Curvy' => 'curvy-escorts',
+    ];
+
+    private const BLOCKED_ATTRIBUTE_KEYWORDS = [
+        'black',
     ];
 
     public function forPlatform(int $platformId): array
@@ -128,6 +131,9 @@ class LinkCatalogService
                 $keyword = (string) ($item['name'] ?? '');
                 $url     = (string) ($item['url'] ?? '');
                 if ($keyword === '' || $url === '') {
+                    continue;
+                }
+                if (in_array(strtolower(trim($keyword)), self::BLOCKED_ATTRIBUTE_KEYWORDS, true)) {
                     continue;
                 }
 

@@ -64,6 +64,9 @@ class SeoEngineConfigProvider extends ServiceProvider
             if (!empty($cfg['model'])) {
                 config(["services.seo_engine.{$provider}.model" => $this->normalizeProviderModel($provider, (string) $cfg['model'])]);
             }
+            if (array_key_exists('fallback_models', $cfg)) {
+                config(["services.seo_engine.{$provider}.fallback_models" => $this->normalizeFallbackModels($provider, (array) $cfg['fallback_models'])]);
+            }
         }
     }
 
@@ -75,6 +78,21 @@ class SeoEngineConfigProvider extends ServiceProvider
             return 'gemini-2.5-flash';
         }
 
+        if ($provider === 'deepseek' && $model === 'deepseek-chat') {
+            return 'deepseek-v4-flash';
+        }
+
         return $model;
+    }
+
+    private function normalizeFallbackModels(string $provider, array $models): array
+    {
+        return collect($models)
+            ->map(fn ($model) => $this->normalizeProviderModel($provider, (string) $model))
+            ->map(fn ($model) => trim($model))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 }

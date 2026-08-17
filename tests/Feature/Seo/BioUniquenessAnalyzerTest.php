@@ -57,4 +57,32 @@ class BioUniquenessAnalyzerTest extends TestCase
         $this->assertGreaterThan(0, $result['ai_slop_score']);
         $this->assertNotEmpty($result['ai_slop_flags']);
     }
+
+    public function test_flags_no_no_just_punchline_as_ai_slop(): void
+    {
+        $platform = Platform::factory()->create();
+        $analyzer = app(BioUniquenessAnalyzer::class);
+
+        $result = $analyzer->analyze(
+            '<p>No chaos, no overthinking. Just good company and a better vibe.</p>',
+            $platform->id
+        );
+
+        $this->assertGreaterThanOrEqual(55, $result['ai_slop_score']);
+        $this->assertTrue($analyzer->shouldRewrite($result));
+        $this->assertContains('no no punchline', collect($result['ai_slop_flags'])->pluck('label')->all());
+    }
+
+    public function test_flags_short_no_no_cliche_as_ai_slop(): void
+    {
+        $platform = Platform::factory()->create();
+
+        $result = app(BioUniquenessAnalyzer::class)->analyze(
+            '<p>No games, no wasting time. Tell me what you want.</p>',
+            $platform->id
+        );
+
+        $this->assertGreaterThanOrEqual(55, $result['ai_slop_score']);
+        $this->assertNotEmpty($result['ai_slop_flags']);
+    }
 }

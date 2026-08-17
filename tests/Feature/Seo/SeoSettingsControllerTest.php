@@ -27,7 +27,9 @@ class SeoSettingsControllerTest extends TestCase
             ->assertJsonPath('config.generation.overuse_sensitivity', 'medium')
             ->assertJsonPath('config.providers.claude.has_key', false)
             ->assertJsonPath('config.providers.gemini.has_key', false)
-            ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash');
+            ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash')
+            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
+            ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
 
         $this->assertSame(['claude', 'openai', 'gemini', 'deepseek'], $response->json('available_providers'));
     }
@@ -91,7 +93,7 @@ class SeoSettingsControllerTest extends TestCase
             'platform_allowlist' => [],
             'providers_order' => ['deepseek', 'gemini', 'claude', 'openai'],
             'providers' => [
-                'deepseek' => ['api_key' => 'sk-deepseek-test', 'model' => 'deepseek-v4-pro'],
+                'deepseek' => ['api_key' => 'sk-deepseek-test', 'model' => 'deepseek-v4-pro', 'fallback_models' => ['deepseek-v4-flash']],
                 'gemini' => ['api_key' => '__keep__', 'model' => 'gemini-2.5-flash'],
                 'claude' => ['api_key' => '__keep__', 'model' => 'claude-3-5-sonnet-20241022'],
                 'openai' => ['api_key' => '__keep__', 'model' => 'gpt-4o-mini'],
@@ -105,12 +107,14 @@ class SeoSettingsControllerTest extends TestCase
             ],
         ])->assertOk()
             ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
-            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro');
+            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
+            ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
 
         $this->getJson('/api/crm/settings/seo-engine')
             ->assertOk()
             ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
-            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro');
+            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
+            ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
     }
 
     public function test_update_normalizes_overlapping_length_settings(): void

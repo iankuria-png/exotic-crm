@@ -79,6 +79,50 @@ class BioSanitizationTest extends TestCase
         $this->assertStringContainsString('Nairobi', $bio);
     }
 
+    public function test_deepseek_fallback_model_is_used_when_primary_returns_empty_content(): void
+    {
+        config([
+            'services.seo_engine.deepseek.model' => 'deepseek-v4-pro',
+            'services.seo_engine.deepseek.fallback_models' => ['deepseek-v4-flash'],
+        ]);
+
+        $platform = Platform::factory()->create();
+        $requestedModels = [];
+
+        Http::fake([
+            'api.deepseek.com/*' => function ($request) use (&$requestedModels) {
+                $model = (string) data_get($request->data(), 'model');
+                $requestedModels[] = $model;
+
+                if ($model === 'deepseek-v4-pro') {
+                    return Http::response([
+                        'choices' => [
+                            ['message' => ['content' => '']],
+                        ],
+                        'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 0],
+                    ], 200);
+                }
+
+                return Http::response([
+                    'choices' => [
+                        ['message' => ['content' => 'Anna keeps things warm, clear, and easy to arrange in Nairobi.']],
+                    ],
+                    'usage' => ['prompt_tokens' => 110, 'completion_tokens' => 18],
+                ], 200);
+            },
+        ]);
+
+        $result = app(BioGenerationService::class)->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => ['name' => 'Anna', 'city' => 'Nairobi'],
+        ]);
+
+        $this->assertSame(['deepseek-v4-pro', 'deepseek-v4-flash'], $requestedModels);
+        $this->assertFalse($result['fallback_used']);
+        $this->assertSame('deepseek', $result['provider_used']);
+        $this->assertStringContainsString('Anna keeps things warm', $result['bio_html']);
+    }
+
     public function test_curly_quotes_and_em_dashes_are_normalized(): void
     {
         $platform = Platform::factory()->create();

@@ -342,11 +342,14 @@ Style rules:
 - Make this profile feel specific, alive, and a little witty. Let sentence length vary.
 - Be specific and factual. Prefer short sentences.
 - Do not invent services, locations, contact details, nationality, measurements, or claims.
+- Do not describe ethnicity, race, skin color, or racialized color labels in the bio.
 - Do not mention height or body measurements in the bio; these already appear in profile facts.
-- Avoid formulaic AI rhythm: not only X but also Y, not just X but Y, rule-of-three adjective strings, puffed-up claims, and essay-like transitions.
+- Avoid formulaic AI rhythm: "No X, no Y. Just Z.", "No games, no wasting time.", not only X but also Y, not just X but Y, rule-of-three adjective strings, puffed-up claims, and essay-like transitions.
+- Do not use canned contrast punchlines like "No chaos, no overthinking. Just good company and a better vibe.", "No scripts, no fake attitude.", or "The rest is where things get interesting."
+- Avoid dash/hyphen punctuation inside sentences. Use a comma or a new sentence instead.
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji, no Unicode symbols.
-- Use plain ASCII punctuation only (no curly quotes, no em-dashes — use ' " - instead).
+- Use plain ASCII punctuation only.
 - Return clean prose only.{$customLine}{$sameClientFeedback}{$feedbackBlock}{$immediateFeedback}{$rewriteLine}
 PROMPT;
     }
@@ -357,7 +360,6 @@ PROMPT;
             'Name' => $snapshot->name ?: '(not provided)',
             'Age' => $snapshot->age !== null ? $snapshot->age . ' years old' : '(not provided)',
             'Gender' => $snapshot->gender ?: 'female',
-            'Ethnicity' => $snapshot->ethnicity ?? '(not specified)',
             'Build' => $snapshot->build ?? '(not specified)',
             'Hair color' => $snapshot->hairColor ?? '(not specified)',
             'Languages' => !empty($snapshot->languages) ? implode(', ', $snapshot->languages) : 'English',

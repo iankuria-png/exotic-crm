@@ -11,6 +11,13 @@ const PROVIDER_DISPLAY = {
     deepseek: { label: 'DeepSeek',         help: 'Lowest cost. Get a key at platform.deepseek.com.' },
 };
 
+const MODEL_PRESETS = {
+    deepseek: [
+        { value: 'deepseek-v4-pro', label: 'V4 Pro', hint: 'Primary quality model' },
+        { value: 'deepseek-v4-flash', label: 'V4 Flash', hint: 'Fast fallback model' },
+    ],
+};
+
 const SENTINEL = '__keep__';
 
 const DEFAULT_GENERATION = {
@@ -39,6 +46,7 @@ function hydrateProvider(provider = {}) {
     return {
         apiKey: incomingKey === SENTINEL ? '' : incomingKey,
         model: provider?.model || '',
+        fallbackModels: Array.isArray(provider?.fallback_models) ? provider.fallback_models : [],
         hasKey: !!provider?.has_key,
         preview: provider?.key_preview || '',
     };
@@ -154,10 +162,10 @@ export default function SeoEnginePanel() {
             platform_allowlist: form.platformAllowlist,
             providers_order: form.providersOrder,
             providers: {
-                claude:   { api_key: form.providers.claude.apiKey   || SENTINEL, model: form.providers.claude.model },
-                openai:   { api_key: form.providers.openai.apiKey   || SENTINEL, model: form.providers.openai.model },
-                gemini:   { api_key: form.providers.gemini.apiKey   || SENTINEL, model: form.providers.gemini.model },
-                deepseek: { api_key: form.providers.deepseek.apiKey || SENTINEL, model: form.providers.deepseek.model },
+                claude:   providerPayload(form.providers.claude),
+                openai:   providerPayload(form.providers.openai),
+                gemini:   providerPayload(form.providers.gemini),
+                deepseek: providerPayload(form.providers.deepseek),
             },
             generation: form.generation,
         };
@@ -198,6 +206,23 @@ export default function SeoEnginePanel() {
                 [provider]: { ...f.providers[provider], [field]: value },
             },
         }));
+    };
+
+    const toggleFallbackModel = (provider, model) => {
+        setForm((f) => {
+            const current = f.providers[provider]?.fallbackModels || [];
+            const next = current.includes(model)
+                ? current.filter((item) => item !== model)
+                : [...current, model];
+
+            return {
+                ...f,
+                providers: {
+                    ...f.providers,
+                    [provider]: { ...f.providers[provider], fallbackModels: next.filter((item) => item !== f.providers[provider].model) },
+                },
+            };
+        });
     };
 
     const updateGeneration = (field, value) => {
@@ -325,15 +350,13 @@ export default function SeoEnginePanel() {
                                             className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-700 mb-1">Model</label>
-                                        <input
-                                            type="text"
-                                            value={p.model}
-                                            onChange={(e) => updateProvider(provider, 'model', e.target.value)}
-                                            className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
-                                        />
-                                    </div>
+                                    <ProviderModelField
+                                        provider={provider}
+                                        value={p.model}
+                                        fallbackModels={p.fallbackModels || []}
+                                        onChange={(value) => updateProvider(provider, 'model', value)}
+                                        onToggleFallback={(model) => toggleFallbackModel(provider, model)}
+                                    />
                                 </div>
                                 {testResult && (
                                     <div className={`mt-3 text-xs rounded-md p-2 ${testResult.success ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'}`}>
@@ -375,6 +398,80 @@ export default function SeoEnginePanel() {
                 >
                     {saveMutation.isPending ? 'Saving…' : 'Save SEO Engine settings'}
                 </button>
+            </div>
+        </div>
+    );
+}
+
+function providerPayload(provider = {}) {
+    return {
+        api_key: provider.apiKey || SENTINEL,
+        model: provider.model,
+        fallback_models: Array.isArray(provider.fallbackModels)
+            ? provider.fallbackModels.filter((model) => model && model !== provider.model)
+            : [],
+    };
+}
+
+function ProviderModelField({ provider, value, fallbackModels = [], onChange, onToggleFallback }) {
+    const presets = MODEL_PRESETS[provider] || [];
+
+    if (presets.length === 0) {
+        return (
+            <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Model</label>
+                <input
+                    type="text"
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
+                />
+            </div>
+        );
+    }
+
+    const effectiveValue = presets.some((preset) => preset.value === value) ? value : presets[0].value;
+
+    return (
+        <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Primary model</label>
+            <select
+                value={effectiveValue}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
+            >
+                {presets.map((preset) => (
+                    <option key={preset.value} value={preset.value}>{preset.label} · {preset.value}</option>
+                ))}
+            </select>
+            <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Fallback model</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                    {presets
+                        .filter((preset) => preset.value !== effectiveValue)
+                        .map((preset) => {
+                            const active = fallbackModels.includes(preset.value);
+                            return (
+                                <button
+                                    key={preset.value}
+                                    type="button"
+                                    onClick={() => onToggleFallback(preset.value)}
+                                    title={preset.hint}
+                                    className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                                        active
+                                            ? 'border-teal-400 bg-teal-50 text-teal-800'
+                                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                    }`}
+                                >
+                                    {active ? 'Fallback: ' : 'Use '}
+                                    {preset.label}
+                                </button>
+                            );
+                        })}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                    If the primary DeepSeek model errors or returns empty text, the engine tries this before template fallback.
+                </p>
             </div>
         </div>
     );

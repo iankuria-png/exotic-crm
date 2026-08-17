@@ -1,17 +1,17 @@
 [
   {
-    "intro": "Meet {name}, a {age}-year-old {ethnicity} companion based in {city}.",
+    "intro": "Meet {name}, a private companion based in {city}.",
     "middle": "He offers {top_service} and is available for {availability_text} bookings.",
     "closer": "Contact {name} for direct enquiries in {neighborhood_or_city}."
   },
   {
-    "intro": "{name} is a {ethnicity} companion in {city}, available for {top_service}.",
+    "intro": "{name} is a companion in {city}, available for {top_service}.",
     "middle": "At {age}, he keeps bookings clear, respectful, and simple to arrange.",
     "closer": "Connect with {name} in {neighborhood_or_city} for serious enquiries."
   },
   {
     "intro": "Looking for {top_service} in {city}? {name} is available for private bookings.",
-    "middle": "He is {age}, {ethnicity}, and available for {availability_text} meetings.",
+    "middle": "He keeps bookings clear and is available for {availability_text} meetings.",
     "closer": "Book {name} in {neighborhood_or_city} when you are ready."
   }
 ]
