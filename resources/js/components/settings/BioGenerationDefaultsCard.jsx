@@ -9,6 +9,7 @@ import React, { useMemo, useState } from 'react';
  */
 
 const TONE_PRESETS = [
+    { key: 'seductive_human', label: 'Seductive human', value: 'seductive, unique, sexy, witty, flirty, suggestive, human-written profile copy', hint: 'Raw, witty, specific' },
     { key: 'simple_direct', label: 'Simple & direct', value: 'simple, direct, local classified profile copy', hint: 'Tight, factual, no fluff' },
     { key: 'sensual_evocative', label: 'Sensual & evocative', value: 'sensual, evocative, hints of mystery without being explicit', hint: 'Lush sensory cues' },
     { key: 'playful_flirty', label: 'Playful & flirty', value: 'playful, flirty, light teasing energy', hint: 'Cheeky, light' },
@@ -42,6 +43,21 @@ const LANGUAGE_OPTIONS = [
     { code: 'fr', label: 'French',     flag: '🇫🇷' },
     { code: 'pt', label: 'Portuguese', flag: '🇵🇹' },
     { code: 'sw', label: 'Swahili',    flag: '🇰🇪' },
+];
+
+const BIO_FORMAT_OPTIONS = [
+    { key: 'auto', label: 'Auto rotation' },
+    { key: 'first_person_intro', label: 'First person' },
+    { key: 'third_person_classified', label: 'Third person' },
+    { key: 'service_first', label: 'Service first' },
+    { key: 'personality_first', label: 'Personality first' },
+    { key: 'location_first', label: 'Location first' },
+];
+
+const OVERUSE_SENSITIVITY_OPTIONS = [
+    { key: 'low', label: 'Low' },
+    { key: 'medium', label: 'Medium' },
+    { key: 'high', label: 'High' },
 ];
 
 function tonePresetForValue(value) {
@@ -80,6 +96,7 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
     };
 
     const wordSpread = Math.max(0, (value.max_words || 0) - (value.min_words || 0));
+    const lengthWarning = getLengthWarning(value);
 
     return (
         <section className="crm-surface p-6">
@@ -134,6 +151,31 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
                         className="w-full rounded-lg border-slate-300 text-sm focus:border-teal-500 focus:ring-teal-500"
                     />
                 )}
+            </div>
+
+            {/* ─── Format variation ──────────────────────────────────────────── */}
+            <div className="mt-6 space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bio format</label>
+                <div className="flex flex-wrap gap-2">
+                    {BIO_FORMAT_OPTIONS.map((format) => {
+                        const active = (value.bio_format || 'auto') === format.key;
+                        return (
+                            <button
+                                key={format.key}
+                                type="button"
+                                onClick={() => update('bio_format', format.key)}
+                                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                                    active
+                                        ? 'border-teal-400 bg-teal-50 text-teal-800 ring-1 ring-teal-300'
+                                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                                }`}
+                            >
+                                {format.label}
+                            </button>
+                        );
+                    })}
+                </div>
+                <p className="text-xs text-slate-500">Auto rotates profile structure so generated bios do not all open the same way.</p>
             </div>
 
             {/* ─── Language ───────────────────────────────────────────────────── */}
@@ -221,6 +263,11 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
             <div className="mt-6">
                 <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Length</label>
                 <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    {lengthWarning ? (
+                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                            {lengthWarning}
+                        </div>
+                    ) : null}
                     <div className="flex flex-wrap items-end gap-4">
                         <NumberStepper
                             label="Min words"
@@ -261,6 +308,66 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
                             step={1}
                             onChange={(v) => update('max_services', v)}
                             hint="0 = let the model decide"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* ─── Corpus uniqueness controls ────────────────────────────────── */}
+            <div className="mt-6">
+                <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Corpus overuse scoring</label>
+                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div>
+                            <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-500">Sensitivity</label>
+                            <div className="mt-1 inline-flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white p-1">
+                                {OVERUSE_SENSITIVITY_OPTIONS.map((opt) => {
+                                    const active = (value.overuse_sensitivity || 'medium') === opt.key;
+                                    return (
+                                        <button
+                                            key={opt.key}
+                                            type="button"
+                                            onClick={() => update('overuse_sensitivity', opt.key)}
+                                            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                                                active ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+                                            }`}
+                                        >
+                                            {opt.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <NumberStepper
+                            label="Lookback days"
+                            value={value.overuse_lookback_days || 60}
+                            min={7}
+                            max={365}
+                            step={7}
+                            onChange={(v) => update('overuse_lookback_days', v)}
+                        />
+                        <div>
+                            <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-500">Creativity</label>
+                            <input
+                                type="range"
+                                min={0}
+                                max={1.4}
+                                step={0.05}
+                                value={value.creativity ?? 0.85}
+                                onChange={(e) => update('creativity', Number(e.target.value))}
+                                className="mt-3 w-full accent-teal-600"
+                            />
+                            <p className="text-xs font-medium text-slate-600">{Number(value.creativity ?? 0.85).toFixed(2)}</p>
+                        </div>
+                    </div>
+                    <div className="mt-3">
+                        <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-500">Ignored overuse terms</label>
+                        <textarea
+                            rows={2}
+                            value={(value.ignored_overuse_terms || []).join(', ')}
+                            onChange={(e) => update('ignored_overuse_terms', e.target.value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))}
+                            className="mt-1 w-full rounded-lg border-slate-300 text-sm focus:border-teal-500 focus:ring-teal-500"
+                            placeholder="Brand or market terms allowed to repeat, separated by commas"
                         />
                     </div>
                 </div>
@@ -328,6 +435,22 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
             </div>
         </section>
     );
+}
+
+function getLengthWarning(value) {
+    const maxCharacters = Number(value.max_characters || 0);
+    const minWords = Number(value.min_words || 0);
+    const maxWords = Number(value.max_words || 0);
+    if (!maxCharacters || !minWords || !maxWords) return null;
+
+    const estimatedMaxWords = Math.max(25, Math.floor(maxCharacters / 7.2));
+    if (minWords > estimatedMaxWords) {
+        return 'This character limit will force the bio shorter than your minimum word target.';
+    }
+    if (maxWords > estimatedMaxWords) {
+        return 'This character limit may force the bio shorter than your word target.';
+    }
+    return null;
 }
 
 function NumberStepper({ label, value, min, max, step = 1, onChange, hint = null }) {

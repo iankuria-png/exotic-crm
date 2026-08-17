@@ -37,6 +37,7 @@ class OpenAiAdapter implements LlmClient
         $payload = [
             'model'      => $this->model,
             'max_tokens' => (int) ($opts['max_tokens'] ?? 1024),
+            'temperature' => (float) ($opts['temperature'] ?? 0.85),
             'messages'   => [
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user', 'content' => $user],

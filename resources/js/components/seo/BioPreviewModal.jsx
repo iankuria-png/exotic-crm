@@ -32,6 +32,11 @@ export default function BioPreviewModal({
     breakdown,
     providerUsed,
     usage = null,
+    overuseScore = null,
+    aiSlopScore = null,
+    uniquenessScore = null,
+    corpusSampleSize = null,
+    rewrittenForUniqueness = false,
     language = 'en',           // language the bio was generated in
     regenerating = false,
     onAccept,
@@ -133,15 +138,17 @@ export default function BioPreviewModal({
         }
         setActiveRefinements(next);
         // Auto-tag negative feedback if user is iterating on the bio
-        sendFeedback({ rating: -1, tag: REFINEMENT_TAG_HINT[refinementKey] || tag });
-        onRegenerate(next);
+        const feedbackContext = { rating: -1, tag: REFINEMENT_TAG_HINT[refinementKey] || tag, comment: comment.trim() };
+        sendFeedback(feedbackContext);
+        onRegenerate(next, feedbackContext);
     };
 
     const handleRegenerateAndClear = () => {
         if (!onRegenerate) return;
-        sendFeedback({ rating: -1 });
+        const feedbackContext = { rating: -1, comment: comment.trim() };
+        sendFeedback(feedbackContext);
         setActiveRefinements([]);
-        onRegenerate([]);
+        onRegenerate([], feedbackContext);
     };
 
     return (
@@ -259,6 +266,18 @@ export default function BioPreviewModal({
                     {usage ? (
                         <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                             Estimated cost: <strong>{usage.estimated_cost_label}</strong> · Tokens: {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out
+                        </div>
+                    ) : null}
+
+                    {uniquenessScore !== null || overuseScore !== null || aiSlopScore !== null ? (
+                        <div className="mt-3 flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                            {uniquenessScore !== null ? <span><strong>Uniqueness:</strong> {uniquenessScore}/100</span> : null}
+                            {overuseScore !== null ? <span><strong>Overuse:</strong> {overuseScore}/100</span> : null}
+                            {aiSlopScore !== null ? <span><strong>AI-slop:</strong> {aiSlopScore}/100</span> : null}
+                            {corpusSampleSize !== null ? <span><strong>Corpus:</strong> {corpusSampleSize}</span> : null}
+                            {rewrittenForUniqueness ? (
+                                <span className="rounded-full bg-teal-50 px-2 py-0.5 font-semibold text-teal-700">rewritten for uniqueness</span>
+                            ) : null}
                         </div>
                     ) : null}
 

@@ -86,17 +86,22 @@ class AutoOptimizeConfig
         $generation = array_merge([
             'language' => $global['language'] ?? 'en',
             'respect_existing_language' => true,
-            'tone' => $global['tone'] ?? 'simple, direct, local classified profile copy',
-            'temperament' => $global['temperament'] ?? 'confident but not exaggerated',
-            'min_words' => $global['min_words'] ?? 55,
-            'max_words' => $global['max_words'] ?? 95,
-            'max_characters' => $global['max_characters'] ?? 750,
+            'tone' => $global['tone'] ?? 'seductive, unique, sexy, witty, flirty, suggestive, human-written profile copy',
+            'temperament' => $global['temperament'] ?? 'confident, playful, raw, and magnetic without sounding scripted',
+            'min_words' => $global['min_words'] ?? 75,
+            'max_words' => $global['max_words'] ?? 115,
+            'max_characters' => $global['max_characters'] ?? 900,
             'max_services' => $global['max_services'] ?? 5,
             'include_location' => $global['include_location'] ?? true,
             'include_services' => $global['include_services'] ?? true,
             'include_contact' => $global['include_contact'] ?? true,
             'contact_channel' => $global['contact_channel'] ?? 'whatsapp',
             'custom_prompt' => $global['custom_prompt'] ?? '',
+            'bio_format' => $global['bio_format'] ?? 'auto',
+            'creativity' => $global['creativity'] ?? 0.85,
+            'overuse_sensitivity' => $global['overuse_sensitivity'] ?? 'medium',
+            'ignored_overuse_terms' => $global['ignored_overuse_terms'] ?? [],
+            'overuse_lookback_days' => $global['overuse_lookback_days'] ?? 60,
             'providers_order' => null,  // null = inherit global
             'scorer_weights' => null,   // null = inherit global
         ], array_filter($perMarket, fn ($v) => $v !== null));

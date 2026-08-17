@@ -106,13 +106,22 @@ class ProfileSnapshotBuilder
         }
 
         $rates = [];
-        $rateKeys = ['rate', 'rate_1h', 'rate_2h', 'rate_overnight', 'rateincall', 'rateoutcall'];
+        $rateKeys = [
+            'rate', 'rate_1h', 'rate_2h', 'rate_overnight', 'rateincall', 'rateoutcall',
+            'incall', 'outcall', 'rate_incall', 'rate_outcall', 'rate30min_incall',
+            'rate30min_outcall', 'rate1h_incall', 'rate1h_outcall', 'rate2h_incall',
+            'rate2h_outcall', 'rate3h_incall', 'rate3h_outcall', 'rate6h_incall',
+            'rate6h_outcall', 'rate12h_incall', 'rate12h_outcall', 'rate24h_incall',
+            'rate24h_outcall',
+        ];
         foreach ($rateKeys as $key) {
             $val = $meta[$key] ?? null;
             if ($val !== null && $val !== '') {
                 $rates[$key] = $val;
             }
         }
+
+        $extraFacts = $this->extraFactsFromData($meta);
 
         $availability = null;
         $avail = $meta['availability'] ?? [];
@@ -153,6 +162,7 @@ class ProfileSnapshotBuilder
             'availability'  => $availability,
             'existing_bio'  => (string) ($wp['post']['content'] ?? ''),
             'media_summary' => $mediaSummary,
+            'extra_facts'    => $extraFacts,
         ];
     }
 
@@ -161,8 +171,10 @@ class ProfileSnapshotBuilder
         $fields = [
             'name', 'age', 'city', 'neighborhood', 'gender', 'ethnicity',
             'build', 'height', 'hair_color', 'services', 'languages', 'rates',
-            'availability', 'existing_bio', 'bio', 'media_summary',
+            'availability', 'existing_bio', 'bio', 'media_summary', 'extra_facts',
         ];
+
+        $overlay = $this->normalizeOverlayAliases($overlay);
 
         foreach ($fields as $field) {
             $key = $field;
@@ -199,7 +211,74 @@ class ProfileSnapshotBuilder
                 'video_count'    => 0,
                 'has_main_image' => false,
             ],
+            extraFacts:    $this->stringList($data['extra_facts'] ?? []),
         );
+    }
+
+    private function normalizeOverlayAliases(array $overlay): array
+    {
+        if (!isset($overlay['hair_color']) && isset($overlay['haircolor'])) {
+            $overlay['hair_color'] = $overlay['haircolor'];
+        }
+
+        if (!isset($overlay['languages'])) {
+            $languages = [];
+            foreach (['language1', 'language2', 'language3'] as $key) {
+                if (!empty($overlay[$key]) && !is_array($overlay[$key])) {
+                    $languages[] = (string) $overlay[$key];
+                }
+            }
+            if ($languages !== []) {
+                $overlay['languages'] = $languages;
+            }
+        }
+
+        if (!isset($overlay['rates'])) {
+            $rates = [];
+            foreach ($overlay as $key => $value) {
+                if (preg_match('/^(rates_|rate|incall|outcall)/', (string) $key) && is_scalar($value) && trim((string) $value) !== '') {
+                    $rates[$key] = trim((string) $value);
+                }
+            }
+            if ($rates !== []) {
+                $overlay['rates'] = $rates;
+            }
+        }
+
+        $extraFacts = $this->extraFactsFromData($overlay);
+        if ($extraFacts !== []) {
+            $overlay['extra_facts'] = array_values(array_unique(array_merge(
+                is_array($overlay['extra_facts'] ?? null) ? $overlay['extra_facts'] : [],
+                $extraFacts
+            )));
+        }
+
+        return $overlay;
+    }
+
+    private function extraFactsFromData(array $data): array
+    {
+        $labels = [
+            'extraservices' => 'Extra services',
+            'education' => 'Education',
+            'occupation' => 'Occupation',
+            'sports' => 'Sports',
+            'hobbies' => 'Hobbies',
+            'zodiacsign' => 'Zodiac',
+            'sexualorientation' => 'Orientation',
+            'looks' => 'Looks',
+            'smoker' => 'Smoker',
+        ];
+
+        $facts = [];
+        foreach ($labels as $key => $label) {
+            $value = $data[$key] ?? null;
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                $facts[] = $label . ': ' . trim((string) $value);
+            }
+        }
+
+        return array_values(array_unique($facts));
     }
 
     private function stringValue(mixed $value): string

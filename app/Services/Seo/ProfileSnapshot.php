@@ -27,6 +27,7 @@ readonly class ProfileSnapshot
         public ?string $availability,
         public string  $existingBio,
         public array   $mediaSummary,
+        public array   $extraFacts = [],
         /** Signature used for deterministic template selection when wp_post_id is absent. */
         public ?string $signature = null,
     ) {}
@@ -95,6 +96,7 @@ readonly class ProfileSnapshot
             'availability' => $this->availability,
             'existing_bio' => $this->existingBio,
             'media_summary' => $this->mediaSummary,
+            'extra_facts' => $this->extraFacts,
         ];
     }
 }

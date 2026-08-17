@@ -106,6 +106,52 @@ class FeedbackInsightService
         }
     }
 
+    public function instructionsForClient(?int $clientId, ?int $wpPostId): string
+    {
+        if (!$clientId && !$wpPostId) {
+            return '';
+        }
+
+        $rows = SeoBioFeedback::query()
+            ->where(function ($query) use ($clientId, $wpPostId) {
+                if ($clientId) {
+                    $query->orWhere('client_id', $clientId);
+                }
+                if ($wpPostId) {
+                    $query->orWhere('wp_post_id', $wpPostId);
+                }
+            })
+            ->where('created_at', '>=', now()->subDays(self::LOOKBACK_DAYS))
+            ->orderByDesc('created_at')
+            ->limit(6)
+            ->get(['rating', 'tag', 'comment', 'accepted']);
+
+        if ($rows->isEmpty()) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($rows as $row) {
+            if ($row->accepted) {
+                $lines[] = '- The editor accepted a previous draft for this profile; keep what worked, but do not copy its exact wording.';
+            } elseif ($row->tag && isset(self::TAG_INSTRUCTIONS[$row->tag])) {
+                $lines[] = '- For this profile: ' . self::TAG_INSTRUCTIONS[$row->tag];
+            }
+
+            $comment = trim((string) $row->comment);
+            if ($comment !== '') {
+                $comment = trim(preg_replace('/\s+/', ' ', $comment));
+                $lines[] = '- Editor note for this profile: "' . mb_substr($comment, 0, 220) . '"';
+            }
+        }
+
+        $lines = array_values(array_unique(array_filter($lines)));
+
+        return $lines === []
+            ? ''
+            : "\nRecent feedback for this specific profile (apply first):\n" . implode("\n", array_slice($lines, 0, 5));
+    }
+
     // -----------------------------------------------------------------
 
     private function build(int $platformId): string

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Seo;
 
 use App\Models\Platform;
+use App\Models\SeoBioFeedback;
 use App\Services\Seo\BioGenerationService;
 use App\Services\Seo\LinkCatalogService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -67,8 +68,8 @@ class BioRefinementTest extends TestCase
 
         $this->assertNotNull($captured);
         $systemPrompt = $captured['messages'][0]['content'] ?? '';
-        // Default range 60–90, +30/+50 → 90–140
-        $this->assertStringContainsString('90-140', $systemPrompt);
+        // Default range 60-90, +30/+50 would be 90-140, but 950 chars safely clamps max words to 131.
+        $this->assertStringContainsString('90-131', $systemPrompt);
     }
 
     public function test_shorter_refinement_decreases_word_range_in_prompt(): void
@@ -165,5 +166,93 @@ class BioRefinementTest extends TestCase
         ]);
 
         $this->assertArrayHasKey('bio_html', $result);
+    }
+
+    public function test_format_feedback_context_temperature_and_richer_snapshot_reach_provider_prompt(): void
+    {
+        $platform = Platform::factory()->create();
+        $captured = null;
+
+        Http::fake(function ($request) use (&$captured) {
+            $captured = $request->data();
+            return Http::response([
+                'choices' => [['message' => ['content' => 'I keep things warm, witty, and specific in Kigali.']]],
+                'usage'   => ['prompt_tokens' => 80, 'completion_tokens' => 30],
+            ], 200);
+        });
+
+        app(BioGenerationService::class)->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => [
+                'name' => 'Gia',
+                'city' => 'Kigali',
+                'haircolor' => '1',
+                'language1' => 'Swahili',
+                'extraservices' => 'slow massage and teasing conversation',
+                'occupation' => 'stylist',
+                'rates_incall' => '100',
+            ],
+            'generation_options' => [
+                'bio_format' => 'first_person_intro',
+                'creativity' => 1.05,
+            ],
+            'feedback_context' => [
+                'rating' => -1,
+                'tag' => 'too_generic',
+                'comment' => 'Make it less polished and more human.',
+            ],
+        ]);
+
+        $systemPrompt = $captured['messages'][0]['content'] ?? '';
+        $userPrompt = $captured['messages'][1]['content'] ?? '';
+
+        $this->assertSame(1.05, $captured['temperature']);
+        $this->assertStringContainsString('Use first person', $systemPrompt);
+        $this->assertStringContainsString('Immediate editor feedback', $systemPrompt);
+        $this->assertStringContainsString('too_generic', $systemPrompt);
+        $this->assertStringContainsString('Hair color: black', $userPrompt);
+        $this->assertStringContainsString('Languages: Swahili', $userPrompt);
+        $this->assertStringContainsString('Rate context', $userPrompt);
+        $this->assertStringContainsString('Extra services', $userPrompt);
+        $this->assertStringContainsString('Occupation: stylist', $userPrompt);
+    }
+
+    public function test_high_overuse_runs_one_rewrite_pass(): void
+    {
+        $platform = Platform::factory()->create();
+        foreach (range(1, 3) as $index) {
+            SeoBioFeedback::create([
+                'platform_id' => $platform->id,
+                'rating' => 1,
+                'accepted' => true,
+                'bio_html' => "<p>She brings an unhurried rhythm and warm teasing in Kigali {$index}. The unhurried rhythm feels easy.</p>",
+            ]);
+        }
+
+        $calls = [];
+        Http::fake(function ($request) use (&$calls) {
+            $calls[] = $request->data();
+
+            $content = count($calls) === 1
+                ? 'She brings an unhurried rhythm and warm teasing. Not only warm but also magnetic.'
+                : 'I like slow conversation, direct eye contact, and a private mood that feels fresh.';
+
+            return Http::response([
+                'choices' => [['message' => ['content' => $content]]],
+                'usage'   => ['prompt_tokens' => 50, 'completion_tokens' => 20],
+            ], 200);
+        });
+
+        $result = app(BioGenerationService::class)->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => ['name' => 'L', 'city' => 'Kigali'],
+            'generation_options' => ['overuse_sensitivity' => 'high'],
+        ]);
+
+        $this->assertCount(2, $calls);
+        $this->assertTrue($result['rewritten_for_uniqueness']);
+        $this->assertStringContainsString('Rewrite instruction', $calls[1]['messages'][0]['content'] ?? '');
+        $this->assertStringContainsString('Draft to rewrite', $calls[1]['messages'][1]['content'] ?? '');
+        $this->assertStringContainsString('private mood', $result['bio_html']);
     }
 }

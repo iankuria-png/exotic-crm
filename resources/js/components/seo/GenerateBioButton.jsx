@@ -37,13 +37,16 @@ export default function GenerateBioButton({
         max_services: '',
         contact_channel: '',
         language: '',
+        bio_format: '',
+        creativity: '',
     });
+    const [lastFeedback, setLastFeedback] = useState(null);
 
     const buildOverrides = () => Object.fromEntries(
         Object.entries(generationOptions).filter(([, v]) => v !== '' && v !== null && v !== undefined),
     );
 
-    const callGenerate = async ({ refinements = [], previousBio = '' } = {}) => {
+    const callGenerate = async ({ refinements = [], previousBio = '', feedbackContext = null } = {}) => {
         const body = {
             profile_snapshot: snapshot,
             save: false,
@@ -57,6 +60,7 @@ export default function GenerateBioButton({
         if (Object.keys(overrides).length > 0) body.generation_options = overrides;
         if (refinements.length > 0) body.refinements = refinements;
         if (previousBio) body.previous_bio = previousBio;
+        if (feedbackContext) body.feedback_context = feedbackContext;
 
         const resp = await fetch('/api/crm/seo/generate-bio', {
             method: 'POST',
@@ -77,6 +81,7 @@ export default function GenerateBioButton({
         try {
             const data = await callGenerate();
             setPreview(data);
+            setLastFeedback(null);
         } catch (e) {
             setError(e.message || 'Failed to generate bio.');
         } finally {
@@ -84,13 +89,14 @@ export default function GenerateBioButton({
         }
     };
 
-    const handleRegenerate = async (refinements) => {
+    const handleRegenerate = async (refinements, feedbackContext = null) => {
         if (!preview) return;
         setRegenerating(true);
         try {
             const data = await callGenerate({
                 refinements,
                 previousBio: preview.bio_html || '',
+                feedbackContext: feedbackContext || lastFeedback,
             });
             // Preserve the modal — just swap the content.
             setPreview(data);
@@ -120,6 +126,7 @@ export default function GenerateBioButton({
     };
 
     const sendFeedback = (feedback) => {
+        setLastFeedback(feedback);
         // Fire-and-forget; UI shows "Saved" optimistically.
         const body = {
             platform_id: platformId,
@@ -222,6 +229,29 @@ export default function GenerateBioButton({
                         <option value="both">Phone & WhatsApp</option>
                         <option value="none">No contact mention</option>
                     </select>
+                    <select
+                        className="rounded-md border-slate-300 text-sm"
+                        value={generationOptions.bio_format}
+                        onChange={(e) => updateOption('bio_format', e.target.value)}
+                        aria-label="Bio format"
+                    >
+                        <option value="">Auto format</option>
+                        <option value="first_person_intro">First person</option>
+                        <option value="third_person_classified">Third person</option>
+                        <option value="service_first">Service first</option>
+                        <option value="personality_first">Personality first</option>
+                        <option value="location_first">Location first</option>
+                    </select>
+                    <input
+                        type="number"
+                        min="0"
+                        max="1.4"
+                        step="0.05"
+                        className="rounded-md border-slate-300 text-sm"
+                        value={generationOptions.creativity}
+                        onChange={(e) => updateOption('creativity', e.target.value ? Number(e.target.value) : '')}
+                        placeholder="Creativity"
+                    />
                     <input
                         type="number"
                         min="25"
@@ -256,6 +286,11 @@ export default function GenerateBioButton({
                 breakdown={preview?.breakdown ?? null}
                 providerUsed={preview?.provider_used ?? ''}
                 usage={preview?.usage ?? null}
+                overuseScore={preview?.overuse_score ?? null}
+                aiSlopScore={preview?.ai_slop_score ?? null}
+                uniquenessScore={preview?.bio_uniqueness_score ?? null}
+                corpusSampleSize={preview?.corpus_sample_size ?? null}
+                rewrittenForUniqueness={!!preview?.rewritten_for_uniqueness}
                 language={preview?.generation_options?.language || generationOptions.language || 'en'}
                 regenerating={regenerating}
                 onAccept={handleAccept}

@@ -19,11 +19,11 @@ use Illuminate\Support\Facades\Log;
 class BioGenerationService
 {
     private const DEFAULT_GENERATION = [
-        'tone' => 'simple, direct, local classified profile copy',
-        'temperament' => 'confident but not exaggerated',
-        'min_words' => 55,
-        'max_words' => 95,
-        'max_characters' => 750,
+        'tone' => 'seductive, unique, sexy, witty, flirty, suggestive, human-written profile copy',
+        'temperament' => 'confident, playful, raw, and magnetic without sounding scripted',
+        'min_words' => 75,
+        'max_words' => 115,
+        'max_characters' => 900,
         'max_services' => 5,
         'include_location' => true,
         'include_services' => true,
@@ -31,6 +31,20 @@ class BioGenerationService
         'contact_channel' => 'whatsapp',
         'custom_prompt' => '',
         'language' => 'en',
+        'bio_format' => 'auto',
+        'creativity' => 0.85,
+        'overuse_sensitivity' => 'medium',
+        'ignored_overuse_terms' => [],
+        'overuse_lookback_days' => 60,
+    ];
+
+    public const BIO_FORMATS = [
+        'auto' => 'Auto rotation',
+        'first_person_intro' => 'First-person intro',
+        'third_person_classified' => 'Third-person classified',
+        'service_first' => 'Service first',
+        'personality_first' => 'Personality first',
+        'location_first' => 'Location first',
     ];
 
     /**
@@ -114,6 +128,7 @@ class BioGenerationService
         private readonly LinkCatalogService     $catalogService,
         private readonly SeoScorer              $scorer,
         private readonly FeedbackInsightService $feedback,
+        private readonly BioUniquenessAnalyzer  $uniqueness,
     ) {}
 
     /**
@@ -132,6 +147,7 @@ class BioGenerationService
         $rawOverrides  = is_array($params['generation_options'] ?? null) ? $params['generation_options'] : [];
         $refinements   = is_array($params['refinements'] ?? null) ? $params['refinements'] : [];
         $previousBio   = isset($params['previous_bio']) ? (string) $params['previous_bio'] : '';
+        $feedbackContext = is_array($params['feedback_context'] ?? null) ? $params['feedback_context'] : [];
 
         // Apply quick-action refinement presets on top of any explicit overrides
         $rawOverrides = $this->applyRefinements($rawOverrides, $refinements, $previousBio);
@@ -144,6 +160,14 @@ class BioGenerationService
         } else {
             // Preview-only: no persisted entity
             $snapshot = $this->snapshotBuilder->fromOverlayOnly($overlay ?? [], $platformId);
+        }
+
+        $generationOptions['resolved_bio_format'] = $this->resolveBioFormat(
+            (string) ($generationOptions['bio_format'] ?? 'auto'),
+            $snapshot
+        );
+        if ($feedbackContext !== []) {
+            $generationOptions['feedback_context'] = $this->normalizeFeedbackContext($feedbackContext);
         }
 
         // Generate bio text
@@ -163,6 +187,36 @@ class BioGenerationService
         );
         $rawText = $this->sanitizeOutput($rawText);
         $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
+
+        $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
+        $rewrittenForUniqueness = false;
+
+        if (!$fallbackUsed && $this->uniqueness->shouldRewrite($analysis, $generationOptions)) {
+            $rewriteOptions = $generationOptions;
+            $rewriteOptions['rewrite_draft'] = $rawText;
+            $rewriteOptions['rewrite_instruction'] = $this->uniqueness->rewriteInstruction($analysis);
+
+            [$rewriteText, $rewriteProvider, $rewriteUsage, $rewriteFallback] = $this->generateText(
+                $snapshot,
+                $forceProvider,
+                $rewriteOptions,
+                $overlay ?? [],
+                $providersOrder,
+            );
+
+            if (!$rewriteFallback) {
+                $rawText = $this->sanitizeOutput($rewriteText);
+                $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
+                $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
+                $providerUsed = $rewriteProvider;
+                $usage = [
+                    'input_tokens' => (int) ($usage['input_tokens'] ?? 0) + (int) ($rewriteUsage['input_tokens'] ?? 0),
+                    'output_tokens' => (int) ($usage['output_tokens'] ?? 0) + (int) ($rewriteUsage['output_tokens'] ?? 0),
+                    'total_tokens' => (int) ($usage['total_tokens'] ?? 0) + (int) ($rewriteUsage['total_tokens'] ?? 0),
+                ];
+                $rewrittenForUniqueness = true;
+            }
+        }
 
         // Wrap in paragraphs
         $bioHtml = $this->textToHtml($rawText);
@@ -205,6 +259,13 @@ class BioGenerationService
             'fallback_used' => $fallbackUsed,
             'usage'         => $usage,
             'generation_options' => $generationOptions,
+            'overuse_score' => $analysis['overuse_score'],
+            'overuse_flags' => $analysis['overuse_flags'],
+            'corpus_sample_size' => $analysis['corpus_sample_size'],
+            'ai_slop_score' => $analysis['ai_slop_score'],
+            'ai_slop_flags' => $analysis['ai_slop_flags'],
+            'bio_uniqueness_score' => $analysis['bio_uniqueness_score'],
+            'rewritten_for_uniqueness' => $rewrittenForUniqueness,
         ];
     }
 
@@ -224,7 +285,10 @@ class BioGenerationService
             $response = $waterfall->generate(
                 $this->buildSystemPrompt($snapshot, $options),
                 $this->buildUserPrompt($snapshot, $options, $overlay),
-                ['max_tokens' => $this->maxTokensForOptions($options)],
+                [
+                    'max_tokens' => $this->maxTokensForOptions($options),
+                    'temperature' => (float) ($options['creativity'] ?? self::DEFAULT_GENERATION['creativity']),
+                ],
             );
 
             return [$response->text, $response->provider, [
@@ -258,6 +322,11 @@ class BioGenerationService
         $custom = trim((string) $options['custom_prompt']);
         $customLine = $custom !== '' ? "\nExtra editor instruction: {$custom}" : '';
         $feedbackBlock = $this->feedback->instructionsForPlatform($snapshot->platformId);
+        $sameClientFeedback = $this->feedback->instructionsForClient($snapshot->clientId, $snapshot->wpPostId);
+        $formatDirective = $this->formatDirective((string) ($options['resolved_bio_format'] ?? 'third_person_classified'));
+        $immediateFeedback = $this->feedbackContextInstruction($options['feedback_context'] ?? []);
+        $rewriteInstruction = trim((string) ($options['rewrite_instruction'] ?? ''));
+        $rewriteLine = $rewriteInstruction !== '' ? "\nRewrite instruction: {$rewriteInstruction}" : '';
         $langCode = (string) ($options['language'] ?? 'en');
         $langDirective = self::SUPPORTED_LANGUAGES[$langCode]['directive']
             ?? self::SUPPORTED_LANGUAGES['en']['directive'];
@@ -267,15 +336,18 @@ You write short public profile copy for an adult escort directory in {$country}.
 {$langDirective}
 Write {$minWords}-{$maxWords} words, no more than {$maxChars} characters.
 Tone: {$tone}. Temperament: {$temperament}.
+Format: {$formatDirective}
 Style rules:
-- Write like a concise local classified/profile listing, not a luxury brochure.
+- Write like a real person with sensual confidence, not like polished AI marketing copy.
+- Make this profile feel specific, alive, and a little witty. Let sentence length vary.
 - Be specific and factual. Prefer short sentences.
 - Do not invent services, locations, contact details, nationality, measurements, or claims.
 - Do not mention height or body measurements in the bio; these already appear in profile facts.
+- Avoid formulaic AI rhythm: not only X but also Y, not just X but Y, rule-of-three adjective strings, puffed-up claims, and essay-like transitions.
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji, no Unicode symbols.
 - Use plain ASCII punctuation only (no curly quotes, no em-dashes — use ' " - instead).
-- Return clean prose only.{$customLine}{$feedbackBlock}
+- Return clean prose only.{$customLine}{$sameClientFeedback}{$feedbackBlock}{$immediateFeedback}{$rewriteLine}
 PROMPT;
     }
 
@@ -287,6 +359,7 @@ PROMPT;
             'Gender' => $snapshot->gender ?: 'female',
             'Ethnicity' => $snapshot->ethnicity ?? '(not specified)',
             'Build' => $snapshot->build ?? '(not specified)',
+            'Hair color' => $snapshot->hairColor ?? '(not specified)',
             'Languages' => !empty($snapshot->languages) ? implode(', ', $snapshot->languages) : 'English',
             'Availability' => $snapshot->availabilityText(),
         ];
@@ -305,9 +378,29 @@ PROMPT;
             $data['Services to mention'] = $services !== [] ? implode(', ', $services) : '(not specified)';
         }
 
+        if (!empty($snapshot->rates)) {
+            $rateBits = [];
+            foreach (array_slice($snapshot->rates, 0, 6, true) as $key => $value) {
+                if (is_scalar($value) && trim((string) $value) !== '') {
+                    $rateBits[] = str_replace('_', ' ', (string) $key) . ': ' . trim((string) $value);
+                }
+            }
+            if ($rateBits !== []) {
+                $data['Rate context'] = implode('; ', $rateBits);
+            }
+        }
+
+        if (!empty($snapshot->extraFacts)) {
+            $data['Human details to use only if natural'] = implode('; ', array_slice($snapshot->extraFacts, 0, 10));
+        }
+
         $contact = $this->contactText($overlay, $options);
         if ($contact !== null) {
             $data['Contact instruction'] = $contact;
+        }
+
+        if (!empty($options['rewrite_draft'])) {
+            $data['Draft to rewrite'] = mb_substr(trim(strip_tags((string) $options['rewrite_draft'])), 0, 900);
         }
 
         $lines = ['Write the final profile bio using only these facts:'];
@@ -388,6 +481,7 @@ PROMPT;
         $options['min_words'] = max(25, min(500, (int) $options['min_words']));
         $options['max_words'] = max($options['min_words'], min(700, (int) $options['max_words']));
         $options['max_characters'] = max(200, min(5000, (int) $options['max_characters']));
+        $options = $this->normalizeLengthOverlap($options);
         $options['max_services'] = max(0, min(20, (int) $options['max_services']));
         $options['include_location'] = (bool) $options['include_location'];
         $options['include_services'] = (bool) $options['include_services'];
@@ -396,6 +490,16 @@ PROMPT;
             ? $options['contact_channel']
             : self::DEFAULT_GENERATION['contact_channel'];
         $options['custom_prompt'] = trim((string) $options['custom_prompt']);
+        $format = strtolower(trim((string) ($options['bio_format'] ?? 'auto')));
+        $options['bio_format'] = array_key_exists($format, self::BIO_FORMATS) ? $format : self::DEFAULT_GENERATION['bio_format'];
+        $options['creativity'] = max(0.0, min(1.4, (float) ($options['creativity'] ?? self::DEFAULT_GENERATION['creativity'])));
+        $options['overuse_sensitivity'] = in_array(($options['overuse_sensitivity'] ?? 'medium'), ['low', 'medium', 'high'], true)
+            ? $options['overuse_sensitivity']
+            : self::DEFAULT_GENERATION['overuse_sensitivity'];
+        $options['ignored_overuse_terms'] = is_array($options['ignored_overuse_terms'] ?? null)
+            ? array_values(array_filter(array_map('strval', $options['ignored_overuse_terms'])))
+            : [];
+        $options['overuse_lookback_days'] = max(7, min(365, (int) ($options['overuse_lookback_days'] ?? self::DEFAULT_GENERATION['overuse_lookback_days'])));
         $options['providers_order'] = is_array($options['providers_order'] ?? null)
             ? array_values(array_filter(array_map(
                 static fn ($provider): string => strtolower(trim((string) $provider)),
@@ -412,6 +516,79 @@ PROMPT;
             : self::DEFAULT_GENERATION['language'];
 
         return $options;
+    }
+
+    private function normalizeLengthOverlap(array $options): array
+    {
+        $maxChars = (int) $options['max_characters'];
+        $estimatedMaxWords = max(25, (int) floor($maxChars / 7.2));
+        $estimatedMinWords = max(25, (int) floor($maxChars / 10));
+
+        if ((int) $options['min_words'] > $estimatedMaxWords) {
+            $options['min_words'] = $estimatedMinWords;
+        }
+
+        if ((int) $options['max_words'] > $estimatedMaxWords) {
+            $options['max_words'] = $estimatedMaxWords;
+        }
+
+        $options['max_words'] = max((int) $options['min_words'], (int) $options['max_words']);
+
+        return $options;
+    }
+
+    private function resolveBioFormat(string $format, ProfileSnapshot $snapshot): string
+    {
+        if ($format !== 'auto' && array_key_exists($format, self::BIO_FORMATS)) {
+            return $format;
+        }
+
+        $formats = array_values(array_diff(array_keys(self::BIO_FORMATS), ['auto']));
+        $index = abs(crc32($snapshot->deterministicKey())) % count($formats);
+
+        return $formats[$index];
+    }
+
+    private function formatDirective(string $format): string
+    {
+        return match ($format) {
+            'first_person_intro' => 'Use first person. Let the profile speak directly as "I" with a natural, human opener.',
+            'service_first' => 'Lead with the most relevant service or experience, then bring in personality and location.',
+            'personality_first' => 'Lead with personality, mood, wit, or attitude before services.',
+            'location_first' => 'Lead with city or neighborhood in a grounded way, then make the person feel distinct.',
+            default => 'Use third person, but avoid a stiff directory template. Keep it intimate and specific.',
+        };
+    }
+
+    private function normalizeFeedbackContext(array $context): array
+    {
+        return array_filter([
+            'rating' => isset($context['rating']) ? max(-1, min(1, (int) $context['rating'])) : null,
+            'tag' => isset($context['tag']) ? mb_substr(trim((string) $context['tag']), 0, 60) : null,
+            'comment' => isset($context['comment']) ? mb_substr(trim((string) $context['comment']), 0, 500) : null,
+        ], fn ($value): bool => $value !== null && $value !== '');
+    }
+
+    private function feedbackContextInstruction(array $context): string
+    {
+        if ($context === []) {
+            return '';
+        }
+
+        $bits = [];
+        if (isset($context['rating']) && (int) $context['rating'] < 0) {
+            $bits[] = 'the editor rejected the current direction';
+        }
+        if (!empty($context['tag'])) {
+            $bits[] = 'tag: ' . $context['tag'];
+        }
+        if (!empty($context['comment'])) {
+            $bits[] = 'comment: "' . $context['comment'] . '"';
+        }
+
+        return $bits === []
+            ? ''
+            : "\nImmediate editor feedback for this regeneration: " . implode('; ', $bits) . '.';
     }
 
     private function contactText(array $overlay, array $options): ?string

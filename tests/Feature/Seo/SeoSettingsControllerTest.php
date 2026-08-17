@@ -20,6 +20,11 @@ class SeoSettingsControllerTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('config.enabled', false)
+            ->assertJsonPath('config.generation.min_words', 75)
+            ->assertJsonPath('config.generation.max_words', 115)
+            ->assertJsonPath('config.generation.max_characters', 900)
+            ->assertJsonPath('config.generation.bio_format', 'auto')
+            ->assertJsonPath('config.generation.overuse_sensitivity', 'medium')
             ->assertJsonPath('config.providers.claude.has_key', false)
             ->assertJsonPath('config.providers.gemini.has_key', false)
             ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash');
@@ -73,6 +78,28 @@ class SeoSettingsControllerTest extends TestCase
         $this->assertSame([1, 2], $stored['platform_allowlist']);
         $this->assertSame('my-gemini-key', $stored['providers']['gemini']['api_key']);
         $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
+    }
+
+    public function test_update_normalizes_overlapping_length_settings(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $this->patchJson('/api/crm/settings/seo-engine', [
+            'enabled' => true,
+            'platform_allowlist' => [],
+            'providers' => [],
+            'generation' => [
+                'min_words' => 300,
+                'max_words' => 605,
+                'max_characters' => 600,
+            ],
+        ])->assertOk();
+
+        $stored = IntegrationSetting::where('key', 'seo_engine')->first()->value;
+
+        $this->assertSame(60, $stored['generation']['min_words']);
+        $this->assertSame(83, $stored['generation']['max_words']);
+        $this->assertSame(600, $stored['generation']['max_characters']);
     }
 
     public function test_update_keep_sentinel_preserves_existing_key(): void

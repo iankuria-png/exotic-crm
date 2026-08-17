@@ -14,11 +14,11 @@ const PROVIDER_DISPLAY = {
 const SENTINEL = '__keep__';
 
 const DEFAULT_GENERATION = {
-    tone: 'simple, direct, local classified profile copy',
-    temperament: 'confident but not exaggerated',
-    min_words: 55,
-    max_words: 95,
-    max_characters: 750,
+    tone: 'seductive, unique, sexy, witty, flirty, suggestive, human-written profile copy',
+    temperament: 'confident, playful, raw, and magnetic without sounding scripted',
+    min_words: 75,
+    max_words: 115,
+    max_characters: 900,
     max_services: 5,
     include_location: true,
     include_services: true,
@@ -26,6 +26,11 @@ const DEFAULT_GENERATION = {
     contact_channel: 'whatsapp',
     custom_prompt: '',
     language: 'en',
+    bio_format: 'auto',
+    creativity: 0.85,
+    overuse_sensitivity: 'medium',
+    ignored_overuse_terms: [],
+    overuse_lookback_days: 60,
 };
 
 

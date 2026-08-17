@@ -110,6 +110,45 @@ class BioGenerationServiceTest extends TestCase
         $this->assertArrayHasKey('media', $result['breakdown']);
     }
 
+    public function test_default_generation_options_are_medium_length_and_uniqueness_aware(): void
+    {
+        $platform = Platform::factory()->create();
+        $service = app(BioGenerationService::class);
+
+        $result = $service->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => ['name' => 'Maya', 'city' => 'Kigali'],
+        ]);
+
+        $this->assertSame(75, $result['generation_options']['min_words']);
+        $this->assertSame(115, $result['generation_options']['max_words']);
+        $this->assertSame(900, $result['generation_options']['max_characters']);
+        $this->assertSame('auto', $result['generation_options']['bio_format']);
+        $this->assertArrayHasKey('overuse_score', $result);
+        $this->assertArrayHasKey('ai_slop_score', $result);
+        $this->assertArrayHasKey('bio_uniqueness_score', $result);
+        $this->assertFalse($result['rewritten_for_uniqueness']);
+    }
+
+    public function test_generation_options_normalize_impossible_length_overlap(): void
+    {
+        $platform = Platform::factory()->create();
+
+        $result = app(BioGenerationService::class)->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => ['name' => 'Nia', 'city' => 'Accra'],
+            'generation_options' => [
+                'min_words' => 300,
+                'max_words' => 605,
+                'max_characters' => 600,
+            ],
+        ]);
+
+        $this->assertSame(60, $result['generation_options']['min_words']);
+        $this->assertSame(83, $result['generation_options']['max_words']);
+        $this->assertSame(600, $result['generation_options']['max_characters']);
+    }
+
     public function test_score_is_integer_between_0_and_100(): void
     {
         $platform = Platform::factory()->create();

@@ -46,6 +46,7 @@ class GeminiAdapter implements LlmClient
             ],
             'generationConfig' => [
                 'maxOutputTokens' => (int) ($opts['max_tokens'] ?? 1024),
+                'temperature' => (float) ($opts['temperature'] ?? 0.85),
             ],
         ];
 

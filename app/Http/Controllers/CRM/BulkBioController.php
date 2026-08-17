@@ -89,6 +89,13 @@ class BulkBioController extends Controller
             'generation_options.include_contact' => 'nullable|boolean',
             'generation_options.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
             'generation_options.custom_prompt' => 'nullable|string|max:2000',
+            'generation_options.language' => ['nullable', 'string', Rule::in(array_keys(BioGenerationService::SUPPORTED_LANGUAGES))],
+            'generation_options.bio_format' => ['nullable', 'string', Rule::in(array_keys(BioGenerationService::BIO_FORMATS))],
+            'generation_options.creativity' => 'nullable|numeric|min:0|max:1.4',
+            'generation_options.overuse_sensitivity' => 'nullable|string|in:low,medium,high',
+            'generation_options.ignored_overuse_terms' => 'nullable|array|max:100',
+            'generation_options.ignored_overuse_terms.*' => 'string|max:80',
+            'generation_options.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
         ]);
 
         $rows = $this->resolver->parse($data['content'], (int) $data['platform_id']);

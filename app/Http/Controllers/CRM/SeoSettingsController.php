@@ -33,11 +33,11 @@ class SeoSettingsController extends Controller
     ];
 
     private const DEFAULT_GENERATION = [
-        'tone' => 'simple, direct, local classified profile copy',
-        'temperament' => 'confident but not exaggerated',
-        'min_words' => 55,
-        'max_words' => 95,
-        'max_characters' => 750,
+        'tone' => 'seductive, unique, sexy, witty, flirty, suggestive, human-written profile copy',
+        'temperament' => 'confident, playful, raw, and magnetic without sounding scripted',
+        'min_words' => 75,
+        'max_words' => 115,
+        'max_characters' => 900,
         'max_services' => 5,
         'include_location' => true,
         'include_services' => true,
@@ -45,6 +45,11 @@ class SeoSettingsController extends Controller
         'contact_channel' => 'whatsapp',
         'custom_prompt' => '',
         'language' => 'en',
+        'bio_format' => 'auto',
+        'creativity' => 0.85,
+        'overuse_sensitivity' => 'medium',
+        'ignored_overuse_terms' => [],
+        'overuse_lookback_days' => 60,
     ];
 
     private const SUPPORTED_LANGUAGES = ['en', 'fr', 'pt', 'sw'];
@@ -103,6 +108,12 @@ class SeoSettingsController extends Controller
             'generation.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
             'generation.custom_prompt' => 'nullable|string|max:2000',
             'generation.language' => ['nullable', 'string', Rule::in(self::SUPPORTED_LANGUAGES)],
+            'generation.bio_format' => ['nullable', 'string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::BIO_FORMATS))],
+            'generation.creativity' => 'nullable|numeric|min:0|max:1.4',
+            'generation.overuse_sensitivity' => 'nullable|string|in:low,medium,high',
+            'generation.ignored_overuse_terms' => 'nullable|array|max:100',
+            'generation.ignored_overuse_terms.*' => 'string|max:80',
+            'generation.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
         ]);
 
         $previous = $this->loadStored();
@@ -278,6 +289,7 @@ class SeoSettingsController extends Controller
         $generation['min_words'] = max(25, min(500, (int) $generation['min_words']));
         $generation['max_words'] = max($generation['min_words'], min(700, (int) $generation['max_words']));
         $generation['max_characters'] = max(200, min(5000, (int) $generation['max_characters']));
+        $generation = $this->normalizeLengthOverlap($generation);
         $generation['max_services'] = max(0, min(20, (int) $generation['max_services']));
         $generation['include_location'] = (bool) $generation['include_location'];
         $generation['include_services'] = (bool) $generation['include_services'];
@@ -290,6 +302,37 @@ class SeoSettingsController extends Controller
         $generation['language'] = in_array($lang, self::SUPPORTED_LANGUAGES, true)
             ? $lang
             : self::DEFAULT_GENERATION['language'];
+        $format = strtolower(trim((string) ($generation['bio_format'] ?? 'auto')));
+        $generation['bio_format'] = array_key_exists($format, \App\Services\Seo\BioGenerationService::BIO_FORMATS)
+            ? $format
+            : self::DEFAULT_GENERATION['bio_format'];
+        $generation['creativity'] = max(0.0, min(1.4, (float) ($generation['creativity'] ?? self::DEFAULT_GENERATION['creativity'])));
+        $generation['overuse_sensitivity'] = in_array(($generation['overuse_sensitivity'] ?? 'medium'), ['low', 'medium', 'high'], true)
+            ? $generation['overuse_sensitivity']
+            : self::DEFAULT_GENERATION['overuse_sensitivity'];
+        $generation['ignored_overuse_terms'] = is_array($generation['ignored_overuse_terms'] ?? null)
+            ? array_values(array_filter(array_map('strval', $generation['ignored_overuse_terms'])))
+            : [];
+        $generation['overuse_lookback_days'] = max(7, min(365, (int) ($generation['overuse_lookback_days'] ?? self::DEFAULT_GENERATION['overuse_lookback_days'])));
+
+        return $generation;
+    }
+
+    private function normalizeLengthOverlap(array $generation): array
+    {
+        $maxChars = (int) $generation['max_characters'];
+        $estimatedMaxWords = max(25, (int) floor($maxChars / 7.2));
+        $estimatedMinWords = max(25, (int) floor($maxChars / 10));
+
+        if ((int) $generation['min_words'] > $estimatedMaxWords) {
+            $generation['min_words'] = $estimatedMinWords;
+        }
+
+        if ((int) $generation['max_words'] > $estimatedMaxWords) {
+            $generation['max_words'] = $estimatedMaxWords;
+        }
+
+        $generation['max_words'] = max((int) $generation['min_words'], (int) $generation['max_words']);
 
         return $generation;
     }
