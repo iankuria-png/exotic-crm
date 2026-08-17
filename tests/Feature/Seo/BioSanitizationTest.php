@@ -82,8 +82,8 @@ class BioSanitizationTest extends TestCase
     public function test_deepseek_fallback_model_is_used_when_primary_returns_empty_content(): void
     {
         config([
-            'services.seo_engine.deepseek.model' => 'deepseek-v4-pro',
-            'services.seo_engine.deepseek.fallback_models' => ['deepseek-v4-flash'],
+            'services.seo_engine.deepseek.model' => 'deepseek-chat',
+            'services.seo_engine.deepseek.fallback_models' => ['deepseek-custom-creative', 'deepseek-v4-flash'],
         ]);
 
         $platform = Platform::factory()->create();
@@ -94,13 +94,17 @@ class BioSanitizationTest extends TestCase
                 $model = (string) data_get($request->data(), 'model');
                 $requestedModels[] = $model;
 
-                if ($model === 'deepseek-v4-pro') {
+                if ($model === 'deepseek-chat') {
                     return Http::response([
                         'choices' => [
                             ['message' => ['content' => '']],
                         ],
                         'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 0],
                     ], 200);
+                }
+
+                if ($model !== 'deepseek-custom-creative') {
+                    return Http::response(['error' => ['message' => 'unexpected model']], 500);
                 }
 
                 return Http::response([
@@ -117,7 +121,7 @@ class BioSanitizationTest extends TestCase
             'profile_snapshot' => ['name' => 'Anna', 'city' => 'Nairobi'],
         ]);
 
-        $this->assertSame(['deepseek-v4-pro', 'deepseek-v4-flash'], $requestedModels);
+        $this->assertSame(['deepseek-chat', 'deepseek-custom-creative'], $requestedModels);
         $this->assertFalse($result['fallback_used']);
         $this->assertSame('deepseek', $result['provider_used']);
         $this->assertStringContainsString('Anna keeps things warm', $result['bio_html']);

@@ -387,10 +387,6 @@ class SeoSettingsController extends Controller
             return self::DEFAULT_MODELS['gemini'];
         }
 
-        if ($provider === 'deepseek' && $model === 'deepseek-chat') {
-            return 'deepseek-v4-flash';
-        }
-
         return $model;
     }
 

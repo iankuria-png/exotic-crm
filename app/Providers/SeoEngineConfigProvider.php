@@ -78,10 +78,6 @@ class SeoEngineConfigProvider extends ServiceProvider
             return 'gemini-2.5-flash';
         }
 
-        if ($provider === 'deepseek' && $model === 'deepseek-chat') {
-            return 'deepseek-v4-flash';
-        }
-
         return $model;
     }
 

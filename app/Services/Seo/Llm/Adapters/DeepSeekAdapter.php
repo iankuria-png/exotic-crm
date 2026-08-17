@@ -18,9 +18,9 @@ class DeepSeekAdapter implements LlmClient
     public function __construct()
     {
         $this->apiKey = (string) config('services.seo_engine.deepseek.api_key', '');
-        $this->model  = $this->normalizeModel((string) config('services.seo_engine.deepseek.model', ''));
+        $this->model  = trim((string) config('services.seo_engine.deepseek.model', ''));
         $this->fallbackModels = array_values(array_filter(array_map(
-            fn ($model): string => $this->normalizeModel((string) $model),
+            fn ($model): string => trim((string) $model),
             (array) config('services.seo_engine.deepseek.fallback_models', [])
         )));
     }
@@ -111,10 +111,4 @@ class DeepSeekAdapter implements LlmClient
             ->all();
     }
 
-    private function normalizeModel(string $model): string
-    {
-        $model = trim($model);
-
-        return $model === 'deepseek-chat' ? 'deepseek-v4-flash' : $model;
-    }
 }

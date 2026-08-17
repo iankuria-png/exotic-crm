@@ -71,7 +71,11 @@ class SeoSettingsControllerTest extends TestCase
                 'gemini' => ['api_key' => 'my-gemini-key', 'model' => 'gemini-1.5-flash'],
                 'claude' => ['api_key' => '__keep__', 'model' => 'claude-3-5-sonnet-20241022'],
                 'openai' => ['api_key' => '__keep__', 'model' => 'gpt-4o-mini'],
-                'deepseek' => ['api_key' => '__keep__', 'model' => 'deepseek-chat'],
+                'deepseek' => [
+                    'api_key' => '__keep__',
+                    'model' => 'deepseek-chat',
+                    'fallback_models' => ['deepseek-v4-pro', 'deepseek-chat', 'deepseek-custom-creative'],
+                ],
             ],
         ])->assertOk();
 
@@ -80,6 +84,8 @@ class SeoSettingsControllerTest extends TestCase
         $this->assertSame([1, 2], $stored['platform_allowlist']);
         $this->assertSame('my-gemini-key', $stored['providers']['gemini']['api_key']);
         $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
+        $this->assertSame('deepseek-chat', $stored['providers']['deepseek']['model']);
+        $this->assertSame(['deepseek-v4-pro', 'deepseek-custom-creative'], $stored['providers']['deepseek']['fallback_models']);
     }
 
     public function test_update_persists_custom_prompt_and_provider_models_on_reload(): void

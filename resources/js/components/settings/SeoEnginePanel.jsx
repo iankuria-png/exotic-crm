@@ -15,6 +15,7 @@ const MODEL_PRESETS = {
     deepseek: [
         { value: 'deepseek-v4-pro', label: 'V4 Pro', hint: 'Primary quality model' },
         { value: 'deepseek-v4-flash', label: 'V4 Flash', hint: 'Fast fallback model' },
+        { value: 'deepseek-chat', label: 'DeepSeek Chat', hint: 'Official chat-compatible model ID' },
     ],
 };
 
@@ -208,18 +209,19 @@ export default function SeoEnginePanel() {
         }));
     };
 
-    const toggleFallbackModel = (provider, model) => {
+    const updateProviderModelChain = (provider, models) => {
         setForm((f) => {
-            const current = f.providers[provider]?.fallbackModels || [];
-            const next = current.includes(model)
-                ? current.filter((item) => item !== model)
-                : [...current, model];
+            const chain = normalizeModelChain(models);
 
             return {
                 ...f,
                 providers: {
                     ...f.providers,
-                    [provider]: { ...f.providers[provider], fallbackModels: next.filter((item) => item !== f.providers[provider].model) },
+                    [provider]: {
+                        ...f.providers[provider],
+                        model: chain[0] || '',
+                        fallbackModels: chain.slice(1),
+                    },
                 },
             };
         });
@@ -355,7 +357,7 @@ export default function SeoEnginePanel() {
                                         value={p.model}
                                         fallbackModels={p.fallbackModels || []}
                                         onChange={(value) => updateProvider(provider, 'model', value)}
-                                        onToggleFallback={(model) => toggleFallbackModel(provider, model)}
+                                        onModelChainChange={(models) => updateProviderModelChain(provider, models)}
                                     />
                                 </div>
                                 {testResult && (
@@ -404,17 +406,32 @@ export default function SeoEnginePanel() {
 }
 
 function providerPayload(provider = {}) {
+    const chain = normalizeModelChain([provider.model, ...(provider.fallbackModels || [])]);
+
     return {
         api_key: provider.apiKey || SENTINEL,
-        model: provider.model,
-        fallback_models: Array.isArray(provider.fallbackModels)
-            ? provider.fallbackModels.filter((model) => model && model !== provider.model)
-            : [],
+        model: chain[0] || provider.model,
+        fallback_models: chain.slice(1),
     };
 }
 
-function ProviderModelField({ provider, value, fallbackModels = [], onChange, onToggleFallback }) {
+function normalizeModelChain(models = []) {
+    const seen = new Set();
+    const chain = [];
+
+    models.forEach((model) => {
+        const trimmed = String(model || '').trim();
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        chain.push(trimmed);
+    });
+
+    return chain;
+}
+
+function ProviderModelField({ provider, value, fallbackModels = [], onChange, onModelChainChange }) {
     const presets = MODEL_PRESETS[provider] || [];
+    const [customModel, setCustomModel] = useState('');
 
     if (presets.length === 0) {
         return (
@@ -430,47 +447,122 @@ function ProviderModelField({ provider, value, fallbackModels = [], onChange, on
         );
     }
 
-    const effectiveValue = presets.some((preset) => preset.value === value) ? value : presets[0].value;
+    const chain = normalizeModelChain([value, ...fallbackModels]);
+    const displayChain = chain.length > 0 ? chain : [presets[0].value];
+
+    const applyChain = (models) => {
+        onModelChainChange(normalizeModelChain(models));
+    };
+
+    const addModel = (model) => {
+        const trimmed = String(model || '').trim();
+        if (!trimmed) return;
+        applyChain([...displayChain, trimmed]);
+        setCustomModel('');
+    };
+
+    const moveModel = (index, direction) => {
+        const next = [...displayChain];
+        const swap = direction === 'up' ? index - 1 : index + 1;
+        if (swap < 0 || swap >= next.length) return;
+        [next[index], next[swap]] = [next[swap], next[index]];
+        applyChain(next);
+    };
+
+    const removeModel = (model) => {
+        const next = displayChain.filter((item) => item !== model);
+        applyChain(next.length > 0 ? next : [presets[0].value]);
+    };
 
     return (
         <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Primary model</label>
-            <select
-                value={effectiveValue}
-                onChange={(e) => onChange(e.target.value)}
-                className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
-            >
-                {presets.map((preset) => (
-                    <option key={preset.value} value={preset.value}>{preset.label} · {preset.value}</option>
-                ))}
-            </select>
-            <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Fallback model</p>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                    {presets
-                        .filter((preset) => preset.value !== effectiveValue)
-                        .map((preset) => {
-                            const active = fallbackModels.includes(preset.value);
-                            return (
-                                <button
-                                    key={preset.value}
-                                    type="button"
-                                    onClick={() => onToggleFallback(preset.value)}
-                                    title={preset.hint}
-                                    className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
-                                        active
-                                            ? 'border-teal-400 bg-teal-50 text-teal-800'
-                                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                                    }`}
-                                >
-                                    {active ? 'Fallback: ' : 'Use '}
-                                    {preset.label}
-                                </button>
-                            );
-                        })}
+            <label className="block text-xs font-medium text-slate-700 mb-1">Model priority</label>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                <div className="flex flex-wrap gap-1.5">
+                    {presets.map((preset) => {
+                        const active = displayChain.includes(preset.value);
+                        return (
+                            <button
+                                key={preset.value}
+                                type="button"
+                                onClick={() => addModel(preset.value)}
+                                disabled={active}
+                                title={preset.hint}
+                                className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                                    active
+                                        ? 'border-teal-300 bg-teal-50 text-teal-800'
+                                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                }`}
+                            >
+                                {active ? 'Added: ' : 'Add '}
+                                {preset.label}
+                            </button>
+                        );
+                    })}
                 </div>
-                <p className="mt-1 text-[11px] text-slate-500">
-                    If the primary DeepSeek model errors or returns empty text, the engine tries this before template fallback.
+
+                <ol className="mt-2 space-y-1.5">
+                    {displayChain.map((model, index) => (
+                        <li key={model} className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                            <span className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                {index === 0 ? 'Primary' : `Fallback ${index}`}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-800">{model}</span>
+                            <button
+                                type="button"
+                                onClick={() => moveModel(index, 'up')}
+                                disabled={index === 0}
+                                className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30"
+                                aria-label={`Move ${model} up`}
+                            >
+                                ↑
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => moveModel(index, 'down')}
+                                disabled={index === displayChain.length - 1}
+                                className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30"
+                                aria-label={`Move ${model} down`}
+                            >
+                                ↓
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => removeModel(model)}
+                                disabled={displayChain.length === 1}
+                                className="text-[11px] font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-30"
+                            >
+                                Remove
+                            </button>
+                        </li>
+                    ))}
+                </ol>
+
+                <div className="mt-2 flex gap-2">
+                    <input
+                        type="text"
+                        value={customModel}
+                        onChange={(e) => setCustomModel(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addModel(customModel);
+                            }
+                        }}
+                        placeholder="Custom model ID, e.g. deepseek-chat"
+                        className="min-w-0 flex-1 text-xs rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => addModel(customModel)}
+                        disabled={!customModel.trim() || displayChain.includes(customModel.trim())}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    >
+                        Add model
+                    </button>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                    The first model is tried first. If it errors or returns empty text, DeepSeek tries each fallback in order before template fallback.
                 </p>
             </div>
         </div>
