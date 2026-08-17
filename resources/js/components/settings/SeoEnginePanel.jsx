@@ -44,6 +44,21 @@ function hydrateProvider(provider = {}) {
     };
 }
 
+function formFromConfig(config = {}) {
+    return {
+        enabled: !!config.enabled,
+        platformAllowlist: config.platform_allowlist || [],
+        providersOrder: config.providers_order || ['gemini', 'claude', 'openai', 'deepseek'],
+        providers: {
+            claude:   hydrateProvider(config.providers?.claude),
+            openai:   hydrateProvider(config.providers?.openai),
+            gemini:   hydrateProvider(config.providers?.gemini),
+            deepseek: hydrateProvider(config.providers?.deepseek),
+        },
+        generation: { ...DEFAULT_GENERATION, ...(config.generation || {}) },
+    };
+}
+
 /**
  * SEO Engine settings panel.
  * Lives in Settings → SEO Engine tab. Admin-only writes.
@@ -66,29 +81,22 @@ export default function SeoEnginePanel() {
     // Hydrate form when settings load
     useEffect(() => {
         if (settingsQuery.data?.config && !form) {
-            const cfg = settingsQuery.data.config;
-            setForm({
-                enabled: !!cfg.enabled,
-                platformAllowlist: cfg.platform_allowlist || [],
-                providersOrder: cfg.providers_order || ['gemini', 'claude', 'openai', 'deepseek'],
-                providers: {
-                    claude:   hydrateProvider(cfg.providers?.claude),
-                    openai:   hydrateProvider(cfg.providers?.openai),
-                    gemini:   hydrateProvider(cfg.providers?.gemini),
-                    deepseek: hydrateProvider(cfg.providers?.deepseek),
-                },
-                generation: { ...DEFAULT_GENERATION, ...(cfg.generation || {}) },
-            });
+            setForm(formFromConfig(settingsQuery.data.config));
         }
     }, [settingsQuery.data, form]);
 
     const saveMutation = useMutation({
         mutationFn: (payload) => api.patch('/crm/settings/seo-engine', payload).then((r) => r.data),
-        onSuccess: () => {
+        onSuccess: (data) => {
             toast.success('SEO Engine settings saved.');
+            if (data?.config) {
+                setForm(formFromConfig(data.config));
+                queryClient.setQueryData(['seo-engine-settings'], (previous) => ({
+                    ...(previous || {}),
+                    config: data.config,
+                }));
+            }
             queryClient.invalidateQueries({ queryKey: ['seo-engine-settings'] });
-            // Reset hasKey state on next render so the placeholder updates
-            setForm(null);
         },
         onError: (err) => {
             toast.error(err?.response?.data?.message || 'Could not save SEO settings.');

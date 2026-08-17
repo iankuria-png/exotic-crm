@@ -80,6 +80,39 @@ class SeoSettingsControllerTest extends TestCase
         $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
     }
 
+    public function test_update_persists_custom_prompt_and_provider_models_on_reload(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $customPrompt = 'Preserve the previous bio voice. No hyphens. Keep it direct, sexy, specific, and human.';
+
+        $this->patchJson('/api/crm/settings/seo-engine', [
+            'enabled' => true,
+            'platform_allowlist' => [],
+            'providers_order' => ['deepseek', 'gemini', 'claude', 'openai'],
+            'providers' => [
+                'deepseek' => ['api_key' => 'sk-deepseek-test', 'model' => 'deepseek-v4-pro'],
+                'gemini' => ['api_key' => '__keep__', 'model' => 'gemini-2.5-flash'],
+                'claude' => ['api_key' => '__keep__', 'model' => 'claude-3-5-sonnet-20241022'],
+                'openai' => ['api_key' => '__keep__', 'model' => 'gpt-4o-mini'],
+            ],
+            'generation' => [
+                'tone' => 'raw, direct, sexy, playful, human, profile voice',
+                'custom_prompt' => $customPrompt,
+                'min_words' => 65,
+                'max_words' => 83,
+                'max_characters' => 800,
+            ],
+        ])->assertOk()
+            ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
+            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro');
+
+        $this->getJson('/api/crm/settings/seo-engine')
+            ->assertOk()
+            ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
+            ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro');
+    }
+
     public function test_update_normalizes_overlapping_length_settings(): void
     {
         Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
