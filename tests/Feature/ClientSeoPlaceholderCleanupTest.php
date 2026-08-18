@@ -7,6 +7,8 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
+use App\Support\ClientLifecycleState;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -24,14 +26,26 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
         $admin = $this->createAdminUser();
         $product = $this->createProduct($platform);
 
-        $placeholder = $this->createPlaceholderClient($platform, ['name' => 'March Seo Filler']);
-        $withImage = $this->createPlaceholderClient($platform, [
-            'name' => 'Real Image',
-            'main_image_url' => 'https://example.test/uploads/profile.jpg',
+        $placeholder = $this->createPlaceholderClient($platform, [
+            'name' => 'March Seo Filler',
+            'main_image_url' => 'https://example.test/uploads/nancy.jpeg',
+        ]);
+        $engineRecovered = $this->createPlaceholderClient($platform, [
+            'name' => 'Real SEO Recovery',
+            'lifecycle_restored_at' => CarbonImmutable::parse('2026-08-18 10:00:00'),
         ]);
         $withExpiry = $this->createPlaceholderClient($platform, [
             'name' => 'Has Expiry',
             'escort_expire' => now()->addDays(30)->timestamp,
+        ]);
+        $activeForever = $this->createPlaceholderClient($platform, [
+            'name' => 'Active Forever',
+            'lifecycle_state' => ClientLifecycleState::ACTIVE,
+        ]);
+        $outsideWindow = $this->createPlaceholderClient($platform, [
+            'name' => 'Outside Import Window',
+            'created_at' => CarbonImmutable::parse('2026-04-18 12:00:00'),
+            'wp_created_at' => CarbonImmutable::parse('2026-04-18 12:00:00'),
         ]);
         $crmProvisioned = $this->createPlaceholderClient($platform, [
             'name' => 'CRM Provisioned',
@@ -56,8 +70,10 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             ->assertJsonPath('data.0.id', $placeholder->id)
             ->assertJsonPath('data.0.seo_placeholder_candidate', true);
 
-        $this->assertFalse((bool) $withImage->fresh()->seo_placeholder_candidate);
+        $this->assertFalse((bool) $engineRecovered->fresh()->seo_placeholder_candidate);
         $this->assertFalse((bool) $withExpiry->fresh()->seo_placeholder_candidate);
+        $this->assertFalse((bool) $activeForever->fresh()->seo_placeholder_candidate);
+        $this->assertFalse((bool) $outsideWindow->fresh()->seo_placeholder_candidate);
         $this->assertFalse((bool) $crmProvisioned->fresh()->seo_placeholder_candidate);
     }
 
@@ -66,13 +82,14 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
         $platform = $this->createPlatform();
         $admin = $this->createAdminUser();
         $placeholder = $this->createPlaceholderClient($platform, [
-            'name' => 'No Image Filler',
+            'name' => 'Legacy Seo Filler',
             'wp_post_id' => 93001,
+            'main_image_url' => 'https://example.test/uploads/nancy.jpeg',
         ]);
-        $withImage = $this->createPlaceholderClient($platform, [
-            'name' => 'Image Profile',
+        $engineRecovered = $this->createPlaceholderClient($platform, [
+            'name' => 'Engine Restored Profile',
             'wp_post_id' => 93002,
-            'main_image_url' => 'https://example.test/uploads/profile.jpg',
+            'lifecycle_restored_at' => CarbonImmutable::parse('2026-08-18 10:00:00'),
         ]);
 
         Http::fake([
@@ -83,7 +100,7 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
         Sanctum::actingAs($admin);
 
         $this->postJson('/api/crm/clients/bulk-seo-placeholder-private', [
-            'client_ids' => [$placeholder->id, $withImage->id],
+            'client_ids' => [$placeholder->id, $engineRecovered->id],
             'reason' => 'Clean up old SEO filler profiles',
         ])
             ->assertOk()
@@ -96,7 +113,7 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             'profile_status' => 'private',
         ]);
         $this->assertDatabaseHas('clients', [
-            'id' => $withImage->id,
+            'id' => $engineRecovered->id,
             'profile_status' => 'publish',
         ]);
 
@@ -144,7 +161,8 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             'profile_status' => 'publish',
             'needs_payment' => false,
             'notactive' => false,
-            'lifecycle_state' => 'active',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_restored_at' => null,
             'main_image_url' => null,
             'display_image_url' => null,
             'escort_expire' => null,
@@ -153,8 +171,8 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             'premium' => false,
             'featured' => false,
             'signup_source' => null,
-            'created_at' => now()->subMonths(5),
-            'wp_created_at' => now()->subMonths(5),
+            'created_at' => CarbonImmutable::parse('2026-03-18 12:00:00'),
+            'wp_created_at' => CarbonImmutable::parse('2026-03-18 12:00:00'),
         ], $overrides));
     }
 
@@ -174,8 +192,8 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             'featured_expire' => null,
             'escort_expire' => null,
             'verified' => false,
-            'main_image_url' => '',
-            'created_at' => now()->subMonths(5)->toIso8601String(),
+            'main_image_url' => (string) ($client->main_image_url ?? ''),
+            'created_at' => CarbonImmutable::parse('2026-03-18 12:00:00')->toIso8601String(),
             'modified_at' => now()->toIso8601String(),
             'signup_source' => null,
         ];

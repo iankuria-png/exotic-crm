@@ -4,23 +4,20 @@ namespace App\Services;
 
 use App\Models\Client;
 use App\Models\TimelineEvent;
+use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
 use App\Support\DeactivationRequest;
 use App\Support\DealDeactivationReason;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Log;
 
 class ClientSeoPlaceholderService
 {
-    private const PLACEHOLDER_IMAGE_PATTERNS = [
-        'placeholder',
-        'no-image',
-        'no_image',
-        'default-avatar',
-        'default_avatar',
-        'camera-placeholder',
-    ];
+    private const LEGACY_IMPORT_WINDOW_START = '2026-03-01 00:00:00';
+
+    private const LEGACY_IMPORT_WINDOW_END = '2026-03-31 23:59:59';
 
     public function __construct(
         private readonly AuditService $auditService,
@@ -37,10 +34,8 @@ class ClientSeoPlaceholderService
             ->where(function (Builder $builder): void {
                 $builder->whereNull('notactive')->orWhere('notactive', false);
             })
-            ->where(function (Builder $builder): void {
-                $builder->whereNull('lifecycle_state')
-                    ->orWhere('lifecycle_state', \App\Support\ClientLifecycleState::ACTIVE);
-            })
+            ->where('lifecycle_state', ClientLifecycleState::EXPIRED)
+            ->whereNull('lifecycle_restored_at')
             ->where('wp_post_id', '>', 0)
             ->whereNull('closed_at')
             ->whereDoesntHave('deals')
@@ -60,10 +55,17 @@ class ClientSeoPlaceholderService
                     ->orWhere('signup_source', 'crm_manual');
             })
             ->where(function (Builder $builder): void {
-                self::applyMissingImagePredicate($builder, 'main_image_url');
-            })
-            ->where(function (Builder $builder): void {
-                self::applyMissingImagePredicate($builder, 'display_image_url');
+                $builder->whereBetween('wp_created_at', [
+                    self::LEGACY_IMPORT_WINDOW_START,
+                    self::LEGACY_IMPORT_WINDOW_END,
+                ])
+                    ->orWhere(function (Builder $fallback): void {
+                        $fallback->whereNull('wp_created_at')
+                            ->whereBetween('created_at', [
+                                self::LEGACY_IMPORT_WINDOW_START,
+                                self::LEGACY_IMPORT_WINDOW_END,
+                            ]);
+                    });
             });
     }
 
@@ -77,7 +79,11 @@ class ClientSeoPlaceholderService
             return false;
         }
 
-        if (($client->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE) !== \App\Support\ClientLifecycleState::ACTIVE) {
+        if (($client->lifecycle_state ?? ClientLifecycleState::ACTIVE) !== ClientLifecycleState::EXPIRED) {
+            return false;
+        }
+
+        if ($client->lifecycle_restored_at !== null) {
             return false;
         }
 
@@ -112,8 +118,7 @@ class ClientSeoPlaceholderService
             return false;
         }
 
-        return $this->isMissingOrPlaceholderImage($client->main_image_url)
-            && $this->isMissingOrPlaceholderImage($client->display_image_url);
+        return $this->isInLegacyImportWindow($client);
     }
 
     public function annotate(iterable $clients): void
@@ -220,36 +225,28 @@ class ClientSeoPlaceholderService
         ];
     }
 
-    private static function applyMissingImagePredicate(Builder $query, string $column): void
+    private function isInLegacyImportWindow(Client $client): bool
     {
-        $query->whereNull($column)
-            ->orWhere($column, '');
+        $createdAt = $client->wp_created_at ?: $client->created_at;
 
-        foreach (self::PLACEHOLDER_IMAGE_PATTERNS as $pattern) {
-            $query->orWhere($column, 'like', "%{$pattern}%");
-        }
-    }
-
-    private function isMissingOrPlaceholderImage(?string $url): bool
-    {
-        $normalized = strtolower(trim((string) $url));
-        if ($normalized === '') {
-            return true;
+        if ($createdAt === null) {
+            return false;
         }
 
-        foreach (self::PLACEHOLDER_IMAGE_PATTERNS as $pattern) {
-            if (str_contains($normalized, $pattern)) {
-                return true;
-            }
-        }
+        $timezone = config('app.timezone');
+        $start = CarbonImmutable::parse(self::LEGACY_IMPORT_WINDOW_START, $timezone);
+        $end = CarbonImmutable::parse(self::LEGACY_IMPORT_WINDOW_END, $timezone);
 
-        return false;
+        return $createdAt->greaterThanOrEqualTo($start)
+            && $createdAt->lessThanOrEqualTo($end);
     }
 
     private function clientState(Client $client): array
     {
         return [
             'profile_status' => $client->profile_status,
+            'lifecycle_state' => $client->lifecycle_state,
+            'lifecycle_restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
             'needs_payment' => (bool) $client->needs_payment,
             'notactive' => (bool) $client->notactive,
             'escort_expire' => $client->escort_expire,
@@ -258,6 +255,8 @@ class ClientSeoPlaceholderService
             'main_image_url' => $client->main_image_url,
             'display_image_url' => $client->display_image_url,
             'wp_post_id' => $client->wp_post_id,
+            'wp_created_at' => optional($client->wp_created_at)->toDateTimeString(),
+            'created_at' => optional($client->created_at)->toDateTimeString(),
         ];
     }
 
