@@ -82,6 +82,7 @@ function createBulkDeleteDialogState(platformId = '') {
             inactive_days: '90',
             has_no_chat: true,
             has_no_subscription_or_payment: true,
+            seo_placeholders: false,
         },
     };
 }
@@ -387,6 +388,10 @@ function isClientOnline(lastOnlineAt) {
     return ts >= Math.floor(Date.now() / 1000) - (ONLINE_STATUS_WINDOW_MINUTES * 60);
 }
 
+function isSeoPlaceholderCandidate(client) {
+    return Boolean(client?.seo_placeholder_candidate);
+}
+
 function formatSeenTimestamp(unixTs) {
     const ts = Number(unixTs || 0);
     if (!ts) return '';
@@ -435,6 +440,7 @@ export default function Clients() {
     const isReadOnly = user?.role === 'marketing';
     const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canBulkTakeSeoPlaceholdersPrivate = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
@@ -541,6 +547,8 @@ export default function Clients() {
     const [showBulkThumbnailRefreshConfirm, setShowBulkThumbnailRefreshConfirm] = useState(false);
     const [bulkExpireSelection, setBulkExpireSelection] = useState([]);
     const [showBulkExpireConfirm, setShowBulkExpireConfirm] = useState(false);
+    const [bulkSeoPrivateSelection, setBulkSeoPrivateSelection] = useState([]);
+    const [showBulkSeoPrivateConfirm, setShowBulkSeoPrivateConfirm] = useState(false);
     const [bulkDeleteDialog, setBulkDeleteDialog] = useState(() => createBulkDeleteDialogState(''));
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
@@ -921,6 +929,9 @@ export default function Clients() {
         if (dialogState.filters.has_no_subscription_or_payment) {
             filters.has_no_subscription_or_payment = true;
         }
+        if (dialogState.filters.seo_placeholders) {
+            filters.seo_placeholders = true;
+        }
 
         return { filters };
     };
@@ -1045,6 +1056,39 @@ export default function Clients() {
         },
     });
 
+    const bulkSeoPrivateMutation = useMutation({
+        mutationFn: ({ clientIds, reason }) => api.post('/crm/clients/bulk-seo-placeholder-private', {
+            client_ids: clientIds,
+            reason,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClearSelectionKey((current) => current + 1);
+            setShowBulkSeoPrivateConfirm(false);
+            setBulkSeoPrivateSelection([]);
+
+            const privatized = Number(payload?.summary?.privatized || 0);
+            const skipped = Number(payload?.summary?.skipped || 0);
+            const failed = Number(payload?.summary?.failed || 0);
+            const summary = [
+                `${privatized} private`,
+                skipped ? `${skipped} skipped` : null,
+                failed ? `${failed} failed` : null,
+            ].filter(Boolean).join(' · ');
+
+            if (failed > 0) {
+                toast.warning(`SEO placeholder cleanup finished with issues: ${summary}.`);
+                return;
+            }
+
+            toast.success(`SEO placeholder cleanup complete: ${summary}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'SEO placeholder cleanup failed.');
+        },
+    });
+
     const closeBulkDeleteDialog = () => {
         if (bulkDeletePreviewMutation.isPending || bulkDeleteMutation.isPending) {
             return;
@@ -1074,11 +1118,20 @@ export default function Clients() {
     };
 
     const openSmartDeleteDialog = () => {
+        const nextDialog = createBulkDeleteDialogState(platformFilter);
+        if (segmentFilter === 'seo_placeholder') {
+            nextDialog.filters.seo_placeholders = true;
+            nextDialog.filters.inactive_days = '';
+            nextDialog.filters.has_no_chat = false;
+        }
+
         setBulkDeleteDialog({
-            ...createBulkDeleteDialogState(platformFilter),
+            ...nextDialog,
             open: true,
             mode: 'smart',
-            reason: 'Smart client deletion from clients page',
+            reason: segmentFilter === 'seo_placeholder'
+                ? 'SEO placeholder cleanup deletion from clients page'
+                : 'Smart client deletion from clients page',
         });
     };
 
@@ -1171,6 +1224,21 @@ export default function Clients() {
             onClick: (rowsSelection) => {
                 openSelectedDeleteDialog(rowsSelection);
             },
+        }] : []),
+        ...(canBulkTakeSeoPlaceholdersPrivate ? [{
+            key: 'bulk-seo-placeholder-private',
+            label: 'Take placeholders private',
+            variant: 'warning',
+            onClick: (rowsSelection) => {
+                setBulkSeoPrivateSelection(rowsSelection);
+                setShowBulkSeoPrivateConfirm(true);
+            },
+            isDisabled: (rowsSelection) => !rowsSelection.some(isSeoPlaceholderCandidate),
+            getDisabledReason: (rowsSelection) => (
+                rowsSelection.some(isSeoPlaceholderCandidate)
+                    ? undefined
+                    : 'None of the selected clients match the SEO placeholder guard.'
+            ),
         }] : []),
         ...(canCloseCases ? [{
             key: 'bulk-close-cases',
@@ -2582,6 +2650,63 @@ export default function Clients() {
                 );
             })()}
 
+            {(() => {
+                const eligible = bulkSeoPrivateSelection.filter(isSeoPlaceholderCandidate);
+                const skipped = bulkSeoPrivateSelection.length - eligible.length;
+                const BULK_SEO_PRIVATE_CAP = 200;
+                const toProcess = eligible.slice(0, BULK_SEO_PRIVATE_CAP);
+                const overCap = eligible.length - toProcess.length;
+
+                return (
+                    <ConfirmDialog
+                        open={showBulkSeoPrivateConfirm}
+                        title="Take SEO placeholders private"
+                        message="Only selected clients that match the SEO placeholder guard will be set private in WordPress. Paid profiles, profiles with images, profiles with expiry dates, and CRM-provisioned clients are skipped automatically."
+                        tone="warning"
+                        confirmLabel={`Take ${toProcess.length} private`}
+                        confirmDisabled={toProcess.length === 0 || bulkSeoPrivateMutation.isPending}
+                        isPending={bulkSeoPrivateMutation.isPending}
+                        onCancel={() => {
+                            if (bulkSeoPrivateMutation.isPending) {
+                                return;
+                            }
+                            setShowBulkSeoPrivateConfirm(false);
+                            setBulkSeoPrivateSelection([]);
+                        }}
+                        onConfirm={() => {
+                            const clientIds = toProcess
+                                .map((client) => Number(client.id))
+                                .filter((clientId) => clientId > 0);
+                            if (clientIds.length === 0) {
+                                return;
+                            }
+                            bulkSeoPrivateMutation.mutate({
+                                clientIds,
+                                reason: 'SEO placeholder cleanup from clients page',
+                            });
+                        }}
+                    >
+                        <div className="space-y-2 text-sm">
+                            <div className="flex items-center justify-between rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-800">
+                                <span>Will be taken private</span>
+                                <span className="font-semibold">{toProcess.length.toLocaleString()}</span>
+                            </div>
+                            {skipped > 0 ? (
+                                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                                    <span>Skipped by guard</span>
+                                    <span className="font-semibold">{skipped.toLocaleString()}</span>
+                                </div>
+                            ) : null}
+                            {overCap > 0 ? (
+                                <p className="text-xs text-amber-700">
+                                    {overCap.toLocaleString()} more eligible client{overCap === 1 ? '' : 's'} will not be processed this run (max {BULK_SEO_PRIVATE_CAP} per run). Run again to continue.
+                                </p>
+                            ) : null}
+                        </div>
+                    </ConfirmDialog>
+                );
+            })()}
+
             <ConfirmDialog
                 open={showCsvConfirm}
                 title="Confirm Clients CSV Upload"
@@ -2844,6 +2969,7 @@ function BulkDeleteClientsDialog({
                                 }))}
                                 className="crm-select w-full"
                             >
+                                <option value="">Any activity window</option>
                                 {SMART_DELETE_DAY_OPTIONS.map((days) => (
                                     <option key={days} value={days}>{days} days or longer</option>
                                 ))}
@@ -2874,6 +3000,21 @@ function BulkDeleteClientsDialog({
                                 className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
                             />
                             <span>No subscriptions and no payments</span>
+                        </label>
+
+                        <label className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                            <input
+                                type="checkbox"
+                                checked={filters.seo_placeholders}
+                                onChange={(event) => onFiltersChange((current) => ({
+                                    ...current,
+                                    seo_placeholders: event.target.checked,
+                                    has_no_subscription_or_payment: event.target.checked ? true : current.has_no_subscription_or_payment,
+                                    inactive_days: event.target.checked ? '' : current.inactive_days,
+                                }))}
+                                className="mt-0.5 h-4 w-4 rounded border-rose-300 text-rose-700 focus:ring-rose-200"
+                            />
+                            <span>SEO placeholders only</span>
                         </label>
                     </div>
                 ) : (

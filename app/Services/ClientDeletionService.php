@@ -13,8 +13,7 @@ class ClientDeletionService
 {
     public function __construct(
         private readonly AuditService $auditService
-    ) {
-    }
+    ) {}
 
     public function previewDeletion(Client $client): array
     {
@@ -177,7 +176,7 @@ class ClientDeletionService
             'after_state' => [
                 'deleted' => true,
                 'wp_deleted' => $wpDeleted,
-                'source_pruned' => !$deleteFromWordPress,
+                'source_pruned' => ! $deleteFromWordPress,
                 'impact' => $impact,
             ],
             'reason' => $reason,
@@ -186,7 +185,7 @@ class ClientDeletionService
         return [
             'deleted' => true,
             'wp_deleted' => $wpDeleted,
-            'source_pruned' => !$deleteFromWordPress,
+            'source_pruned' => ! $deleteFromWordPress,
             'impact' => $impact,
         ];
     }
@@ -215,23 +214,27 @@ class ClientDeletionService
             }
         }
 
-        if (!empty($clientIds)) {
+        if (! empty($clientIds)) {
             $query->whereIn('id', $clientIds);
         } else {
-            if (!empty($filters['platform_id'])) {
+            if (! empty($filters['platform_id'])) {
                 $query->where('platform_id', (int) $filters['platform_id']);
             }
 
-            if (!empty($filters['inactive_days'])) {
+            if (! empty($filters['inactive_days'])) {
                 $query->inactiveFor((int) $filters['inactive_days']);
             }
 
-            if (!empty($filters['has_no_chat'])) {
+            if (! empty($filters['has_no_chat'])) {
                 $query->hasNoChat();
             }
 
-            if (!empty($filters['has_no_subscription_or_payment'])) {
+            if (! empty($filters['has_no_subscription_or_payment'])) {
                 $query->hasNoSubscriptionOrPayment();
+            }
+
+            if (! empty($filters['seo_placeholders'])) {
+                ClientSeoPlaceholderService::applyCandidateScope($query);
             }
         }
 

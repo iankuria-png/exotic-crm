@@ -1,5 +1,11 @@
 export const CLIENT_SEGMENTS = [
     {
+        key: 'seo_placeholder',
+        label: 'SEO placeholders',
+        classes: 'border-rose-200 bg-rose-50 text-rose-700',
+        activeClasses: 'border-rose-500 bg-rose-600 text-white',
+    },
+    {
         key: 'active',
         label: 'Active',
         classes: 'border-emerald-200 bg-emerald-50 text-emerald-700',

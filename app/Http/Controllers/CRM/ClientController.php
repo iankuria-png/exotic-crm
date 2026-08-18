@@ -27,6 +27,7 @@ use App\Services\ClientProfileImageService;
 use App\Services\ClientProfileUrlSearchService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSegmentService;
+use App\Services\ClientSeoPlaceholderService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientSyncService;
@@ -85,6 +86,7 @@ class ClientController extends Controller
         private readonly CredentialDeliveryService $credentialDeliveryService,
         private readonly ClientWpLinkRepairService $clientWpLinkRepairService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
+        private readonly ClientSeoPlaceholderService $clientSeoPlaceholderService,
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
         private readonly ClientSubscriptionDeactivationService $clientSubscriptionDeactivationService,
@@ -349,6 +351,7 @@ class ClientController extends Controller
             $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
             $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
             $this->decorateLifetimeValue($clients->getCollection());
+            $this->clientSeoPlaceholderService->annotate($clients->getCollection());
 
             $payload = $clients->toArray();
         }
@@ -388,6 +391,7 @@ class ClientController extends Controller
             $clients = $fallbackQuery->paginate($perPage);
             $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
             $this->decorateLifetimeValue($clients->getCollection());
+            $this->clientSeoPlaceholderService->annotate($clients->getCollection());
 
             $payload = $clients->toArray();
             $payload['meta'] = array_merge($payload['meta'] ?? [], [
@@ -439,6 +443,7 @@ class ClientController extends Controller
 
         $clients->each(fn (Client $client) => $this->decorateExpiryState($client));
         $this->decorateLifetimeValue($clients);
+        $this->clientSeoPlaceholderService->annotate($clients);
 
         $paginator = new LengthAwarePaginator(
             $clients,
@@ -1413,6 +1418,7 @@ class ClientController extends Controller
             'filters.inactive_days' => 'nullable|integer|min:1',
             'filters.has_no_chat' => 'nullable|boolean',
             'filters.has_no_subscription_or_payment' => 'nullable|boolean',
+            'filters.seo_placeholders' => 'nullable|boolean',
         ]);
 
         $clientIds = collect($validated['client_ids'] ?? [])
@@ -1494,6 +1500,50 @@ class ClientController extends Controller
                 (string) ($validated['reason'] ?? 'Bulk client deletion from CRM')
             )
         );
+    }
+
+    public function bulkTakeSeoPlaceholdersPrivate(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+
+        $validated = $request->validate([
+            'client_ids' => 'required|array|min:1|max:200',
+            'client_ids.*' => 'integer|exists:clients,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $clients = Client::query()
+            ->whereIn('id', $validated['client_ids'])
+            ->get();
+
+        $authorizedIds = [];
+        $unauthorizedIds = [];
+        foreach ($clients as $client) {
+            try {
+                $this->authorizeClientAccess($request, $client);
+                $authorizedIds[] = (int) $client->id;
+            } catch (\Throwable) {
+                $unauthorizedIds[] = (int) $client->id;
+            }
+        }
+
+        $outcome = $this->clientSeoPlaceholderService->bulkTakePrivate(
+            $authorizedIds,
+            (int) $request->user()->id,
+            trim((string) ($validated['reason'] ?? 'SEO placeholder cleanup from clients page')) ?: 'SEO placeholder cleanup from clients page'
+        );
+
+        foreach ($unauthorizedIds as $unauthorizedId) {
+            $outcome['results'][] = [
+                'client_id' => $unauthorizedId,
+                'action' => 'failed',
+                'message' => 'You do not have access to this client.',
+            ];
+            $outcome['summary']['failed'] = ($outcome['summary']['failed'] ?? 0) + 1;
+            $outcome['summary']['total'] = ($outcome['summary']['total'] ?? 0) + 1;
+        }
+
+        return response()->json($outcome);
     }
 
     /**

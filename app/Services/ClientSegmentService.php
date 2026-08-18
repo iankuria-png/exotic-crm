@@ -8,6 +8,7 @@ use InvalidArgumentException;
 class ClientSegmentService
 {
     public const SEGMENT_ORDER = [
+        'seo_placeholder',
         'active',
         'suspended',
         'duplicate',
@@ -31,7 +32,7 @@ class ClientSegmentService
     {
         $segment = trim($segment);
 
-        if (!self::isValid($segment)) {
+        if (! self::isValid($segment)) {
             throw new InvalidArgumentException("Unknown client segment [{$segment}].");
         }
 
@@ -66,6 +67,7 @@ class ClientSegmentService
     private function applyBasePredicate(Builder $query, string $segment): Builder
     {
         return match ($segment) {
+            'seo_placeholder' => ClientSeoPlaceholderService::applyCandidateScope($query),
             'active' => $query->active(),
             'suspended' => $query->highRisk(),
             'duplicate' => $query->whereNotNull('duplicate_of'),
