@@ -106,7 +106,7 @@ class LifecycleRestoreTest extends TestCase
         $platform = $this->createPlatform();
         $client = $this->createOfflineClient($platform, 7004);
         $this->createPaidDeal($client, now()->subDays(20));
-        $this->fakeWp($platform, 7004);
+        $this->fakeWpPrivateAfterDeactivate($platform, 7004);
 
         $run = $this->makeRun($platform, LifecycleRestoreRun::MODE_LIVE);
         app(ProfileLifecycleRestoreService::class)->execute($run);
@@ -130,6 +130,12 @@ class LifecycleRestoreTest extends TestCase
 
         // The advertiser's real bio must survive a revert — it is the only copy.
         $this->assertSame(self::DIRTY_BIO, $fresh->bio_original_html);
+
+        $event = \App\Models\TimelineEvent::query()
+            ->where('entity_id', $client->id)
+            ->where('event_type', 'profile_restore_reverted')
+            ->first();
+        $this->assertSame((int) $run->id, (int) data_get($event?->content, 'run_id'));
     }
 
     public function test_a_market_without_the_lifecycle_is_refused(): void
@@ -210,6 +216,94 @@ class LifecycleRestoreTest extends TestCase
         $this->assertNull($bad->fresh()->lifecycle_restored_at);
     }
 
+    public function test_market_rollback_deactivates_only_restricted_profiles_for_that_market(): void
+    {
+        $platform = $this->createPlatform();
+        $otherPlatform = $this->createPlatform();
+
+        $expired = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7030,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(12),
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => 88,
+        ]);
+        $active = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7031,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::ACTIVE,
+            'lifecycle_restored_at' => now()->subDay(),
+        ]);
+        $otherMarket = Client::factory()->create([
+            'platform_id' => $otherPlatform->id,
+            'wp_post_id' => 8030,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_restored_at' => now()->subDay(),
+        ]);
+
+        $this->fakeWpPrivateAfterDeactivate($platform, 7030);
+
+        $result = app(ProfileLifecycleRestoreService::class)
+            ->rollbackMarket((int) $platform->id, null, 'market_lifecycle_disabled');
+
+        $this->assertSame(1, $result['candidates']);
+        $this->assertSame(1, $result['reverted']);
+        $this->assertSame(0, $result['failed']);
+
+        $freshExpired = $expired->fresh();
+        $this->assertSame('private', $freshExpired->profile_status);
+        $this->assertSame(ClientLifecycleState::ACTIVE, $freshExpired->lifecycle_state);
+        $this->assertNull($freshExpired->lifecycle_restored_at);
+        $this->assertNull($freshExpired->lifecycle_restore_run_id);
+
+        $this->assertSame('publish', $active->fresh()->profile_status);
+        $this->assertSame(ClientLifecycleState::ACTIVE, $active->fresh()->lifecycle_state);
+        $this->assertSame('publish', $otherMarket->fresh()->profile_status);
+        $this->assertSame(ClientLifecycleState::EXPIRED, $otherMarket->fresh()->lifecycle_state);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/clients/7030/deactivate'));
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/clients/7031/'));
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/clients/8030/'));
+    }
+
+    public function test_market_rollback_does_not_clear_crm_state_when_wordpress_stays_public(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7040,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(12),
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => 89,
+        ]);
+        $base = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake([
+            "{$base}/clients/7040/deactivate" => Http::response(['ok' => true], 200),
+            "{$base}/clients/7040" => Http::response($this->wpClientPayload(7040, 'publish', ClientLifecycleState::EXPIRED), 200),
+        ]);
+
+        $result = app(ProfileLifecycleRestoreService::class)
+            ->rollbackMarket((int) $platform->id, null, 'market_lifecycle_disabled');
+
+        $this->assertSame(1, $result['candidates']);
+        $this->assertSame(0, $result['reverted']);
+        $this->assertSame(1, $result['failed']);
+
+        $fresh = $client->fresh();
+        $this->assertSame('publish', $fresh->profile_status);
+        $this->assertSame(ClientLifecycleState::EXPIRED, $fresh->lifecycle_state);
+        $this->assertNotNull($fresh->lifecycle_restored_at);
+        $this->assertSame(89, (int) $fresh->lifecycle_restore_run_id);
+    }
+
     // ─── helpers ────────────────────────────────────────────────────────────
 
     private function makeRun(Platform $platform, string $mode, ?array $filters = null): LifecycleRestoreRun
@@ -225,12 +319,12 @@ class LifecycleRestoreTest extends TestCase
         ]);
     }
 
-    private function wpClientPayload(int $wpPostId): array
+    private function wpClientPayload(int $wpPostId, string $status = 'publish', string $lifecycleState = ClientLifecycleState::EXPIRED): array
     {
         return [
             'wp_post_id' => $wpPostId,
-            'post_status' => 'publish',
-            'crm_lifecycle_state' => 'expired',
+            'post_status' => $status,
+            'crm_lifecycle_state' => $lifecycleState,
             'post' => ['id' => $wpPostId, 'content' => self::DIRTY_BIO],
             'modified_at' => now()->toIso8601String(),
         ];
@@ -248,12 +342,47 @@ class LifecycleRestoreTest extends TestCase
         ]);
     }
 
+    private function fakeWpPrivateAfterDeactivate(Platform $platform, int $wpPostId): void
+    {
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        $deactivated = false;
+
+        Http::fake(function ($request) use ($base, $wpPostId, &$deactivated) {
+            if ($request->url() === "{$base}/clients/{$wpPostId}/deactivate") {
+                $deactivated = true;
+
+                return Http::response(['ok' => true], 200);
+            }
+
+            if ($request->url() === "{$base}/clients/{$wpPostId}/lifecycle") {
+                return Http::response(['ok' => true], 200);
+            }
+
+            if ($request->url() === "{$base}/clients/{$wpPostId}/update") {
+                return Http::response(['ok' => true], 200);
+            }
+
+            if ($request->url() === "{$base}/clients/{$wpPostId}") {
+                return Http::response(
+                    $this->wpClientPayload(
+                        $wpPostId,
+                        $deactivated ? 'private' : 'publish',
+                        $deactivated ? ClientLifecycleState::ACTIVE : ClientLifecycleState::EXPIRED
+                    ),
+                    200
+                );
+            }
+
+            return Http::response(['message' => 'Unexpected request'], 500);
+        });
+    }
+
     private function createOfflineClient(Platform $platform, int $wpPostId, array $overrides = []): Client
     {
         return Client::factory()->create(array_merge([
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
-            'name' => 'Offline ' . $wpPostId,
+            'name' => 'Offline '.$wpPostId,
             'profile_status' => 'private',
             'lifecycle_state' => ClientLifecycleState::ACTIVE,
             'closed_at' => null,
@@ -276,7 +405,7 @@ class LifecycleRestoreTest extends TestCase
     {
         return Platform::query()->create([
             'name' => 'Test Market',
-            'domain' => 'tm-' . Str::random(6) . '.example.test',
+            'domain' => 'tm-'.Str::random(6).'.example.test',
             'country' => 'South Sudan',
             'timezone' => 'Africa/Juba',
             'phone_prefix' => '211',

@@ -11,6 +11,7 @@ use App\Billing\Support\ProviderCapability;
 use App\Billing\BillingPermissions;
 use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
+use App\Jobs\RollbackLifecycleProfilesJob;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunClientSyncJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -38,6 +39,7 @@ use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
 use App\Services\ClientSyncRunService;
 use App\Services\ClientSyncService;
+use App\Services\FeatureSettingsService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Services\SbLeadImportRunService;
@@ -55,6 +57,7 @@ use App\Services\WordPressSyncKeyService;
 use App\Services\WpSyncService;
 use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
+use App\Support\LifecycleRestorePacing;
 use App\Support\MarketTimezone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -3006,15 +3009,27 @@ class SettingsController extends Controller
         // mirror the new effective state to each of their WordPress sites so the
         // legacy expiry sweeps stand down / resume accordingly.
         $pushWarnings = [];
-        Platform::query()->where('lifecycle_policy_enabled', true)->get()->each(function (Platform $platform) use (&$pushWarnings): void {
+        $actorId = (int) $request->user()->id;
+        $masterWasEnabled = (bool) ($before['master_enabled'] ?? false);
+        $masterIsEnabled = \App\Support\LifecyclePolicy::masterEnabled();
+        $optedInPlatforms = Platform::query()->where('lifecycle_policy_enabled', true)->get();
+
+        $optedInPlatforms->each(function (Platform $platform) use (&$pushWarnings): void {
             $warning = $this->pushLifecyclePolicyToWordPress($platform);
             if ($warning !== null) {
                 $pushWarnings[] = $warning;
             }
         });
 
+        if ($masterWasEnabled && ! $masterIsEnabled) {
+            $optedInPlatforms->each(function (Platform $platform) use ($actorId): void {
+                $this->resetLifecycleRestorePacing($platform, $actorId);
+                RollbackLifecycleProfilesJob::dispatch((int) $platform->id, $actorId, 'global_lifecycle_disabled');
+            });
+        }
+
         return response()->json(array_filter([
-            'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
+            'master_enabled' => $masterIsEnabled,
             'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
             'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
             'lifecycle_policy_push_warnings' => $pushWarnings ?: null,
@@ -3110,6 +3125,7 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
+        $wasLifecycleFlagEnabled = (bool) $platform->lifecycle_policy_enabled;
         $beforeState = $this->platformAuditState($platform);
         $payload = $this->platformWritePayload($validated, true);
         $activationRequested = array_key_exists('is_active', $payload) && (bool) $payload['is_active'];
@@ -3151,6 +3167,12 @@ class SettingsController extends Controller
         $lifecyclePushWarning = null;
         if (array_key_exists('lifecycle_policy_enabled', $validated)) {
             $lifecyclePushWarning = $this->pushLifecyclePolicyToWordPress($platform);
+
+            if ($wasLifecycleFlagEnabled && ! (bool) $platform->lifecycle_policy_enabled) {
+                $actorId = $request->user()?->id ? (int) $request->user()->id : null;
+                $this->resetLifecycleRestorePacing($platform, $actorId);
+                RollbackLifecycleProfilesJob::dispatch((int) $platform->id, $actorId, 'market_lifecycle_disabled');
+            }
         }
 
         return response()->json(array_filter([
@@ -3181,6 +3203,15 @@ class SettingsController extends Controller
                 $e->getMessage()
             );
         }
+    }
+
+    private function resetLifecycleRestorePacing(Platform $platform, ?int $actorId): void
+    {
+        app(FeatureSettingsService::class)->set(
+            LifecycleRestorePacing::settingsKey((int) $platform->id),
+            LifecycleRestorePacing::defaults(),
+            $actorId
+        );
     }
 
     public function updatePlatformPackages(Request $request, Platform $platform)

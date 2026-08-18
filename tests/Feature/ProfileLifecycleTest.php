@@ -2,13 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\RollbackLifecycleProfilesJob;
 use App\Models\Client;
 use App\Models\Platform;
-use App\Models\TimelineEvent;
 use App\Services\ClientLifecycleService;
+use App\Services\FeatureSettingsService;
 use App\Services\WpSyncService;
+use App\Support\LifecycleRestorePacing;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -107,12 +110,15 @@ class ProfileLifecycleTest extends TestCase
 
     public function test_admin_can_toggle_lifecycle_policy_from_market_settings(): void
     {
+        Queue::fake();
+        Http::fake(['*' => Http::response(['ok' => true], 200)]);
+
         $platform = $this->createPlatform();
         $platform->forceFill(['lifecycle_policy_enabled' => false])->save();
 
         $admin = \App\Models\User::query()->create([
             'name' => 'Admin Tester',
-            'email' => 'admin-' . uniqid() . '@example.test',
+            'email' => 'admin-'.uniqid().'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',
@@ -129,6 +135,13 @@ class ProfileLifecycleTest extends TestCase
             ->assertJsonPath('platform.lifecycle_policy_effective', true);
 
         $this->assertTrue((bool) $platform->fresh()->lifecycle_policy_enabled);
+        Queue::assertNotPushed(RollbackLifecycleProfilesJob::class);
+
+        app(FeatureSettingsService::class)->set(
+            LifecycleRestorePacing::settingsKey((int) $platform->id),
+            ['mode' => LifecycleRestorePacing::DAILY_TRICKLE, 'daily_quota' => 25],
+            (int) $admin->id
+        );
 
         // And back off.
         $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}", [
@@ -139,10 +152,21 @@ class ProfileLifecycleTest extends TestCase
             ->assertJsonPath('platform.lifecycle_policy_effective', false);
 
         $this->assertFalse((bool) $platform->fresh()->lifecycle_policy_enabled);
+        Queue::assertPushed(RollbackLifecycleProfilesJob::class, function (RollbackLifecycleProfilesJob $job) use ($platform): bool {
+            return $job->platformId === (int) $platform->id
+                && $job->reason === 'market_lifecycle_disabled';
+        });
+        $this->assertSame(
+            LifecycleRestorePacing::MANUAL_CAPPED,
+            app(FeatureSettingsService::class)->get(LifecycleRestorePacing::settingsKey((int) $platform->id))['mode'] ?? null
+        );
     }
 
     public function test_lifecycle_master_switch_is_managed_from_settings(): void
     {
+        Queue::fake();
+        Http::fake(['*' => Http::response(['ok' => true], 200)]);
+
         $platform = $this->createPlatform(); // per-market flag ON
 
         $admin = $this->createAdminUser();
@@ -163,6 +187,10 @@ class ProfileLifecycleTest extends TestCase
             ->assertJsonPath('master_enabled', false);
 
         $this->assertFalse($platform->fresh()->lifecycleEnabled(), 'master off must override per-market flag');
+        Queue::assertPushed(RollbackLifecycleProfilesJob::class, function (RollbackLifecycleProfilesJob $job) use ($platform): bool {
+            return $job->platformId === (int) $platform->id
+                && $job->reason === 'global_lifecycle_disabled';
+        });
         $this->artisan('crm:archive-expired')->expectsOutputToContain('master switch is off')->assertExitCode(0);
 
         // Back on.
@@ -183,7 +211,7 @@ class ProfileLifecycleTest extends TestCase
 
         // Toggle OFF (default): no shared key header.
         (new WpSyncService($platform))->setLifecycleState(900, 'expired');
-        Http::assertSent(fn ($request) => !$request->hasHeader('X-Exotic-CRM-Sync-Key'));
+        Http::assertSent(fn ($request) => ! $request->hasHeader('X-Exotic-CRM-Sync-Key'));
 
         // Toggle ON via the market settings column: header present.
         $platform->forceFill(['sync_shared_key_enabled' => true])->save();
@@ -195,7 +223,7 @@ class ProfileLifecycleTest extends TestCase
     {
         return \App\Models\User::query()->create([
             'name' => 'Admin Tester',
-            'email' => 'admin-' . uniqid() . '@example.test',
+            'email' => 'admin-'.uniqid().'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',
@@ -227,6 +255,8 @@ class ProfileLifecycleTest extends TestCase
 
     public function test_market_lifecycle_toggle_pushes_policy_flag_to_wordpress(): void
     {
+        Queue::fake();
+
         $platform = $this->createPlatform();
         $platform->forceFill(['lifecycle_policy_enabled' => false])->save();
         $base = rtrim((string) $platform->wp_api_url, '/');
@@ -249,6 +279,10 @@ class ProfileLifecycleTest extends TestCase
 
         Http::assertSent(function ($request) use ($base) {
             return $request->url() === "{$base}/lifecycle-policy" && (string) $request['enabled'] === '0';
+        });
+        Queue::assertPushed(RollbackLifecycleProfilesJob::class, function (RollbackLifecycleProfilesJob $job) use ($platform): bool {
+            return $job->platformId === (int) $platform->id
+                && $job->reason === 'global_lifecycle_disabled';
         });
 
         // Restore for other tests sharing the feature_settings row.
@@ -310,7 +344,7 @@ class ProfileLifecycleTest extends TestCase
         return Client::factory()->create([
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
-            'name' => 'Expired ' . $wpPostId,
+            'name' => 'Expired '.$wpPostId,
             'profile_status' => 'publish',
             'lifecycle_state' => 'expired',
             'lifecycle_expired_at' => $expiredAt ?? now()->subDays(100),
@@ -327,7 +361,7 @@ class ProfileLifecycleTest extends TestCase
             "{$base}/clients/{$wpPostId}" => Http::response([
                 'wp_post_id' => $wpPostId,
                 'wp_user_id' => $wpPostId + 1000,
-                'name' => 'Expired ' . $wpPostId,
+                'name' => 'Expired '.$wpPostId,
                 'phone' => '+255700000000',
                 'city' => 'Kigamboni',
                 'post_status' => 'publish',
@@ -345,7 +379,7 @@ class ProfileLifecycleTest extends TestCase
     {
         return Platform::query()->create([
             'name' => 'Tanzania Market',
-            'domain' => 'tz-' . Str::random(6) . '.example.test',
+            'domain' => 'tz-'.Str::random(6).'.example.test',
             'country' => 'Tanzania',
             'timezone' => 'Africa/Dar_es_Salaam',
             'phone_prefix' => '255',

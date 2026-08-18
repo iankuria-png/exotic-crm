@@ -32,8 +32,7 @@ class ProfileLifecycleRestoreService
 
     public function __construct(
         private readonly ProfileBioScrubService $bioScrubber,
-    ) {
-    }
+    ) {}
 
     /**
      * Eligible profiles for a run's configuration.
@@ -240,7 +239,9 @@ class ProfileLifecycleRestoreService
      */
     public function revert(LifecycleRestoreRun $run): array
     {
+        $platform = Platform::query()->findOrFail((int) $run->platform_id);
         $wp = WpSyncService::forPlatform((int) $run->platform_id);
+        $sync = new ClientSyncService($platform);
 
         $reverted = 0;
         $failed = 0;
@@ -248,30 +249,20 @@ class ProfileLifecycleRestoreService
         Client::query()
             ->where('lifecycle_restore_run_id', $run->id)
             ->orderBy('id')
-            ->chunkById(100, function ($clients) use ($wp, &$reverted, &$failed) {
+            ->chunkById(100, function ($clients) use ($wp, $sync, &$reverted, &$failed) {
                 foreach ($clients as $client) {
                     try {
-                        $wp->deactivateClient((int) $client->wp_post_id);
-
-                        $client->forceFill([
-                            'profile_status' => 'private',
-                            'lifecycle_state' => ClientLifecycleState::ACTIVE,
-                            'lifecycle_expired_at' => null,
-                            'lifecycle_archived_at' => null,
-                            'lifecycle_restored_at' => null,
-                            'lifecycle_restore_run_id' => null,
-                        ])->save();
-
-                        TimelineEvent::create([
-                            'platform_id' => (int) $client->platform_id,
-                            'entity_type' => 'client',
-                            'entity_id' => (int) $client->id,
-                            'event_type' => 'profile_restore_reverted',
-                            'actor_id' => null,
-                            'content' => ['run_id' => (int) $client->lifecycle_restore_run_id],
-                            'created_at' => now(),
-                        ]);
-
+                        $this->deactivateAndVerify(
+                            $client,
+                            $wp,
+                            $sync,
+                            null,
+                            'profile_restore_reverted',
+                            [
+                                'run_id' => (int) $client->lifecycle_restore_run_id,
+                                'scope' => 'run_revert',
+                            ]
+                        );
                         $reverted++;
                     } catch (\Throwable $exception) {
                         $failed++;
@@ -289,10 +280,130 @@ class ProfileLifecycleRestoreService
 
         $run->forceFill([
             'status' => LifecycleRestoreRun::STATUS_REVERTED,
-            'notes' => trim((string) $run->notes . sprintf(' Reverted %d profile(s) on %s.', $reverted, now()->toDateTimeString())),
+            'notes' => trim((string) $run->notes.sprintf(' Reverted %d profile(s) on %s.', $reverted, now()->toDateTimeString())),
         ])->save();
 
         return ['reverted' => $reverted, 'failed' => $failed];
+    }
+
+    /**
+     * Emergency rollback for a market when the SEO lifecycle is disabled.
+     *
+     * Only restricted, published lifecycle profiles are targeted. A paid profile
+     * that has already returned to Active is deliberately left alone.
+     */
+    public function rollbackMarket(int $platformId, ?int $actorId = null, string $reason = 'lifecycle_disabled'): array
+    {
+        $platform = Platform::query()->findOrFail($platformId);
+        $wp = WpSyncService::forPlatform($platformId);
+        $sync = new ClientSyncService($platform);
+
+        $query = $this->rollbackCandidates($platformId);
+        $candidateCount = (int) (clone $query)->toBase()->getCountForPagination();
+        $reverted = 0;
+        $failed = 0;
+
+        $query->chunkById(100, function ($clients) use ($wp, $sync, $actorId, $reason, &$reverted, &$failed) {
+            foreach ($clients as $client) {
+                try {
+                    $this->deactivateAndVerify(
+                        $client,
+                        $wp,
+                        $sync,
+                        $actorId,
+                        'profile_lifecycle_rollback',
+                        [
+                            'reason' => $reason,
+                            'scope' => 'market_lifecycle_disable',
+                            'previous_lifecycle_state' => $client->lifecycle_state,
+                            'run_id' => $client->lifecycle_restore_run_id ? (int) $client->lifecycle_restore_run_id : null,
+                            'restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
+                        ]
+                    );
+                    $reverted++;
+                } catch (\Throwable $exception) {
+                    $failed++;
+                    Log::error('SEO Recovery: market rollback failed', [
+                        'client_id' => $client->id,
+                        'platform_id' => $client->platform_id,
+                        'wp_post_id' => $client->wp_post_id,
+                        'reason' => $reason,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+
+                usleep(self::WP_WRITE_THROTTLE_MICROSECONDS);
+            }
+
+            return true;
+        });
+
+        return [
+            'candidates' => $candidateCount,
+            'reverted' => $reverted,
+            'failed' => $failed,
+        ];
+    }
+
+    private function rollbackCandidates(int $platformId): Builder
+    {
+        return Client::query()
+            ->where('platform_id', $platformId)
+            ->where('profile_status', 'publish')
+            ->whereNotNull('wp_post_id')
+            ->where('wp_post_id', '>', 0)
+            ->whereIn('lifecycle_state', [
+                ClientLifecycleState::EXPIRED,
+                ClientLifecycleState::ARCHIVED,
+            ])
+            ->orderBy('id');
+    }
+
+    private function deactivateAndVerify(
+        Client $client,
+        WpSyncService $wp,
+        ClientSyncService $sync,
+        ?int $actorId,
+        string $eventType,
+        array $eventContent,
+    ): Client {
+        $wpPostId = (int) ($client->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            throw new \InvalidArgumentException('Client is not linked to a WordPress profile.');
+        }
+
+        $wp->deactivateClient($wpPostId);
+        $synced = $sync->syncOne($wpPostId);
+
+        if ((string) $synced->profile_status !== 'private') {
+            throw new \RuntimeException(sprintf(
+                'WordPress still reports post_status=%s after deactivate.',
+                (string) $synced->profile_status
+            ));
+        }
+
+        Client::withoutRetentionRefresh(function () use ($synced): void {
+            $synced->forceFill([
+                'profile_status' => 'private',
+                'lifecycle_state' => ClientLifecycleState::ACTIVE,
+                'lifecycle_expired_at' => null,
+                'lifecycle_archived_at' => null,
+                'lifecycle_restored_at' => null,
+                'lifecycle_restore_run_id' => null,
+            ])->save();
+        });
+
+        TimelineEvent::create([
+            'platform_id' => (int) $synced->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $synced->id,
+            'event_type' => $eventType,
+            'actor_id' => $actorId,
+            'content' => $eventContent,
+            'created_at' => now(),
+        ]);
+
+        return $synced->fresh(['platform']) ?? $synced;
     }
 
     /**
