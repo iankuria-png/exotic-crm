@@ -34,7 +34,10 @@ class ClientSeoPlaceholderService
             ->where(function (Builder $builder): void {
                 $builder->whereNull('notactive')->orWhere('notactive', false);
             })
-            ->where('lifecycle_state', ClientLifecycleState::EXPIRED)
+            ->whereIn('lifecycle_state', [
+                ClientLifecycleState::ACTIVE,
+                ClientLifecycleState::EXPIRED,
+            ])
             ->whereNull('lifecycle_restored_at')
             ->where('wp_post_id', '>', 0)
             ->whereNull('closed_at')
@@ -79,7 +82,10 @@ class ClientSeoPlaceholderService
             return false;
         }
 
-        if (($client->lifecycle_state ?? ClientLifecycleState::ACTIVE) !== ClientLifecycleState::EXPIRED) {
+        if (! in_array(($client->lifecycle_state ?? ClientLifecycleState::ACTIVE), [
+            ClientLifecycleState::ACTIVE,
+            ClientLifecycleState::EXPIRED,
+        ], true)) {
             return false;
         }
 

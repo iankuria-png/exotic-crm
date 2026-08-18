@@ -392,6 +392,14 @@ function isSeoPlaceholderCandidate(client) {
     return Boolean(client?.seo_placeholder_candidate);
 }
 
+function isExpiredPublicCandidate(client) {
+    return String(client?.expiry_state || '') === 'expired_public';
+}
+
+function isBulkDeactivationCandidate(client) {
+    return isExpiredPublicCandidate(client) || Boolean(client?.can_bulk_deactivate_without_subscription);
+}
+
 function formatSeenTimestamp(unixTs) {
     const ts = Number(unixTs || 0);
     if (!ts) return '';
@@ -1237,7 +1245,7 @@ export default function Clients() {
             getDisabledReason: (rowsSelection) => (
                 rowsSelection.some(isSeoPlaceholderCandidate)
                     ? undefined
-                    : 'None of the selected clients match the SEO placeholder guard.'
+                    : 'None of the selected clients match the SEO placeholder guard. Check the March import window, no-expiry, no-payment, no-history criteria.'
             ),
         }] : []),
         ...(canCloseCases ? [{
@@ -1257,11 +1265,11 @@ export default function Clients() {
                 setBulkExpireSelection(rowsSelection);
                 setShowBulkExpireConfirm(true);
             },
-            isDisabled: (rowsSelection) => !rowsSelection.some((row) => String(row.expiry_state || '') === 'expired_public'),
+            isDisabled: (rowsSelection) => !rowsSelection.some(isBulkDeactivationCandidate),
             getDisabledReason: (rowsSelection) => (
-                rowsSelection.some((row) => String(row.expiry_state || '') === 'expired_public')
+                rowsSelection.some(isBulkDeactivationCandidate)
                     ? undefined
-                    : 'None of the selected clients are past their expiry. Use the “Expired (still public)” status filter to find them.'
+                    : 'None of the selected clients are past expiry or safe no-subscription/no-expiry profiles.'
             ),
         }] : []),
     ];
@@ -2597,17 +2605,19 @@ export default function Clients() {
             </ConfirmDialog>
 
             {(() => {
-                const eligible = bulkExpireSelection.filter((row) => String(row.expiry_state || '') === 'expired_public');
+                const eligible = bulkExpireSelection.filter(isBulkDeactivationCandidate);
                 const skipped = bulkExpireSelection.length - eligible.length;
                 const BULK_EXPIRE_CAP = 100;
                 const toProcess = eligible.slice(0, BULK_EXPIRE_CAP);
                 const overCap = eligible.length - toProcess.length;
+                const expiredPublicCount = toProcess.filter(isExpiredPublicCandidate).length;
+                const noSubscriptionCount = toProcess.filter((row) => !isExpiredPublicCandidate(row) && Boolean(row?.can_bulk_deactivate_without_subscription)).length;
 
                 return (
                     <ConfirmDialog
                         open={showBulkExpireConfirm}
                         title="Expire selected clients"
-                        message="Only clients that are past their expiry but still public will be set to private in WordPress. Active and not-yet-expired clients are skipped automatically."
+                        message="Selected expired-public profiles will be expired. Selected public forever/no-expiry profiles with no CRM deal or payment history will be taken private through the same WordPress deactivation path used on the client page."
                         tone="warning"
                         confirmLabel={`Expire ${toProcess.length} profile${toProcess.length === 1 ? '' : 's'}`}
                         confirmDisabled={toProcess.length === 0 || bulkExpireMutation.isPending}
@@ -2631,12 +2641,24 @@ export default function Clients() {
                     >
                         <div className="space-y-2 text-sm">
                             <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                <span>Will be expired (past expiry, still public)</span>
+                                <span>Will be expired or taken private</span>
                                 <span className="font-semibold">{toProcess.length.toLocaleString()}</span>
                             </div>
+                            {expiredPublicCount > 0 ? (
+                                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                                    <span>Past expiry / lifecycle expiry</span>
+                                    <span className="font-semibold">{expiredPublicCount.toLocaleString()}</span>
+                                </div>
+                            ) : null}
+                            {noSubscriptionCount > 0 ? (
+                                <div className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                                    <span>No-expiry, no-history profiles</span>
+                                    <span className="font-semibold">{noSubscriptionCount.toLocaleString()}</span>
+                                </div>
+                            ) : null}
                             {skipped > 0 ? (
                                 <div className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                                    <span>Skipped (not past expiry)</span>
+                                    <span>Skipped by guard</span>
                                     <span className="font-semibold">{skipped.toLocaleString()}</span>
                                 </div>
                             ) : null}
@@ -2661,7 +2683,7 @@ export default function Clients() {
                     <ConfirmDialog
                         open={showBulkSeoPrivateConfirm}
                         title="Take SEO placeholders private"
-                        message="Only selected clients that match the SEO placeholder guard will be set private in WordPress. Paid profiles, profiles with images, profiles with expiry dates, and CRM-provisioned clients are skipped automatically."
+                        message="Only selected clients that match the SEO placeholder guard will be set private in WordPress. Paid profiles, profiles with expiry dates, CRM-provisioned clients, and engine-restored SEO Recovery profiles are skipped automatically."
                         tone="warning"
                         confirmLabel={`Take ${toProcess.length} private`}
                         confirmDisabled={toProcess.length === 0 || bulkSeoPrivateMutation.isPending}

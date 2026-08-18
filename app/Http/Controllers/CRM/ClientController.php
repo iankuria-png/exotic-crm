@@ -54,6 +54,7 @@ use App\Support\PhoneNormalizer;
 use App\Support\WpProfileFieldCatalog;
 use App\Support\WpProfileFieldValidator;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -349,9 +350,7 @@ class ClientController extends Controller
             $this->applyClientSort($query, $sortBy, $sortDirection);
 
             $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
-            $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
-            $this->decorateLifetimeValue($clients->getCollection());
-            $this->clientSeoPlaceholderService->annotate($clients->getCollection());
+            $this->decorateClientListRows($clients->getCollection());
 
             $payload = $clients->toArray();
         }
@@ -389,9 +388,7 @@ class ClientController extends Controller
             $this->applyClientSort($fallbackQuery, 'updated_at', 'desc');
 
             $clients = $fallbackQuery->paginate($perPage);
-            $clients->getCollection()->each(fn (Client $client) => $this->decorateExpiryState($client));
-            $this->decorateLifetimeValue($clients->getCollection());
-            $this->clientSeoPlaceholderService->annotate($clients->getCollection());
+            $this->decorateClientListRows($clients->getCollection());
 
             $payload = $clients->toArray();
             $payload['meta'] = array_merge($payload['meta'] ?? [], [
@@ -441,9 +438,7 @@ class ClientController extends Controller
             ->sortBy(fn (Client $client) => $order[(int) $client->id] ?? PHP_INT_MAX)
             ->values();
 
-        $clients->each(fn (Client $client) => $this->decorateExpiryState($client));
-        $this->decorateLifetimeValue($clients);
-        $this->clientSeoPlaceholderService->annotate($clients);
+        $this->decorateClientListRows($clients);
 
         $paginator = new LengthAwarePaginator(
             $clients,
@@ -1107,9 +1102,9 @@ class ClientController extends Controller
     }
 
     /**
-     * Bulk force-expire selected clients. Only clients that are genuinely past
-     * their expiry but still public are deactivated (the reconciler's isStuck
-     * guard); ineligible or unauthorized clients are reported, not acted on.
+     * Bulk force-expire selected clients. Profiles that are genuinely past their
+     * expiry still use the reconciler; public no-expiry/no-history profiles use
+     * the same WordPress deactivation path as the individual client page.
      */
     public function bulkExpire(Request $request)
     {
@@ -1118,7 +1113,9 @@ class ClientController extends Controller
             'client_ids.*' => 'integer|exists:clients,id',
         ]);
 
-        $clients = Client::with('platform')->whereIn('id', $validated['client_ids'])->get();
+        $clients = Client::with(['platform', 'activeDeal', 'deals:id,client_id', 'payments:id,client_id'])
+            ->whereIn('id', $validated['client_ids'])
+            ->get();
 
         $authorized = collect();
         $unauthorizedIds = [];
@@ -1131,32 +1128,98 @@ class ClientController extends Controller
             }
         }
 
-        $actorId = (int) optional($request->user())->id;
-        $outcome = $this->expiredSubscriptionReconciler->reconcileMany($authorized, $actorId ?: null);
+        $actorId = (int) optional($request->user())->id ?: null;
+        $outcome = [
+            'results' => [],
+            'summary' => ['total' => 0, 'expired' => 0, 'skipped' => 0, 'failed' => 0],
+        ];
 
-        // Audit each deactivated profile against its own market.
-        $byId = $authorized->keyBy('id');
-        foreach ($outcome['results'] as $row) {
-            if (($row['action'] ?? null) !== 'expired') {
-                continue;
+        foreach ($authorized as $client) {
+            $outcome['summary']['total']++;
+
+            try {
+                if ($this->expiredSubscriptionReconciler->isStuck($client)) {
+                    $row = $this->expiredSubscriptionReconciler->reconcileClient($client, $actorId, false);
+                    $outcome['results'][] = $row;
+
+                    if (($row['action'] ?? null) === 'expired') {
+                        $outcome['summary']['expired']++;
+                        $this->auditService->fromRequest(
+                            $request,
+                            (int) $client->platform_id,
+                            CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+                            'client',
+                            (int) $client->id,
+                            null,
+                            [
+                                'profile_status' => 'private',
+                                'deactivation_scope' => 'expired_subscription_reconcile_bulk',
+                            ],
+                            'Bulk force-expired stuck profile (past WP expiry)'
+                        );
+                    } else {
+                        $outcome['summary']['skipped']++;
+                    }
+
+                    continue;
+                }
+
+                if (! $this->canBulkDeactivateNoSubscriptionClient($client)) {
+                    $outcome['summary']['skipped']++;
+                    $outcome['results'][] = [
+                        'client_id' => (int) $client->id,
+                        'action' => 'not_expired',
+                        'reason' => 'Client is not past expiry and is not a no-expiry/no-history public profile.',
+                    ];
+
+                    continue;
+                }
+
+                $beforeState = $this->clientBulkDeactivationState($client);
+                $deactivationRequest = new DeactivationRequest(
+                    DealDeactivationReason::OTHER,
+                    'Bulk deactivated no-subscription profile from clients page'
+                );
+
+                DB::beginTransaction();
+                try {
+                    $fresh = $this->clientSubscriptionDeactivationService->deactivate($client, $deactivationRequest, $actorId);
+                    $this->auditService->fromRequest(
+                        $request,
+                        (int) $fresh->platform_id,
+                        CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+                        'client',
+                        (int) $fresh->id,
+                        $beforeState,
+                        array_merge($this->clientBulkDeactivationState($fresh), [
+                            'deactivation_scope' => 'bulk_client_wp_subscription',
+                        ]),
+                        $deactivationRequest->auditReason()
+                    );
+                    DB::commit();
+                } catch (\Throwable $exception) {
+                    DB::rollBack();
+                    throw $exception;
+                }
+
+                $outcome['summary']['expired']++;
+                $outcome['results'][] = [
+                    'client_id' => (int) $fresh->id,
+                    'wp_post_id' => (int) ($fresh->wp_post_id ?? 0),
+                    'platform_id' => (int) $fresh->platform_id,
+                    'market' => $fresh->platform?->name ?? (string) $fresh->platform_id,
+                    'name' => (string) $fresh->name,
+                    'action' => 'expired',
+                    'mode' => 'no_subscription_deactivated',
+                ];
+            } catch (\Throwable $exception) {
+                $outcome['summary']['failed']++;
+                $outcome['results'][] = [
+                    'client_id' => (int) $client->id,
+                    'action' => 'failed',
+                    'error' => $exception->getMessage(),
+                ];
             }
-            $client = $byId->get($row['client_id']);
-            if (! $client) {
-                continue;
-            }
-            $this->auditService->fromRequest(
-                $request,
-                (int) $client->platform_id,
-                CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
-                'client',
-                (int) $client->id,
-                null,
-                [
-                    'profile_status' => 'private',
-                    'deactivation_scope' => 'expired_subscription_reconcile_bulk',
-                ],
-                'Bulk force-expired stuck profile (past WP expiry)'
-            );
         }
 
         foreach ($unauthorizedIds as $unauthorizedId) {
@@ -1199,6 +1262,94 @@ class ClientController extends Controller
         foreach ($subscriptionAction as $key => $value) {
             $client->setAttribute($key, $value);
         }
+    }
+
+    private function decorateClientListRows($clients): void
+    {
+        $collection = $clients instanceof EloquentCollection
+            ? $clients
+            : new EloquentCollection($clients->all());
+
+        $collection->loadMissing(['activeDeal:id,client_id,status', 'deals:id,client_id', 'payments:id,client_id']);
+
+        $collection->each(fn (Client $client) => $this->decorateExpiryState($client));
+        $this->decorateLifetimeValue($collection);
+        $this->clientSeoPlaceholderService->annotate($collection);
+
+        $collection->each(function (Client $client): void {
+            $this->appendSubscriptionActionMetadata($client);
+            $client->setAttribute(
+                'can_bulk_deactivate_without_subscription',
+                $this->canBulkDeactivateNoSubscriptionClient($client)
+            );
+        });
+    }
+
+    private function canBulkDeactivateNoSubscriptionClient(Client $client): bool
+    {
+        if ((string) $client->profile_status !== 'publish') {
+            return false;
+        }
+
+        if ((bool) $client->needs_payment || (bool) $client->notactive) {
+            return false;
+        }
+
+        if (($client->lifecycle_state ?? ClientLifecycleState::ACTIVE) !== ClientLifecycleState::ACTIVE) {
+            return false;
+        }
+
+        if ((int) ($client->wp_post_id ?? 0) <= 0 || $client->closed_at !== null) {
+            return false;
+        }
+
+        if ((int) ($client->escort_expire ?? 0) > 0
+            || (int) ($client->premium_expire ?? 0) > 0
+            || (int) ($client->featured_expire ?? 0) > 0) {
+            return false;
+        }
+
+        if ($client->relationLoaded('activeDeal') && $client->activeDeal !== null) {
+            return false;
+        }
+
+        if (! $client->relationLoaded('activeDeal') && $client->activeDeal()->exists()) {
+            return false;
+        }
+
+        if ($client->relationLoaded('deals') && $client->deals->isNotEmpty()) {
+            return false;
+        }
+
+        if (! $client->relationLoaded('deals') && $client->deals()->exists()) {
+            return false;
+        }
+
+        if ($client->relationLoaded('payments') && $client->payments->isNotEmpty()) {
+            return false;
+        }
+
+        if (! $client->relationLoaded('payments') && $client->payments()->exists()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function clientBulkDeactivationState(Client $client): array
+    {
+        return [
+            'profile_status' => $client->profile_status,
+            'lifecycle_state' => $client->lifecycle_state,
+            'needs_payment' => (bool) $client->needs_payment,
+            'notactive' => (bool) $client->notactive,
+            'premium' => (bool) $client->premium,
+            'featured' => (bool) $client->featured,
+            'escort_expire' => $client->escort_expire,
+            'premium_expire' => $client->premium_expire,
+            'featured_expire' => $client->featured_expire,
+            'wp_post_id' => $client->wp_post_id,
+        ];
     }
 
     public function deletePreview(Request $request, Client $client)

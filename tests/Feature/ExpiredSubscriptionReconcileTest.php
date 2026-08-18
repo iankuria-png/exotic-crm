@@ -6,7 +6,6 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\ExpiryReconciliationRun;
 use App\Models\Platform;
-use App\Models\TimelineEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -258,6 +257,47 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         $this->assertSame('active', $active->fresh()->lifecycle_state);
     }
 
+    public function test_client_list_marks_no_expiry_no_history_profiles_for_bulk_deactivation(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createNoExpiryNoHistoryClient($platform, 124011);
+
+        Sanctum::actingAs($this->createAuthorizedUser($platform));
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&plan=no-active-subscription")
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonPath('data.0.can_deactivate_without_deal', true)
+            ->assertJsonPath('data.0.can_bulk_deactivate_without_subscription', true);
+    }
+
+    public function test_bulk_expire_deactivates_no_expiry_no_history_public_profiles(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createNoExpiryNoHistoryClient($platform, 124011);
+
+        $this->fakeWpLegacyOffline($platform, 124011);
+
+        Sanctum::actingAs($this->createAuthorizedUser($platform));
+
+        $this->postJson('/api/crm/clients/bulk-expire', [
+            'client_ids' => [$client->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('summary.total', 1)
+            ->assertJsonPath('summary.expired', 1)
+            ->assertJsonPath('summary.skipped', 0)
+            ->assertJsonPath('summary.failed', 0)
+            ->assertJsonPath('results.0.mode', 'no_subscription_deactivated');
+
+        $fresh = $client->fresh();
+        $this->assertSame('private', $fresh->profile_status);
+        $this->assertTrue((bool) $fresh->needs_payment);
+
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::assertSent(fn ($request) => $request->url() === "{$base}/clients/124011/deactivate");
+    }
+
     public function test_bulk_expire_reports_clients_outside_the_reps_market(): void
     {
         $platform = $this->createPlatform();
@@ -268,7 +308,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
 
         $sales = User::query()->create([
             'name' => 'Scoped Sales',
-            'email' => 'scoped-' . Str::random(6) . '@example.test',
+            'email' => 'scoped-'.Str::random(6).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
@@ -294,11 +334,28 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
             'wp_user_id' => $wpPostId + 1000,
-            'name' => 'Judy ' . $wpPostId,
+            'name' => 'Judy '.$wpPostId,
             'profile_status' => 'publish',
             'needs_payment' => false,
             'notactive' => false,
             'escort_expire' => now()->subDays(3)->timestamp,
+        ]);
+    }
+
+    private function createNoExpiryNoHistoryClient(Platform $platform, int $wpPostId): Client
+    {
+        return Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => $wpPostId,
+            'wp_user_id' => $wpPostId + 1000,
+            'name' => 'Forever '.$wpPostId,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'lifecycle_state' => 'active',
+            'escort_expire' => null,
+            'premium_expire' => null,
+            'featured_expire' => null,
         ]);
     }
 
@@ -312,7 +369,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             "{$base}/clients/{$wpPostId}" => Http::response([
                 'wp_post_id' => $wpPostId,
                 'wp_user_id' => $wpPostId + 1000,
-                'name' => 'Judy ' . $wpPostId,
+                'name' => 'Judy '.$wpPostId,
                 'phone' => '+255700000000',
                 'city' => 'Kigamboni',
                 'post_status' => 'private',
@@ -342,7 +399,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             "{$base}/clients/{$wpPostId}" => Http::response([
                 'wp_post_id' => $wpPostId,
                 'wp_user_id' => $wpPostId + 1000,
-                'name' => 'Judy ' . $wpPostId,
+                'name' => 'Judy '.$wpPostId,
                 'phone' => '+255700000000',
                 'email' => "judy{$wpPostId}@example.test",
                 'city' => 'Kigamboni',
@@ -366,7 +423,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
     {
         return Platform::query()->create([
             'name' => 'Tanzania Market',
-            'domain' => 'tz-' . Str::random(6) . '.example.test',
+            'domain' => 'tz-'.Str::random(6).'.example.test',
             'country' => 'Tanzania',
             'timezone' => 'Africa/Dar_es_Salaam',
             'phone_prefix' => '255',
@@ -383,7 +440,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
     {
         return User::query()->create([
             'name' => 'Reconcile Admin',
-            'email' => 'reconcile-' . Str::random(6) . '@example.test',
+            'email' => 'reconcile-'.Str::random(6).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'assigned_market_ids' => [$platform->id],

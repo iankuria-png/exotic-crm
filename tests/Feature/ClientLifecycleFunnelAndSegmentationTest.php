@@ -113,6 +113,7 @@ class ClientLifecycleFunnelAndSegmentationTest extends TestCase
             'profile_status' => 'publish',
             'needs_payment' => false,
             'notactive' => false,
+            'escort_expire' => now()->addDays(30)->timestamp,
         ]);
         $this->createClient($platform, [
             'name' => 'Suspended Segment',

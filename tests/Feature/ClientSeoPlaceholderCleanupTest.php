@@ -38,8 +38,8 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
             'name' => 'Has Expiry',
             'escort_expire' => now()->addDays(30)->timestamp,
         ]);
-        $activeForever = $this->createPlaceholderClient($platform, [
-            'name' => 'Active Forever',
+        $activeForeverPlaceholder = $this->createPlaceholderClient($platform, [
+            'name' => 'Active Forever Placeholder',
             'lifecycle_state' => ClientLifecycleState::ACTIVE,
         ]);
         $outsideWindow = $this->createPlaceholderClient($platform, [
@@ -65,14 +65,16 @@ class ClientSeoPlaceholderCleanupTest extends TestCase
         $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&segment=seo_placeholder");
 
         $response->assertOk()
-            ->assertJsonPath('stats.segments.seo_placeholder', 1)
-            ->assertJsonCount(1, 'data')
-            ->assertJsonPath('data.0.id', $placeholder->id)
-            ->assertJsonPath('data.0.seo_placeholder_candidate', true);
+            ->assertJsonPath('stats.segments.seo_placeholder', 2)
+            ->assertJsonCount(2, 'data');
+
+        $returnedIds = collect($response->json('data'))->pluck('id')->all();
+        $this->assertContains($placeholder->id, $returnedIds);
+        $this->assertContains($activeForeverPlaceholder->id, $returnedIds);
+        $this->assertTrue((bool) collect($response->json('data'))->firstWhere('id', $placeholder->id)['seo_placeholder_candidate']);
 
         $this->assertFalse((bool) $engineRecovered->fresh()->seo_placeholder_candidate);
         $this->assertFalse((bool) $withExpiry->fresh()->seo_placeholder_candidate);
-        $this->assertFalse((bool) $activeForever->fresh()->seo_placeholder_candidate);
         $this->assertFalse((bool) $outsideWindow->fresh()->seo_placeholder_candidate);
         $this->assertFalse((bool) $crmProvisioned->fresh()->seo_placeholder_candidate);
     }
