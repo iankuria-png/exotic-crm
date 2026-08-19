@@ -24,10 +24,10 @@ class FeedbackInsightService
     /** Tag → natural-language editor instruction. */
     private const TAG_INSTRUCTIONS = [
         'too_long'        => 'Editors keep flagging bios as too long. Stay near the lower end of the word range.',
-        'too_short'       => 'Editors keep flagging bios as too short. Use the full word range.',
-        'too_generic'     => 'Editors flag generic copy. Use specific, profile-driven details and avoid stock phrases.',
+        'too_short'       => 'Editors keep flagging bios as too short. Use the full word range with grounded details, not filler.',
+        'too_generic'     => 'Editors flag generic copy. Use specific profile facts and avoid stock phrases like keep things simple, real connection, good conversation, no games, and see if we click.',
         'off_tone'        => 'Editors flag the tone. Lean more toward the configured tone descriptor.',
-        'repetitive'      => 'Editors flag repetition. Vary sentence openings, verbs, and structure.',
+        'repetitive'      => 'Editors flag repetition. Vary sentence openings, verbs, paragraph shape, and the core angle.',
         'missing_contact' => 'Editors expect a contact mention. Include the configured contact channel naturally.',
         'too_formal'      => 'Editors find the copy too formal. Use everyday phrasing, contractions, and warmth.',
         'too_casual'      => 'Editors find the copy too casual. Polish the phrasing without becoming corporate.',

@@ -78,10 +78,10 @@ class BioGenerationService
     public const REFINEMENT_PRESETS = [
         'longer' => [
             'label' => 'Make it longer',
-            'min_words_delta' => 30,
-            'max_words_delta' => 50,
-            'max_chars_delta' => 250,
-            'prompt_addendum' => 'Lengthen the previous bio with more grounded details; do not pad with filler.',
+            'min_words_delta' => 45,
+            'max_words_delta' => 75,
+            'max_chars_delta' => 420,
+            'prompt_addendum' => 'Lengthen the previous bio with more grounded, profile-specific detail. Add a distinct angle, a second scene, or service context. Do not pad with slogans.',
         ],
         'shorter' => [
             'label' => 'Make it shorter',
@@ -342,10 +342,14 @@ Style rules:
 - Make this profile feel specific, alive, and a little witty. Let sentence length vary.
 - Be specific and factual. Prefer short sentences.
 - Do not invent services, locations, contact details, nationality, measurements, or claims.
+- Do not open with name, age, or "Meet Name" unless the selected facts give no better angle.
+- Avoid mentioning age in the bio unless the editor explicitly asks for it.
 - Do not describe ethnicity, race, skin color, or racialized color labels in the bio.
 - Do not mention height or body measurements in the bio; these already appear in profile facts.
 - Avoid formulaic AI rhythm: "No X, no Y. Just Z.", "No games, no wasting time.", not only X but also Y, not just X but Y, rule-of-three adjective strings, puffed-up claims, and essay-like transitions.
 - Do not use canned contrast punchlines like "No chaos, no overthinking. Just good company and a better vibe.", "No scripts, no fake attitude.", or "The rest is where things get interesting."
+- Do not use these overused corpus phrases or close variants: "keep things simple", "keep things real", "good conversation", "real connection", "genuine connection", "down-to-earth", "easy to talk to", "see if we click", "knows what she wants", "schedule is flexible".
+- Do not make WhatsApp/contact the closing punchline unless contact is the only useful differentiator.
 - Avoid dash/hyphen punctuation inside sentences. Use a comma or a new sentence instead.
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji, no Unicode symbols.
@@ -554,11 +558,11 @@ PROMPT;
     private function formatDirective(string $format): string
     {
         return match ($format) {
-            'first_person_intro' => 'Use first person. Let the profile speak directly as "I" with a natural, human opener.',
-            'service_first' => 'Lead with the most relevant service or experience, then bring in personality and location.',
-            'personality_first' => 'Lead with personality, mood, wit, or attitude before services.',
-            'location_first' => 'Lead with city or neighborhood in a grounded way, then make the person feel distinct.',
-            default => 'Use third person, but avoid a stiff directory template. Keep it intimate and specific.',
+            'first_person_intro' => 'Use first person. Open with a specific mood, habit, or promise, not "I am Name" or an age line.',
+            'service_first' => 'Lead with the most relevant service or experience using a concrete detail, then bring in personality and location.',
+            'personality_first' => 'Lead with personality, mood, wit, or attitude before services. Avoid stock confidence phrases.',
+            'location_first' => 'Lead with city or neighborhood in a grounded way, then make the person feel distinct without sounding like a directory entry.',
+            default => 'Use third person, but avoid a stiff directory template and avoid "Meet Name" openings. Keep it intimate and specific.',
         };
     }
 

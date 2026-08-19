@@ -33,8 +33,11 @@ class BioUniquenessAnalyzer
             '/\brather than\b/i',
         ],
         'stock_seduction' => [
+            '/\bkeep(?:s|ing)?\s+things\s+(?:simple|real|easy|honest|straightforward)\b/i',
             '/\bno games\b/i',
             '/\bno wasting time\b/i',
+            '/\bno rush\b/i',
+            '/\bno pressure\b/i',
             '/\bno scripts\b/i',
             '/\bfake attitude\b/i',
             '/\bshe is the one\b/i',
@@ -43,6 +46,14 @@ class BioUniquenessAnalyzer
             '/\bon (?:his|your) toes\b/i',
             '/\band so is (?:the|her|his)\b/i',
             '/\bbetter vibe\b/i',
+            '/\b(?:real|genuine)\s+connection\b/i',
+            '/\bgood conversation\b/i',
+            '/\bdown[- ]to[- ]earth\b/i',
+            '/\beasy to talk to\b/i',
+            '/\bsee if (?:we|it) clicks?\b/i',
+            '/\bknows? what (?:she|i) want\b/i',
+            '/\bschedule is flexible\b/i',
+            '/\bthe rest is where things get interesting\b/i',
         ],
         'puffery' => [
             '/\bserves as\b/i',
@@ -117,7 +128,7 @@ class BioUniquenessAnalyzer
 
         $flags = $flags !== '' ? $flags : 'repeated wording and formulaic rhythm';
 
-        return "Rewrite the draft once to improve uniqueness. Preserve the facts, sensual human voice, language, and length. Change sentence openings, rhythm, angle, and repeated phrases. Avoid these flagged patterns: {$flags}.";
+        return "Rewrite the draft once to improve uniqueness. Preserve the facts, sensual human voice, language, and target length. Change the opening angle, sentence rhythm, verbs, and paragraph shape. Do not use name/age as the opener. Avoid these flagged patterns: {$flags}.";
     }
 
     private function overuseScore(string $text, Collection $corpus, array $ignored, string $sensitivity): array

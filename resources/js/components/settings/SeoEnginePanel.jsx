@@ -86,6 +86,8 @@ export default function SeoEnginePanel() {
     const [testResults, setTestResults] = useState({});
     const [balances, setBalances] = useState({});
     const [refreshingBalance, setRefreshingBalance] = useState(null);
+    const [auditPlatformId, setAuditPlatformId] = useState('');
+    const [auditSource, setAuditSource] = useState('all');
 
     // Hydrate form when settings load
     useEffect(() => {
@@ -93,6 +95,19 @@ export default function SeoEnginePanel() {
             setForm(formFromConfig(settingsQuery.data.config));
         }
     }, [settingsQuery.data, form]);
+
+    const qualityAuditQuery = useQuery({
+        queryKey: ['seo-quality-audit', auditPlatformId, auditSource],
+        queryFn: () => api.get('/crm/seo/quality-audit', {
+            params: {
+                source: auditSource,
+                limit: 300,
+                ...(auditPlatformId ? { platform_id: auditPlatformId } : {}),
+            },
+        }).then((r) => r.data),
+        enabled: !!form,
+        staleTime: 60_000,
+    });
 
     const saveMutation = useMutation({
         mutationFn: (payload) => api.patch('/crm/settings/seo-engine', payload).then((r) => r.data),
@@ -390,6 +405,18 @@ export default function SeoEnginePanel() {
                 onChange={(next) => setForm((f) => ({ ...f, generation: next }))}
             />
 
+            <BioQualityAuditCard
+                platforms={platforms}
+                selectedPlatformId={auditPlatformId}
+                onPlatformChange={setAuditPlatformId}
+                source={auditSource}
+                onSourceChange={setAuditSource}
+                data={qualityAuditQuery.data}
+                loading={qualityAuditQuery.isFetching}
+                error={qualityAuditQuery.error}
+                onRefresh={() => qualityAuditQuery.refetch()}
+            />
+
             {/* === Save bar === */}
             <div className="sticky bottom-4 flex justify-end">
                 <button
@@ -403,6 +430,192 @@ export default function SeoEnginePanel() {
             </div>
         </div>
     );
+}
+
+function BioQualityAuditCard({
+    platforms,
+    selectedPlatformId,
+    onPlatformChange,
+    source,
+    onSourceChange,
+    data,
+    loading,
+    error,
+    onRefresh,
+}) {
+    const summary = data?.summary || {};
+    const platformRows = data?.platforms || [];
+    const detailRows = selectedPlatformId ? [summary].filter((item) => item?.sample_size) : platformRows.slice(0, 8);
+    const issueSummary = selectedPlatformId
+        ? summary
+        : platformRows.find((row) => (row?.top_slop_flags || []).length || (row?.top_repetition_flags || []).length);
+
+    return (
+        <section className="crm-surface p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h3 className="text-base font-semibold text-slate-900">Bio quality audit</h3>
+                    <p className="mt-1 text-sm text-slate-600">
+                        Scan country-level bio quality for repeated openings, AI-ish phrasing, thin copy, ethnicity leakage, and punctuation artifacts.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={onRefresh}
+                    disabled={loading}
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                    {loading ? 'Scanning...' : 'Refresh scan'}
+                </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px_150px]">
+                <label className="block">
+                    <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Market</span>
+                    <select
+                        value={selectedPlatformId}
+                        onChange={(e) => onPlatformChange(e.target.value)}
+                        className="mt-1 w-full rounded-md border-slate-300 text-sm focus:border-teal-500 focus:ring-teal-500"
+                    >
+                        <option value="">All markets</option>
+                        {platforms.map((platform) => (
+                            <option key={platform.id} value={platform.id}>
+                                {platform.name} {platform.country ? `· ${platform.country}` : ''}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <label className="block">
+                    <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Source</span>
+                    <select
+                        value={source}
+                        onChange={(e) => onSourceChange(e.target.value)}
+                        className="mt-1 w-full rounded-md border-slate-300 text-sm focus:border-teal-500 focus:ring-teal-500"
+                    >
+                        <option value="all">Live + generated</option>
+                        <option value="accepted">Accepted generated</option>
+                        <option value="generated">All generated</option>
+                        <option value="live">Live client bios</option>
+                    </select>
+                </label>
+                <div>
+                    <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Sample</span>
+                    <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                        {summary.sample_size || 0} bios
+                    </div>
+                </div>
+            </div>
+
+            {error ? (
+                <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                    Could not run the quality audit.
+                </div>
+            ) : null}
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <MetricTile label="Quality" value={summary.quality_score ?? 0} suffix="/100" band={summary.quality_band} />
+                <MetricTile label="AI-likeness" value={summary.ai_likeness_score ?? 0} suffix="/100" dangerHigh />
+                <MetricTile label="Repetition" value={summary.repetition_score ?? 0} suffix="/100" dangerHigh />
+                <MetricTile label="Slop patterns" value={summary.slop_score ?? 0} suffix="/100" dangerHigh />
+            </div>
+
+            {detailRows.length > 0 ? (
+                <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead className="bg-slate-50 text-xs uppercase tracking-[0.08em] text-slate-500">
+                            <tr>
+                                <th className="px-3 py-2 text-left font-semibold">Market</th>
+                                <th className="px-3 py-2 text-left font-semibold">Score</th>
+                                <th className="px-3 py-2 text-left font-semibold">AI-like</th>
+                                <th className="px-3 py-2 text-left font-semibold">Name/Age</th>
+                                <th className="px-3 py-2 text-left font-semibold">Top issue</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                            {detailRows.map((row) => {
+                                const topIssue = row.top_slop_flags?.[0]?.label || row.top_repetition_flags?.[0]?.label || 'No major pattern';
+                                return (
+                                    <tr key={row.platform_id || 'summary'}>
+                                        <td className="px-3 py-2 font-medium text-slate-800">{row.platform_name || row.country || 'All markets'}</td>
+                                        <td className="px-3 py-2"><QualityPill score={row.quality_score} band={row.quality_band} /></td>
+                                        <td className="px-3 py-2 text-slate-700">{row.ai_likeness_score}/100</td>
+                                        <td className="px-3 py-2 text-slate-700">
+                                            {formatPercent(row.metrics?.name_intro_rate)} / {formatPercent(row.metrics?.age_mention_rate)}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-600">{topIssue}</td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            ) : null}
+
+            {issueSummary ? (
+                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <IssueList title="Repeated structures" items={issueSummary.top_repetition_flags || []} />
+                    <IssueList title="AI-ish patterns" items={issueSummary.top_slop_flags || []} />
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+function MetricTile({ label, value, suffix = '', band, dangerHigh = false }) {
+    const numeric = Number(value || 0);
+    const color = dangerHigh
+        ? (numeric >= 65 ? 'text-rose-700' : numeric >= 35 ? 'text-amber-700' : 'text-emerald-700')
+        : (numeric >= 80 ? 'text-emerald-700' : numeric >= 60 ? 'text-amber-700' : 'text-rose-700');
+
+    return (
+        <div className="rounded-md border border-slate-200 bg-white p-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</div>
+            <div className={`mt-1 text-2xl font-bold ${color}`}>{numeric}{suffix}</div>
+            {band ? <div className="mt-1 text-xs text-slate-500">{band}</div> : null}
+        </div>
+    );
+}
+
+function QualityPill({ score = 0, band = 'none' }) {
+    const numeric = Number(score || 0);
+    const color = numeric >= 80
+        ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+        : numeric >= 60
+            ? 'bg-amber-50 text-amber-700 ring-amber-200'
+            : 'bg-rose-50 text-rose-700 ring-rose-200';
+
+    return (
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${color}`}>
+            {numeric}/100 {band}
+        </span>
+    );
+}
+
+function IssueList({ title, items }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{title}</h4>
+            {items.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500">No strong pattern detected.</p>
+            ) : (
+                <ul className="mt-2 space-y-1.5">
+                    {items.slice(0, 8).map((item, index) => (
+                        <li key={`${item.label || item.term}-${index}`} className="flex items-center justify-between gap-3 text-sm">
+                            <span className="min-w-0 truncate text-slate-700">{item.label || item.term}</span>
+                            <span className="shrink-0 text-xs font-semibold text-slate-500">
+                                {item.rate != null ? formatPercent(item.rate) : formatPercent(item.corpus_rate)}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+function formatPercent(value) {
+    const numeric = Number(value || 0);
+    return `${Math.round(numeric * 100)}%`;
 }
 
 function providerPayload(provider = {}) {

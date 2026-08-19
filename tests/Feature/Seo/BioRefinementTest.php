@@ -68,8 +68,9 @@ class BioRefinementTest extends TestCase
 
         $this->assertNotNull($captured);
         $systemPrompt = $captured['messages'][0]['content'] ?? '';
-        // Default range 60-90, +30/+50 would be 90-140, but 950 chars safely clamps max words to 131.
-        $this->assertStringContainsString('90-131', $systemPrompt);
+        // Default range 60-90, +45/+75 gives the model enough room to actually lengthen.
+        $this->assertStringContainsString('105-155', $systemPrompt);
+        $this->assertStringContainsString('1120 characters', $systemPrompt);
     }
 
     public function test_shorter_refinement_decreases_word_range_in_prompt(): void

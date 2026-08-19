@@ -180,6 +180,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/translate-bio', [SeoController::class, 'translateBio']);
         Route::post('/feedback', [SeoController::class, 'feedback']);
         Route::get('/feedback/summary', [SeoController::class, 'feedbackSummary']);
+        Route::get('/quality-audit', [SeoController::class, 'qualityAudit'])->middleware('role:admin,sub_admin');
 
         // Bulk bio generation
         Route::prefix('bulk')->group(function () {

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\SeoBioFeedback;
 use App\Services\Seo\BioGenerationService;
+use App\Services\Seo\BioQualityAuditService;
 use App\Services\Seo\BioTranslationService;
 use App\Services\Seo\FeedbackInsightService;
 use App\Services\Seo\ProfileSnapshotBuilder;
@@ -26,6 +27,7 @@ class SeoController extends Controller
         private readonly SeoScorer              $scorer,
         private readonly FeedbackInsightService $feedbackInsight,
         private readonly BioTranslationService  $translator,
+        private readonly BioQualityAuditService $qualityAudit,
     ) {}
 
     /**
@@ -205,6 +207,26 @@ class SeoController extends Controller
         ]);
 
         return response()->json($this->feedbackInsight->summaryForPlatform((int) $data['platform_id']));
+    }
+
+    /**
+     * GET /api/crm/seo/quality-audit
+     * Market-level content-health scan for spotting AI-ish repetition before
+     * it becomes a country-wide voice problem.
+     */
+    public function qualityAudit(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'platform_id' => 'nullable|integer|min:1',
+            'source' => ['nullable', 'string', Rule::in(['all', 'live', 'generated', 'accepted'])],
+            'limit' => 'nullable|integer|min:25|max:1000',
+        ]);
+
+        return response()->json($this->qualityAudit->scan(
+            isset($data['platform_id']) ? (int) $data['platform_id'] : null,
+            (string) ($data['source'] ?? 'all'),
+            (int) ($data['limit'] ?? 300),
+        ));
     }
 
     // -------------------------------------------------------------------------
