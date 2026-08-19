@@ -5,6 +5,7 @@ namespace Tests\Feature\AutoPush;
 use App\Console\Commands\RunAutoPushEngine;
 use App\Jobs\SendPushNotificationJob;
 use App\Models\AutoPushAlert;
+use App\Models\AutoPushBoostUsage;
 use App\Models\AutoPushPlan;
 use App\Models\AutoPushRun;
 use App\Models\Client;
@@ -308,6 +309,146 @@ class AutoPushWorkflowTest extends TestCase
         $this->assertNull($client->boosted_until);
     }
 
+    public function test_market_sales_team_boost_limiter_blocks_fourth_boost_until_window_resets(): void
+    {
+        Carbon::setTestNow('2026-06-05 08:00:00');
+        Queue::fake();
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $this->makePlan($platform);
+        $firstSalesUser = $this->createUser('sales', [$platform->id]);
+        $secondSalesUser = $this->createUser('field_sales', [$platform->id]);
+        $clients = Client::factory()->count(4)->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+
+        Sanctum::actingAs($firstSalesUser);
+        $this->postJson("/api/crm/clients/{$clients[0]->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 2);
+
+        Sanctum::actingAs($secondSalesUser);
+        $this->postJson("/api/crm/clients/{$clients[1]->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 1);
+        $this->postJson("/api/crm/clients/{$clients[2]->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 0);
+
+        $this->postJson("/api/crm/clients/{$clients[3]->id}/boost", ['hours' => 24])
+            ->assertStatus(429)
+            ->assertJsonPath('status', 'boost_limited')
+            ->assertJsonPath('boost_limit.remaining', 0);
+
+        $this->assertSame(3, AutoPushBoostUsage::query()->where('platform_id', $platform->id)->count());
+        $this->assertSame(3, PushCampaign::query()->where('source_filename', 'auto_push_boost')->count());
+        $this->assertFalse($clients[3]->fresh()->is_boosted);
+
+        Carbon::setTestNow('2026-06-05 14:01:00');
+
+        $this->postJson("/api/crm/clients/{$clients[3]->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 2);
+
+        $this->assertSame(4, AutoPushBoostUsage::query()->where('platform_id', $platform->id)->count());
+    }
+
+    public function test_boost_limiter_is_market_scoped_and_admins_bypass_usage_pool(): void
+    {
+        Carbon::setTestNow('2026-06-05 08:00:00');
+        Queue::fake();
+
+        $kenya = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $uganda = $this->createPlatform('Uganda', 'uganda.example', 'Uganda');
+        $this->makePlan($kenya);
+        $this->makePlan($uganda);
+        $salesUser = $this->createUser('sales', [$kenya->id, $uganda->id]);
+        $admin = $this->createUser('admin');
+        $kenyaClients = Client::factory()->count(4)->create([
+            'platform_id' => $kenya->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+        $ugandaClient = Client::factory()->create([
+            'platform_id' => $uganda->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+        foreach ($kenyaClients->take(3) as $client) {
+            $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 24])->assertOk();
+        }
+
+        $this->postJson("/api/crm/clients/{$ugandaClient->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 2);
+
+        Sanctum::actingAs($admin);
+        $this->postJson("/api/crm/clients/{$kenyaClients[3]->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.bypassed', true);
+
+        $this->assertSame(3, AutoPushBoostUsage::query()->where('platform_id', $kenya->id)->count());
+        $this->assertSame(1, AutoPushBoostUsage::query()->where('platform_id', $uganda->id)->count());
+    }
+
+    public function test_disabled_boost_limiter_allows_repeated_sales_boosts_without_usage_records(): void
+    {
+        Carbon::setTestNow('2026-06-05 08:00:00');
+        Queue::fake();
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $this->makePlan($platform, [
+            'reliability' => array_merge($this->defaultReliability(), [
+                'boost_limit' => [
+                    'enabled' => false,
+                    'max_boosts' => 1,
+                    'window_hours' => 6,
+                ],
+            ]),
+        ]);
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 24])->assertOk();
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 48])->assertOk();
+
+        $this->assertSame(0, AutoPushBoostUsage::query()->count());
+    }
+
+    public function test_reboosting_active_client_consumes_another_market_boost_usage(): void
+    {
+        Carbon::setTestNow('2026-06-05 08:00:00');
+        Queue::fake();
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $this->makePlan($platform);
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'profile_status' => 'publish',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 24])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 2);
+        $this->postJson("/api/crm/clients/{$client->id}/boost", ['hours' => 48])
+            ->assertOk()
+            ->assertJsonPath('boost_limit.remaining', 1);
+
+        $this->assertSame(2, AutoPushBoostUsage::query()->where('client_id', $client->id)->count());
+    }
+
     public function test_slot_allocator_respects_same_day_and_next_active_day_spillover(): void
     {
         Carbon::setTestNow('2026-06-05 06:00:00');
@@ -517,7 +658,11 @@ class AutoPushWorkflowTest extends TestCase
         Sanctum::actingAs($user);
 
         $store = $this->postJson('/api/crm/auto-push/plans', $this->planRequestPayload($platform->id));
-        $store->assertCreated();
+        $store->assertCreated()
+            ->assertJsonPath('plan.reliability.boost_limit.enabled', true)
+            ->assertJsonPath('plan.reliability.boost_limit.max_boosts', 3)
+            ->assertJsonPath('plan.reliability.boost_limit.window_hours', 6)
+            ->assertJsonPath('plan.boost_limit_state.remaining', 3);
         $planId = (int) $store->json('plan.id');
 
         $this->getJson('/api/crm/auto-push/plans')
@@ -912,6 +1057,13 @@ class AutoPushWorkflowTest extends TestCase
             'exclude_pushed_within_days' => 0,
             'replacement_spillover' => 'next_active_day',
             'sms_alerts_enabled' => false,
+            'fallback_enabled' => true,
+            'fallback_ordering' => 'random',
+            'boost_limit' => [
+                'enabled' => true,
+                'max_boosts' => 3,
+                'window_hours' => 6,
+            ],
         ];
     }
 

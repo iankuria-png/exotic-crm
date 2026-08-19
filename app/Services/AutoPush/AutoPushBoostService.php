@@ -22,6 +22,7 @@ class AutoPushBoostService
         private readonly AutoPushCampaignBuilder $campaignBuilder,
         private readonly AutoPushMessageService $messageService,
         private readonly PushCampaignService $pushCampaignService,
+        private readonly AutoPushBoostPlanResolver $planResolver,
     ) {
     }
 
@@ -31,7 +32,7 @@ class AutoPushBoostService
     public function dispatchNow(Client $client, int $actorId): array
     {
         $client->loadMissing('platform');
-        $plan = $this->boostPlanForClient($client);
+        $plan = $this->planResolver->forClient($client);
         $reshuffled = $plan instanceof AutoPushPlan ? $this->reshufflePendingCollisions($plan) : 0;
 
         $campaign = PushCampaign::query()->create([
@@ -84,22 +85,6 @@ class AutoPushBoostService
             'reshuffled_items' => $reshuffled,
             'message' => 'Boost push queued for immediate dispatch.',
         ];
-    }
-
-    private function boostPlanForClient(Client $client): ?AutoPushPlan
-    {
-        return AutoPushPlan::query()
-            ->with('platform')
-            ->where('platform_id', (int) $client->platform_id)
-            ->where('enabled', true)
-            ->orderByDesc('autopilot')
-            ->latest('updated_at')
-            ->first()
-            ?: AutoPushPlan::query()
-                ->with('platform')
-                ->where('platform_id', (int) $client->platform_id)
-                ->latest('updated_at')
-                ->first();
     }
 
     private function boostMessage(?AutoPushPlan $plan, Client $client): string

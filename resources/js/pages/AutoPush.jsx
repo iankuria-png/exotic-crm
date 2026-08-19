@@ -86,6 +86,11 @@ const EMPTY_FORM = {
         sms_alerts_enabled: false,
         fallback_enabled: true,
         fallback_ordering: 'random',
+        boost_limit: {
+            enabled: true,
+            max_boosts: 3,
+            window_hours: 6,
+        },
     },
 };
 
@@ -201,6 +206,11 @@ function normalizePlanToForm(plan) {
             sms_alerts_enabled: Boolean(plan.reliability?.sms_alerts_enabled),
             fallback_enabled: plan.reliability?.fallback_enabled ?? true,
             fallback_ordering: plan.reliability?.fallback_ordering || 'random',
+            boost_limit: {
+                enabled: plan.reliability?.boost_limit?.enabled ?? true,
+                max_boosts: Number(plan.reliability?.boost_limit?.max_boosts || 3),
+                window_hours: Number(plan.reliability?.boost_limit?.window_hours || 6),
+            },
         },
     };
 }
@@ -243,6 +253,11 @@ function planToPayload(form) {
             sms_alerts_enabled: Boolean(form.reliability.sms_alerts_enabled),
             fallback_enabled: Boolean(form.reliability.fallback_enabled),
             fallback_ordering: form.reliability.fallback_ordering || 'random',
+            boost_limit: {
+                enabled: Boolean(form.reliability.boost_limit?.enabled),
+                max_boosts: Number(form.reliability.boost_limit?.max_boosts || 3),
+                window_hours: Number(form.reliability.boost_limit?.window_hours || 6),
+            },
         },
     };
 }
@@ -1587,6 +1602,88 @@ export default function AutoPush() {
                                         ))}
                                     </SelectField>
                                 ) : null}
+
+                                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">Single boost limiter</p>
+                                            <p className="mt-1 text-xs text-slate-500">Sales and field sales share this market pool; managers bypass it but stay audited.</p>
+                                        </div>
+                                        <label className="inline-flex min-h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={form.reliability.boost_limit?.enabled ?? true}
+                                                onChange={(event) => setForm((current) => ({
+                                                    ...current,
+                                                    reliability: {
+                                                        ...current.reliability,
+                                                        boost_limit: {
+                                                            ...(current.reliability.boost_limit || EMPTY_FORM.reliability.boost_limit),
+                                                            enabled: event.target.checked,
+                                                        },
+                                                    },
+                                                }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Enabled
+                                        </label>
+                                    </div>
+                                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                                        <label className="space-y-1">
+                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Boosts per window</span>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="100"
+                                                className="crm-input"
+                                                value={form.reliability.boost_limit?.max_boosts ?? 3}
+                                                onChange={(event) => setForm((current) => ({
+                                                    ...current,
+                                                    reliability: {
+                                                        ...current.reliability,
+                                                        boost_limit: {
+                                                            ...(current.reliability.boost_limit || EMPTY_FORM.reliability.boost_limit),
+                                                            max_boosts: Number(event.target.value || 1),
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Window hours</span>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="168"
+                                                className="crm-input"
+                                                value={form.reliability.boost_limit?.window_hours ?? 6}
+                                                onChange={(event) => setForm((current) => ({
+                                                    ...current,
+                                                    reliability: {
+                                                        ...current.reliability,
+                                                        boost_limit: {
+                                                            ...(current.reliability.boost_limit || EMPTY_FORM.reliability.boost_limit),
+                                                            window_hours: Number(event.target.value || 1),
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                        </label>
+                                    </div>
+                                    {selectedPlan?.boost_limit_state ? (
+                                        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                                                {selectedPlan.boost_limit_state.enabled ? `${selectedPlan.boost_limit_state.remaining} left` : 'Limiter off'}
+                                            </span>
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                                                used {selectedPlan.boost_limit_state.used}/{selectedPlan.boost_limit_state.max_boosts}
+                                            </span>
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                                                resets {formatDateTime(selectedPlan.boost_limit_state.resets_at)}
+                                            </span>
+                                        </div>
+                                    ) : null}
+                                </div>
 
                                 <label className="space-y-1">
                                     <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Seed phrases</span>

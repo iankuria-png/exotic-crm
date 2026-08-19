@@ -1029,6 +1029,14 @@ export default function ClientDetail() {
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
+    const boostLimit = client?.boost_limit || null;
+    const boostLimitApplies = boostLimit?.applies_to_actor === true;
+    const boostLimitEnabled = Boolean(boostLimit?.enabled);
+    const boostLimitRemaining = Number(boostLimit?.remaining ?? 0);
+    const boostLimitBlocked = boostLimitApplies && boostLimitEnabled && boostLimitRemaining <= 0;
+    const boostLimitSummary = boostLimitApplies && boostLimitEnabled
+        ? `${Math.max(0, boostLimitRemaining)} boost${boostLimitRemaining === 1 ? '' : 's'} left · resets ${formatDateTime(boostLimit.resets_at)}`
+        : null;
 
     // Lightweight stats for the header badge + summary count (drawer refetches
     // the same key on send/pause, so this stays in sync).
@@ -1213,7 +1221,10 @@ export default function ClientDetail() {
             toast.success(data?.message || 'Client boosted for push.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Failed to boost client.');
+            const boostLimitMessage = error?.response?.data?.status === 'boost_limited' && error?.response?.data?.boost_limit?.resets_at
+                ? `Boost limit reached. Resets ${formatDateTime(error.response.data.boost_limit.resets_at)}.`
+                : null;
+            toast.error(boostLimitMessage || error?.response?.data?.message || 'Failed to boost client.');
         },
     });
 
@@ -2989,24 +3000,40 @@ export default function ClientDetail() {
                                 <div className="relative">
                                     <button
                                         type="button"
-                                        onClick={() => setShowBoostMenu((open) => !open)}
-                                        disabled={boostMutation.isPending || unboostMutation.isPending}
+                                        onClick={() => {
+                                            if (!client.is_boosted && boostLimitBlocked) {
+                                                return;
+                                            }
+                                            setShowBoostMenu((open) => !open);
+                                        }}
+                                        disabled={boostMutation.isPending || unboostMutation.isPending || (!client.is_boosted && boostLimitBlocked)}
                                         title={client.is_boosted
                                             ? `Boosted for auto-push${client.boost_remaining_hours ? ` — ~${client.boost_remaining_hours}h left` : ''}`
-                                            : 'Prioritise this client for the next auto-push runs'}
+                                            : boostLimitBlocked
+                                                ? `Boost limit reached. Resets ${formatDateTime(boostLimit?.resets_at)}`
+                                                : 'Prioritise this client for the next auto-push runs'}
                                         className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
                                             client.is_boosted
                                                 ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100'
+                                                : boostLimitBlocked
+                                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
                                                 : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700'
                                         }`}
                                     >
                                         <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M11.3 1.046a1 1 0 00-1.78-.13L3.66 9.4A1 1 0 004.5 11h3.2l-1.02 7.954a1 1 0 001.78.73l6.86-9.084A1 1 0 0014.48 9H11.3l1-7.954z" /></svg>
                                         {boostMutation.isPending
                                             ? 'Boosting…'
-                                            : client.is_boosted
-                                                ? `Boosted${client.boost_remaining_hours ? ` · ${client.boost_remaining_hours}h` : ''}`
-                                                : 'Boost'}
+                                                : client.is_boosted
+                                                    ? `Boosted${client.boost_remaining_hours ? ` · ${client.boost_remaining_hours}h` : ''}`
+                                                    : boostLimitBlocked
+                                                        ? 'Limit reached'
+                                                    : 'Boost'}
                                     </button>
+                                    {boostLimitSummary ? (
+                                        <p className={`mt-1 max-w-[13rem] text-[11px] ${boostLimitBlocked ? 'font-medium text-amber-700' : 'text-slate-500'}`}>
+                                            {boostLimitSummary}
+                                        </p>
+                                    ) : null}
                                     {showBoostMenu ? (
                                         <>
                                             <div className="fixed inset-0 z-10" onClick={() => setShowBoostMenu(false)} />
@@ -3022,12 +3049,24 @@ export default function ClientDetail() {
                                                     <button
                                                         key={option.hours}
                                                         type="button"
-                                                        onClick={() => { setShowBoostMenu(false); boostMutation.mutate(option.hours); }}
-                                                        className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-fuchsia-50 hover:text-fuchsia-700"
+                                                        onClick={() => {
+                                                            if (boostLimitBlocked) {
+                                                                return;
+                                                            }
+                                                            setShowBoostMenu(false);
+                                                            boostMutation.mutate(option.hours);
+                                                        }}
+                                                        disabled={boostLimitBlocked}
+                                                        className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white"
                                                     >
                                                         <span>{client.is_boosted ? `Extend ${option.label}` : option.label}</span>
                                                     </button>
                                                 ))}
+                                                {boostLimitBlocked ? (
+                                                    <p className="px-2 py-1.5 text-xs text-amber-700">
+                                                        Market team limit resets {formatDateTime(boostLimit?.resets_at)}.
+                                                    </p>
+                                                ) : null}
                                                 {client.is_boosted ? (
                                                     <button
                                                         type="button"

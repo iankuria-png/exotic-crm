@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AutoPushAlert;
 use App\Models\AutoPushPlan;
 use App\Models\AutoPushRun;
+use App\Services\AutoPush\AutoPushBoostLimitService;
 use App\Services\AutoPush\AutoPushDraftPackageService;
 use App\Services\AutoPush\AutoPushEngineService;
 use App\Services\MarketAuthorizationService;
@@ -20,6 +21,7 @@ class AutoPushPlanController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AutoPushEngineService $engineService,
         private readonly AutoPushDraftPackageService $draftPackageService,
+        private readonly AutoPushBoostLimitService $boostLimitService,
     ) {
     }
 
@@ -85,6 +87,10 @@ class AutoPushPlanController extends Controller
             $platformId = (int) $platformId;
             $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), $platformId);
 
+            $reliability = array_merge((array) $plan->reliability, [
+                'boost_limit' => $this->boostLimitService->configForPlan($plan),
+            ]);
+
             $copy = AutoPushPlan::query()->create([
                 'name' => $plan->name,
                 'platform_id' => $platformId,
@@ -93,7 +99,7 @@ class AutoPushPlanController extends Controller
                 'buckets' => $plan->buckets,
                 'schedule' => $plan->schedule,
                 'message_strategy' => $plan->message_strategy,
-                'reliability' => $plan->reliability,
+                'reliability' => $reliability,
                 'created_by' => (int) $request->user()->id,
             ]);
             $copy->load('platform');
@@ -312,6 +318,10 @@ class AutoPushPlanController extends Controller
             'reliability.sms_alerts_enabled' => 'nullable|boolean',
             'reliability.fallback_enabled' => 'nullable|boolean',
             'reliability.fallback_ordering' => ['nullable', 'string', Rule::in(['random', 'recent', 'newest'])],
+            'reliability.boost_limit' => 'nullable|array',
+            'reliability.boost_limit.enabled' => 'nullable|boolean',
+            'reliability.boost_limit.max_boosts' => 'nullable|integer|min:1|max:100',
+            'reliability.boost_limit.window_hours' => 'nullable|integer|min:1|max:168',
         ]);
 
         return [
@@ -353,6 +363,7 @@ class AutoPushPlanController extends Controller
                 'sms_alerts_enabled' => (bool) ($validated['reliability']['sms_alerts_enabled'] ?? false),
                 'fallback_enabled' => (bool) ($validated['reliability']['fallback_enabled'] ?? true),
                 'fallback_ordering' => (string) ($validated['reliability']['fallback_ordering'] ?? 'random'),
+                'boost_limit' => AutoPushBoostLimitService::normalizeConfig($validated['reliability']['boost_limit'] ?? null),
             ],
         ];
     }
@@ -380,7 +391,10 @@ class AutoPushPlanController extends Controller
             'buckets' => $plan->buckets,
             'schedule' => $plan->schedule,
             'message_strategy' => $plan->message_strategy,
-            'reliability' => $plan->reliability,
+            'reliability' => array_merge((array) $plan->reliability, [
+                'boost_limit' => $this->boostLimitService->configForPlan($plan),
+            ]),
+            'boost_limit_state' => $this->boostLimitService->stateForPlan($plan, request()->user()),
             'last_run_at' => optional($plan->last_run_at)->toIso8601String(),
             'coverage_count' => $this->engineService->coverageCount($plan),
             'runway_threshold' => $runwayThreshold,

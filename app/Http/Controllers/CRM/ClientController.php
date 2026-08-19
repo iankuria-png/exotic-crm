@@ -14,6 +14,7 @@ use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\AutoPush\AutoPushBoostLimitService;
 use App\Services\AutoPush\AutoPushBoostService;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientCaseClosureService;
@@ -104,6 +105,7 @@ class ClientController extends Controller
         private readonly ChurnAggregatorService $churnAggregatorService,
         private readonly ClientChurnStamper $clientChurnStamper,
         private readonly ClientLifetimeValueService $clientLifetimeValueService,
+        private readonly AutoPushBoostLimitService $autoPushBoostLimitService,
         private readonly AutoPushBoostService $autoPushBoostService,
     ) {}
 
@@ -787,6 +789,7 @@ class ClientController extends Controller
             ->exists());
         $this->decorateExpiryState($client);
         $this->decorateLifetimeValue(collect([$client]));
+        $client->setAttribute('boost_limit', $this->autoPushBoostLimitService->stateForClient($client, $request->user()));
 
         return response()->json($client);
     }
@@ -2100,6 +2103,20 @@ class ClientController extends Controller
             'boosted_until' => $client->boosted_until?->toIso8601String(),
         ];
 
+        $limitState = $this->autoPushBoostLimitService->reserveForClient($client, $request->user(), $hours);
+        if (!($limitState['allowed'] ?? false)) {
+            return response()->json([
+                'status' => 'boost_limited',
+                'message' => sprintf(
+                    'This market has used all %d boosts for the current %d-hour window. Try again after %s.',
+                    (int) $limitState['max_boosts'],
+                    (int) $limitState['window_hours'],
+                    $limitState['resets_at']
+                ),
+                'boost_limit' => $limitState,
+            ], 429);
+        }
+
         $client->update([
             'boosted_until' => now()->addHours($hours),
             'boosted_at' => now(),
@@ -2146,6 +2163,7 @@ class ClientController extends Controller
                 'hours' => $hours,
                 'boosted_until' => $client->boosted_until?->toIso8601String(),
                 'boost_dispatch' => $boostDispatch,
+                'boost_limit' => $limitState,
             ],
             'created_at' => now(),
         ]);
@@ -2155,6 +2173,7 @@ class ClientController extends Controller
             'is_boosted' => true,
             'boosted_until' => $client->boosted_until?->toIso8601String(),
             'boost_remaining_hours' => $client->boost_remaining_hours,
+            'boost_limit' => $limitState,
             'boost_dispatch' => $boostDispatch,
         ]);
     }
