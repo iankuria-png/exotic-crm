@@ -109,6 +109,23 @@ export default function SeoEnginePanel() {
         staleTime: 60_000,
     });
 
+    const qualityRecoveryMutation = useMutation({
+        mutationFn: () => api.post('/crm/auto-optimize/quality-audit/run', {
+            platform_id: Number(auditPlatformId),
+            limit: 20,
+        }).then((r) => r.data),
+        onSuccess: (data) => {
+            toast.success(data?.message || 'Bio quality recovery run staged.');
+            queryClient.invalidateQueries({ queryKey: ['auto-optimize-plans'] });
+            queryClient.invalidateQueries({ queryKey: ['auto-optimize-items'] });
+            queryClient.invalidateQueries({ queryKey: ['auto-optimize-metrics'] });
+            qualityAuditQuery.refetch();
+        },
+        onError: (err) => {
+            toast.error(err?.response?.data?.message || 'Could not stage bio quality recovery.');
+        },
+    });
+
     const saveMutation = useMutation({
         mutationFn: (payload) => api.patch('/crm/settings/seo-engine', payload).then((r) => r.data),
         onSuccess: (data) => {
@@ -415,6 +432,8 @@ export default function SeoEnginePanel() {
                 loading={qualityAuditQuery.isFetching}
                 error={qualityAuditQuery.error}
                 onRefresh={() => qualityAuditQuery.refetch()}
+                onRunRecovery={() => qualityRecoveryMutation.mutate()}
+                runningRecovery={qualityRecoveryMutation.isPending}
             />
 
             {/* === Save bar === */}
@@ -442,6 +461,8 @@ function BioQualityAuditCard({
     loading,
     error,
     onRefresh,
+    onRunRecovery,
+    runningRecovery,
 }) {
     const summary = data?.summary || {};
     const platformRows = data?.platforms || [];
@@ -459,14 +480,25 @@ function BioQualityAuditCard({
                         Scan country-level bio quality for repeated openings, AI-ish phrasing, thin copy, ethnicity leakage, and punctuation artifacts.
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={onRefresh}
-                    disabled={loading}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                    {loading ? 'Scanning...' : 'Refresh scan'}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={onRefresh}
+                        disabled={loading}
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                        {loading ? 'Scanning...' : 'Refresh scan'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onRunRecovery}
+                        disabled={!selectedPlatformId || runningRecovery}
+                        className="rounded-md bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={!selectedPlatformId ? 'Select one market before staging optimizer work.' : 'Queue the worst bio-quality profiles into Optimizer approval mode.'}
+                    >
+                        {runningRecovery ? 'Staging...' : 'Stage optimizer run'}
+                    </button>
+                </div>
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px_150px]">
@@ -552,10 +584,37 @@ function BioQualityAuditCard({
             ) : null}
 
             {issueSummary ? (
-                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
+                    <CorpusOveruseList title="Overused words" items={issueSummary.corpus_overuse?.words || []} />
+                    <CorpusOveruseList title="Overused phrases" items={issueSummary.corpus_overuse?.phrases || []} />
+                    <CorpusOveruseList title="Repeated openings" items={issueSummary.corpus_overuse?.openings || []} />
+                </div>
+            ) : null}
+
+            {issueSummary ? (
+                <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
                     <IssueList title="Repeated structures" items={issueSummary.top_repetition_flags || []} />
                     <IssueList title="AI-ish patterns" items={issueSummary.top_slop_flags || []} />
                 </div>
+            ) : null}
+
+            {issueSummary?.examples?.length ? (
+                <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Example snippets</h4>
+                    <ul className="mt-2 space-y-2">
+                        {issueSummary.examples.slice(0, 4).map((example, index) => (
+                            <li key={`${example.client_id || example.feedback_id || 'example'}-${index}`} className="text-sm text-slate-600">
+                                <span className="font-semibold text-slate-700">{example.issue}:</span> {example.snippet}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
+
+            {!selectedPlatformId ? (
+                <p className="mt-3 text-xs text-slate-500">
+                    Select a single market to stage quality-recovery profiles into the Optimizer approval queue.
+                </p>
             ) : null}
         </section>
     );
@@ -605,6 +664,29 @@ function IssueList({ title, items }) {
                             <span className="shrink-0 text-xs font-semibold text-slate-500">
                                 {item.rate != null ? formatPercent(item.rate) : formatPercent(item.corpus_rate)}
                             </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+function CorpusOveruseList({ title, items }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-white p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{title}</h4>
+            {items.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500">No repeated term crossed the threshold.</p>
+            ) : (
+                <ul className="mt-2 space-y-1.5">
+                    {items.slice(0, 10).map((item) => (
+                        <li key={`${item.type}-${item.term}`} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-sm">
+                            <span className="min-w-0 truncate font-medium text-slate-700">{item.term}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                                {item.corpus_hits} bios
+                            </span>
+                            <span className="text-xs font-semibold text-slate-500">{formatPercent(item.corpus_rate)}</span>
                         </li>
                     ))}
                 </ul>

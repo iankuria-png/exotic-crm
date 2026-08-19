@@ -309,6 +309,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/plans/{plan}/toggle', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'toggle']);
         Route::post('/plans/{plan}/autopilot', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'autopilot']);
         Route::post('/plans/{plan}/run-now', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'runNow']);
+        Route::post('/quality-audit/run', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'runBioQualityRecovery']);
         Route::get('/items', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'items']);
         Route::get('/items/{item}', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'showItem']);
         Route::post('/items/{item}/approve', [\App\Http\Controllers\CRM\AutoOptimizeController::class, 'approve']);

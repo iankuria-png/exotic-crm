@@ -13,6 +13,7 @@ use App\Services\AutoOptimize\AutoOptimizeApplyService;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\AutoOptimize\AutoOptimizeEngineService;
 use App\Services\MarketAuthorizationService;
+use App\Services\Seo\BioQualityAuditService;
 use App\Support\MarketTimezone;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -29,6 +30,7 @@ class AutoOptimizeController extends Controller
         private readonly MarketAuthorizationService $marketAuth,
         private readonly AutoOptimizeEngineService $engineService,
         private readonly AutoOptimizeApplyService $applyService,
+        private readonly BioQualityAuditService $bioQualityAudit,
     ) {}
 
     public function index(Request $request)
@@ -163,6 +165,86 @@ class AutoOptimizeController extends Controller
         $this->ensurePlanAccess($request, $plan);
         $run = $this->engineService->runPlan($plan->fresh('platform'));
         return response()->json(['run' => $run]);
+    }
+
+    public function runBioQualityRecovery(Request $request)
+    {
+        $this->requireRole($request, self::APPLY_ROLES);
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'limit' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $limit = (int) ($validated['limit'] ?? 20);
+        $this->marketAuth->ensureUserCanAccessPlatform($request->user(), $platformId);
+
+        $platform = Platform::query()->findOrFail($platformId);
+        $plan = AutoOptimizePlan::query()
+            ->where('platform_id', $platformId)
+            ->where('name', 'Bio quality recovery')
+            ->first();
+
+        if (!$plan) {
+            $plan = new AutoOptimizePlan([
+                'name' => 'Bio quality recovery',
+                'platform_id' => $platformId,
+                'enabled' => false,
+                'autopilot' => false,
+                'created_by' => $request->user()?->id,
+            ]);
+        }
+
+        $plan->forceFill([
+            'enabled' => false,
+            'autopilot' => false,
+            'criteria' => [
+                'max_score' => 100,
+                'min_market_sample' => 1,
+                'only_published' => true,
+                'only_active' => true,
+            ],
+            'actions' => [
+                'optimize_bio' => true,
+                'switch_main_image' => false,
+                'generation' => [
+                    'bio_format' => 'auto',
+                    'creativity' => 0.95,
+                    'overuse_sensitivity' => 'high',
+                    'overuse_lookback_days' => 60,
+                    'custom_prompt' => 'Quality recovery run: preserve useful personality from the old bio, but remove repeated corpus phrases, name/age openings, ethnicity labels, dash punctuation, and AI slogan rhythms. Rewrite with a fresh angle and concrete profile facts.',
+                ],
+            ],
+            'schedule' => [
+                'daily_limit' => $limit,
+                'runway_threshold' => 0,
+                'active_days' => [1, 2, 3, 4, 5, 6, 7],
+                'window_start' => '00:00',
+                'window_end' => '23:59',
+            ],
+            'reliability' => [
+                'exclude_optimized_within_days' => 7,
+                'exclude_skipped_within_days' => 2,
+                'min_score_gain' => 0,
+                'no_op_similarity_pct' => 92,
+            ],
+        ])->save();
+
+        $clients = $this->bioQualityAudit->qualityRecoveryCandidates($platformId, $limit);
+        $run = $this->engineService->runSelectedClients(
+            $plan->fresh('platform'),
+            $clients,
+            'Selected by bio quality audit recovery run',
+        );
+
+        return response()->json([
+            'message' => $run->candidates_selected > 0
+                ? "{$run->candidates_selected} profile(s) staged in Optimizer for {$platform->name}."
+                : 'No eligible bio quality candidates were staged.',
+            'plan' => $this->planPayload($plan->fresh(['platform', 'runs'])),
+            'run' => $run,
+            'selected' => (int) $run->candidates_selected,
+        ]);
     }
 
     public function items(Request $request)

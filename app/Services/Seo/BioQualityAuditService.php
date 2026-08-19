@@ -97,6 +97,45 @@ class BioQualityAuditService
         ];
     }
 
+    /**
+     * Select live clients whose current bios are most likely depressing market
+     * quality: repeated corpus language, name/age intros, ethnicity leakage,
+     * thin copy, or formatting artifacts.
+     *
+     * @return Collection<Client>
+     */
+    public function qualityRecoveryCandidates(int $platformId, int $limit = 20): Collection
+    {
+        $limit = max(1, min(100, $limit));
+        $scan = $this->scorePlatform($platformId, 'live', max(100, $limit * 12), Platform::query()->find($platformId));
+
+        $overusedTerms = collect($scan['top_repetition_flags'] ?? [])
+            ->pluck('term')
+            ->filter()
+            ->take(20)
+            ->values()
+            ->all();
+
+        return $this->liveClientSamples($platformId, max(150, $limit * 20))
+            ->map(function (array $sample) use ($overusedTerms): array {
+                $text = (string) $sample['text'];
+
+                return [
+                    'client_id' => (int) $sample['client_id'],
+                    'score' => $this->clientIssueScore($text, $overusedTerms),
+                ];
+            })
+            ->filter(fn (array $row): bool => $row['score'] > 0)
+            ->sortByDesc('score')
+            ->take($limit)
+            ->pluck('client_id')
+            ->pipe(fn (Collection $ids): Collection => Client::query()
+                ->whereIn('id', $ids->all())
+                ->get()
+                ->sortBy(fn (Client $client): int => array_search((int) $client->id, $ids->all(), true))
+                ->values());
+    }
+
     private function scorePlatform(int $platformId, string $source, int $limit, ?Platform $platform = null): array
     {
         $samples = $this->samples($platformId, $source, $limit);
@@ -161,10 +200,16 @@ class BioQualityAuditService
             $metrics[$key] = round($value / $sampleSize, 3);
         }
 
+        $corpusOveruse = [
+            'phrases' => $this->topRepeated($phraseDocs, $sampleSize, 'phrase', 0.09),
+            'openings' => $this->topRepeated($openingDocs, $sampleSize, 'opening', 0.04),
+            'words' => $this->topRepeated($wordDocs, $sampleSize, 'word', 0.28),
+        ];
+
         $repetitionFlags = array_merge(
-            $this->topRepeated($phraseDocs, $sampleSize, 'phrase', 0.09),
-            $this->topRepeated($openingDocs, $sampleSize, 'opening', 0.04),
-            $this->topRepeated($wordDocs, $sampleSize, 'word', 0.28),
+            $corpusOveruse['phrases'],
+            $corpusOveruse['openings'],
+            $corpusOveruse['words'],
         );
         usort($repetitionFlags, fn (array $a, array $b): int => ($b['impact'] ?? 0) <=> ($a['impact'] ?? 0));
 
@@ -198,6 +243,11 @@ class BioQualityAuditService
             'avg_words' => round(array_sum($wordCounts) / $sampleSize, 1),
             'median_words' => $wordCounts[(int) floor($sampleSize / 2)] ?? 0,
             'metrics' => $metrics,
+            'corpus_overuse' => [
+                'words' => array_slice($corpusOveruse['words'], 0, 12),
+                'phrases' => array_slice($corpusOveruse['phrases'], 0, 12),
+                'openings' => array_slice($corpusOveruse['openings'], 0, 12),
+            ],
             'top_repetition_flags' => array_slice($repetitionFlags, 0, 12),
             'top_slop_flags' => $this->topFlags($slopFlags, $sampleSize),
             'examples' => $examples,
@@ -254,6 +304,24 @@ class BioQualityAuditService
             ->values();
     }
 
+    private function liveClientSamples(int $platformId, int $limit): Collection
+    {
+        return Client::query()
+            ->where('platform_id', $platformId)
+            ->whereNotNull('bio_original_html')
+            ->where('bio_original_html', '<>', '')
+            ->latest('updated_at')
+            ->limit($limit)
+            ->get(['id', 'bio_original_html'])
+            ->map(fn (Client $client): array => [
+                'client_id' => (int) $client->id,
+                'text' => $this->plainText((string) $client->bio_original_html),
+            ])
+            ->filter(fn (array $row): bool => mb_strlen((string) $row['text']) > 20)
+            ->unique(fn (array $row): string => (string) $row['client_id'])
+            ->values();
+    }
+
     private function combine(array $rows): array
     {
         if ($rows === []) {
@@ -262,6 +330,11 @@ class BioQualityAuditService
                 'quality_score' => 0,
                 'quality_band' => 'none',
                 'ai_likeness_score' => 0,
+                'corpus_overuse' => [
+                    'words' => [],
+                    'phrases' => [],
+                    'openings' => [],
+                ],
             ];
         }
 
@@ -306,6 +379,11 @@ class BioQualityAuditService
             'top_slop_flags' => [],
             'examples' => [],
             'metrics' => [],
+            'corpus_overuse' => [
+                'words' => [],
+                'phrases' => [],
+                'openings' => [],
+            ],
         ];
     }
 
@@ -366,6 +444,36 @@ class BioQualityAuditService
             ->values()
             ->take(10)
             ->all();
+    }
+
+    private function clientIssueScore(string $text, array $overusedTerms): int
+    {
+        $lower = mb_strtolower($text);
+        $words = $this->words($text);
+        $score = 0;
+
+        foreach ($this->slopFlags($text) as $flag) {
+            $score += match ($flag['type']) {
+                'corpus_cliche' => 24,
+                'no_no_punchline' => 22,
+                'format_artifact' => 12,
+                default => 10,
+            } * max(1, (int) $flag['count']);
+        }
+
+        $score += preg_match('/^\s*(?:i am|i\'m|im|meet|my name is)\s+[a-z]{2,}\b/i', $text) ? 18 : 0;
+        $score += preg_match('/\b\d{2}\s*(?:year|yr)|\b\d{2}\s*,/i', $text) ? 16 : 0;
+        $score += preg_match('/\b(?:black|african|latin|white|asian|mixed race)\b/i', $lower) ? 22 : 0;
+        $score += preg_match('/\s[-–—]{1,2}\s/u', $text) ? 10 : 0;
+        $score += count($words) < 55 ? 12 : 0;
+
+        foreach ($overusedTerms as $term) {
+            if ($term !== '' && str_contains($lower, mb_strtolower($term))) {
+                $score += 8;
+            }
+        }
+
+        return min(100, $score);
     }
 
     private function words(string $text): array
