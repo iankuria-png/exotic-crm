@@ -66,6 +66,7 @@ class SeoController extends Controller
             'generation_options.ignored_overuse_terms' => 'nullable|array|max:100',
             'generation_options.ignored_overuse_terms.*' => 'string|max:80',
             'generation_options.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
+            'generation_options.previous_bio_reference_min_uniqueness_score' => 'nullable|integer|min:0|max:100',
             'feedback_context' => 'nullable|array',
             'feedback_context.rating' => 'nullable|integer|min:-1|max:1',
             'feedback_context.tag' => ['nullable', 'string', Rule::in(SeoBioFeedback::ALLOWED_TAGS)],

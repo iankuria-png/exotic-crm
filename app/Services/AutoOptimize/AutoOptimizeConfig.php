@@ -102,6 +102,7 @@ class AutoOptimizeConfig
             'overuse_sensitivity' => $global['overuse_sensitivity'] ?? 'medium',
             'ignored_overuse_terms' => $global['ignored_overuse_terms'] ?? [],
             'overuse_lookback_days' => $global['overuse_lookback_days'] ?? 60,
+            'previous_bio_reference_min_uniqueness_score' => $global['previous_bio_reference_min_uniqueness_score'] ?? 70,
             'providers_order' => null,  // null = inherit global
             'scorer_weights' => null,   // null = inherit global
         ], array_filter($perMarket, fn ($v) => $v !== null));

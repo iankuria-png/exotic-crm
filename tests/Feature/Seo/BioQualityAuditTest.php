@@ -73,6 +73,33 @@ class BioQualityAuditTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_service_terms_are_not_reported_as_corpus_overuse(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Kenya', 'country' => 'Kenya']);
+
+        foreach (['Kilimani', 'Westlands', 'Kisumu', 'Mombasa'] as $city) {
+            SeoBioFeedback::create([
+                'platform_id' => $platform->id,
+                'accepted' => true,
+                'rating' => 1,
+                'bio_html' => "<p>Private plans in {$city} can include massage, incall, outcall, BDSM, couples, and WhatsApp booking when the details are clear.</p>",
+            ]);
+        }
+
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $response = $this->getJson("/api/crm/seo/quality-audit?platform_id={$platform->id}&source=accepted&limit=25");
+
+        $response->assertOk();
+
+        $words = collect($response->json('summary.corpus_overuse.words'))->pluck('term')->all();
+        $phrases = collect($response->json('summary.corpus_overuse.phrases'))->pluck('term')->all();
+
+        $this->assertNotContains('massage', $words);
+        $this->assertNotContains('whatsapp', $words);
+        $this->assertNotContains('incall outcall', $phrases);
+    }
+
     public function test_admin_can_stage_bio_quality_recovery_into_auto_optimizer(): void
     {
         Bus::fake();

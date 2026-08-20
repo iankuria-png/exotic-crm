@@ -39,6 +39,7 @@ const DEFAULT_GENERATION = {
     overuse_sensitivity: 'medium',
     ignored_overuse_terms: [],
     overuse_lookback_days: 60,
+    previous_bio_reference_min_uniqueness_score: 70,
 };
 
 

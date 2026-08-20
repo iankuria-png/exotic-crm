@@ -58,6 +58,45 @@ class BioUniquenessAnalyzerTest extends TestCase
         $this->assertNotEmpty($result['ai_slop_flags']);
     }
 
+    public function test_service_vocabulary_is_ignored_for_corpus_overuse(): void
+    {
+        $platform = Platform::factory()->create();
+
+        foreach (range(1, 4) as $index) {
+            SeoBioFeedback::create([
+                'platform_id' => $platform->id,
+                'rating' => 1,
+                'accepted' => true,
+                'bio_html' => "<p>Massage, incall, outcall, BDSM, couples, video calls, and WhatsApp booking are available in Nairobi {$index}.</p>",
+            ]);
+        }
+
+        $result = app(BioUniquenessAnalyzer::class)->analyze(
+            '<p>Massage, incall, outcall, BDSM, couples, video calls, and WhatsApp booking are available tonight.</p>',
+            $platform->id,
+            ['overuse_sensitivity' => 'high']
+        );
+
+        $terms = collect($result['overuse_flags'])->pluck('term')->all();
+
+        $this->assertSame(0, $result['overuse_score']);
+        $this->assertNotContains('massage', $terms);
+        $this->assertNotContains('incall outcall', $terms);
+    }
+
+    public function test_low_quality_reference_can_be_detected_by_uniqueness_threshold(): void
+    {
+        $platform = Platform::factory()->create();
+
+        $result = app(BioUniquenessAnalyzer::class)->analyze(
+            '<p>Lisa is 23, a Black escort in Kisumu. No games, no wasting time. Just good company and a better vibe.</p>',
+            $platform->id
+        );
+
+        $this->assertLessThan(90, $result['bio_uniqueness_score']);
+        $this->assertContains('profile artifact', collect($result['ai_slop_flags'])->pluck('label')->all());
+    }
+
     public function test_flags_no_no_just_punchline_as_ai_slop(): void
     {
         $platform = Platform::factory()->create();

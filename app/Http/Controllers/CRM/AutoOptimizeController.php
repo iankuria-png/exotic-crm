@@ -212,7 +212,8 @@ class AutoOptimizeController extends Controller
                     'creativity' => 0.95,
                     'overuse_sensitivity' => 'high',
                     'overuse_lookback_days' => 60,
-                    'custom_prompt' => 'Quality recovery run: preserve useful personality from the old bio, but remove repeated corpus phrases, name/age openings, ethnicity labels, dash punctuation, and AI slogan rhythms. Rewrite with a fresh angle and concrete profile facts.',
+                    'previous_bio_reference_min_uniqueness_score' => 75,
+                    'custom_prompt' => 'Quality recovery run: preserve useful personality only if the old bio feels human. If it is thin, AI-polished, name/age-led, ethnicity-led, or repetitive, ignore its wording and rebuild from concrete profile facts with a fresh angle.',
                 ],
             ],
             'schedule' => [
@@ -597,6 +598,7 @@ class AutoOptimizeController extends Controller
             'actions.generation.ignored_overuse_terms' => 'nullable|array|max:100',
             'actions.generation.ignored_overuse_terms.*' => 'string|max:80',
             'actions.generation.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
+            'actions.generation.previous_bio_reference_min_uniqueness_score' => 'nullable|integer|min:0|max:100',
             'actions.generation.providers_order' => 'nullable|array',
             'actions.generation.scorer_weights' => 'nullable|array',
             'actions.image_quality' => 'nullable|array',

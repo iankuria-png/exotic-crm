@@ -57,6 +57,7 @@ class SeoSettingsController extends Controller
         'overuse_sensitivity' => 'medium',
         'ignored_overuse_terms' => [],
         'overuse_lookback_days' => 60,
+        'previous_bio_reference_min_uniqueness_score' => 70,
     ];
 
     private const SUPPORTED_LANGUAGES = ['en', 'fr', 'pt', 'sw'];
@@ -123,6 +124,7 @@ class SeoSettingsController extends Controller
             'generation.ignored_overuse_terms' => 'nullable|array|max:100',
             'generation.ignored_overuse_terms.*' => 'string|max:80',
             'generation.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
+            'generation.previous_bio_reference_min_uniqueness_score' => 'nullable|integer|min:0|max:100',
         ]);
 
         $previous = $this->loadStored();
@@ -336,6 +338,7 @@ class SeoSettingsController extends Controller
             ? array_values(array_filter(array_map('strval', $generation['ignored_overuse_terms'])))
             : [];
         $generation['overuse_lookback_days'] = max(7, min(365, (int) ($generation['overuse_lookback_days'] ?? self::DEFAULT_GENERATION['overuse_lookback_days'])));
+        $generation['previous_bio_reference_min_uniqueness_score'] = max(0, min(100, (int) ($generation['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score'])));
 
         return $generation;
     }

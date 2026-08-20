@@ -16,10 +16,12 @@ class BioQualityAuditService
         'because', 'been', 'before', 'being', 'between', 'book', 'booking', 'but',
         'can', 'city', 'contact', 'does', 'each', 'escort', 'feel', 'from', 'give',
         'good', 'have', 'here', 'into', 'just', 'like', 'looking', 'make', 'more',
-        'most', 'need', 'offers', 'only', 'profile', 'ready', 'real', 'same', 'she',
+        'most', 'need', 'offer', 'offers', 'only', 'profile', 'ready', 'real', 'same', 'she',
         'that', 'the', 'them', 'then', 'there', 'this', 'time', 'very', 'when',
         'with', 'will', 'you', 'your',
     ];
+
+    private const ALLOWED_REPEATED_TERMS = BioUniquenessAnalyzer::DEFAULT_ALLOWED_REPEATED_TERMS;
 
     private const SLOP_PATTERNS = [
         'no_no_punchline' => [
@@ -484,7 +486,8 @@ class BioQualityAuditService
             $word = trim($word, "'");
 
             return mb_strlen($word) >= 4
-                && !in_array($word, self::STOP_WORDS, true);
+                && !in_array($word, self::STOP_WORDS, true)
+                && !in_array($word, self::ALLOWED_REPEATED_TERMS, true);
         }));
     }
 

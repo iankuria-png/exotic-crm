@@ -112,6 +112,14 @@ export default function AutoOptimizeGenerationCard({ value = {}, globalDefaults 
                 </Field>
             </div>
 
+            <Field label="Reference min score" help="Old/current bio must reach this uniqueness score before it can guide the rewrite.">
+                <input type="number" min={0} max={100} value={eff('previous_bio_reference_min_uniqueness_score') ?? ''}
+                    onChange={(e) => update('previous_bio_reference_min_uniqueness_score', e.target.value ? Number(e.target.value) : null)}
+                    placeholder={String(globalDefaults.previous_bio_reference_min_uniqueness_score ?? 70)}
+                    className="crm-input w-full text-xs" />
+                <InheritNote value={value.previous_bio_reference_min_uniqueness_score} globalValue={globalDefaults.previous_bio_reference_min_uniqueness_score ?? 70} />
+            </Field>
+
             {/* Inclusions */}
             <div className="flex flex-wrap gap-4">
                 {[

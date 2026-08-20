@@ -25,6 +25,7 @@ class SeoSettingsControllerTest extends TestCase
             ->assertJsonPath('config.generation.max_characters', 900)
             ->assertJsonPath('config.generation.bio_format', 'auto')
             ->assertJsonPath('config.generation.overuse_sensitivity', 'medium')
+            ->assertJsonPath('config.generation.previous_bio_reference_min_uniqueness_score', 70)
             ->assertJsonPath('config.providers.claude.has_key', false)
             ->assertJsonPath('config.providers.gemini.has_key', false)
             ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash')
@@ -110,15 +111,18 @@ class SeoSettingsControllerTest extends TestCase
                 'min_words' => 65,
                 'max_words' => 83,
                 'max_characters' => 800,
+                'previous_bio_reference_min_uniqueness_score' => 85,
             ],
         ])->assertOk()
             ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
+            ->assertJsonPath('config.generation.previous_bio_reference_min_uniqueness_score', 85)
             ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
             ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
 
         $this->getJson('/api/crm/settings/seo-engine')
             ->assertOk()
             ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
+            ->assertJsonPath('config.generation.previous_bio_reference_min_uniqueness_score', 85)
             ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
             ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
     }

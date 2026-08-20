@@ -317,7 +317,7 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
             <div className="mt-6">
                 <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Corpus overuse scoring</label>
                 <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                         <div>
                             <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-500">Sensitivity</label>
                             <div className="mt-1 inline-flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white p-1">
@@ -345,6 +345,15 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
                             max={365}
                             step={7}
                             onChange={(v) => update('overuse_lookback_days', v)}
+                        />
+                        <NumberStepper
+                            label="Reference min score"
+                            value={value.previous_bio_reference_min_uniqueness_score || 70}
+                            min={0}
+                            max={100}
+                            step={5}
+                            onChange={(v) => update('previous_bio_reference_min_uniqueness_score', v)}
+                            hint="Old/current bio must reach this uniqueness score before the engine can use it as voice reference"
                         />
                         <div>
                             <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-500">Creativity</label>
@@ -424,7 +433,7 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
             {/* ─── Custom prompt guardrail ────────────────────────────────────── */}
             <div className="mt-6">
                 <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Custom prompt guardrail</label>
-                <p className="mt-1 text-xs text-slate-500">Appended to every bio prompt. Use it for market quirks, brand voice rules, or things to avoid.</p>
+                <p className="mt-1 text-xs text-slate-500">Appended after the built-in house rules. Use it for market quirks, brand voice rules, or things to avoid.</p>
                 <textarea
                     rows={3}
                     value={value.custom_prompt}

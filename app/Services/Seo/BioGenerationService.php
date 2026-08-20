@@ -36,6 +36,7 @@ class BioGenerationService
         'overuse_sensitivity' => 'medium',
         'ignored_overuse_terms' => [],
         'overuse_lookback_days' => 60,
+        'previous_bio_reference_min_uniqueness_score' => 70,
     ];
 
     public const BIO_FORMATS = [
@@ -46,6 +47,10 @@ class BioGenerationService
         'personality_first' => 'Personality first',
         'location_first' => 'Location first',
     ];
+
+    private const BUILT_IN_GUARDRAIL = <<<'TEXT'
+Core house rule: preserve useful human personality only when the old/current bio is good enough to trust. If the reference bio is thin, repetitive, AI-polished, name/age-led, ethnicity-led, or slogan-like, ignore its wording and structure and rebuild from profile facts. Do not describe ethnicity, race, or skin color. Do not use "No X, no Y. Just Z." punchlines. Do not use hyphen or dash punctuation inside sentences. Treat service words like massage, incall, outcall, WhatsApp, BDSM, couples, domination, video calls, and rates as normal factual vocabulary, not as slop by themselves. Make the angle, opening, and rhythm different from other bios.
+TEXT;
 
     /**
      * Supported output languages → display label + LLM directive.
@@ -81,14 +86,14 @@ class BioGenerationService
             'min_words_delta' => 45,
             'max_words_delta' => 75,
             'max_chars_delta' => 420,
-            'prompt_addendum' => 'Lengthen the previous bio with more grounded, profile-specific detail. Add a distinct angle, a second scene, or service context. Do not pad with slogans.',
+            'prompt_addendum' => 'Generate a fuller bio with more grounded, profile-specific detail. Add a distinct angle, a second scene, or service context. Do not pad with slogans.',
         ],
         'shorter' => [
             'label' => 'Make it shorter',
             'min_words_delta' => -20,
             'max_words_delta' => -30,
             'max_chars_delta' => -200,
-            'prompt_addendum' => 'Tighten the previous bio. Cut redundant phrases. Keep the strongest sentence.',
+            'prompt_addendum' => 'Generate a tighter bio. Cut redundant phrases. Keep only the strongest details.',
         ],
         'more_creative' => [
             'label' => 'More creative',
@@ -108,7 +113,7 @@ class BioGenerationService
         ],
         'different_angle' => [
             'label' => 'Different angle',
-            'prompt_addendum' => 'Take a different angle from the previous draft. Lead with a different fact.',
+            'prompt_addendum' => 'Take a different angle. Lead with a less obvious profile fact.',
         ],
     ];
 
@@ -150,7 +155,7 @@ class BioGenerationService
         $feedbackContext = is_array($params['feedback_context'] ?? null) ? $params['feedback_context'] : [];
 
         // Apply quick-action refinement presets on top of any explicit overrides
-        $rawOverrides = $this->applyRefinements($rawOverrides, $refinements, $previousBio);
+        $rawOverrides = $this->applyRefinements($rawOverrides, $refinements);
         $generationOptions = $this->generationOptions($rawOverrides);
 
         // Build normalized snapshot
@@ -165,6 +170,18 @@ class BioGenerationService
         $generationOptions['resolved_bio_format'] = $this->resolveBioFormat(
             (string) ($generationOptions['bio_format'] ?? 'auto'),
             $snapshot
+        );
+        $generationOptions['existing_bio_reference'] = $this->referenceBioContext(
+            $snapshot->existingBio,
+            $snapshot->platformId,
+            $generationOptions,
+            'Existing bio'
+        );
+        $generationOptions['previous_draft_reference'] = $this->referenceBioContext(
+            $previousBio,
+            $snapshot->platformId,
+            $generationOptions,
+            'Previous draft'
         );
         if ($feedbackContext !== []) {
             $generationOptions['feedback_context'] = $this->normalizeFeedbackContext($feedbackContext);
@@ -266,6 +283,11 @@ class BioGenerationService
             'ai_slop_flags' => $analysis['ai_slop_flags'],
             'bio_uniqueness_score' => $analysis['bio_uniqueness_score'],
             'rewritten_for_uniqueness' => $rewrittenForUniqueness,
+            'existing_bio_reference_used' => (bool) ($generationOptions['existing_bio_reference']['use'] ?? false),
+            'existing_bio_reference_score' => $generationOptions['existing_bio_reference']['score'] ?? null,
+            'previous_bio_reference_used' => (bool) ($generationOptions['previous_draft_reference']['use'] ?? false),
+            'previous_bio_reference_score' => $generationOptions['previous_draft_reference']['score'] ?? null,
+            'reference_bio_min_score' => (int) ($generationOptions['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']),
         ];
     }
 
@@ -327,6 +349,7 @@ class BioGenerationService
         $immediateFeedback = $this->feedbackContextInstruction($options['feedback_context'] ?? []);
         $rewriteInstruction = trim((string) ($options['rewrite_instruction'] ?? ''));
         $rewriteLine = $rewriteInstruction !== '' ? "\nRewrite instruction: {$rewriteInstruction}" : '';
+        $builtInGuardrail = self::BUILT_IN_GUARDRAIL;
         $langCode = (string) ($options['language'] ?? 'en');
         $langDirective = self::SUPPORTED_LANGUAGES[$langCode]['directive']
             ?? self::SUPPORTED_LANGUAGES['en']['directive'];
@@ -354,7 +377,8 @@ Style rules:
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji, no Unicode symbols.
 - Use plain ASCII punctuation only.
-- Return clean prose only.{$customLine}{$sameClientFeedback}{$feedbackBlock}{$immediateFeedback}{$rewriteLine}
+- Return clean prose only.
+{$builtInGuardrail}{$customLine}{$sameClientFeedback}{$feedbackBlock}{$immediateFeedback}{$rewriteLine}
 PROMPT;
     }
 
@@ -370,9 +394,8 @@ PROMPT;
             'Availability' => $snapshot->availabilityText(),
         ];
 
-        if (trim($snapshot->existingBio) !== '') {
-            $data['Previous bio context'] = mb_substr(strip_tags($snapshot->existingBio), 0, 500) . ' — use only for continuity and uniqueness; do not copy phrasing.';
-        }
+        $this->addReferenceBioContext($data, $options['existing_bio_reference'] ?? null);
+        $this->addReferenceBioContext($data, $options['previous_draft_reference'] ?? null);
 
         if ($options['include_location']) {
             $data['City'] = $snapshot->city ?: '(not provided)';
@@ -424,9 +447,9 @@ PROMPT;
      *
      * Additive: passing the same preset twice doubles the effect.
      */
-    private function applyRefinements(array $overrides, array $refinements, string $previousBio): array
+    private function applyRefinements(array $overrides, array $refinements): array
     {
-        if (empty($refinements) && $previousBio === '') {
+        if (empty($refinements)) {
             return $overrides;
         }
 
@@ -449,13 +472,6 @@ PROMPT;
             $maxChars += (int) ($preset['max_chars_delta'] ?? 0);
             if (!empty($preset['prompt_addendum'])) {
                 $addenda[] = $preset['prompt_addendum'];
-            }
-        }
-
-        if ($previousBio !== '') {
-            $clean = mb_substr(trim(strip_tags($previousBio)), 0, 600);
-            if ($clean !== '') {
-                $addenda[] = "Previous draft (do not repeat phrasing): \"{$clean}\"";
             }
         }
 
@@ -506,6 +522,7 @@ PROMPT;
             ? array_values(array_filter(array_map('strval', $options['ignored_overuse_terms'])))
             : [];
         $options['overuse_lookback_days'] = max(7, min(365, (int) ($options['overuse_lookback_days'] ?? self::DEFAULT_GENERATION['overuse_lookback_days'])));
+        $options['previous_bio_reference_min_uniqueness_score'] = max(0, min(100, (int) ($options['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score'])));
         $options['providers_order'] = is_array($options['providers_order'] ?? null)
             ? array_values(array_filter(array_map(
                 static fn ($provider): string => strtolower(trim((string) $provider)),
@@ -522,6 +539,64 @@ PROMPT;
             : self::DEFAULT_GENERATION['language'];
 
         return $options;
+    }
+
+    private function referenceBioContext(string $bioHtml, int $platformId, array $options, string $label): array
+    {
+        $text = trim(strip_tags($bioHtml));
+        if ($text === '') {
+            return [
+                'label' => $label,
+                'use' => false,
+                'score' => null,
+                'threshold' => (int) ($options['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']),
+                'reason' => 'empty',
+            ];
+        }
+
+        $analysis = $this->uniqueness->analyze($bioHtml, $platformId, $options);
+        $threshold = (int) ($options['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']);
+        $score = (int) ($analysis['bio_uniqueness_score'] ?? 0);
+        $flags = collect(array_merge(
+            (array) ($analysis['overuse_flags'] ?? []),
+            (array) ($analysis['ai_slop_flags'] ?? [])
+        ))
+            ->map(fn (array $flag): string => (string) ($flag['label'] ?? $flag['term'] ?? 'formulaic wording'))
+            ->filter()
+            ->unique()
+            ->take(6)
+            ->values()
+            ->all();
+
+        return [
+            'label' => $label,
+            'use' => $score >= $threshold,
+            'score' => $score,
+            'threshold' => $threshold,
+            'text' => mb_substr($text, 0, 500),
+            'flags' => $flags,
+        ];
+    }
+
+    private function addReferenceBioContext(array &$data, mixed $context): void
+    {
+        if (!is_array($context)) {
+            return;
+        }
+
+        $label = (string) ($context['label'] ?? 'Reference bio');
+        $score = $context['score'] ?? null;
+        $threshold = (int) ($context['threshold'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']);
+
+        if (!empty($context['use']) && trim((string) ($context['text'] ?? '')) !== '') {
+            $data[$label . ' context'] = trim((string) $context['text']) . ' — use only for human voice and useful continuity; do not copy phrasing or structure.';
+            return;
+        }
+
+        if ($score !== null) {
+            $flags = !empty($context['flags']) ? ' Flags: ' . implode(', ', (array) $context['flags']) . '.' : '';
+            $data[$label . ' quality note'] = "{$label} scored {$score}/100, below the reference threshold {$threshold}. Do not copy its wording, structure, opening, or angle. Use profile facts instead.{$flags}";
+        }
     }
 
     private function normalizeLengthOverlap(array $options): array

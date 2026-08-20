@@ -556,18 +556,26 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $selfServiceResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=self_service');
         $selfServiceResponse->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.total', 1)
+            ->assertJsonPath('stats.confirmed', 1)
+            ->assertJsonPath('stats.confirmed_amount', 1500)
             ->assertJsonPath('data.0.id', $selfService->id)
             ->assertJsonPath('data.0.reference_number', 'CHANNEL-SELF-SERVICE-001');
 
         $manualResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=manual');
         $manualResponse->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.total', 1)
+            ->assertJsonPath('stats.manual_proof_uploads', 1)
             ->assertJsonPath('data.0.id', $manual->id)
             ->assertJsonPath('data.0.reference_number', 'CHANNEL-MANUAL-001');
 
         $otherResponse = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&collection_channel=other');
         $otherResponse->assertOk()
             ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.total', 1)
+            ->assertJsonPath('stats.confirmed', 1)
+            ->assertJsonPath('stats.confirmed_amount', 900)
             ->assertJsonPath('data.0.id', $other->id)
             ->assertJsonPath('data.0.reference_number', 'CHANNEL-OTHER-001');
     }

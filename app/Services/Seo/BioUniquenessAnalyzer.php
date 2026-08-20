@@ -17,9 +17,22 @@ class BioUniquenessAnalyzer
         'because', 'been', 'before', 'being', 'between', 'book', 'booking', 'but',
         'can', 'city', 'contact', 'does', 'each', 'escort', 'feel', 'from', 'give',
         'good', 'have', 'here', 'into', 'just', 'like', 'looking', 'make', 'more',
-        'most', 'need', 'offers', 'only', 'profile', 'ready', 'real', 'same', 'she',
+        'most', 'need', 'offer', 'offers', 'only', 'profile', 'ready', 'real', 'same', 'she',
         'that', 'the', 'them', 'then', 'there', 'this', 'time', 'very', 'when',
         'with', 'will', 'you', 'your',
+    ];
+
+    /**
+     * Business/service vocabulary is allowed to recur across a marketplace.
+     * These terms may be SEO-relevant facts, so they should not count as corpus
+     * overuse unless they appear inside a cliche structure.
+     */
+    public const DEFAULT_ALLOWED_REPEATED_TERMS = [
+        'anal', 'bdsm', 'booking', 'bookings', 'call', 'calls', 'companion',
+        'companionship', 'couples', 'date', 'dates', 'domination', 'escort',
+        'escorts', 'fetish', 'gfe', 'incall', 'massage', 'mature', 'nude',
+        'nudes', 'outcall', 'private', 'rates', 'service', 'services',
+        'session', 'sessions', 'telegram', 'video', 'videos', 'whatsapp',
     ];
 
     private const AI_SLOP_PATTERNS = [
@@ -54,6 +67,12 @@ class BioUniquenessAnalyzer
             '/\bknows? what (?:she|i) want\b/i',
             '/\bschedule is flexible\b/i',
             '/\bthe rest is where things get interesting\b/i',
+        ],
+        'profile_artifact' => [
+            '/^\s*(?:i am|i\'m|im|meet|my name is)\s+[a-z]{2,}\b/i',
+            '/\b\d{2}\s*(?:year|yr)|\b\d{2}\s*,/i',
+            '/\b(?:black|african|latin|white|asian|mixed race)\b/i',
+            '/\s[-–—]{1,2}\s/u',
         ],
         'puffery' => [
             '/\bserves as\b/i',
@@ -219,6 +238,7 @@ class BioUniquenessAnalyzer
                     'formatting_artifact' => 18,
                     'no_no_punchline' => 36,
                     'stock_seduction' => 20,
+                    'profile_artifact' => 24,
                     default => 14,
                 });
                 $score += $impact;
@@ -364,7 +384,7 @@ class BioUniquenessAnalyzer
     {
         $items = is_array($value) ? $value : explode(',', (string) $value);
 
-        return collect($items)
+        return collect(array_merge(self::DEFAULT_ALLOWED_REPEATED_TERMS, $items))
             ->flatMap(fn ($item) => preg_split('/[\n,]+/', (string) $item) ?: [])
             ->map(fn ($item) => strtolower(trim((string) $item)))
             ->filter()

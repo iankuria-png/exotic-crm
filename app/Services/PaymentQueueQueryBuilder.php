@@ -242,11 +242,124 @@ class PaymentQueueQueryBuilder
         // (a top-up is credited here, then counted again when the balance is spent
         // on a subscription). When the queue is explicitly filtered to top-ups, the
         // stats reflect top-up totals so the cards stay consistent with the table.
+        $statusFilter = trim((string) ($validated['status'] ?? $request->input('status', '')));
+        if ($statusFilter !== '') {
+            if ($statusFilter === 'awaiting_payment') {
+                $query->whereIn('status', ['initiated', 'pending']);
+            } elseif ($statusFilter === 'completed') {
+                $query->whereIn('status', $context['successful_statuses']);
+            } elseif ($statusFilter === 'recovery_queue') {
+                $query->where(function (Builder $builder) use ($context) {
+                    $builder->whereIn('status', ['initiated', 'pending', 'failed'])
+                        ->orWhere(function (Builder $unmatchedCompleted) use ($context) {
+                            $unmatchedCompleted->whereIn('status', $context['successful_statuses'])
+                                ->whereNull('client_id');
+                        });
+                });
+            } elseif ($statusFilter === 'reversed') {
+                $query->where(function (Builder $builder) use ($context) {
+                    $builder->where('status', 'reversed')
+                        ->orWhere(function (Builder $inner) use ($context) {
+                            $inner->whereIn('status', $context['successful_statuses'])
+                                ->where('resolution_code', Payment::RESOLUTION_REVERSED);
+                        });
+                });
+            } else {
+                $query->where('status', $statusFilter);
+            }
+        }
+
+        $matchedFilter = trim((string) ($validated['matched'] ?? $request->input('matched', '')));
+        if ($matchedFilter !== '') {
+            if ($matchedFilter === 'unmatched') {
+                $query->whereNull('client_id');
+            } elseif ($matchedFilter === 'matched') {
+                $query->whereNotNull('client_id');
+            }
+        }
+
+        $sourceFilter = trim((string) ($validated['source'] ?? $request->input('source', '')));
+        if ($sourceFilter !== '') {
+            $query->where('source', $sourceFilter);
+        }
+
         $purposeFilter = trim((string) ($validated['purpose'] ?? $request->input('purpose', '')));
         if ($purposeFilter === 'wallet_topup') {
             $query->walletTopups();
         } else {
             $query->excludingWalletTopups();
+        }
+
+        $collectionChannelFilter = trim((string) ($validated['collection_channel'] ?? $request->input('collection_channel', '')));
+        if ($collectionChannelFilter !== '') {
+            $this->applyCollectionChannelFilter($query, $collectionChannelFilter);
+        }
+
+        $manualSubmissionFilter = trim((string) ($validated['manual_submission'] ?? $request->input('manual_submission', '')));
+        if ($manualSubmissionFilter !== '') {
+            if ($manualSubmissionFilter === 'without_proof') {
+                $query->whereDoesntHave('manualSubmission');
+            } elseif ($manualSubmissionFilter === 'pending_review') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->whereNull('review_decision');
+                })->where('reconciliation_state', 'manual_review');
+            } elseif ($manualSubmissionFilter === 'verified') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->where('review_decision', 'approved');
+                });
+            } elseif ($manualSubmissionFilter === 'rejected') {
+                $query->whereHas('manualSubmission', function (Builder $manualSubmissionQuery) {
+                    $manualSubmissionQuery->where('review_decision', 'rejected');
+                });
+            } else {
+                $query->whereHas('manualSubmission');
+            }
+        }
+
+        $hasDiscountFilter = trim((string) ($validated['has_discount'] ?? ''));
+        if ($hasDiscountFilter !== '') {
+            if ($hasDiscountFilter === '1') {
+                $query->whereHas('deal', function (Builder $dealQuery) {
+                    $dealQuery->whereNotNull('discount_percentage');
+                });
+            } else {
+                $query->where(function (Builder $builder) {
+                    $builder->whereNull('deal_id')
+                        ->orWhereHas('deal', function (Builder $dealQuery) {
+                            $dealQuery->whereNull('discount_percentage');
+                        });
+                });
+            }
+        }
+
+        $confidenceFilter = trim((string) ($validated['match_confidence'] ?? $request->input('match_confidence', '')));
+        if ($confidenceFilter !== '') {
+            if (in_array($confidenceFilter, ['high', 'medium', 'low'], true)) {
+                $query->where('reconciliation_confidence', $confidenceFilter);
+            } else {
+                $query->where('match_confidence', $confidenceFilter);
+            }
+        }
+
+        $reviewState = trim((string) ($validated['review_state'] ?? $request->input('review_state', '')));
+        if ($reviewState !== '') {
+            $query->where('reconciliation_state', $reviewState);
+        }
+
+        $resolutionCode = trim((string) ($validated['resolution_code'] ?? ''));
+        if ($resolutionCode !== '') {
+            $query->where('resolution_code', $resolutionCode);
+        }
+
+        $customerMixSegment = trim((string) ($validated['customer_mix_segment'] ?? ''));
+        if ($customerMixSegment !== '') {
+            $this->applyCustomerMixSegmentFilter(
+                $query,
+                $customerMixSegment,
+                $context['from'],
+                $context['to'],
+                $context['successful_statuses']
+            );
         }
 
         return $query;

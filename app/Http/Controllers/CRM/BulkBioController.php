@@ -96,6 +96,7 @@ class BulkBioController extends Controller
             'generation_options.ignored_overuse_terms' => 'nullable|array|max:100',
             'generation_options.ignored_overuse_terms.*' => 'string|max:80',
             'generation_options.overuse_lookback_days' => 'nullable|integer|min:7|max:365',
+            'generation_options.previous_bio_reference_min_uniqueness_score' => 'nullable|integer|min:0|max:100',
         ]);
 
         $rows = $this->resolver->parse($data['content'], (int) $data['platform_id']);

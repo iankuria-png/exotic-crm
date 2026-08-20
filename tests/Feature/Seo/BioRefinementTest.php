@@ -120,7 +120,7 @@ class BioRefinementTest extends TestCase
         $this->assertStringContainsString('stock copywriting phrases', $systemPrompt);
     }
 
-    public function test_previous_bio_is_included_in_prompt_when_provided(): void
+    public function test_low_quality_previous_bio_is_not_used_as_reference(): void
     {
         $platform = Platform::factory()->create();
         $captured = null;
@@ -133,18 +133,22 @@ class BioRefinementTest extends TestCase
             ], 200);
         });
 
-        $previousBio = '<p>The original draft mentioned coffee and books.</p>';
+        $previousBio = '<p>No games, no wasting time. Just good company and a better vibe.</p>';
 
-        app(BioGenerationService::class)->generate([
+        $result = app(BioGenerationService::class)->generate([
             'platform_id' => $platform->id,
             'profile_snapshot' => ['name' => 'L', 'city' => 'N'],
+            'generation_options' => ['previous_bio_reference_min_uniqueness_score' => 90],
             'refinements' => ['different_angle'],
             'previous_bio' => $previousBio,
         ]);
 
-        $systemPrompt = $captured['messages'][0]['content'] ?? '';
-        $this->assertStringContainsString('Previous draft', $systemPrompt);
-        $this->assertStringContainsString('coffee and books', $systemPrompt);
+        $userPrompt = $captured['messages'][1]['content'] ?? '';
+        $this->assertFalse($result['previous_bio_reference_used']);
+        $this->assertLessThan(90, $result['previous_bio_reference_score']);
+        $this->assertStringContainsString('Previous draft quality note', $userPrompt);
+        $this->assertStringContainsString('below the reference threshold 90', $userPrompt);
+        $this->assertStringNotContainsString('Just good company and a better vibe', $userPrompt);
     }
 
     public function test_unknown_refinements_are_silently_ignored(): void
