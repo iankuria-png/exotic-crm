@@ -30,6 +30,13 @@ const TIMING_OPTIONS = [
     { key: 'manual_send_later', label: 'Manual send later', hint: 'Store in queue and send when ready.' },
 ];
 
+const LOGIN_TARGET_OPTIONS = [
+    { key: 'profile', label: 'Profile', actionLabel: 'Open profile as client' },
+    { key: 'edit_profile', label: 'Edit profile', actionLabel: 'Edit profile as client' },
+    { key: 'change_password', label: 'Password', actionLabel: 'Change password as client' },
+    { key: 'home', label: 'Home', actionLabel: 'Open home as client' },
+];
+
 const statusTone = {
     deferred: 'bg-amber-50 text-amber-700 ring-amber-200',
     sent: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -83,16 +90,20 @@ export default function CredentialDispatchDrawer({
         temporary_password: '',
         reason: defaultReason,
     });
+    const [loginTarget, setLoginTarget] = useState('profile');
     const [dispatchFeedback, setDispatchFeedback] = useState(null);
     const [credentialReveal, setCredentialReveal] = useState(null);
+    const [sessionFallback, setSessionFallback] = useState(null);
 
     useEffect(() => {
         if (!open || !client) {
             return;
         }
 
+        setLoginTarget('profile');
         setDispatchFeedback(null);
         setCredentialReveal(null);
+        setSessionFallback(null);
         setForm({
             method: 'setup_link',
             channel: 'both',
@@ -220,33 +231,56 @@ export default function CredentialDispatchDrawer({
             queryClient.invalidateQueries({ queryKey: ['client-timeline', client?.id] });
             queryClient.invalidateQueries({ queryKey: ['client', client?.id] });
 
+            const destinationUrl = result?.url || result?.fallback?.open_url || null;
             const popup = loginWindowRef.current;
-            if (popup && !popup.closed) {
+            if (destinationUrl && popup && !popup.closed) {
                 try {
                     popup.opener = null;
                 } catch {
                     // Ignore cross-window restrictions.
                 }
-                popup.location.href = result.url;
+                popup.location.href = destinationUrl;
                 popup.focus();
-            } else {
-                window.open(result.url, '_blank', 'noopener,noreferrer');
+            } else if (destinationUrl) {
+                window.open(destinationUrl, '_blank', 'noopener,noreferrer');
+            } else if (popup && !popup.closed) {
+                popup.close();
             }
             loginWindowRef.current = null;
 
-            toast.success('Client session opened in a new tab.');
+            if (result?.mode === 'fallback_profile' || result?.session_link_generated === false) {
+                setSessionFallback(result?.fallback || { open_url: destinationUrl });
+                toast.warning('Client session unavailable. Opened profile fallback.');
+            } else {
+                setSessionFallback(null);
+                toast.success('Client session opened in a new tab.');
+            }
 
             if (typeof onSuccess === 'function') {
                 onSuccess(result);
             }
         },
         onError: (error) => {
+            const fallback = error?.response?.data?.fallback || null;
+            const fallbackUrl = fallback?.open_url || null;
             const popup = loginWindowRef.current;
-            if (popup && !popup.closed) {
+            if (fallbackUrl && popup && !popup.closed) {
+                try {
+                    popup.opener = null;
+                } catch {
+                    // Ignore cross-window restrictions.
+                }
+                popup.location.href = fallbackUrl;
+                popup.focus();
+                setSessionFallback(fallback);
+                toast.warning('Client session unavailable. Opened profile fallback.');
+            } else if (popup && !popup.closed) {
                 popup.close();
+                toast.error(error?.response?.data?.message || 'Unable to open client session.');
+            } else {
+                toast.error(error?.response?.data?.message || 'Unable to open client session.');
             }
             loginWindowRef.current = null;
-            toast.error(error?.response?.data?.message || 'Unable to open client session.');
         },
     });
 
@@ -274,6 +308,7 @@ export default function CredentialDispatchDrawer({
     }
 
     const historyRows = dispatchHistoryQuery.data?.data || [];
+    const selectedLoginTarget = LOGIN_TARGET_OPTIONS.find((option) => option.key === loginTarget) || LOGIN_TARGET_OPTIONS[0];
     const handleCopy = async (label, value) => {
         if (!value) {
             return;
@@ -287,14 +322,15 @@ export default function CredentialDispatchDrawer({
         }
     };
 
-    const handleLoginAsClient = () => {
+    const handleLoginAsClient = (target = loginTarget) => {
         loginWindowRef.current = window.open('', '_blank');
         if (loginWindowRef.current && !loginWindowRef.current.closed) {
             loginWindowRef.current.document.write('<p style="font-family: sans-serif; padding: 16px;">Opening client session...</p>');
         }
+        setSessionFallback(null);
 
         loginAsClientMutation.mutate({
-            target: 'edit_profile',
+            target,
             reason: form.reason.trim() || defaultReason,
             source: defaultSource,
         });
@@ -350,11 +386,11 @@ export default function CredentialDispatchDrawer({
                             ) : null}
                             <button
                                 type="button"
-                                onClick={handleLoginAsClient}
-                                disabled={accessContextQuery.isLoading || !canGenerateSessionLink || loginAsClientMutation.isPending}
+                                onClick={() => handleLoginAsClient(loginTarget)}
+                                disabled={accessContextQuery.isLoading || (!canGenerateSessionLink && !profileUrl) || loginAsClientMutation.isPending}
                                 className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {loginAsClientMutation.isPending ? 'Opening client session...' : 'Log in as client'}
+                                {loginAsClientMutation.isPending ? 'Opening client session...' : selectedLoginTarget.actionLabel}
                             </button>
                             <button
                                 type="button"
@@ -369,6 +405,22 @@ export default function CredentialDispatchDrawer({
                                 {resetCredentialsMutation.isPending ? 'Resetting credentials...' : 'Reset & copy credentials'}
                             </button>
                         </div>
+                        <div className="mt-2 flex flex-wrap gap-1 rounded-md border border-slate-200 bg-white p-1">
+                            {LOGIN_TARGET_OPTIONS.map((option) => (
+                                <button
+                                    key={option.key}
+                                    type="button"
+                                    onClick={() => setLoginTarget(option.key)}
+                                    className={`rounded px-2 py-1 text-[11px] font-semibold transition ${
+                                        loginTarget === option.key
+                                            ? 'bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200'
+                                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                                    }`}
+                                >
+                                    {option.label}
+                                </button>
+                            ))}
+                        </div>
                         {!profileUrl && accessMessages.access_links ? (
                             <p className="mt-2 text-[11px] text-amber-700">{accessMessages.access_links}</p>
                         ) : null}
@@ -382,6 +434,69 @@ export default function CredentialDispatchDrawer({
                             <p className="mt-2 text-[11px] text-rose-700">{accessContextError}</p>
                         ) : null}
                     </div>
+
+                    {sessionFallback ? (
+                        <section className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                    <p className="font-semibold">Profile fallback opened</p>
+                                    <p className="mt-0.5 text-amber-800">
+                                        The client session was unavailable, so CRM opened the best available access link.
+                                    </p>
+                                </div>
+                                {sessionFallback.open_url ? (
+                                    <a
+                                        href={sessionFallback.open_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100"
+                                    >
+                                        Reopen
+                                    </a>
+                                ) : null}
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {sessionFallback.profile_url ? (
+                                    <a href={sessionFallback.profile_url} target="_blank" rel="noreferrer" className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100">
+                                        Profile
+                                    </a>
+                                ) : null}
+                                {sessionFallback.login_url ? (
+                                    <a href={sessionFallback.login_url} target="_blank" rel="noreferrer" className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100">
+                                        Login page
+                                    </a>
+                                ) : null}
+                                {sessionFallback.setup_url ? (
+                                    <a href={sessionFallback.setup_url} target="_blank" rel="noreferrer" className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100">
+                                        Setup page
+                                    </a>
+                                ) : null}
+                                {sessionFallback.wp_username ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCopy('Username', sessionFallback.wp_username)}
+                                        className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100"
+                                    >
+                                        Copy username
+                                    </button>
+                                ) : null}
+                                {sessionFallback.can_reset_password ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => resetCredentialsMutation.mutate({
+                                            temporary_password: form.temporary_password.trim() || null,
+                                            reason: form.reason.trim() || defaultReason,
+                                            source: defaultSource,
+                                        })}
+                                        disabled={resetCredentialsMutation.isPending}
+                                        className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {resetCredentialsMutation.isPending ? 'Resetting...' : 'Reset & copy credentials'}
+                                    </button>
+                                ) : null}
+                            </div>
+                        </section>
+                    ) : null}
 
                     <section className="rounded-md border border-slate-200 bg-white px-3 py-3">
                         <p className="text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Access details</p>

@@ -58,6 +58,9 @@ function formatEventDescription(event) {
         case 'client_credentials_reset':
             return `Client credentials reset${content.wp_username ? ` for ${content.wp_username}` : ''}`;
         case 'client_login_as_client_link_generated':
+            if (content.fallback_used) {
+                return `Opened client ${String(content.fallback_url_type || 'profile').replace(/_/g, ' ')} fallback`;
+            }
             return `Client session link generated${content.target ? ` (${String(content.target).replace(/_/g, ' ')})` : ''}`;
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';

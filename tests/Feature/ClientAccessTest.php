@@ -162,7 +162,7 @@ class ClientAccessTest extends TestCase
         $baseUrl = rtrim((string) $platform->wp_api_url, '/');
 
         Http::fake([
-            $baseUrl . '/clients/8517/session-link' => Http::response([
+            $baseUrl.'/clients/8517/session-link' => Http::response([
                 'url' => 'https://kenya.example.test/?crm_client_session=super-secret-token',
                 'expires_at' => '2026-04-03T08:45:00+00:00',
                 'target' => 'edit_profile',
@@ -178,6 +178,8 @@ class ClientAccessTest extends TestCase
             ]);
 
             $response->assertOk()
+                ->assertJsonPath('mode', 'session')
+                ->assertJsonPath('session_link_generated', true)
                 ->assertJsonPath('url', 'https://kenya.example.test/?crm_client_session=super-secret-token')
                 ->assertJsonPath('expires_at', '2026-04-03T08:45:00+00:00')
                 ->assertJsonPath('target', 'edit_profile');
@@ -211,6 +213,141 @@ class ClientAccessTest extends TestCase
             $this->assertStringNotContainsString('super-secret-token', $payload);
             $this->assertSame('edit_profile', data_get($timelineEvent->content, 'target'));
         }
+    }
+
+    public function test_client_session_default_target_is_profile_and_alternates_pass_through(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+        $targets = [];
+
+        Http::fake(function ($request) use (&$targets, $baseUrl) {
+            if ($request->url() !== $baseUrl.'/clients/8517/session-link') {
+                return Http::response([], 404);
+            }
+
+            $target = (string) data_get($request->data(), 'target');
+            $targets[] = $target;
+
+            return Http::response([
+                'url' => "https://uganda.example.test/?crm_client_session={$target}",
+                'expires_at' => '2026-04-03T08:45:00+00:00',
+                'target' => $target,
+            ], 200);
+        });
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'reason' => 'Default target should be profile',
+        ])->assertOk()
+            ->assertJsonPath('target', 'profile');
+
+        foreach (['edit_profile', 'change_password', 'home'] as $target) {
+            $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+                'target' => $target,
+                'reason' => "Alternate target {$target}",
+            ])->assertOk()
+                ->assertJsonPath('target', $target);
+        }
+
+        $this->assertSame(['profile', 'edit_profile', 'change_password', 'home'], $targets);
+    }
+
+    public function test_session_link_request_failure_returns_profile_fallback_and_logs_without_session_url(): void
+    {
+        $platform = Platform::factory()->create([
+            'domain' => 'uganda.example.test',
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+            'wp_profile_permalink' => 'https://uganda.example.test/escort/nature-spot-parlour/',
+        ]);
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake([
+            $baseUrl.'/clients/8517/session-link' => Http::response([
+                'message' => 'Session endpoint unavailable',
+            ], 502),
+        ]);
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'reason' => 'Fallback when Uganda session creation fails',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('mode', 'fallback_profile')
+            ->assertJsonPath('session_link_generated', false)
+            ->assertJsonPath('url', 'https://uganda.example.test/escort/nature-spot-parlour/')
+            ->assertJsonPath('target', 'profile')
+            ->assertJsonPath('fallback.available', true)
+            ->assertJsonPath('fallback.url_type', 'profile')
+            ->assertJsonPath('fallback.profile_url', 'https://uganda.example.test/escort/nature-spot-parlour/')
+            ->assertJsonPath('fallback.login_url', 'https://uganda.example.test/wp-login.php')
+            ->assertJsonPath('fallback.setup_url', 'https://uganda.example.test/wp-login.php?action=lostpassword');
+
+        $auditLog = AuditLog::query()->where('action', 'client_login_as_client_link')->latest('id')->firstOrFail();
+        $timelineEvent = TimelineEvent::query()->where('event_type', 'client_login_as_client_link_generated')->latest('id')->firstOrFail();
+
+        $this->assertFalse((bool) data_get($auditLog->after_state, 'session_link_generated'));
+        $this->assertTrue((bool) data_get($auditLog->after_state, 'fallback_used'));
+        $this->assertSame('profile', data_get($auditLog->after_state, 'fallback_url_type'));
+        $this->assertStringNotContainsString('crm_client_session', json_encode($auditLog->after_state));
+
+        $this->assertFalse((bool) data_get($timelineEvent->content, 'session_link_generated'));
+        $this->assertTrue((bool) data_get($timelineEvent->content, 'fallback_used'));
+        $this->assertSame('profile', data_get($timelineEvent->content, 'fallback_url_type'));
+        $this->assertStringNotContainsString('crm_client_session', json_encode($timelineEvent->content));
+    }
+
+    public function test_malformed_session_link_success_uses_profile_fallback(): void
+    {
+        $platform = Platform::factory()->create([
+            'domain' => 'uganda.example.test',
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+            'wp_profile_permalink' => 'https://uganda.example.test/escort/nature-spot-parlour/',
+        ]);
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake([
+            $baseUrl.'/clients/8517/session-link' => Http::response([
+                'expires_at' => '2026-04-03T08:45:00+00:00',
+                'target' => 'profile',
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'reason' => 'Fallback when session payload has no URL',
+        ])->assertOk()
+            ->assertJsonPath('mode', 'fallback_profile')
+            ->assertJsonPath('session_link_generated', false)
+            ->assertJsonPath('url', 'https://uganda.example.test/escort/nature-spot-parlour/')
+            ->assertJsonPath('fallback.url_type', 'profile');
     }
 
     public function test_marketing_out_of_market_and_unlinked_clients_cannot_generate_client_session_links(): void
@@ -302,7 +439,7 @@ class ClientAccessTest extends TestCase
             'assigned_market_ids' => $role === 'admin' ? [] : $assignedMarketIds,
         ]);
 
-        if (!empty($assignedMarketIds)) {
+        if (! empty($assignedMarketIds)) {
             $user->platforms()->syncWithoutDetaching($assignedMarketIds);
         }
 

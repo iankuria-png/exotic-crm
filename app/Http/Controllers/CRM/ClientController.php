@@ -3489,14 +3489,30 @@ class ClientController extends Controller
         ]);
         $isFieldDepositFlow = ($request->user()?->role ?? null) === MarketAuthorizationService::ROLE_FIELD_SALES
             || ($validated['source'] ?? null) === 'field_sales.deposit_flow';
+        $requestedTarget = (string) ($validated['target'] ?? 'profile');
 
         try {
             $result = $this->credentialDeliveryService->createClientSessionLink($client, [
-                'target' => $validated['target'] ?? 'edit_profile',
+                'target' => $requestedTarget,
                 'reason' => $validated['reason'],
                 'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#'.(int) $request->user()?->id))),
             ]);
         } catch (\InvalidArgumentException $exception) {
+            if ((int) ($client->wp_post_id ?? 0) > 0) {
+                $fallbackResponse = $this->clientSessionFallbackResponse(
+                    $request,
+                    $client,
+                    $validated,
+                    $requestedTarget,
+                    $isFieldDepositFlow,
+                    $exception->getMessage()
+                );
+
+                if ($fallbackResponse) {
+                    return $fallbackResponse;
+                }
+            }
+
             return response()->json([
                 'message' => $exception->getMessage(),
             ], 422);
@@ -3508,6 +3524,19 @@ class ClientController extends Controller
                 'error' => $exception->getMessage(),
             ]);
 
+            $fallbackResponse = $this->clientSessionFallbackResponse(
+                $request,
+                $client,
+                $validated,
+                $requestedTarget,
+                $isFieldDepositFlow,
+                'WordPress session-link request failed.'
+            );
+
+            if ($fallbackResponse) {
+                return $fallbackResponse;
+            }
+
             return response()->json([
                 'message' => 'Client session link could not be generated. Please retry.',
             ], 502);
@@ -3518,13 +3547,26 @@ class ClientController extends Controller
                 'error' => $exception->getMessage(),
             ]);
 
+            $fallbackResponse = $this->clientSessionFallbackResponse(
+                $request,
+                $client,
+                $validated,
+                $requestedTarget,
+                $isFieldDepositFlow,
+                'WordPress did not return a usable client session link.'
+            );
+
+            if ($fallbackResponse) {
+                return $fallbackResponse;
+            }
+
             return response()->json([
                 'message' => 'Client session link could not be generated. Please retry.',
             ], 500);
         }
 
         $expiresAt = $result['expires_at'] ?? null;
-        $target = (string) ($result['target'] ?? ($validated['target'] ?? 'edit_profile'));
+        $target = (string) ($result['target'] ?? $requestedTarget);
 
         TimelineEvent::create([
             'platform_id' => (int) $client->platform_id,
@@ -3583,6 +3625,8 @@ class ClientController extends Controller
         }
 
         return response()->json([
+            'mode' => 'session',
+            'session_link_generated' => true,
             'url' => $result['url'],
             'expires_at' => $expiresAt,
             'target' => $target,
@@ -3774,6 +3818,132 @@ class ClientController extends Controller
         if (! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
             abort(403, 'You do not have access to this client market.');
         }
+    }
+
+    private function clientSessionFallbackResponse(
+        Request $request,
+        Client $client,
+        array $validated,
+        string $target,
+        bool $isFieldDepositFlow,
+        string $failureMessage
+    ) {
+        try {
+            $accessContext = $this->credentialDeliveryService->accessContext($client);
+        } catch (\Throwable $exception) {
+            Log::warning('Client session fallback context lookup failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $fallback = $this->buildClientSessionFallback($accessContext);
+        if (! $fallback['available']) {
+            return null;
+        }
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_login_as_client_link_generated',
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'target' => $target,
+                'session_link_generated' => false,
+                'fallback_used' => true,
+                'fallback_url_type' => $fallback['url_type'],
+                'source' => $validated['source'] ?? null,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $auditPayload = [
+            'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+            'target' => $target,
+            'session_link_generated' => false,
+            'fallback_used' => true,
+            'fallback_url_type' => $fallback['url_type'],
+            'source' => $validated['source'] ?? null,
+            'field_sales_deposit_flow' => $isFieldDepositFlow,
+            'request_ip' => $request->ip(),
+            'user_agent' => substr((string) $request->userAgent(), 0, 500),
+        ];
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_LOGIN_AS_CLIENT_LINK,
+            'client',
+            (int) $client->id,
+            null,
+            $auditPayload,
+            (string) $validated['reason']
+        );
+
+        if ($isFieldDepositFlow) {
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::FIELD_SALES_CLIENT_LOGIN_AS_CLIENT,
+                'client',
+                (int) $client->id,
+                null,
+                array_merge($auditPayload, ['source' => 'field_sales.deposit_flow']),
+                (string) $validated['reason']
+            );
+        }
+
+        return response()->json([
+            'message' => 'Client session link could not be generated, so the profile fallback was opened.',
+            'mode' => 'fallback_profile',
+            'session_link_generated' => false,
+            'url' => $fallback['open_url'],
+            'target' => $target,
+            'expires_at' => null,
+            'fallback' => [
+                'available' => true,
+                'reason' => $failureMessage,
+                'open_url' => $fallback['open_url'],
+                'url_type' => $fallback['url_type'],
+                'profile_url' => $fallback['profile_url'],
+                'login_url' => $fallback['login_url'],
+                'setup_url' => $fallback['setup_url'],
+                'wp_username' => $fallback['wp_username'],
+                'can_reset_password' => $fallback['can_reset_password'],
+            ],
+        ]);
+    }
+
+    private function buildClientSessionFallback(array $accessContext): array
+    {
+        $profileUrl = $this->filledString($accessContext['profile_url'] ?? null);
+        $loginUrl = $this->filledString($accessContext['login_url'] ?? null);
+        $setupUrl = $this->filledString($accessContext['setup_url'] ?? null);
+        $openUrl = $profileUrl ?: ($loginUrl ?: $setupUrl);
+        $urlType = $profileUrl ? 'profile' : ($loginUrl ? 'login' : ($setupUrl ? 'setup' : null));
+
+        return [
+            'available' => $openUrl !== null,
+            'open_url' => $openUrl,
+            'url_type' => $urlType,
+            'profile_url' => $profileUrl,
+            'login_url' => $loginUrl,
+            'setup_url' => $setupUrl,
+            'wp_username' => $this->filledString($accessContext['wp_username'] ?? null),
+            'can_reset_password' => (bool) ($accessContext['can_reset_password'] ?? false),
+        ];
+    }
+
+    private function filledString($value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+
+        return $value !== '' ? $value : null;
     }
 
     private function paymentLinkResponsePayload(Deal $deal, Payment $payment, array $result): array

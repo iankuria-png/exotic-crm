@@ -9,6 +9,7 @@ use App\Models\Template;
 use App\Services\Messaging\DispatchResult;
 use App\Services\Messaging\MessageRecipient;
 use App\Services\Messaging\MessagingDispatcher;
+use App\Support\ClientProfileUrl;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -21,14 +22,15 @@ class CredentialDeliveryService
     private const DEFAULT_SUPPORT_CHAT_URL = 'https://chat.cloud.board.support/1369683147';
 
     public const RESET_PASSWORD_DISABLED_MESSAGE = 'A linked WordPress user and market database credentials are required to reset credentials.';
+
     public const LOGIN_AS_CLIENT_DISABLED_MESSAGE = 'A linked WordPress profile and market API credentials are required to generate a client session link.';
+
     public const ACCESS_LINKS_DISABLED_MESSAGE = 'No WordPress login or profile URL is configured for this market.';
 
     public function __construct(
         private readonly NotificationService $notificationService,
         private readonly MessagingDispatcher $messagingDispatcher
-    ) {
-    }
+    ) {}
 
     public function createDispatch(Client $client, array $payload, int $actorId): ClientCredentialDispatch
     {
@@ -92,7 +94,7 @@ class CredentialDeliveryService
         $client->loadMissing('platform');
         $platform = $client->platform;
 
-        if (!$platform) {
+        if (! $platform) {
             throw new \InvalidArgumentException('Client platform is required to resolve access context.');
         }
 
@@ -124,11 +126,11 @@ class CredentialDeliveryService
         $client->loadMissing('platform');
         $platform = $client->platform;
 
-        if (!$platform) {
+        if (! $platform) {
             throw new \InvalidArgumentException('Client platform is required to reset credentials.');
         }
 
-        if (!$this->canResetPassword($client, $platform)) {
+        if (! $this->canResetPassword($client, $platform)) {
             throw new \InvalidArgumentException(self::RESET_PASSWORD_DISABLED_MESSAGE);
         }
 
@@ -152,11 +154,11 @@ class CredentialDeliveryService
         $client->loadMissing('platform');
         $platform = $client->platform;
 
-        if (!$platform) {
+        if (! $platform) {
             throw new \InvalidArgumentException('Client platform is required to generate a client session link.');
         }
 
-        if (!$this->canGenerateSessionLink($client, $platform)) {
+        if (! $this->canGenerateSessionLink($client, $platform)) {
             throw new \InvalidArgumentException(self::LOGIN_AS_CLIENT_DISABLED_MESSAGE);
         }
 
@@ -189,17 +191,17 @@ class CredentialDeliveryService
     private function normalizePayload(Client $client, array $payload): array
     {
         $method = (string) ($payload['method'] ?? 'setup_link');
-        if (!in_array($method, ['setup_link', 'temporary_password'], true)) {
+        if (! in_array($method, ['setup_link', 'temporary_password'], true)) {
             throw new \InvalidArgumentException('Invalid credential method.');
         }
 
         $channel = (string) ($payload['channel'] ?? 'both');
-        if (!in_array($channel, ['email', 'sms', 'whatsapp', 'both', 'sms_whatsapp'], true)) {
+        if (! in_array($channel, ['email', 'sms', 'whatsapp', 'both', 'sms_whatsapp'], true)) {
             throw new \InvalidArgumentException('Invalid credential channel.');
         }
 
         $timing = (string) ($payload['timing'] ?? 'send_now');
-        if (!in_array($timing, ['send_now', 'manual_send_later'], true)) {
+        if (! in_array($timing, ['send_now', 'manual_send_later'], true)) {
             throw new \InvalidArgumentException('Invalid credential timing.');
         }
 
@@ -220,13 +222,13 @@ class CredentialDeliveryService
             $recipientPhone = null;
         }
 
-        if (in_array($channel, ['email', 'both'], true) && !$recipientEmail) {
+        if (in_array($channel, ['email', 'both'], true) && ! $recipientEmail) {
             if ($timing === 'send_now') {
                 throw new \InvalidArgumentException('Recipient email is required for the selected credential channel.');
             }
         }
 
-        if (in_array($channel, ['sms', 'whatsapp', 'both', 'sms_whatsapp'], true) && !$recipientPhone) {
+        if (in_array($channel, ['sms', 'whatsapp', 'both', 'sms_whatsapp'], true) && ! $recipientPhone) {
             if ($timing === 'send_now') {
                 throw new \InvalidArgumentException('Recipient phone is required for the selected credential channel.');
             }
@@ -284,7 +286,7 @@ class CredentialDeliveryService
         $client->loadMissing('platform');
         $platform = $client->platform;
 
-        if (!$platform) {
+        if (! $platform) {
             throw new \InvalidArgumentException('Client platform is required for credential delivery.');
         }
 
@@ -314,7 +316,7 @@ class CredentialDeliveryService
         }
 
         if (in_array('email', $requestedChannels, true)) {
-            if (!$normalized['recipient_email']) {
+            if (! $normalized['recipient_email']) {
                 $channelResults['email'] = [
                     'success' => false,
                     'status' => 'failed',
@@ -329,14 +331,14 @@ class CredentialDeliveryService
                     (string) $messageBundle['email_body']
                 );
                 $channelResults['email'] = $emailResult;
-                if (!$emailResult['success']) {
-                    $errors[] = 'Email send failed: ' . ($emailResult['provider_response'] ?? 'unknown error');
+                if (! $emailResult['success']) {
+                    $errors[] = 'Email send failed: '.($emailResult['provider_response'] ?? 'unknown error');
                 }
             }
         }
 
         if (in_array('sms', $requestedChannels, true)) {
-            if (!$normalized['recipient_phone']) {
+            if (! $normalized['recipient_phone']) {
                 $channelResults['sms'] = [
                     'success' => false,
                     'status' => 'failed',
@@ -358,13 +360,13 @@ class CredentialDeliveryService
 
                 $channelResults['sms'] = $smsResult;
                 if (empty($smsResult['success'])) {
-                    $errors[] = 'SMS send failed: ' . ($smsResult['provider_response'] ?? 'unknown error');
+                    $errors[] = 'SMS send failed: '.($smsResult['provider_response'] ?? 'unknown error');
                 }
             }
         }
 
         if (in_array('whatsapp', $requestedChannels, true)) {
-            if (!$normalized['recipient_phone']) {
+            if (! $normalized['recipient_phone']) {
                 $channelResults['whatsapp'] = [
                     'success' => false,
                     'status' => 'failed',
@@ -389,20 +391,20 @@ class CredentialDeliveryService
                         'credential_dispatch_id' => (int) $dispatch->id,
                         'actor_id' => $actorId,
                         'suppress_gateway_timeline' => true,
-                        'idempotency_key' => 'credential-' . $dispatch->id . '-whatsapp',
+                        'idempotency_key' => 'credential-'.$dispatch->id.'-whatsapp',
                     ]
                 );
                 $whatsAppResult = $this->serializeDispatchResult($whatsAppDispatch);
 
                 $channelResults['whatsapp'] = $whatsAppResult;
                 if (empty($whatsAppResult['success'])) {
-                    $errors[] = 'WhatsApp send failed: ' . ($whatsAppResult['provider_response'] ?? 'unknown error');
+                    $errors[] = 'WhatsApp send failed: '.($whatsAppResult['provider_response'] ?? 'unknown error');
                 }
             }
         }
 
         $successCount = collect($requestedChannels)
-            ->filter(fn (string $channel) => !empty($channelResults[$channel]['success']))
+            ->filter(fn (string $channel) => ! empty($channelResults[$channel]['success']))
             ->count();
 
         $status = 'failed';
@@ -474,10 +476,10 @@ class CredentialDeliveryService
         string $method,
         ?string $temporaryPassword
     ): array {
-        $profileUrl = $client->wp_profile_url;
+        $profileUrl = ClientProfileUrl::resolve($client, $platform);
         $baseUrl = $this->resolvePlatformBaseUrl($platform, $profileUrl);
-        $loginUrl = $baseUrl ? rtrim($baseUrl, '/') . '/wp-login.php' : null;
-        $setupUrl = $baseUrl ? rtrim($baseUrl, '/') . '/wp-login.php?action=lostpassword' : null;
+        $loginUrl = $baseUrl ? rtrim($baseUrl, '/').'/wp-login.php' : null;
+        $setupUrl = $baseUrl ? rtrim($baseUrl, '/').'/wp-login.php?action=lostpassword' : null;
         $wpUsername = $this->resolveWpUsername($platform, (int) ($client->wp_user_id ?? 0));
         $supportChatUrl = trim((string) ($platform->support_chat_url ?: self::DEFAULT_SUPPORT_CHAT_URL));
 
@@ -582,7 +584,7 @@ class CredentialDeliveryService
         $search = [];
         $replace = [];
         foreach ($vars as $key => $value) {
-            $search[] = '{' . $key . '}';
+            $search[] = '{'.$key.'}';
             $replace[] = (string) $value;
         }
 
@@ -731,11 +733,11 @@ class CredentialDeliveryService
 
     private function connectWordPress(Platform $platform): string
     {
-        if (!$this->hasWordPressDatabaseCredentials($platform)) {
+        if (! $this->hasWordPressDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
 
-        $connectionName = 'wp_credentials_' . (int) $platform->id;
+        $connectionName = 'wp_credentials_'.(int) $platform->id;
         $connectionConfig = $platform->getConnectionConfig();
         $host = strtolower(trim((string) ($connectionConfig['host'] ?? '')));
         $defaultSocket = (string) config('database.connections.mysql.unix_socket', '');
@@ -768,8 +770,8 @@ class CredentialDeliveryService
     {
         $domain = trim((string) ($platform->domain ?? ''));
         if ($domain !== '') {
-            if (!str_starts_with($domain, 'http://') && !str_starts_with($domain, 'https://')) {
-                $domain = 'https://' . $domain;
+            if (! str_starts_with($domain, 'http://') && ! str_starts_with($domain, 'https://')) {
+                $domain = 'https://'.$domain;
             }
 
             return rtrim($domain, '/');
@@ -782,8 +784,8 @@ class CredentialDeliveryService
 
         if ($profileUrl) {
             $parts = parse_url($profileUrl);
-            if (!empty($parts['scheme']) && !empty($parts['host'])) {
-                return $parts['scheme'] . '://' . $parts['host'];
+            if (! empty($parts['scheme']) && ! empty($parts['host'])) {
+                return $parts['scheme'].'://'.$parts['host'];
             }
         }
 
@@ -820,7 +822,7 @@ class CredentialDeliveryService
     {
         $normalized = PhoneNormalizer::normalize($phone, $prefix) ?? '';
 
-        if ($normalized === '' || !preg_match('/^\d{10,15}$/', $normalized)) {
+        if ($normalized === '' || ! preg_match('/^\d{10,15}$/', $normalized)) {
             return null;
         }
 
@@ -830,13 +832,14 @@ class CredentialDeliveryService
     private function generateTemporaryPassword(int $length = 12): string
     {
         $length = max(10, $length);
+
         return Str::random($length);
     }
 
     private function buildIdempotencyKey(array $context): string
     {
         $encoded = json_encode($context);
-        if (!is_string($encoded)) {
+        if (! is_string($encoded)) {
             $encoded = serialize($context);
         }
 

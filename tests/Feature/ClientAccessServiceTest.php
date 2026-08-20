@@ -8,7 +8,6 @@ use App\Services\CredentialDeliveryService;
 use App\Services\Messaging\MessagingDispatcher;
 use App\Services\NotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Mockery\MockInterface;
 use Tests\TestCase;
 
 class ClientAccessServiceTest extends TestCase
@@ -48,6 +47,34 @@ class ClientAccessServiceTest extends TestCase
         $this->assertTrue($context['can_generate_session_link']);
         $this->assertSame(CredentialDeliveryService::RESET_PASSWORD_DISABLED_MESSAGE, $context['messages']['reset_password']);
         $this->assertNull($context['messages']['login_as_client']);
+    }
+
+    public function test_access_context_prefers_synced_profile_permalink_before_computed_post_url(): void
+    {
+        $platform = Platform::factory()->create([
+            'domain' => 'uganda.example.test',
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7777,
+            'wp_user_id' => null,
+            'wp_profile_permalink' => 'https://uganda.example.test/escort/nature-spot-parlour/',
+        ]);
+
+        $service = new CredentialDeliveryService(
+            $this->mockedNotificationService(),
+            app(MessagingDispatcher::class)
+        );
+
+        $context = $service->accessContext($client);
+
+        $this->assertSame('https://uganda.example.test/escort/nature-spot-parlour/', $context['profile_url']);
+        $this->assertSame('https://uganda.example.test/wp-login.php', $context['login_url']);
+        $this->assertSame('https://uganda.example.test/wp-login.php?action=lostpassword', $context['setup_url']);
     }
 
     private function mockedNotificationService(): NotificationService
