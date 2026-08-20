@@ -475,7 +475,9 @@ class ClientController extends Controller
                 $builder->orWhere(function ($nested) use ($term) {
                     $nested->where('name', 'like', "%{$term}%")
                         ->orWhere('phone_normalized', 'like', "%{$term}%")
-                        ->orWhere('email', 'like', "%{$term}%");
+                        ->orWhere('email', 'like', "%{$term}%")
+                        ->orWhere('wp_profile_permalink', 'like', "%{$term}%")
+                        ->orWhere('wp_profile_slug', 'like', "%{$term}%");
 
                     if (ctype_digit($term)) {
                         $numeric = (int) $term;

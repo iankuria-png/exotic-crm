@@ -101,6 +101,155 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_client_search_prefers_stored_permalink_before_wordpress_lookup_paths(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 44822,
+            'name' => 'Bella',
+            'wp_profile_permalink' => 'https://www.exoticghana.com/escort/bella-2/',
+            'wp_profile_slug' => 'bella-2',
+        ]);
+        $staleClient = $this->createClient($ghana, [
+            'wp_post_id' => 99117,
+            'name' => 'Wrong Bella',
+        ]);
+
+        DB::table('escort_live_urls')->insert([
+            'post_id' => 99117,
+            'post_name' => 'bella-2',
+            'live_url' => 'https://www.exoticghana.com/escort/bella-2/',
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/bella-2/' => Http::response('', 404),
+        ]);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/bella-2/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'stored_permalink')
+            ->assertJsonPath('search_resolution.resolved_wp_post_id', 44822)
+            ->assertJsonPath('search_resolution.matched_client_ids.0', $client->id);
+
+        $this->assertNotSame($staleClient->id, $response->json('data.0.id'));
+    }
+
+    public function test_client_search_prefers_stored_slug_before_wordpress_lookup_paths(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 44823,
+            'name' => 'Slug Bella',
+            'wp_profile_slug' => 'bella-3',
+        ]);
+
+        DB::table('escort_live_urls')->insert([
+            'post_id' => 88888,
+            'post_name' => 'bella-3',
+            'live_url' => null,
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/bella-3/' => Http::response('', 404),
+        ]);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/bella-3/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'stored_slug')
+            ->assertJsonPath('search_resolution.resolved_wp_post_id', 44823);
+    }
+
+    public function test_stored_permalink_conflict_returns_crm_match_with_warning_metadata(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 44822,
+            'name' => 'Bella',
+            'wp_profile_permalink' => 'https://www.exoticghana.com/escort/bella-2/',
+            'wp_profile_slug' => 'bella-2',
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/bella-2/' => Http::response('', 200, [
+                'Link' => '<https://www.exoticghana.com/?p=107143>; rel=shortlink',
+            ]),
+        ]);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/bella-2/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'conflict')
+            ->assertJsonPath('search_resolution.source', 'stored_permalink_conflict')
+            ->assertJsonPath('search_resolution.matched_client_ids.0', $client->id)
+            ->assertJsonPath('search_resolution.crm_wp_post_id', 44822)
+            ->assertJsonPath('search_resolution.live_resolved_wp_post_id', 107143);
+    }
+
+    public function test_stored_permalink_same_resolved_post_id_does_not_show_conflict(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 44822,
+            'name' => 'Bella',
+            'wp_profile_permalink' => 'https://www.exoticghana.com/escort/bella-2/',
+            'wp_profile_slug' => 'bella-2',
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/bella-2/' => Http::response('', 200, [
+                'Link' => '<https://www.exoticghana.com/?p=44822>; rel=shortlink',
+            ]),
+        ]);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/bella-2/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'stored_permalink');
+    }
+
+    public function test_stored_permalink_resolver_failure_still_returns_crm_match(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 44822,
+            'name' => 'Bella',
+            'wp_profile_permalink' => 'https://www.exoticghana.com/escort/bella-2/',
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/bella-2/' => Http::response('', 404),
+        ]);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/bella-2/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'stored_permalink');
+    }
+
     public function test_client_search_resolves_exact_client_from_public_profile_shortlink_header(): void
     {
         $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
@@ -307,6 +456,29 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonPath('data.0.id', $client->id)
             ->assertJsonCount(1, 'data');
         $byWpUserId->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data');
+    }
+
+    public function test_client_text_search_matches_profile_permalink_and_slug(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'name' => 'Profile Link Match',
+            'wp_profile_permalink' => 'https://www.exoticghana.com/escort/bella-2/',
+            'wp_profile_slug' => 'bella-2',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $bySlug = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=bella-2');
+        $byPermalinkFragment = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('escort/bella-2'));
+
+        $bySlug->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data');
+        $byPermalinkFragment->assertOk()
             ->assertJsonPath('data.0.id', $client->id)
             ->assertJsonCount(1, 'data');
     }

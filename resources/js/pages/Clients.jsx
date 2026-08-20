@@ -430,6 +430,53 @@ function formatLastSeenMeta(unixTs) {
     return exact ? `Seen ${relative} • ${exact}` : `Seen ${relative}`;
 }
 
+function profileUrlIdentity(row) {
+    const bestUrl = String(row?.wp_profile_permalink || row?.wp_profile_url || '').trim();
+    const slug = String(row?.wp_profile_slug || '').trim();
+
+    if (slug) {
+        return { bestUrl, label: slug };
+    }
+
+    if (bestUrl) {
+        try {
+            const parsed = new URL(bestUrl);
+            const pathSegment = parsed.pathname
+                .split('/')
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .pop();
+
+            if (pathSegment) {
+                return { bestUrl, label: decodeURIComponent(pathSegment) };
+            }
+
+            const postId = parsed.searchParams.get('p');
+            if (postId) {
+                return { bestUrl, label: `?p=${postId}` };
+            }
+        } catch {
+            const fallbackSegment = bestUrl
+                .split('?')[0]
+                .split('/')
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .pop();
+
+            if (fallbackSegment) {
+                return { bestUrl, label: fallbackSegment };
+            }
+        }
+    }
+
+    const wpPostId = Number(row?.wp_post_id || 0);
+    if (wpPostId > 0) {
+        return { bestUrl, label: `?p=${wpPostId}` };
+    }
+
+    return { bestUrl, label: '' };
+}
+
 export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending', 'expired_public', 'archived']);
     const allowedVerifiedFilters = new Set(['1', '0']);
@@ -1534,6 +1581,8 @@ export default function Clients() {
         }
 
         const wpPostId = resolution.resolved_wp_post_id ? `WP #${resolution.resolved_wp_post_id}` : null;
+        const crmWpPostId = Number(resolution.crm_wp_post_id || 0) > 0 ? `WP #${Number(resolution.crm_wp_post_id)}` : null;
+        const liveWpPostId = Number(resolution.live_resolved_wp_post_id || 0) > 0 ? `WP #${Number(resolution.live_resolved_wp_post_id)}` : null;
 
         // Pick a market the agent can actually sync: prefer the active market filter when
         // it's among the resolved platforms, otherwise the first accessible match.
@@ -1554,6 +1603,19 @@ export default function Clients() {
                 platformName: syncTarget.platform_name || 'this market',
             }
             : null;
+
+        if (resolution.mode === 'conflict') {
+            const ids = crmWpPostId && liveWpPostId
+                ? `CRM has ${crmWpPostId}; WordPress resolves this URL to ${liveWpPostId}.`
+                : 'WordPress resolves this URL to a different profile than the CRM record.';
+
+            return {
+                tone: 'warning',
+                title: 'CRM profile found, but WordPress resolves this URL differently',
+                message: `${ids} Opening the CRM match so sales can identify the client, but the profile link should be reviewed.`,
+                action: null,
+            };
+        }
 
         if (resolution.mode === 'exact') {
             return {
@@ -1692,6 +1754,21 @@ export default function Clients() {
             toast.success('Phone number copied');
         } catch {
             toast.error('Clipboard blocked. Select the phone number and copy manually.');
+        }
+    };
+
+    const handleCopyProfileUrl = async (event, row, url) => {
+        event.stopPropagation();
+
+        if (!url) {
+            return;
+        }
+
+        try {
+            await copyToClipboard(url);
+            toast.success(`Profile URL copied for ${row.name || 'client'}`);
+        } catch {
+            toast.error('Clipboard blocked. Select the profile URL and copy manually.');
         }
     };
 
@@ -1913,21 +1990,55 @@ export default function Clients() {
         {
             key: 'wp_profile_url',
             label: 'Profile URL',
-            render: (row) => (
-                row.wp_profile_url ? (
-                    <a
-                        href={row.wp_profile_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => event.stopPropagation()}
-                        className="text-xs font-medium text-teal-700 underline decoration-teal-200 underline-offset-2 transition hover:text-teal-800"
-                    >
-                        Open profile
-                    </a>
-                ) : (
-                    <span className="text-xs text-slate-400">Not available</span>
-                )
-            ),
+            width: '210px',
+            cellClassName: 'w-[210px] max-w-[210px]',
+            render: (row) => {
+                const { bestUrl, label } = profileUrlIdentity(row);
+                const clientLabel = row.name || `client ${row.id}`;
+
+                if (!bestUrl) {
+                    return (
+                        <div className="max-w-[178px] truncate text-xs text-slate-400" title={label || 'Profile URL not available'}>
+                            {label || 'Not available'}
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="flex max-w-[178px] min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-700" title={bestUrl}>
+                            {label || 'Open profile'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={(event) => handleCopyProfileUrl(event, row, bestUrl)}
+                            aria-label={`Copy profile URL for ${clientLabel}`}
+                            title="Copy profile URL"
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" />
+                            </svg>
+                        </button>
+                        <a
+                            href={bestUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            aria-label={`Open public profile for ${clientLabel}`}
+                            title="Open public profile"
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 6H18v4.5" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 6l-8 8" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 18H6V10" />
+                            </svg>
+                        </a>
+                    </div>
+                );
+            },
         },
         {
             key: 'platform',

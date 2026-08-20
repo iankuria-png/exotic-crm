@@ -35,6 +35,28 @@ class ClientProfileUrlSearchService
             ];
         }
 
+        $storedPermalinkMatch = $this->resolveStoredClientMatch(
+            $search,
+            $candidatePlatforms,
+            $normalizedUrl,
+            'wp_profile_permalink',
+            'stored_permalink'
+        );
+        if ($storedPermalinkMatch !== null) {
+            return $storedPermalinkMatch;
+        }
+
+        $storedSlugMatch = $this->resolveStoredClientMatch(
+            $search,
+            $candidatePlatforms,
+            $normalizedUrl,
+            'wp_profile_slug',
+            'stored_slug'
+        );
+        if ($storedSlugMatch !== null) {
+            return $storedSlugMatch;
+        }
+
         if ($normalizedUrl['wp_post_id'] !== null) {
             $clientIds = $this->findClientIdsByPostId($candidatePlatforms, $normalizedUrl['wp_post_id']);
 
@@ -214,9 +236,118 @@ class ClientProfileUrlSearchService
         return Client::query()
             ->whereIn('platform_id', $platforms->pluck('id')->all())
             ->where('wp_post_id', $wpPostId)
+            ->orderBy('id')
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
+    }
+
+    private function resolveStoredClientMatch(
+        string $search,
+        Collection $candidatePlatforms,
+        array $normalizedUrl,
+        string $column,
+        string $source
+    ): ?array {
+        $candidates = $column === 'wp_profile_permalink'
+            ? (array) ($normalizedUrl['url_candidates'] ?? [])
+            : (array) ($normalizedUrl['slug_candidates'] ?? []);
+
+        $candidates = array_values(array_unique(array_filter(array_map(
+            static fn ($candidate) => trim((string) $candidate),
+            $candidates
+        ))));
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $clients = Client::query()
+            ->whereIn('platform_id', $candidatePlatforms->pluck('id')->all())
+            ->whereIn($column, $candidates)
+            ->orderBy('id')
+            ->get(['id', 'platform_id', 'wp_post_id']);
+
+        if ($clients->isEmpty()) {
+            return null;
+        }
+
+        $clientIds = $clients
+            ->pluck('id')
+            ->map(static fn ($id) => (int) $id)
+            ->values()
+            ->all();
+        $crmPostIds = $clients
+            ->pluck('wp_post_id')
+            ->map(static fn ($id) => (int) $id)
+            ->filter(static fn (int $id) => $id > 0)
+            ->values()
+            ->all();
+        $firstRowPostId = (int) ($clients->first()?->wp_post_id ?? 0);
+        $firstCrmPostId = $firstRowPostId > 0 ? $firstRowPostId : null;
+        $matchedPlatformIds = $clients
+            ->pluck('platform_id')
+            ->map(static fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $resolution = $this->resolution('exact', $source, $firstCrmPostId, [
+            'matched_client_ids' => $clientIds,
+            'matched_platform_ids' => $matchedPlatformIds,
+        ]);
+
+        if ($normalizedUrl['wp_post_id'] === null) {
+            $conflict = $this->resolveStoredMatchConflict(
+                $search,
+                $candidatePlatforms,
+                $source,
+                $clientIds,
+                $crmPostIds,
+                $firstCrmPostId,
+                $matchedPlatformIds
+            );
+
+            if ($conflict !== null) {
+                $resolution = $conflict;
+            }
+        }
+
+        return [
+            'client_ids' => $clientIds,
+            'fallback_terms' => [],
+            'resolution' => $resolution,
+        ];
+    }
+
+    private function resolveStoredMatchConflict(
+        string $search,
+        Collection $candidatePlatforms,
+        string $source,
+        array $clientIds,
+        array $crmPostIds,
+        ?int $firstCrmPostId,
+        array $matchedPlatformIds
+    ): ?array {
+        foreach ($candidatePlatforms as $platform) {
+            $resolved = $this->wordPressProfileUrlResolver->resolve($search, $platform);
+            $livePostId = (int) ($resolved['wp_post_id'] ?? 0);
+
+            if ($livePostId <= 0 || in_array($livePostId, $crmPostIds, true)) {
+                continue;
+            }
+
+            return [
+                'mode' => 'conflict',
+                'source' => $source . '_conflict',
+                'matched_client_ids' => $clientIds,
+                'crm_wp_post_id' => $firstCrmPostId,
+                'live_resolved_wp_post_id' => $livePostId,
+                'matched_platform_ids' => $matchedPlatformIds,
+            ];
+        }
+
+        return null;
     }
 
     private function resolvePublicProfileUrl(string $search, Collection $candidatePlatforms): ?array
@@ -283,6 +414,7 @@ class ClientProfileUrlSearchService
                     });
                 }
             })
+            ->orderBy('id')
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
