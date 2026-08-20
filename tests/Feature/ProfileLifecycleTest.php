@@ -328,6 +328,53 @@ class ProfileLifecycleTest extends TestCase
         $this->assertSame($client->id, $fresh->id);
     }
 
+    public function test_sync_one_clears_stale_lifecycle_when_wordpress_reports_future_paid_profile_without_lifecycle_meta(): void
+    {
+        $platform = $this->createPlatform();
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 70864,
+            'name' => 'MWIZA',
+            'profile_status' => 'publish',
+            'lifecycle_state' => 'expired',
+            'lifecycle_expired_at' => now()->subDays(2),
+            'lifecycle_restored_at' => now()->subDay(),
+            'needs_payment' => false,
+            'notactive' => false,
+            'escort_expire' => now()->subDay()->timestamp,
+        ]);
+
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake([
+            "{$base}/clients/70864" => Http::response([
+                'wp_post_id' => 70864,
+                'wp_user_id' => 18185,
+                'name' => 'MWIZA',
+                'phone' => '+256786625582',
+                'city' => 'Kyanja',
+                'post_status' => 'publish',
+                'premium' => true,
+                'featured' => true,
+                'escort_expire' => now()->addDays(7)->timestamp,
+                'premium_expire' => now()->addDays(7)->timestamp,
+                'featured_expire' => now()->addDays(7)->timestamp,
+                'needs_payment' => false,
+                'notactive' => false,
+                'main_image_url' => '',
+                'modified_at' => now()->toIso8601String(),
+            ], 200),
+        ]);
+
+        $fresh = (new \App\Services\ClientSyncService($platform))->syncOne(70864);
+
+        $this->assertSame('active', $fresh->lifecycle_state);
+        $this->assertNull($fresh->lifecycle_expired_at);
+        $this->assertNull($fresh->lifecycle_restored_at);
+        $this->assertFalse((bool) $fresh->needs_payment);
+        $this->assertTrue((bool) $fresh->premium);
+        $this->assertTrue((bool) $fresh->featured);
+    }
+
     public function test_archive_is_rejected_when_market_has_not_opted_in(): void
     {
         $platform = $this->createPlatform();

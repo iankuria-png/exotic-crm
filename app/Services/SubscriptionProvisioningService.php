@@ -18,25 +18,30 @@ class SubscriptionProvisioningService
 {
     public function __construct(
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService
-    ) {
-    }
+    ) {}
 
     public function activateDeal(Deal $deal, array $options = []): Deal
     {
         $deal->loadMissing(['client.platform', 'product', 'platform']);
 
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             throw new InvalidArgumentException('Deal has no associated client.');
         }
 
         $payment = $options['payment'] ?? null;
-        if ($payment !== null && !$payment instanceof Payment) {
+        if ($payment !== null && ! $payment instanceof Payment) {
             throw new InvalidArgumentException('Provisioning payment must be a Payment model.');
         }
 
         if ((string) $deal->status === 'active') {
             $this->updateLinkedPayment($payment, $deal, $client, $options);
+            app(ActiveSubscriptionProfileRepairService::class)->repairClient(
+                $client,
+                $deal,
+                false,
+                'subscription_activation_already_active'
+            );
 
             return $deal->fresh(['client', 'product', 'platform']);
         }
@@ -81,7 +86,7 @@ class SubscriptionProvisioningService
             'activated_by_field_agent' => $fieldAgentId ?: $deal->activated_by_field_agent,
         ] + $lifecycleAttributes)->save();
 
-        if (!$isFreeTrial) {
+        if (! $isFreeTrial) {
             $commissionService = app(CommissionService::class);
             $commissionService->recordActivationCommission($deal);
             $commissionService->recordRenewalCommission($deal);
@@ -98,10 +103,18 @@ class SubscriptionProvisioningService
             $deal->setRelation('client', $syncedClient);
         }
 
+        $repairClient = $syncedClient ?? $client->fresh() ?? $client;
+        app(ActiveSubscriptionProfileRepairService::class)->repairClient(
+            $repairClient,
+            $deal->fresh(),
+            false,
+            'subscription_activation'
+        );
+
         // The profile is live again, so put back the bio exactly as the advertiser
         // wrote it if a previous expiry had redacted contact details from it.
         // No-op unless an original was stored. Non-fatal: never block activation.
-        app(ProfileBioScrubService::class)->restoreQuietly($syncedClient ?? $client, $actorId);
+        app(ProfileBioScrubService::class)->restoreQuietly($repairClient, $actorId);
 
         $timelineContext = is_array($options['timeline_context'] ?? null)
             ? $options['timeline_context']
@@ -177,15 +190,15 @@ class SubscriptionProvisioningService
         }
 
         $client = $options['client'] ?? $payment->client;
-        if ($client !== null && !$client instanceof Client) {
+        if ($client !== null && ! $client instanceof Client) {
             throw new InvalidArgumentException('Provisioning client must be a Client model.');
         }
 
-        if (!$client && $payment->client_id) {
+        if (! $client && $payment->client_id) {
             $client = Client::find((int) $payment->client_id);
         }
 
-        if (!$client) {
+        if (! $client) {
             throw new InvalidArgumentException('Payment must be matched to a client first.');
         }
 
@@ -194,14 +207,14 @@ class SubscriptionProvisioningService
             $existingDeal = Deal::find((int) $payment->deal_id);
         }
 
-        if (!$existingDeal) {
+        if (! $existingDeal) {
             $existingDeal = Deal::query()
                 ->where('payment_id', (int) $payment->id)
                 ->latest('id')
                 ->first();
         }
 
-        if (!$existingDeal) {
+        if (! $existingDeal) {
             $product = $this->resolveProductForPayment($payment);
             $duration = $this->resolveDurationForPayment($payment, $product);
             $planType = $this->resolvePlanTypeFromProduct($product);
@@ -223,7 +236,7 @@ class SubscriptionProvisioningService
             ] + $this->resolveLifecycleAttributes(null, $payment, $options);
 
             $incentive = data_get($payment->payment_data, 'self_service_incentive');
-            if ($incentive && !empty($incentive['original_amount']) && !empty($incentive['percent'])) {
+            if ($incentive && ! empty($incentive['original_amount']) && ! empty($incentive['percent'])) {
                 $dealData['original_amount'] = (float) $incentive['original_amount'];
                 $dealData['discount_percentage'] = (float) $incentive['percent'];
                 $dealData['discount_source'] = 'self_service_incentive';
@@ -247,7 +260,7 @@ class SubscriptionProvisioningService
 
     private function updateLinkedPayment(?Payment $payment, Deal $deal, Client $client, array $options): void
     {
-        if (!$payment) {
+        if (! $payment) {
             return;
         }
 
@@ -271,7 +284,7 @@ class SubscriptionProvisioningService
      */
     private function resolveLifecycleAttributes(?Deal $deal, ?Payment $payment, array $options): array
     {
-        if (!empty($options['subscription_lifecycle'])) {
+        if (! empty($options['subscription_lifecycle'])) {
             return [
                 'subscription_lifecycle' => $options['subscription_lifecycle'],
                 'subscription_lifecycle_source' => $options['subscription_lifecycle_source'] ?? SubscriptionLifecycleService::SOURCE_PREDICTED,
@@ -279,7 +292,7 @@ class SubscriptionProvisioningService
             ];
         }
 
-        if ($deal && !empty($deal->subscription_lifecycle)) {
+        if ($deal && ! empty($deal->subscription_lifecycle)) {
             return [
                 'subscription_lifecycle' => $deal->subscription_lifecycle,
                 'subscription_lifecycle_source' => $deal->subscription_lifecycle_source,
@@ -287,7 +300,7 @@ class SubscriptionProvisioningService
             ];
         }
 
-        if ($payment && !empty($payment->subscription_lifecycle)) {
+        if ($payment && ! empty($payment->subscription_lifecycle)) {
             return [
                 'subscription_lifecycle' => $payment->subscription_lifecycle,
                 'subscription_lifecycle_source' => $payment->subscription_lifecycle_source,
@@ -418,14 +431,14 @@ class SubscriptionProvisioningService
         return Product::query()
             ->where('is_active', true)
             ->when(
-                !empty($payment->platform_id),
+                ! empty($payment->platform_id),
                 fn (Builder $builder) => $builder->where(function (Builder $platformScoped) use ($payment) {
                     $platformScoped->where('platform_id', (int) $payment->platform_id)
                         ->orWhereNull('platform_id');
                 })
             )
             ->when(
-                !empty($payment->currency),
+                ! empty($payment->currency),
                 fn (Builder $builder) => $builder->whereRaw('UPPER(currency) = ?', [strtoupper((string) $payment->currency)])
             )
             ->where(function (Builder $builder) use ($payment): void {
@@ -439,7 +452,7 @@ class SubscriptionProvisioningService
 
     private function resolvePlanTypeFromProduct(?Product $product): string
     {
-        if (!$product) {
+        if (! $product) {
             return 'basic';
         }
 

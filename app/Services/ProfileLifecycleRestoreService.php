@@ -32,6 +32,7 @@ class ProfileLifecycleRestoreService
 
     public function __construct(
         private readonly ProfileBioScrubService $bioScrubber,
+        private readonly ActiveSubscriptionProfileRepairService $activeSubscriptionRepair,
     ) {}
 
     /**
@@ -148,6 +149,18 @@ class ProfileLifecycleRestoreService
                 }
 
                 try {
+                    if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+                        $this->activeSubscriptionRepair->repairClient(
+                            $client,
+                            null,
+                            false,
+                            'profile_restore_active_subscription_skip'
+                        );
+                        $skipped++;
+
+                        continue;
+                    }
+
                     $expiredAt = $this->resolveHistoricalExpiry($client);
                     $state = $this->resolveLandingState($run, $expiredAt);
 
@@ -244,14 +257,27 @@ class ProfileLifecycleRestoreService
         $sync = new ClientSyncService($platform);
 
         $reverted = 0;
+        $skipped = 0;
         $failed = 0;
 
         Client::query()
             ->where('lifecycle_restore_run_id', $run->id)
             ->orderBy('id')
-            ->chunkById(100, function ($clients) use ($wp, $sync, &$reverted, &$failed) {
+            ->chunkById(100, function ($clients) use ($wp, $sync, &$reverted, &$skipped, &$failed) {
                 foreach ($clients as $client) {
                     try {
+                        if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+                            $this->activeSubscriptionRepair->repairClient(
+                                $client,
+                                null,
+                                false,
+                                'profile_restore_revert_active_subscription_skip'
+                            );
+                            $skipped++;
+
+                            continue;
+                        }
+
                         $this->deactivateAndVerify(
                             $client,
                             $wp,
@@ -280,10 +306,10 @@ class ProfileLifecycleRestoreService
 
         $run->forceFill([
             'status' => LifecycleRestoreRun::STATUS_REVERTED,
-            'notes' => trim((string) $run->notes.sprintf(' Reverted %d profile(s) on %s.', $reverted, now()->toDateTimeString())),
+            'notes' => trim((string) $run->notes.sprintf(' Reverted %d profile(s), skipped %d active subscription profile(s) on %s.', $reverted, $skipped, now()->toDateTimeString())),
         ])->save();
 
-        return ['reverted' => $reverted, 'failed' => $failed];
+        return ['reverted' => $reverted, 'skipped' => $skipped, 'failed' => $failed];
     }
 
     /**
@@ -356,6 +382,11 @@ class ProfileLifecycleRestoreService
                 ClientLifecycleState::EXPIRED,
                 ClientLifecycleState::ARCHIVED,
             ])
+            ->whereDoesntHave('deals', function (Builder $deal): void {
+                $deal->where('status', 'active')
+                    ->whereNotNull('expires_at')
+                    ->where('expires_at', '>', now());
+            })
             ->orderBy('id');
     }
 

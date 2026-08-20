@@ -48,12 +48,19 @@ final class LifecycleRestoreEligibility
     ];
 
     public string $historyMode;
+
     public bool $excludeHighRisk;
+
     public bool $excludeDuplicates;
+
     public bool $excludeBadCloseReasons;
+
     public bool $requireVerified;
+
     public bool $requireImage;
+
     public ?int $minSeoScore;
+
     public ?int $expiredWithinMonths;
 
     public function __construct(array $filters = [])
@@ -98,6 +105,11 @@ final class LifecycleRestoreEligibility
             ->where(function (Builder $builder) {
                 $builder->whereNull('lifecycle_state')
                     ->orWhere('lifecycle_state', ClientLifecycleState::ACTIVE);
+            })
+            ->whereDoesntHave('deals', function (Builder $deal): void {
+                $deal->where('status', 'active')
+                    ->whereNotNull('expires_at')
+                    ->where('expires_at', '>', now());
             })
             // Idempotency: a profile restored by an earlier run stays restored.
             ->whereNull('lifecycle_restored_at');

@@ -52,6 +52,10 @@ class ExpiredSubscriptionReconciler
             return false;
         }
 
+        if (app(ActiveSubscriptionProfileRepairService::class)->hasFutureActiveDeal($client)) {
+            return false;
+        }
+
         return SubscriptionExpiry::isExpired((int) $client->escort_expire, $this->timezoneFor($client));
     }
 
@@ -67,6 +71,11 @@ class ExpiredSubscriptionReconciler
             ->active() // profile_status=publish AND not needs_payment AND not notactive
             ->whereNotNull('escort_expire')
             ->where('escort_expire', '>', 0)
+            ->whereDoesntHave('deals', function ($deal): void {
+                $deal->where('status', 'active')
+                    ->whereNotNull('expires_at')
+                    ->where('expires_at', '>', now());
+            })
             // Raw "< now" is a necessary condition (end-of-day grace only moves the
             // cutoff later), so this safely narrows the set before the precise check.
             ->where('escort_expire', '<', now()->timestamp)
@@ -202,7 +211,7 @@ class ExpiredSubscriptionReconciler
             ->all();
 
         $expiredDeals = 0;
-        if (!empty($expiredDealIds)) {
+        if (! empty($expiredDealIds)) {
             $expiredDeals = Deal::query()
                 ->whereIn('id', $expiredDealIds)
                 ->update(['status' => 'expired']);

@@ -25,6 +25,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'client_id' => $client->id,
             'status' => 'active',
+            'expires_at' => now()->subDays(3),
         ]);
 
         $this->fakeWpDeactivation($platform, 124001);
@@ -63,6 +64,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'client_id' => $client->id,
             'status' => 'active',
+            'expires_at' => now()->subDays(3),
         ]);
 
         $this->fakeWpLegacyOffline($platform, 124900);
@@ -93,6 +95,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'client_id' => $client->id,
             'status' => 'active',
+            'expires_at' => now()->subDays(3),
         ]);
 
         Http::fake();
@@ -146,6 +149,28 @@ class ExpiredSubscriptionReconcileTest extends TestCase
         $this->assertSame('publish', $premiumOnly->fresh()->profile_status);
     }
 
+    public function test_command_ignores_stale_wp_expiry_when_client_has_future_active_deal(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createStuckClient($platform, 124014);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+            'expires_at' => now()->addDays(7),
+        ]);
+
+        Http::fake();
+
+        $this->artisan('crm:reconcile-expired-subscriptions')
+            ->expectsOutputToContain('Found 0 stuck profile(s).')
+            ->assertExitCode(0);
+
+        Http::assertNothingSent();
+        $this->assertSame('publish', $client->fresh()->profile_status);
+        $this->assertSame('active', $deal->fresh()->status);
+    }
+
     public function test_expire_now_endpoint_deactivates_a_stuck_profile(): void
     {
         $platform = $this->createPlatform();
@@ -154,6 +179,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'client_id' => $client->id,
             'status' => 'active',
+            'expires_at' => now()->subDays(3),
         ]);
         $this->fakeWpDeactivation($platform, 124005);
 
@@ -227,6 +253,7 @@ class ExpiredSubscriptionReconcileTest extends TestCase
             'platform_id' => $platform->id,
             'client_id' => $stuck->id,
             'status' => 'active',
+            'expires_at' => now()->subDays(3),
         ]);
         $active = Client::factory()->create([
             'platform_id' => $platform->id,

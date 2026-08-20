@@ -304,6 +304,52 @@ class LifecycleRestoreTest extends TestCase
         $this->assertSame(89, (int) $fresh->lifecycle_restore_run_id);
     }
 
+    public function test_restore_revert_skips_and_repairs_profiles_that_have_renewed(): void
+    {
+        $platform = $this->createPlatform();
+        $run = LifecycleRestoreRun::create([
+            'platform_id' => $platform->id,
+            'requested_by' => null,
+            'mode' => LifecycleRestoreRun::MODE_LIVE,
+            'status' => LifecycleRestoreRun::STATUS_COMPLETED,
+            'batch_limit' => 200,
+            'filters' => null,
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7041,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(12),
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => $run->id,
+            'escort_expire' => now()->subDay()->timestamp,
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+            'plan_type' => 'vip',
+            'expires_at' => now()->addDays(7),
+        ]);
+        Http::fake();
+
+        $result = app(ProfileLifecycleRestoreService::class)->revert($run);
+
+        $this->assertSame(0, $result['reverted']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertSame(0, $result['failed']);
+
+        $fresh = $client->fresh();
+        $this->assertSame('publish', $fresh->profile_status);
+        $this->assertSame(ClientLifecycleState::ACTIVE, $fresh->lifecycle_state);
+        $this->assertNull($fresh->lifecycle_expired_at);
+        $this->assertNull($fresh->lifecycle_restored_at);
+        $this->assertGreaterThan(now()->timestamp, (int) $fresh->escort_expire);
+
+        Http::assertNothingSent();
+    }
+
     // ─── helpers ────────────────────────────────────────────────────────────
 
     private function makeRun(Platform $platform, string $mode, ?array $filters = null): LifecycleRestoreRun

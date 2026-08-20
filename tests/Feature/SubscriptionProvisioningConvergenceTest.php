@@ -8,6 +8,8 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\SubscriptionProvisioningService;
+use App\Support\ClientLifecycleState;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -235,6 +237,101 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         $this->assertProvisioningRequestsSent($platform, $client, 'vip');
     }
 
+    public function test_activation_repairs_stale_seo_lifecycle_state_after_renewal(): void
+    {
+        $platform = $this->createPlatform();
+        $product = $this->createProduct($platform, 'VIP Escort', 3200);
+        $client = $this->createClient($platform, 70864);
+        $client->forceFill([
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(10),
+            'lifecycle_restored_at' => now()->subDay(),
+            'needs_payment' => false,
+            'notactive' => false,
+            'escort_expire' => now()->subDay()->timestamp,
+            'churned_at' => now()->subDay(),
+            'churn_reason_code' => 'expired_unrenewed',
+            'churn_source' => 'profile_inactive',
+        ])->save();
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'plan_type' => 'vip',
+            'duration' => 'weekly',
+            'status' => 'pending',
+            'activated_at' => null,
+            'expires_at' => null,
+        ]);
+
+        $this->fakeProvisioningApis($platform, $client, [
+            // Older/partial WP sync payloads can omit crm_lifecycle_state. CRM must
+            // still treat the future paid subscription as authoritative.
+            'premium' => true,
+            'featured' => true,
+            'escort_expire' => now()->addDays(7)->timestamp,
+            'premium_expire' => now()->addDays(7)->timestamp,
+            'featured_expire' => now()->addDays(7)->timestamp,
+        ]);
+
+        app(SubscriptionProvisioningService::class)->activateDeal($deal, [
+            'duration_days' => 7,
+            'payment_method' => 'manual',
+        ]);
+
+        $fresh = $client->fresh();
+        $this->assertSame('publish', $fresh->profile_status);
+        $this->assertSame(ClientLifecycleState::ACTIVE, $fresh->lifecycle_state);
+        $this->assertNull($fresh->lifecycle_expired_at);
+        $this->assertNull($fresh->lifecycle_restored_at);
+        $this->assertFalse((bool) $fresh->needs_payment);
+        $this->assertFalse((bool) $fresh->notactive);
+        $this->assertTrue((bool) $fresh->premium);
+        $this->assertTrue((bool) $fresh->featured);
+        $this->assertGreaterThan(now()->timestamp, (int) $fresh->escort_expire);
+        $this->assertNull($fresh->churned_at);
+    }
+
+    public function test_already_active_deal_activation_repairs_stale_crm_profile_state(): void
+    {
+        $platform = $this->createPlatform();
+        $product = $this->createProduct($platform, 'VIP Escort', 3200);
+        $client = $this->createClient($platform, 70865);
+        $client->forceFill([
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(10),
+            'needs_payment' => true,
+            'notactive' => false,
+            'escort_expire' => null,
+        ])->save();
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'plan_type' => 'vip',
+            'duration' => 'weekly',
+            'status' => 'active',
+            'activated_at' => now()->subHour(),
+            'expires_at' => now()->addDays(7),
+        ]);
+
+        Http::fake();
+
+        app(SubscriptionProvisioningService::class)->activateDeal($deal, [
+            'payment_method' => 'manual',
+        ]);
+
+        $fresh = $client->fresh();
+        $this->assertSame(ClientLifecycleState::ACTIVE, $fresh->lifecycle_state);
+        $this->assertNull($fresh->lifecycle_expired_at);
+        $this->assertFalse((bool) $fresh->needs_payment);
+        $this->assertGreaterThan(now()->timestamp, (int) $fresh->escort_expire);
+
+        Http::assertNothingSent();
+    }
+
     private function createPlatform(): Platform
     {
         return Platform::factory()->create([
@@ -275,7 +372,7 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
             'wp_user_id' => $wpPostId + 5000,
-            'phone_normalized' => '254700' . str_pad((string) $wpPostId, 6, '0', STR_PAD_LEFT),
+            'phone_normalized' => '254700'.str_pad((string) $wpPostId, 6, '0', STR_PAD_LEFT),
             'profile_status' => 'private',
             'premium' => false,
             'featured' => false,
@@ -287,7 +384,7 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
     {
         return User::query()->create([
             'name' => 'Admin User',
-            'email' => 'admin-' . Str::random(8) . '@example.test',
+            'email' => 'admin-'.Str::random(8).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',

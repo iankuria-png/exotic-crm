@@ -4,9 +4,9 @@ namespace App\Services;
 
 use App\Jobs\RecomputeSeoScoreJob;
 use App\Models\Client;
-use App\Models\KycSubject;
-use App\Models\ClientSyncRun;
 use App\Models\ClientSyncExclusion;
+use App\Models\ClientSyncRun;
+use App\Models\KycSubject;
 use App\Models\Platform;
 use App\Support\CityNormalizer;
 use Carbon\Carbon;
@@ -16,9 +16,11 @@ use Illuminate\Support\Facades\Log;
 class ClientSyncService
 {
     private const DELTA_OVERLAP_MINUTES = 15;
+
     private const SAFETY_LAG_MINUTES = 2;
 
     private WpSyncService $wpSync;
+
     private Platform $platform;
 
     public function __construct(Platform $platform)
@@ -62,7 +64,7 @@ class ClientSyncService
             'created' => $created,
             'updated' => $updated,
             'skipped' => $skipped,
-            'total'   => $total,
+            'total' => $total,
         ];
     }
 
@@ -96,7 +98,7 @@ class ClientSyncService
             'created' => $created,
             'updated' => $updated,
             'skipped' => $skipped,
-            'total'   => $total,
+            'total' => $total,
         ];
     }
 
@@ -155,9 +157,9 @@ class ClientSyncService
 
         $client = Client::firstOrNew([
             'platform_id' => $this->platform->id,
-            'wp_post_id'  => $wpPostId,
+            'wp_post_id' => $wpPostId,
         ]);
-        $wasRecentlyCreated = !$client->exists;
+        $wasRecentlyCreated = ! $client->exists;
         $previousVerified = (bool) ($client->verified ?? false);
         $previousVerifiedSource = (string) ($client->verified_source ?? '');
 
@@ -165,29 +167,29 @@ class ClientSyncService
         $incomingVerified = (bool) ($wpClient['verified'] ?? false);
 
         $syncData = [
-            'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
+            'wp_user_id' => $wpClient['wp_user_id'] ?? null,
             'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
             'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
-            'client_type'     => 'escort',
-            'name'            => $name ?: null,
-            'phone_normalized'=> $phone ?: null,
-            'email'           => $email ?: null,
-            'city'            => $city ?? $client->city,
-            'region'          => $region ?? $client->region,
-            'profile_status'  => $wpClient['post_status'] ?? 'private',
-            'premium'         => (bool) ($wpClient['premium'] ?? false),
-            'premium_expire'  => $premiumExpire,
-            'featured'        => (bool) ($wpClient['featured'] ?? false),
+            'client_type' => 'escort',
+            'name' => $name ?: null,
+            'phone_normalized' => $phone ?: null,
+            'email' => $email ?: null,
+            'city' => $city ?? $client->city,
+            'region' => $region ?? $client->region,
+            'profile_status' => $wpClient['post_status'] ?? 'private',
+            'premium' => (bool) ($wpClient['premium'] ?? false),
+            'premium_expire' => $premiumExpire,
+            'featured' => (bool) ($wpClient['featured'] ?? false),
             'featured_expire' => $featuredExpire,
-            'escort_expire'   => $escortExpire,
-            'verified'        => $incomingVerified,
-            'force_new'       => $newBadgeMode === 'force_on',
-            'new_badge_mode'  => $newBadgeMode,
-            'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
-            'main_image_url'  => $imageUrl ?: null,
-            'last_synced_at'  => now(),
-            'wp_modified_at'  => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
-            'wp_created_at'   => $this->normalizeWpCreatedAt($wpClient, $client),
+            'escort_expire' => $escortExpire,
+            'verified' => $incomingVerified,
+            'force_new' => $newBadgeMode === 'force_on',
+            'new_badge_mode' => $newBadgeMode,
+            'last_online_at' => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
+            'main_image_url' => $imageUrl ?: null,
+            'last_synced_at' => now(),
+            'wp_modified_at' => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
+            'wp_created_at' => $this->normalizeWpCreatedAt($wpClient, $client),
             // Mirror the CRM-authored lifecycle back from WordPress (same rule as
             // buildBulkClientRow): absent key preserves the current state, unknown
             // values normalise to 'active'.
@@ -209,6 +211,14 @@ class ClientSyncService
 
         if (array_key_exists('notactive', $wpClient)) {
             $syncData['notactive'] = (bool) ($wpClient['notactive'] ?? false);
+        }
+
+        if ($this->payloadLooksActivelySubscribed($syncData)) {
+            $syncData['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
+            $syncData['lifecycle_expired_at'] = null;
+            $syncData['lifecycle_archived_at'] = null;
+            $syncData['lifecycle_restored_at'] = null;
+            $syncData['lifecycle_restore_run_id'] = null;
         }
 
         // signup_source is a CRM-side attribution signal. 'field' is set by the field-sales
@@ -395,7 +405,7 @@ class ClientSyncService
             ], static fn ($value) => $value !== null && $value !== ''));
 
             $runUpperBound = $runUpperBound ?: (string) ($response['run_upper_bound_modified_at'] ?? null);
-            if (!$runUpperBound) {
+            if (! $runUpperBound) {
                 throw new \RuntimeException('WordPress v2 sync feed did not return a run upper bound.');
             }
 
@@ -424,7 +434,7 @@ class ClientSyncService
                 'cursor_modified_at' => $cursorModifiedAt ? Carbon::parse((string) $cursorModifiedAt, 'UTC')->utc() : null,
                 'cursor_post_id' => $cursorPostId,
             ]);
-        } while (!empty($response['has_more']));
+        } while (! empty($response['has_more']));
 
         if ($mode === 'reconcile') {
             $summary['tombstones_processed'] = $this->processV2Tombstones($run, $perPage);
@@ -486,7 +496,7 @@ class ClientSyncService
                 'tombstone_cursor_removed_at' => $cursorRemovedAt ? Carbon::parse((string) $cursorRemovedAt, 'UTC')->utc() : null,
                 'tombstone_cursor_post_id' => $cursorPostId,
             ]);
-        } while (!empty($response['has_more']));
+        } while (! empty($response['has_more']));
 
         if ($removedUpperBound) {
             $this->platform->forceFill([
@@ -535,11 +545,13 @@ class ClientSyncService
             $wpPostId = (int) ($wpClient['wp_post_id'] ?? 0);
             if ($wpPostId <= 0) {
                 $skipped++;
+
                 continue;
             }
 
             if (isset($excludedLookup[$wpPostId])) {
                 $skipped++;
+
                 continue;
             }
 
@@ -554,7 +566,7 @@ class ClientSyncService
             }
         }
 
-        if (!empty($rows)) {
+        if (! empty($rows)) {
             Client::withoutRetentionRefresh(function () use ($rows): void {
                 Client::query()->upsert(
                     $rows,
@@ -571,6 +583,11 @@ class ClientSyncService
                         'profile_status',
                         'needs_payment',
                         'notactive',
+                        'lifecycle_state',
+                        'lifecycle_expired_at',
+                        'lifecycle_archived_at',
+                        'lifecycle_restored_at',
+                        'lifecycle_restore_run_id',
                         'premium',
                         'premium_expire',
                         'featured',
@@ -622,7 +639,7 @@ class ClientSyncService
     {
         $stalePostIds = [];
         foreach ($wpClients as $wpClient) {
-            if (!empty($wpClient['seo_quality_score_stale'])) {
+            if (! empty($wpClient['seo_quality_score_stale'])) {
                 $postId = (int) ($wpClient['wp_post_id'] ?? 0);
                 if ($postId > 0) {
                     $stalePostIds[] = $postId;
@@ -663,7 +680,7 @@ class ClientSyncService
             ? 'field'
             : ($wpClient['signup_source'] ?? $existing?->signup_source);
 
-        return [
+        $row = [
             'platform_id' => (int) $this->platform->id,
             'wp_post_id' => (int) ($wpClient['wp_post_id'] ?? 0),
             'wp_user_id' => $wpClient['wp_user_id'] ?? null,
@@ -686,6 +703,10 @@ class ClientSyncService
             'lifecycle_state' => array_key_exists('crm_lifecycle_state', $wpClient)
                 ? \App\Support\ClientLifecycleState::normalize($wpClient['crm_lifecycle_state'] ?? null)
                 : ($existing?->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE),
+            'lifecycle_expired_at' => $existing?->lifecycle_expired_at,
+            'lifecycle_archived_at' => $existing?->lifecycle_archived_at,
+            'lifecycle_restored_at' => $existing?->lifecycle_restored_at,
+            'lifecycle_restore_run_id' => $existing?->lifecycle_restore_run_id,
             'premium' => (bool) ($wpClient['premium'] ?? false),
             'premium_expire' => $premiumExpire,
             'featured' => (bool) ($wpClient['featured'] ?? false),
@@ -710,6 +731,7 @@ class ClientSyncService
                 if ($raw === null) {
                     return $existing?->seo_score;
                 }
+
                 return $raw === '' ? null : (int) $raw;
             })(),
             'seo_score_breakdown' => isset($wpClient['seo_quality_score_breakdown'])
@@ -719,6 +741,16 @@ class ClientSyncService
             'created_at' => $existing?->created_at ?: $now,
             'updated_at' => $now,
         ];
+
+        if ($this->payloadLooksActivelySubscribed($row)) {
+            $row['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
+            $row['lifecycle_expired_at'] = null;
+            $row['lifecycle_archived_at'] = null;
+            $row['lifecycle_restored_at'] = null;
+            $row['lifecycle_restore_run_id'] = null;
+        }
+
+        return $row;
     }
 
     private function applyTombstones(array $rows): int
@@ -741,7 +773,7 @@ class ClientSyncService
                 ->where('wp_post_id', $wpPostId)
                 ->update([
                     'source_presence_status' => 'missing',
-                    'source_missing_at' => DB::raw("COALESCE(source_missing_at, '" . $removedAt->format('Y-m-d H:i:s') . "')"),
+                    'source_missing_at' => DB::raw("COALESCE(source_missing_at, '".$removedAt->format('Y-m-d H:i:s')."')"),
                     'source_missing_count' => DB::raw('CASE WHEN source_missing_count < 1 THEN 1 ELSE source_missing_count END'),
                     'updated_at' => now(),
                 ]);
@@ -873,7 +905,7 @@ class ClientSyncService
             return $mode;
         }
 
-        return !empty($wpClient['force_new']) ? 'force_on' : 'auto';
+        return ! empty($wpClient['force_new']) ? 'force_on' : 'auto';
     }
 
     /**
@@ -881,7 +913,7 @@ class ClientSyncService
      */
     private function normalizePhone(?string $phone, string $prefix = '254'): string
     {
-        if (!$phone) {
+        if (! $phone) {
             return '';
         }
 
@@ -893,7 +925,7 @@ class ClientSyncService
 
         // If starts with 0, replace with country prefix
         if (str_starts_with($phone, '0')) {
-            $phone = $prefix . substr($phone, 1);
+            $phone = $prefix.substr($phone, 1);
         }
 
         return $phone;
@@ -924,13 +956,28 @@ class ClientSyncService
         $fallbacks = array_values(array_filter([
             $premiumExpire,
             $featuredExpire,
-        ], static fn($value) => $value !== null));
+        ], static fn ($value) => $value !== null));
 
         if (empty($fallbacks)) {
             return null;
         }
 
         return max($fallbacks);
+    }
+
+    /**
+     * WordPress is the profile source of truth. If it reports a published profile
+     * with future paid access and no payment/offline flags, CRM must not preserve
+     * a stale SEO-restricted lifecycle value from before a renewal.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function payloadLooksActivelySubscribed(array $payload): bool
+    {
+        return (string) ($payload['profile_status'] ?? '') === 'publish'
+            && ! (bool) ($payload['needs_payment'] ?? false)
+            && ! (bool) ($payload['notactive'] ?? false)
+            && (int) ($payload['escort_expire'] ?? 0) > now()->timestamp;
     }
 
     private function resolveDeltaModifiedAfter(): ?string
@@ -940,7 +987,7 @@ class ClientSyncService
             ->whereNotNull('wp_modified_at')
             ->max('wp_modified_at');
 
-        if (!$lastWpModifiedAt) {
+        if (! $lastWpModifiedAt) {
             return null;
         }
 
