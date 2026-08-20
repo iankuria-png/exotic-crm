@@ -1239,6 +1239,22 @@ export default function ClientDetail() {
         },
     });
 
+    const markOnlineNowMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/online-now`, {
+            reason: 'Sales refreshed WordPress Online Now presence from CRM',
+        }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            const visibleUntil = data?.expected_visible_until ? ` until ${formatDateTime(data.expected_visible_until)}` : '';
+            toast.success(`${data?.message || 'Client marked online on WordPress.'}${visibleUntil}`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to mark client online.');
+        },
+    });
+
     const createDealMutation = useMutation({
         mutationFn: (deal) =>
             api.post('/crm/deals', (() => {
@@ -3080,6 +3096,21 @@ export default function ClientDetail() {
                                         </>
                                     ) : null}
                                 </div>
+
+                                {/* Online Now — refresh public WordPress presence */}
+                                <button
+                                    type="button"
+                                    onClick={() => markOnlineNowMutation.mutate()}
+                                    disabled={!canSyncFromWp || markOnlineNowMutation.isPending}
+                                    title={!canSyncFromWp ? 'Online Now requires a linked WordPress profile' : 'Make this client appear in the WordPress Online Now strip'}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    <span className="relative flex h-3.5 w-3.5 items-center justify-center" aria-hidden="true">
+                                        <span className="absolute h-3 w-3 rounded-full bg-emerald-300 opacity-70" />
+                                        <span className="relative h-2 w-2 rounded-full bg-emerald-600" />
+                                    </span>
+                                    {markOnlineNowMutation.isPending ? 'Marking…' : 'Online Now'}
+                                </button>
 
                                 {/* Client access */}
                                 <button

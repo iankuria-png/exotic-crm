@@ -208,6 +208,8 @@ final class CrmAuditAction
 
     public const CLIENT_BOOST_CLEAR = 'client_boost_clear';
 
+    public const CLIENT_ONLINE_NOW_MARK = 'client_online_now_mark';
+
     public const CLIENT_TOUR_ADD = 'client_tour_add';
 
     public const CLIENT_TOUR_DELETE = 'client_tour_delete';

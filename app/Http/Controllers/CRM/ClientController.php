@@ -2215,6 +2215,126 @@ class ClientController extends Controller
         ]);
     }
 
+    /**
+     * Refresh WordPress presence so this client appears in the public Online Now
+     * strip for the market's configured online window.
+     */
+    public function markOnlineNow(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if ((int) ($client->wp_post_id ?? 0) <= 0) {
+            return response()->json([
+                'message' => 'A linked WordPress profile is required to mark this client online.',
+            ], 422);
+        }
+
+        $client->loadMissing('platform');
+        if (! $client->platform) {
+            return response()->json([
+                'message' => 'Client platform is required to mark this client online.',
+            ], 422);
+        }
+
+        $before = [
+            'last_online_at' => $client->last_online_at,
+        ];
+        $reason = trim((string) ($validated['reason'] ?? 'CRM Online Now refresh'));
+        if ($reason === '') {
+            $reason = 'CRM Online Now refresh';
+        }
+
+        try {
+            $result = (new WpSyncService($client->platform))->markClientOnlineNow(
+                (int) $client->wp_post_id,
+                [
+                    'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#'.(int) $request->user()?->id))),
+                    'reason' => $reason,
+                ]
+            );
+        } catch (RequestException $exception) {
+            Log::error('Client Online Now request failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'status' => $exception->response?->status(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'WordPress could not mark this client online. Please retry.',
+            ], 502);
+        } catch (\Throwable $exception) {
+            Log::error('Client Online Now refresh failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client could not be marked online. Please retry.',
+            ], 500);
+        }
+
+        $lastOnlineAt = (int) ($result['last_online'] ?? now()->timestamp);
+        if ($lastOnlineAt <= 0) {
+            $lastOnlineAt = now()->timestamp;
+        }
+
+        $client->forceFill([
+            'last_online_at' => $lastOnlineAt,
+            'last_synced_at' => now(),
+        ])->save();
+
+        $windowMinutes = (int) ($result['online_window_minutes'] ?? 1440);
+        $expiresAt = now()->setTimestamp($lastOnlineAt)->addMinutes(max(5, $windowMinutes));
+
+        TimelineEvent::query()->create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_online_now_marked',
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'wp_user_id' => (int) ($client->wp_user_id ?? 0),
+                'last_online_at' => $lastOnlineAt,
+                'online_window_minutes' => $windowMinutes,
+                'expected_visible_until' => $expiresAt->toIso8601String(),
+                'profile_url' => $result['profile_url'] ?? $client->wp_profile_permalink,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_ONLINE_NOW_MARK,
+            'client',
+            (int) $client->id,
+            $before,
+            [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'wp_user_id' => (int) ($client->wp_user_id ?? 0),
+                'last_online_at' => $lastOnlineAt,
+                'online_window_minutes' => $windowMinutes,
+                'expected_visible_until' => $expiresAt->toIso8601String(),
+            ],
+            $reason
+        );
+
+        return response()->json([
+            'message' => 'Client marked online on WordPress.',
+            'last_online_at' => $lastOnlineAt,
+            'online_window_minutes' => $windowMinutes,
+            'expected_visible_until' => $expiresAt->toIso8601String(),
+            'profile_url' => $result['profile_url'] ?? $client->wp_profile_permalink,
+        ]);
+    }
+
     // ─── Tours ──────────────────────────────────────────────────────────────────
 
     public function tours(Request $request, Client $client)

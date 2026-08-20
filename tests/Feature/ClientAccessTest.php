@@ -9,6 +9,7 @@ use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Services\CredentialDeliveryService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
@@ -429,6 +430,92 @@ class ClientAccessTest extends TestCase
             'entity_id' => $client->id,
             'event_type' => 'client_credentials_deferred',
         ]);
+    }
+
+    public function test_sales_can_mark_wordpress_client_online_now(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 20, 20, 30, 0, config('app.timezone')));
+
+        try {
+            $platform = Platform::factory()->create([
+                'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+                'wp_api_user' => 'crm-user',
+                'wp_api_password' => 'secret',
+            ]);
+            $client = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'wp_post_id' => 1392904,
+                'wp_user_id' => 881122,
+                'last_online_at' => now()->subDays(3)->timestamp,
+                'wp_profile_permalink' => 'https://uganda.example.test/escort/mulungi-3/',
+            ]);
+            $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+
+            Http::fake([
+                $baseUrl.'/clients/1392904/online-now' => Http::response([
+                    'last_online' => now()->timestamp,
+                    'online_window_minutes' => 1440,
+                    'profile_url' => 'https://uganda.example.test/escort/mulungi-3/',
+                ], 200),
+            ]);
+
+            Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+            $response = $this->postJson("/api/crm/clients/{$client->id}/online-now");
+
+            $response->assertOk()
+                ->assertJsonPath('message', 'Client marked online on WordPress.')
+                ->assertJsonPath('last_online_at', now()->timestamp)
+                ->assertJsonPath('online_window_minutes', 1440)
+                ->assertJsonPath('profile_url', 'https://uganda.example.test/escort/mulungi-3/');
+
+            Http::assertSent(function ($request) use ($baseUrl) {
+                return $request->url() === $baseUrl.'/clients/1392904/online-now'
+                    && $request['reason'] === 'CRM Online Now refresh';
+            });
+
+            $this->assertSame(now()->timestamp, (int) $client->fresh()->last_online_at);
+
+            $this->assertDatabaseHas('audit_log', [
+                'platform_id' => $platform->id,
+                'entity_type' => 'client',
+                'entity_id' => $client->id,
+                'action' => 'client_online_now_mark',
+            ]);
+
+            $this->assertDatabaseHas('timeline_events', [
+                'platform_id' => $platform->id,
+                'entity_type' => 'client',
+                'entity_id' => $client->id,
+                'event_type' => 'client_online_now_marked',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_online_now_requires_linked_wordpress_profile(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 0,
+            'wp_user_id' => null,
+        ]);
+
+        Http::fake();
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/online-now")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'A linked WordPress profile is required to mark this client online.');
+
+        Http::assertNothingSent();
     }
 
     private function createUser(string $role, array $assignedMarketIds = []): User

@@ -18,6 +18,7 @@ const eventTones = {
     support_board_profile_sync: 'bg-violet-100 text-violet-700',
     client_credentials_reset: 'bg-amber-100 text-amber-700',
     client_login_as_client_link_generated: 'bg-indigo-100 text-indigo-700',
+    client_online_now_marked: 'bg-emerald-100 text-emerald-700',
 };
 
 function formatEventDescription(event) {
@@ -62,6 +63,8 @@ function formatEventDescription(event) {
                 return `Opened client ${String(content.fallback_url_type || 'profile').replace(/_/g, ' ')} fallback`;
             }
             return `Client session link generated${content.target ? ` (${String(content.target).replace(/_/g, ' ')})` : ''}`;
+        case 'client_online_now_marked':
+            return `Marked client Online Now${content.expected_visible_until ? ` until ${new Date(content.expected_visible_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';
     }

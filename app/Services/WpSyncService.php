@@ -341,6 +341,18 @@ class WpSyncService
     }
 
     /**
+     * Refresh the client's WordPress presence timestamp so the public Online Now
+     * strip can include them without requiring an interactive client login.
+     */
+    public function markClientOnlineNow(int $postId, array $payload = []): array
+    {
+        return $this->post("/clients/{$postId}/online-now", array_filter([
+            'issued_by' => $payload['issued_by'] ?? null,
+            'reason' => $payload['reason'] ?? null,
+        ], fn ($value) => $value !== null && $value !== ''));
+    }
+
+    /**
      * Activate a client profile
      */
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array
