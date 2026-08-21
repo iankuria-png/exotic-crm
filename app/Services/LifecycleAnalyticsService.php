@@ -35,8 +35,7 @@ class LifecycleAnalyticsService
     public function __construct(
         private readonly LifecycleSmsSettingsService $settings,
         private readonly ReportingCurrencyService $reportingCurrency
-    ) {
-    }
+    ) {}
 
     public function defaultWindowDays(): int
     {
@@ -44,7 +43,7 @@ class LifecycleAnalyticsService
     }
 
     /**
-     * @param array{from?:string,to?:string,platform_id?:int|null,window_days?:int|null} $filters
+     * @param  array{from?:string,to?:string,platform_id?:int|null,window_days?:int|null}  $filters
      */
     public function overview(array $filters = []): array
     {
@@ -150,7 +149,7 @@ class LifecycleAnalyticsService
      * opened flag, conversion outcome (direct/assisted/none), value, time-to-
      * convert and new/existing — the same attribution the overview aggregates.
      *
-     * @param array{from?:string,to?:string,platform_id?:int|null,window_days?:int|null,flow?:string,outcome?:string,search?:string} $filters
+     * @param  array{from?:string,to?:string,platform_id?:int|null,window_days?:int|null,flow?:string,outcome?:string,search?:string}  $filters
      */
     public function messages(array $filters, int $page = 1, int $perPage = 25): array
     {
@@ -181,11 +180,12 @@ class LifecycleAnalyticsService
         $rows = $sends
             ->map(function ($s) use ($openedSet, $attribution, $names) {
                 $attr = $attribution[$s['id']] ?? null;
+
                 return [
                     'id' => $s['id'],
                     'sent_at' => $s['sent_at']->toIso8601String(),
                     'client_id' => $s['client_id'],
-                    'client_name' => (string) ($names[$s['client_id']] ?? ('Client #' . $s['client_id'])),
+                    'client_name' => (string) ($names[$s['client_id']] ?? ('Client #'.$s['client_id'])),
                     'flow' => $s['flow'],
                     'source' => $s['source'],
                     'body' => $s['body'],
@@ -201,16 +201,16 @@ class LifecycleAnalyticsService
                 if ($flowFilter !== '' && $row['flow'] !== $flowFilter) {
                     return false;
                 }
-                if ($outcome === 'opened' && !$row['opened']) {
+                if ($outcome === 'opened' && ! $row['opened']) {
                     return false;
                 }
-                if ($outcome === 'converted' && !$row['converted']) {
+                if ($outcome === 'converted' && ! $row['converted']) {
                     return false;
                 }
                 if ($outcome === 'not_converted' && $row['converted']) {
                     return false;
                 }
-                if ($search !== '' && !str_contains(strtolower($row['client_name']), $search) && !str_contains(strtolower((string) $row['body']), $search)) {
+                if ($search !== '' && ! str_contains(strtolower($row['client_name']), $search) && ! str_contains(strtolower((string) $row['body']), $search)) {
                     return false;
                 }
 
@@ -247,7 +247,7 @@ class LifecycleAnalyticsService
 
         foreach ($conversions as $conversion) {
             $clientSends = $sendsByClient->get($conversion['client_id']);
-            if (!$clientSends) {
+            if (! $clientSends) {
                 continue;
             }
 
@@ -255,18 +255,22 @@ class LifecycleAnalyticsService
             $match = null;
             foreach ($clientSends as $send) {
                 $sentAt = $send['sent_at'];
-                if ($sentAt->lte($conversion['completed_at']) && $sentAt->gte($windowStart) && !isset($creditedSendIds[$send['id']])) {
+                if ($sentAt->lte($conversion['completed_at']) && $sentAt->gte($windowStart) && ! isset($creditedSendIds[$send['id']])) {
                     $match = $send; // latest qualifying send wins (asc list)
                 }
             }
-            if (!$match) {
+            if (! $match) {
                 continue;
             }
 
             $creditedSendIds[$match['id']] = true;
             $map[$match['id']] = [
                 'direct' => (bool) ($match['payment_id'] && (int) $match['payment_id'] === (int) $conversion['payment_id']),
-                'usd' => $this->toUsd((float) $conversion['amount'], (string) $conversion['currency'], $conversion['completed_at']),
+                'usd' => $this->toUsd((float) $conversion['amount'], (string) $conversion['currency'], $conversion['completed_at'], [
+                    'platform_id' => $conversion['platform_id'] ?? $match['platform_id'] ?? null,
+                    'platform_country' => $conversion['platform_country'] ?? null,
+                    'platform_name' => $conversion['platform_name'] ?? null,
+                ]),
                 'hours_to_convert' => max(0, $match['sent_at']->diffInMinutes($conversion['completed_at']) / 60),
                 'is_new' => $conversion['client_first_paid_at'] === null
                     || Carbon::parse($conversion['client_first_paid_at'])->gte($match['sent_at']),
@@ -281,7 +285,7 @@ class LifecycleAnalyticsService
     {
         $to = isset($filters['to']) && $filters['to'] ? Carbon::parse($filters['to'])->endOfDay() : now();
         $from = isset($filters['from']) && $filters['from'] ? Carbon::parse($filters['from'])->startOfDay() : $to->copy()->subDays(30)->startOfDay();
-        $platformId = !empty($filters['platform_id']) ? (int) $filters['platform_id'] : null;
+        $platformId = ! empty($filters['platform_id']) ? (int) $filters['platform_id'] : null;
         $windowDays = isset($filters['window_days']) && $filters['window_days']
             ? max(1, min(90, (int) $filters['window_days']))
             : $this->defaultWindowDays();
@@ -332,16 +336,29 @@ class LifecycleAnalyticsService
             ->pluck('first_paid_at', 'client_id');
 
         return Payment::query()
-            ->whereIn('client_id', $clientIds->all())
-            ->where('status', 'completed')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->whereIn('payments.client_id', $clientIds->all())
+            ->where('payments.status', 'completed')
             ->businessVisible()
-            ->when($platformId, fn (Builder $q) => $q->where('platform_id', $platformId))
-            ->whereNotNull('completed_at')
-            ->whereBetween('completed_at', [$from, $toPlusWindow])
-            ->get(['id', 'client_id', 'amount', 'currency', 'completed_at'])
+            ->when($platformId, fn (Builder $q) => $q->where('payments.platform_id', $platformId))
+            ->whereNotNull('payments.completed_at')
+            ->whereBetween('payments.completed_at', [$from, $toPlusWindow])
+            ->get([
+                'payments.id',
+                'payments.client_id',
+                'payments.platform_id',
+                'payments.amount',
+                'payments.currency',
+                'payments.completed_at',
+                'platforms.country as platform_country',
+                'platforms.name as platform_name',
+            ])
             ->map(fn (Payment $payment) => [
                 'payment_id' => (int) $payment->id,
                 'client_id' => (int) $payment->client_id,
+                'platform_id' => $payment->platform_id ? (int) $payment->platform_id : null,
+                'platform_country' => (string) ($payment->platform_country ?? ''),
+                'platform_name' => (string) ($payment->platform_name ?? ''),
                 'amount' => (float) $payment->amount,
                 'currency' => (string) ($payment->currency ?: 'KES'),
                 'completed_at' => $payment->completed_at,
@@ -387,7 +404,7 @@ class LifecycleAnalyticsService
 
             return [
                 'platform_id' => (int) $pid,
-                'platform_name' => (string) ($names[$pid] ?? ('Market #' . $pid)),
+                'platform_name' => (string) ($names[$pid] ?? ('Market #'.$pid)),
                 'sent' => $sent,
                 'converted' => $marketConv->count(),
                 'conversion_rate' => $sent > 0 ? round($marketConv->count() / $sent * 100, 1) : 0.0,
@@ -400,10 +417,21 @@ class LifecycleAnalyticsService
     private function paymentRollup(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
     {
         $rows = Payment::query()
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
             ->where('raw_payload->source', 'crm_lifecycle')
-            ->whereBetween('created_at', [$from, $to])
-            ->when($platformId, fn (Builder $q) => $q->where('platform_id', $platformId))
-            ->get(['id', 'status', 'amount', 'currency', 'completed_at', 'created_at']);
+            ->whereBetween('payments.created_at', [$from, $to])
+            ->when($platformId, fn (Builder $q) => $q->where('payments.platform_id', $platformId))
+            ->get([
+                'payments.id',
+                'payments.platform_id',
+                'payments.status',
+                'payments.amount',
+                'payments.currency',
+                'payments.completed_at',
+                'payments.created_at',
+                'platforms.country as platform_country',
+                'platforms.name as platform_name',
+            ]);
 
         $buckets = [
             'completed' => ['label' => 'Successful', 'statuses' => ['completed', 'activated']],
@@ -417,7 +445,12 @@ class LifecycleAnalyticsService
             $usd = $group->sum(fn (Payment $p) => $this->toUsd(
                 (float) $p->amount,
                 (string) ($p->currency ?: 'KES'),
-                $p->completed_at ?: $p->created_at
+                $p->completed_at ?: $p->created_at,
+                [
+                    'platform_id' => $p->platform_id ? (int) $p->platform_id : null,
+                    'platform_country' => (string) ($p->platform_country ?? ''),
+                    'platform_name' => (string) ($p->platform_name ?? ''),
+                ]
             ));
             $out[$key] = [
                 'label' => $bucket['label'],
@@ -435,18 +468,26 @@ class LifecycleAnalyticsService
         return $out;
     }
 
-    private function toUsd(float $amount, string $currency, $eventDate = null): float
+    private function toUsd(float $amount, string $currency, $eventDate = null, array $context = []): float
     {
         if ($amount <= 0) {
             return 0.0;
         }
 
         try {
-            $normalized = $this->reportingCurrency->normalizeBreakdown(
-                [strtoupper($currency) => $amount],
-                $eventDate instanceof Carbon ? $eventDate : ($eventDate ? Carbon::parse($eventDate) : null),
-                'USD'
-            );
+            $date = $eventDate instanceof Carbon
+                ? $eventDate->toDateString()
+                : ($eventDate ? Carbon::parse($eventDate)->toDateString() : now()->toDateString());
+            $normalized = $this->reportingCurrency->normalizeEventRows([
+                (object) [
+                    'currency' => strtoupper($currency),
+                    'amount' => $amount,
+                    'event_date' => $date,
+                    'platform_id' => $context['platform_id'] ?? null,
+                    'platform_country' => $context['platform_country'] ?? null,
+                    'platform_name' => $context['platform_name'] ?? null,
+                ],
+            ], 'USD', false);
 
             // normalized_total is null when a rate is missing; fall back to the
             // raw amount so a single-currency view still totals (approximate).

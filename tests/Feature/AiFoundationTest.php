@@ -4,12 +4,11 @@ namespace Tests\Feature;
 
 use App\Models\AiInteraction;
 use App\Models\ClientActiveSnapshot;
-use App\Models\Deal;
 use App\Models\IntegrationSetting;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
-use App\Models\User;
+use App\Models\ReportingFxRate;
 use App\Services\Ai\AiBriefingSettingsService;
 use App\Services\Ai\AiGateway;
 use App\Services\Ai\AiInsightsSettingsService;
@@ -21,7 +20,6 @@ use App\Services\Seo\Llm\LlmResponse;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class AiFoundationTest extends TestCase
@@ -56,6 +54,37 @@ class AiFoundationTest extends TestCase
         }
         $this->assertArrayHasKey('platform_id', $columns);
         $this->assertArrayHasKey('amount_usd', $columns);
+    }
+
+    public function test_reporting_views_resolve_cfa_alias_from_market_context(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Senegal',
+            'country' => 'Senegal',
+            'currency_code' => 'XOF',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'XOF']);
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => now()->toDateString(),
+            'rate' => 0.002,
+            'fetched_at' => now(),
+        ]);
+
+        $this->payment($platform, $product, [
+            'amount' => 1000,
+            'currency' => 'CFA',
+            'completed_at' => now(),
+        ]);
+
+        $payment = DB::table('vw_payments_usd')->where('platform_id', $platform->id)->first();
+        $market = DB::table('vw_market_revenue')->where('platform_id', $platform->id)->first();
+
+        $this->assertSame('XOF', $payment->source_currency);
+        $this->assertEqualsWithDelta(2.0, (float) $payment->amount_usd, 0.001);
+        $this->assertEqualsWithDelta(2.0, (float) $market->revenue_usd, 0.001);
     }
 
     public function test_ai_gateway_logs_one_success_row_with_cost_and_provider(): void
@@ -209,7 +238,8 @@ class AiFoundationTest extends TestCase
 
     private function bindFakeProvider(\Closure $generate): void
     {
-        $this->app->bind(DeepSeekAdapter::class, fn () => new class($generate) implements LlmClient {
+        $this->app->bind(DeepSeekAdapter::class, fn () => new class($generate) implements LlmClient
+        {
             public function __construct(private \Closure $generate) {}
 
             public function name(): string

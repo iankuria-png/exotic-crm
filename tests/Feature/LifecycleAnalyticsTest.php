@@ -6,6 +6,7 @@ use App\Models\BillingProxySession;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\ReportingFxRate;
 use App\Models\TimelineEvent;
 use App\Services\LifecycleAnalyticsService;
 use App\Services\LifecycleSmsService;
@@ -99,6 +100,47 @@ class LifecycleAnalyticsTest extends TestCase
         $this->assertSame(1, $overview['funnel']['direct']);
         $this->assertSame(1, $overview['funnel']['assisted']);
         $this->assertEqualsWithDelta(150.0, $overview['attributed_revenue_usd'], 0.5);
+    }
+
+    public function test_funnel_resolves_cfa_alias_from_market_context(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Senegal',
+            'country' => 'Senegal',
+            'currency_code' => 'XOF',
+        ]);
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => now()->subDays(2)->toDateString(),
+            'rate' => 0.002,
+            'fetched_at' => now(),
+        ]);
+
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => $client->id,
+            'status' => 'completed',
+            'amount' => 1000,
+            'currency' => 'CFA',
+            'completed_at' => now()->subDays(2),
+            'raw_payload' => ['source' => 'crm_lifecycle', 'lifecycle_flow' => 'onboarding'],
+        ]);
+        $this->send($client, 'onboarding', $payment->id, now()->subDays(3));
+
+        $overview = app(LifecycleAnalyticsService::class)->overview([
+            'from' => now()->subDays(30)->toDateString(),
+            'to' => now()->toDateString(),
+            'window_days' => 7,
+        ]);
+
+        $this->assertSame(1, $overview['funnel']['converted']);
+        $this->assertEqualsWithDelta(2.0, $overview['attributed_revenue_usd'], 0.001);
+        $this->assertEqualsWithDelta(2.0, $overview['by_market'][0]['revenue_usd'], 0.001);
+        $this->assertEqualsWithDelta(2.0, $overview['payments']['completed']['value_usd'], 0.001);
     }
 
     public function test_messages_drill_annotates_and_filters_rows(): void
@@ -218,7 +260,7 @@ class LifecycleAnalyticsTest extends TestCase
             Payment::factory()->create([
                 'platform_id' => $platform->id,
                 'product_id' => null,
-            'client_id' => $client->id,
+                'client_id' => $client->id,
                 'status' => $status,
                 'amount' => $amount,
                 'currency' => 'USD',
