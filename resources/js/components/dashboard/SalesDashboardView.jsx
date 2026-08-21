@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import SectionFrame from '../SectionFrame';
 import CurrencyAmount from '../CurrencyAmount';
+import WeeklyPrioritiesPanel from './WeeklyPrioritiesPanel';
 import ProfileEngagementWidget from './ProfileEngagementWidget';
 import useSalesWidgetConfig from '../../hooks/useSalesWidgetConfig';
 import { useToast } from '../ToastProvider';
@@ -1396,6 +1397,17 @@ export default function SalesDashboardView({ user, navigate }) {
                         />
                     </>
                 )}
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-12">
+                <div className="xl:col-span-12">
+                    <WeeklyPrioritiesPanel
+                        title="This Week's Priorities"
+                        subtitle="CEO/admin priorities assigned to your sales scope."
+                        audience="sales"
+                        compact
+                    />
+                </div>
             </section>
 
             <section className="grid gap-4 xl:grid-cols-12">

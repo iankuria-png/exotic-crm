@@ -80,6 +80,7 @@ use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossary
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
+use App\Http\Controllers\CRM\WeeklyPriorityController;
 use App\Http\Controllers\Wp\ComplianceController as WpComplianceController;
 use App\Http\Controllers\Wp\WpSeoController;
 use Illuminate\Http\Request;
@@ -220,6 +221,15 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::patch('/{todo}', [AgentTodoController::class, 'update']);
         Route::delete('/{todo}', [AgentTodoController::class, 'destroy']);
     });
+
+    Route::middleware('role:admin,sub_admin,sales,field_sales')->prefix('priorities')->group(function () {
+        Route::get('/', [WeeklyPriorityController::class, 'index']);
+        Route::post('/', [WeeklyPriorityController::class, 'store']);
+        Route::patch('/{priority}', [WeeklyPriorityController::class, 'update']);
+        Route::delete('/{priority}', [WeeklyPriorityController::class, 'destroy']);
+    });
+
+    Route::post('/briefings/shared/{token}/priorities', [WeeklyPriorityController::class, 'storeFromBriefing']);
 
     Route::middleware('role:admin,sub_admin')->prefix('team')->group(function () {
         Route::get('/presence', [TeamController::class, 'presence']);

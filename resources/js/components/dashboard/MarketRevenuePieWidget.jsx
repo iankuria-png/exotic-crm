@@ -80,12 +80,14 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                     });
                     return acc;
                 }, {}),
-                normalized_total: other.reduce((sum, item) => sum + Number(item.normalized_total || 0), 0),
+                normalized_total: other.some((item) => item.normalized_total === null || item.normalized_total === undefined)
+                    ? null
+                    : other.reduce((sum, item) => sum + Number(item.normalized_total || 0), 0),
                 normalized_currency: reporting?.targetCurrency || 'USD',
                 payments_count: other.reduce((sum, item) => sum + Number(item.payments_count || 0), 0),
                 color: '#94a3b8',
                 other_markets: other,
-                value: other.reduce((sum, item) => sum + Number(item.normalized_total || 0), 0),
+                value: other.reduce((sum, item) => sum + Number(item.normalized_total ?? Object.values(item.source_breakdown || {}).reduce((sourceSum, amount) => sourceSum + Number(amount || 0), 0)), 0),
             });
         }
 
@@ -214,7 +216,9 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                                     </span>
                                     <span className="shrink-0 text-right">
                                         <span className="block text-sm font-semibold text-slate-900">{Number(market.share_percent || 0).toFixed(1)}%</span>
-                                        <span className="block text-[11px] text-slate-500">{formatCurrency(market.normalized_total || 0, market.normalized_currency || reporting?.targetCurrency)}</span>
+                                        <span className="block text-[11px] text-slate-500">
+                                            {moneyFromBreakdown(market.source_breakdown, market.normalized_total, market.normalized_currency || reporting?.targetCurrency, reporting?.displayMode)}
+                                        </span>
                                     </span>
                                 </button>
                             ))}

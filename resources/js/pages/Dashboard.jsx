@@ -11,6 +11,7 @@ import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWi
 import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
 import RevenueByPackageWidget from '../components/dashboard/RevenueByPackageWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
+import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 import CeoDashboard from './CeoDashboard';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
@@ -377,7 +378,7 @@ function RetentionWatchWidget({ summary, isLoading, onOpenWatchlist }) {
     );
 }
 
-function OperationsDashboard() {
+function OperationsDashboard({ user }) {
     const navigate = useNavigate();
     const { config: widgetConfig } = useDashboardWidgets();
     const [platformFilter, setPlatformFilter] = useState(() => {
@@ -847,6 +848,14 @@ function OperationsDashboard() {
 
             <p className="px-1 text-xs text-slate-500">Click any metric card to open the relevant action queue.</p>
 
+            <WeeklyPrioritiesPanel
+                title="Weekly Operating Priorities"
+                subtitle="CEO/admin priorities for this week, including overdue and completed work."
+                audience="all"
+                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
+                markets={platforms}
+            />
+
             <ProfileMovementWidget
                 data={profileMovementQuery.data}
                 isLoading={profileMovementQuery.isLoading}
@@ -1154,7 +1163,7 @@ export default function Dashboard() {
                     </button>
                 </div>
                 {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} /> : null}
-                <OperationsDashboard />
+                <OperationsDashboard user={user} />
             </div>
         );
     }
@@ -1162,7 +1171,7 @@ export default function Dashboard() {
     return (
         <div className="space-y-4">
             {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} /> : null}
-            <OperationsDashboard />
+            <OperationsDashboard user={user} />
         </div>
     );
 }

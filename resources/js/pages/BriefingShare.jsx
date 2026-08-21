@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import AiStateBlock from '../components/ai/AiStateBlock';
+import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 
 /**
  * Recipient-facing weekly briefing at /b/:token.
@@ -75,18 +76,20 @@ export default function BriefingShare() {
 
     return (
         <Shell>
-            <ExecutiveBriefing data={state.data} />
+            <ExecutiveBriefing data={state.data} token={token} user={user} />
         </Shell>
     );
 }
 
-function ExecutiveBriefing({ data }) {
+function ExecutiveBriefing({ data, token, user }) {
     const body = data.body || {};
-    const isV2 = body.version === 'executive_scorecard_v2' || Array.isArray(body.scorecards);
+    const isV2 = body.version === 'executive_scorecard_v2' || body.version === 'executive_scorecard_v3' || Array.isArray(body.scorecards);
     const period = body.period || data.period || {};
     const scopeLabel = data.scope?.org_wide === false && data.scope?.platform_ids?.length
         ? `${data.scope.platform_ids.length} market${data.scope.platform_ids.length > 1 ? 's' : ''}`
         : 'All markets';
+    const canCreatePriorities = Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role));
+    const decisionSeed = body.executive_summary?.decision_points?.[0] || '';
 
     if (!isV2) {
         return <LegacyBriefing data={data} />;
@@ -124,19 +127,55 @@ function ExecutiveBriefing({ data }) {
                 </div>
             </header>
 
+            <nav className="mb-6 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+                {[
+                    ['#readout', 'Readout'],
+                    ['#movement', 'Customers'],
+                    ['#markets', 'Markets'],
+                    ['#recovery', 'Recovery'],
+                    ['#priorities', 'Priorities'],
+                    ['#quality', 'Data quality'],
+                ].map(([href, label]) => (
+                    <a
+                        key={href}
+                        href={href}
+                        className="rounded-md px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
+                    >
+                        {label}
+                    </a>
+                ))}
+            </nav>
+
             <ScorecardGrid scorecards={body.scorecards || []} />
 
-            <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
+            <div id="readout" className="mt-6 grid scroll-mt-6 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
                 <ExecutiveSummary summary={body.executive_summary} narrative={body.narrative} />
-                <CustomerMovement movement={body.customer_movement} />
+                <div id="movement" className="scroll-mt-6">
+                    <CustomerMovement movement={body.customer_movement} />
+                </div>
             </div>
 
             <div className="mt-6 grid gap-6 xl:grid-cols-2">
-                <MarketMovement movement={body.market_movement} />
-                <PaymentRecovery recovery={body.payment_recovery} />
+                <div id="markets" className="scroll-mt-6">
+                    <MarketMovement movement={body.market_movement} />
+                </div>
+                <div id="recovery" className="scroll-mt-6">
+                    <PaymentRecovery recovery={body.payment_recovery} />
+                </div>
             </div>
 
-            <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
+            <div id="priorities" className="mt-6 scroll-mt-6">
+                <WeeklyPrioritiesPanel
+                    title="CEO Weekly Priorities"
+                    subtitle="Turn the briefing into visible operating priorities for this week."
+                    audience={data.audience === 'sales' ? 'sales' : 'all'}
+                    allowCreate={canCreatePriorities}
+                    createEndpoint={`/crm/briefings/shared/${token}/priorities`}
+                    sourceSuggestion={decisionSeed}
+                />
+            </div>
+
+            <div id="quality" className="mt-6 grid scroll-mt-6 gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
                 <TeamExecution execution={body.team_execution} />
                 <DataQuality quality={body.data_quality} generatedAt={data.generated_at} />
             </div>
@@ -292,12 +331,13 @@ function PaymentRecovery({ recovery = {} }) {
                 <MetricCell label="Recovery rate" value={formatPercent(recovery.payment_recovery_rate)} />
                 <MetricCell label="Recovered payments" value={formatNumber(recovery.recovered_payments)} />
                 <MetricCell label="Failed payments" value={formatNumber(recovery.failed_payments)} />
-                <MetricCell label="Recovered value" value={`${recovery.currency || ''} ${formatCompact(recovery.recovered_value)}`} />
-                <MetricCell label="Unrecovered value" value={`${recovery.currency || ''} ${formatCompact(recovery.lost_value)}`} />
+                <MetricCell label="Recovered value" value={formatRecoveryMoney(recovery, 'recovered_value')} />
+                <MetricCell label="Unrecovered value" value={formatRecoveryMoney(recovery, 'lost_value')} />
                 <MetricCell label="Customers affected" value={formatNumber(recovery.failed_customers)} />
             </div>
             <p className="mt-4 text-sm text-slate-600">
                 Recovery moved {signedNumber(recovery.payment_recovery_rate_delta)} percentage points versus the prior week.
+                {recovery.normalization_partial ? ' Some values are shown from native currency breakdowns because FX was partial.' : ''}
             </p>
         </section>
     );
@@ -468,6 +508,26 @@ function formatCompact(value) {
 
 function formatPercent(value) {
     return `${formatCompact(value)}%`;
+}
+
+function formatRecoveryMoney(recovery, key) {
+    const display = recovery?.[`${key}_display`];
+    if (display) {
+        return display;
+    }
+
+    const value = recovery?.[key];
+    if (value !== null && value !== undefined) {
+        return `${recovery.currency || ''} ${formatCompact(value)}`.trim();
+    }
+
+    const breakdown = recovery?.[`${key}_breakdown`] || {};
+    const parts = Object.entries(breakdown)
+        .filter(([, amount]) => Number(amount || 0) !== 0)
+        .slice(0, 2)
+        .map(([currency, amount]) => `${currency} ${formatCompact(amount)}`);
+
+    return parts.length ? parts.join(' + ') : 'Not available';
 }
 
 function signedNumber(value) {

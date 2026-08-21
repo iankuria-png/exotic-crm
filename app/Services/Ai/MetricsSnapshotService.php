@@ -65,7 +65,7 @@ class MetricsSnapshotService
         $teamExecution = $this->teamExecution($from, $to, $priorFrom, $priorTo, $platformIds);
 
         $snapshot = [
-            'version' => 'executive_scorecard_v2',
+            'version' => 'executive_scorecard_v3',
             'scope' => [
                 'org_wide' => $platformIds === null,
                 'platform_ids' => $platformIds ?? [],
@@ -124,7 +124,7 @@ class MetricsSnapshotService
                 'caveats' => array_values(array_filter([
                     'Revenue uses reportable successful payments with wallet top-ups excluded.',
                     'Team active hours are CRM session time and may include work outside a specific market scope.',
-                    (($paymentRecovery['normalization_partial'] ?? false) ? 'Some payment recovery values could not be fully currency-normalized.' : null),
+                    (($paymentRecovery['normalization_partial'] ?? false) ? 'Some payment recovery values could not be fully currency-normalized; native amounts are retained in the source breakdown.' : null),
                 ])),
             ],
         ];
@@ -508,9 +508,18 @@ class MetricsSnapshotService
             'recovered_customers' => (int) ($current['recovered_customers'] ?? 0),
             'lost_customers' => (int) ($current['lost_customers'] ?? 0),
             'customer_recovery_rate' => (float) ($current['customer_recovery_rate'] ?? 0.0),
-            'failed_value' => (float) ($failed['normalized_total'] ?? 0.0),
-            'recovered_value' => (float) ($recovered['normalized_total'] ?? 0.0),
-            'lost_value' => (float) ($lost['normalized_total'] ?? 0.0),
+            'failed_value' => $failed['normalized_total'],
+            'failed_value_display' => $failed['normalized_display'],
+            'failed_value_breakdown' => $failed['source_breakdown'] ?? [],
+            'failed_value_normalization_meta' => $failed['normalization_meta'] ?? null,
+            'recovered_value' => $recovered['normalized_total'],
+            'recovered_value_display' => $recovered['normalized_display'],
+            'recovered_value_breakdown' => $recovered['source_breakdown'] ?? [],
+            'recovered_value_normalization_meta' => $recovered['normalization_meta'] ?? null,
+            'lost_value' => $lost['normalized_total'],
+            'lost_value_display' => $lost['normalized_display'],
+            'lost_value_breakdown' => $lost['source_breakdown'] ?? [],
+            'lost_value_normalization_meta' => $lost['normalization_meta'] ?? null,
             'currency' => $targetCurrency,
             'normalization_partial' => (bool) data_get($failed, 'normalization_meta.partial', false)
                 || (bool) data_get($recovered, 'normalization_meta.partial', false)
@@ -690,12 +699,10 @@ class MetricsSnapshotService
                     (int) ($customers['expired_profiles'] ?? 0),
                 ),
                 sprintf(
-                    'Payment recovery is %.1f%%, with %s %s recovered and %s %s still unrecovered.',
+                    'Payment recovery is %.1f%%, with %s recovered and %s still unrecovered.',
                     (float) ($recovery['payment_recovery_rate'] ?? 0),
-                    (string) ($recovery['currency'] ?? $currency),
-                    number_format((float) ($recovery['recovered_value'] ?? 0), 0),
-                    (string) ($recovery['currency'] ?? $currency),
-                    number_format((float) ($recovery['lost_value'] ?? 0), 0),
+                    $this->moneyNarrativeValue($recovery, 'recovered_value', $currency),
+                    $this->moneyNarrativeValue($recovery, 'lost_value', $currency),
                 ),
                 sprintf(
                     'Team active time was %.1fh across %d actions.',
@@ -723,6 +730,30 @@ class MetricsSnapshotService
         }
 
         return $positive ? 'good' : 'watch';
+    }
+
+    private function moneyNarrativeValue(array $source, string $key, string $fallbackCurrency): string
+    {
+        $display = $source[$key.'_display'] ?? null;
+        if (is_string($display) && trim($display) !== '') {
+            return $display;
+        }
+
+        $value = $source[$key] ?? null;
+        if ($value !== null) {
+            return $fallbackCurrency.' '.number_format((float) $value, 0);
+        }
+
+        $breakdown = (array) ($source[$key.'_breakdown'] ?? []);
+        if ($breakdown !== []) {
+            return collect($breakdown)
+                ->map(fn ($amount, $currency) => strtoupper((string) $currency).' '.number_format((float) $amount, 0))
+                ->values()
+                ->take(3)
+                ->implode(' + ');
+        }
+
+        return 'no value recorded';
     }
 
     private function topAgents(Carbon $from, Carbon $to, ?array $platformIds, string $targetCurrency, int $limit = 5): array

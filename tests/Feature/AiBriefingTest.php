@@ -251,7 +251,7 @@ class AiBriefingTest extends TestCase
         $this->assertSame('Africa/Nairobi', $result['period']['timezone']);
     }
 
-    public function test_briefing_body_uses_executive_scorecard_v2_snapshot(): void
+    public function test_briefing_body_uses_executive_scorecard_v3_snapshot(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-08-21 12:00:00', 'Africa/Nairobi'));
         $this->bindAiJson();
@@ -342,7 +342,7 @@ class AiBriefingTest extends TestCase
         $result = app(BriefingService::class)->run('ceo', false);
         $body = $result['briefings'][0]['full_body'];
 
-        $this->assertSame('executive_scorecard_v2', $body['version']);
+        $this->assertSame('executive_scorecard_v3', $body['version']);
         $this->assertSame('Week 33', $body['period']['label']);
         $this->assertSame('10-16 Aug 2026', $body['period']['display']);
         $this->assertNotEmpty($body['scorecards']);
@@ -358,7 +358,49 @@ class AiBriefingTest extends TestCase
         $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
             ->assertOk()
             ->assertJsonPath('period.label', 'Week 33')
-            ->assertJsonPath('body.version', 'executive_scorecard_v2');
+            ->assertJsonPath('body.version', 'executive_scorecard_v3');
+
+        Carbon::setTestNow();
+    }
+
+    public function test_payment_recovery_money_stays_null_when_fx_is_partial(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-21 12:00:00', 'Africa/Nairobi'));
+        $this->bindAiJson();
+        [$senegal, $product] = $this->market([
+            'name' => 'Senegal',
+            'country' => 'Senegal',
+            'currency_code' => 'CFA',
+        ]);
+        $ceoUser = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        $this->saveRecipients([
+            ['user_id' => $ceoUser->id, 'audience' => 'ceo', 'phone' => '221700000001'],
+        ]);
+
+        $failedAt = Carbon::parse('2026-08-11 08:00:00', 'Africa/Nairobi')->utc();
+        $this->payment($senegal, $product, [
+            'status' => 'failed',
+            'amount' => 10000,
+            'currency' => 'CFA',
+            'created_at' => $failedAt,
+            'completed_at' => null,
+            'phone' => '221700000002',
+        ]);
+        $this->payment($senegal, $product, [
+            'amount' => 10000,
+            'currency' => 'CFA',
+            'created_at' => $failedAt->copy()->addHour(),
+            'completed_at' => $failedAt->copy()->addHour(),
+            'phone' => '221700000002',
+        ]);
+
+        $result = app(BriefingService::class)->run('ceo', false);
+        $recovery = $result['briefings'][0]['full_body']['payment_recovery'];
+
+        $this->assertSame(1, $recovery['recovered_payments']);
+        $this->assertNull($recovery['recovered_value']);
+        $this->assertSame(['CFA' => 10000.0], $recovery['recovered_value_breakdown']);
+        $this->assertTrue($recovery['normalization_partial']);
 
         Carbon::setTestNow();
     }

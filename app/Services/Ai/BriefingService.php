@@ -437,7 +437,7 @@ PROMPT;
         return [
             'sms_digest' => $digest,
             'full_body' => [
-                'version' => 'executive_scorecard_v2',
+                'version' => 'executive_scorecard_v3',
                 'headline' => (string) ($focus['headline'] ?? sprintf('%s scorecard: %s%s', $periodLabel, $money, $deltaStr)),
                 'period' => $snapshot['period'] ?? [],
                 'scope' => $snapshot['scope'] ?? [],

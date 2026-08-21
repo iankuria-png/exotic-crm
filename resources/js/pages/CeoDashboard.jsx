@@ -14,6 +14,7 @@ import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidg
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import MarketHealthWidget from '../components/dashboard/MarketHealthWidget';
 import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
+import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
@@ -345,6 +346,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 isLoading={summaryQuery.isLoading}
                 onMarketClick={handleMarketScope}
                 onAgentClick={setFocusedAgentId}
+            />
+
+            <WeeklyPrioritiesPanel
+                title="CEO Priority Board"
+                subtitle="This week's decisions, metric targets, and overdue follow-through in one operating queue."
+                audience="all"
+                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
+                markets={marketOptions}
             />
 
             <RevenueTrendWidget
