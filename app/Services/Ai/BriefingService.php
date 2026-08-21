@@ -389,8 +389,11 @@ PROMPT;
         $periodDisplay = (string) data_get($snapshot, 'period.display', trim((string) data_get($snapshot, 'window.from').' - '.(string) data_get($snapshot, 'window.to')));
         $priorLabel = (string) data_get($snapshot, 'period.prior_label', 'prior week');
         $newPaid = (int) data_get($snapshot, 'customer_movement.new_paid_customers', 0);
-        $expiredProfiles = (int) data_get($snapshot, 'customer_movement.expired_profiles', 0);
+        $churnedProfiles = (int) data_get($snapshot, 'customer_movement.churned_profiles', 0);
         $renewedProfiles = (int) data_get($snapshot, 'customer_movement.renewed_profiles', 0);
+        $lostToChurn = (string) data_get($snapshot, 'customer_movement.lost_value_to_churn_display', 'USD 0.00');
+        $subscriberSnapshot = (int) data_get($snapshot, 'customer_movement.active_subscribers_snapshot.current', data_get($snapshot, 'active_subscribers.count', 0));
+        $priorSubscriberSnapshot = (int) data_get($snapshot, 'customer_movement.active_subscribers_snapshot.prior', data_get($snapshot, 'active_subscribers.prior_count', 0));
         $recoveryRate = (float) data_get($snapshot, 'payment_recovery.payment_recovery_rate', 0.0);
         $teamHours = (float) data_get($snapshot, 'team_execution.active_hours', 0.0);
 
@@ -409,7 +412,8 @@ PROMPT;
         $highlights = [
             sprintf('Revenue was %s%s across %d payments.', $money, $deltaStr, (int) ($snapshot['revenue']['payments_count'] ?? 0)),
             sprintf('Daily revenue averaged %s %s vs %s %s in %s.', $currency, number_format((float) data_get($snapshot, 'revenue.average_daily', 0), 0), $currency, number_format((float) data_get($snapshot, 'revenue.prior_average_daily', 0), 0), $priorLabel),
-            sprintf('%d new paid customers, %d renewed profiles, %d expired profiles.', $newPaid, $renewedProfiles, $expiredProfiles),
+            sprintf('%d new paid customers, %d renewed profiles, %d churned profiles.', $newPaid, $renewedProfiles, $churnedProfiles),
+            sprintf('Active paid-user snapshot is %d vs %d in %s.', $subscriberSnapshot, $priorSubscriberSnapshot, $priorLabel),
             sprintf('Payment recovery closed %.1f%% of failed payments.', $recoveryRate),
             sprintf('Team logged %.1f active hours across %d actions.', $teamHours, (int) data_get($snapshot, 'team_execution.total_actions', 0)),
         ];
@@ -425,8 +429,8 @@ PROMPT;
                 $priorLabel,
             );
         }
-        if ($expiredProfiles > $newPaid) {
-            $watch[] = sprintf('%d profiles expired against %d new paid customers.', $expiredProfiles, $newPaid);
+        if ($churnedProfiles > $newPaid) {
+            $watch[] = sprintf('%d profiles churned against %d new paid customers; possible lost value %s.', $churnedProfiles, $newPaid, $lostToChurn);
         }
         if ($delta !== null && (float) $delta < 0) {
             $watch[] = sprintf('Revenue down %.1f%% vs prior week', abs((float) $delta));
@@ -455,13 +459,15 @@ PROMPT;
                 'team_execution' => $snapshot['team_execution'] ?? [],
                 'data_quality' => $snapshot['data_quality'] ?? [],
                 'narrative' => sprintf(
-                    '%s covered %s. The business recorded %s in normalized revenue%s, added %d new paid customers, renewed %d profiles, and recovered %.1f%% of failed payments.',
+                    '%s covered %s. The business recorded %s in normalized revenue%s, added %d new paid customers, renewed %d profiles, churned %d profiles (%s possible lost value), and recovered %.1f%% of failed payments.',
                     $periodLabel,
                     $periodDisplay,
                     $money,
                     $deltaStr,
                     $newPaid,
                     $renewedProfiles,
+                    $churnedProfiles,
+                    $lostToChurn,
                     $recoveryRate,
                 ),
                 'generated' => 'template',

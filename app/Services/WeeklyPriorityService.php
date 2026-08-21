@@ -266,7 +266,9 @@ class WeeklyPriorityService
             'average_daily_revenue' => data_get($snapshot, 'revenue.average_daily'),
             'payment_recovery_rate' => data_get($snapshot, 'payment_recovery.payment_recovery_rate'),
             'new_paid_customers' => data_get($snapshot, 'customer_movement.new_paid_customers'),
-            'expired_profiles' => data_get($snapshot, 'customer_movement.expired_profiles'),
+            'active_subscriber_snapshot' => data_get($snapshot, 'customer_movement.active_subscribers_snapshot.current'),
+            'churned_profiles' => data_get($snapshot, 'customer_movement.churned_profiles'),
+            'lost_value_to_churn' => data_get($snapshot, 'customer_movement.lost_value_to_churn'),
             'team_active_hours' => data_get($snapshot, 'team_execution.active_hours'),
             default => null,
         };

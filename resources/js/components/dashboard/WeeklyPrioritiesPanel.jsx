@@ -10,7 +10,9 @@ const METRIC_OPTIONS = [
     { value: 'average_daily_revenue', label: 'Daily average revenue' },
     { value: 'payment_recovery_rate', label: 'Payment recovery rate' },
     { value: 'new_paid_customers', label: 'New paid customers' },
-    { value: 'expired_profiles', label: 'Expired profiles' },
+    { value: 'active_subscriber_snapshot', label: 'User snapshot' },
+    { value: 'churned_profiles', label: 'Churned profiles' },
+    { value: 'lost_value_to_churn', label: 'Lost value to churn' },
     { value: 'team_active_hours', label: 'Team active hours' },
 ];
 
@@ -33,7 +35,7 @@ function formatValue(priority) {
     const target = Number(priority.target_value ?? 0);
     const metric = priority.metric_key || '';
     const suffix = metric.includes('rate') ? '%' : metric.includes('hours') ? 'h' : '';
-    const prefix = metric.includes('revenue') ? `${priority.target_currency || 'USD'} ` : '';
+    const prefix = metric.includes('revenue') || metric.includes('lost_value') ? `${priority.target_currency || 'USD'} ` : '';
 
     if (!priority.metric_key || priority.target_value === null || priority.target_value === undefined) {
         return 'Manual';
@@ -64,6 +66,23 @@ function priorityTabCounts(priorities) {
         done: priorities.filter((item) => item.status === 'completed').length,
         all: priorities.length,
     };
+}
+
+function SelectControl({ className = '', children, ...props }) {
+    return (
+        <span className="relative block">
+            <select
+                {...props}
+                className={`${className} appearance-none pr-10`}
+            >
+                {children}
+            </select>
+            <span
+                aria-hidden="true"
+                className="pointer-events-none absolute right-3 top-1/2 h-2 w-2 -translate-y-[60%] rotate-45 border-b-2 border-r-2 border-slate-500"
+            />
+        </span>
+    );
 }
 
 export default function WeeklyPrioritiesPanel({
@@ -155,7 +174,7 @@ export default function WeeklyPrioritiesPanel({
             metric_key: hasMetric ? draft.metric_key : null,
             target_operator: hasMetric ? draft.target_operator : null,
             target_value: hasMetric && draft.target_value !== '' ? Number(draft.target_value) : null,
-            target_currency: hasMetric && draft.metric_key.includes('revenue') ? draft.target_currency : null,
+            target_currency: hasMetric && (draft.metric_key.includes('revenue') || draft.metric_key.includes('lost_value')) ? draft.target_currency : null,
             due_at: draft.due_at || null,
         });
     };
@@ -208,7 +227,7 @@ export default function WeeklyPrioritiesPanel({
                         <div className="grid gap-3 lg:grid-cols-[1fr_140px_140px_140px]">
                             <label className="space-y-1">
                                 <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Metric link</span>
-                                <select
+                                <SelectControl
                                     value={draft.metric_key}
                                     onChange={(event) => setDraft((current) => ({
                                         ...current,
@@ -221,11 +240,11 @@ export default function WeeklyPrioritiesPanel({
                                     {METRIC_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
-                                </select>
+                                </SelectControl>
                             </label>
                             <label className="space-y-1">
                                 <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Audience</span>
-                                <select
+                                <SelectControl
                                     value={draft.audience}
                                     onChange={(event) => setDraft((current) => ({ ...current, audience: event.target.value }))}
                                     className="crm-select bg-white"
@@ -234,11 +253,11 @@ export default function WeeklyPrioritiesPanel({
                                     {AUDIENCE_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
-                                </select>
+                                </SelectControl>
                             </label>
                             <label className="space-y-1">
                                 <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Level</span>
-                                <select
+                                <SelectControl
                                     value={draft.priority_level}
                                     onChange={(event) => setDraft((current) => ({ ...current, priority_level: event.target.value }))}
                                     className="crm-select bg-white"
@@ -247,7 +266,7 @@ export default function WeeklyPrioritiesPanel({
                                     <option value="critical">Critical</option>
                                     <option value="high">High</option>
                                     <option value="normal">Normal</option>
-                                </select>
+                                </SelectControl>
                             </label>
                             <label className="space-y-1">
                                 <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Due</span>
@@ -261,7 +280,7 @@ export default function WeeklyPrioritiesPanel({
                             </label>
                         </div>
                         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_140px_auto]">
-                            <select
+                            <SelectControl
                                 value={draft.platform_id}
                                 onChange={(event) => setDraft((current) => ({ ...current, platform_id: event.target.value }))}
                                 className="crm-select bg-white"
@@ -274,8 +293,8 @@ export default function WeeklyPrioritiesPanel({
                                         {market.name || market.platform_name}
                                     </option>
                                 ))}
-                            </select>
-                            <select
+                            </SelectControl>
+                            <SelectControl
                                 value={draft.target_operator}
                                 onChange={(event) => setDraft((current) => ({ ...current, target_operator: event.target.value }))}
                                 className="crm-select bg-white"
@@ -284,7 +303,7 @@ export default function WeeklyPrioritiesPanel({
                             >
                                 <option value="gte">At least</option>
                                 <option value="lte">At most</option>
-                            </select>
+                            </SelectControl>
                             <input
                                 type="number"
                                 min="0"

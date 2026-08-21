@@ -15,6 +15,7 @@ use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\ReportingFxRate;
 use App\Models\SmsLog;
 use App\Models\User;
 use App\Services\Ai\AiBriefingSettingsService;
@@ -273,12 +274,27 @@ class AiBriefingTest extends TestCase
             'platform_id' => $kenya->id,
             'lifecycle_expired_at' => $currentStart->copy()->addDay(),
         ]);
+        Client::factory()->create([
+            'platform_id' => $kenya->id,
+            'churned_at' => $currentStart->copy()->addDay(),
+        ]);
         $renewalDeal = Deal::factory()->create([
             'platform_id' => $kenya->id,
             'client_id' => $newClient->id,
             'product_id' => $product->id,
+            'assigned_to' => $ceoUser->id,
             'expires_at' => $currentStart->copy()->addDays(2),
             'subscription_lifecycle' => 'renewal',
+        ]);
+        ClientActiveSnapshot::query()->create([
+            'date' => '2026-08-09',
+            'platform_id' => $kenya->id,
+            'count' => 100,
+        ]);
+        ClientActiveSnapshot::query()->create([
+            'date' => '2026-08-16',
+            'platform_id' => $kenya->id,
+            'count' => 120,
         ]);
 
         $this->payment($kenya, $product, [
@@ -351,6 +367,9 @@ class AiBriefingTest extends TestCase
         $this->assertArrayHasKey('payment_recovery', $body);
         $this->assertArrayHasKey('team_execution', $body);
         $this->assertSame(1, $body['customer_movement']['expired_profiles']);
+        $this->assertSame(1, $body['customer_movement']['churned_profiles']);
+        $this->assertSame(120, $body['customer_movement']['active_subscribers_snapshot']['current']);
+        $this->assertNotEmpty($body['team_execution']['members']);
         $this->assertGreaterThanOrEqual(50.0, $body['payment_recovery']['payment_recovery_rate']);
 
         $recipient = BriefingRecipient::first();
@@ -363,10 +382,11 @@ class AiBriefingTest extends TestCase
         Carbon::setTestNow();
     }
 
-    public function test_payment_recovery_money_stays_null_when_fx_is_partial(): void
+    public function test_payment_recovery_money_uses_platform_context_for_cfa_fx(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-08-21 12:00:00', 'Africa/Nairobi'));
         $this->bindAiJson();
+        config(['services.reporting_fx.enabled' => true]);
         [$senegal, $product] = $this->market([
             'name' => 'Senegal',
             'country' => 'Senegal',
@@ -378,6 +398,14 @@ class AiBriefingTest extends TestCase
         ]);
 
         $failedAt = Carbon::parse('2026-08-11 08:00:00', 'Africa/Nairobi')->utc();
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => $failedAt->toDateString(),
+            'rate' => '0.0016000000',
+            'fetched_at' => $failedAt,
+        ]);
         $this->payment($senegal, $product, [
             'status' => 'failed',
             'amount' => 10000,
@@ -398,9 +426,11 @@ class AiBriefingTest extends TestCase
         $recovery = $result['briefings'][0]['full_body']['payment_recovery'];
 
         $this->assertSame(1, $recovery['recovered_payments']);
-        $this->assertNull($recovery['recovered_value']);
+        $this->assertEqualsWithDelta(16.0, (float) $recovery['recovered_value'], 0.001);
+        $this->assertSame('USD 16.00', $recovery['recovered_value_display']);
         $this->assertSame(['CFA' => 10000.0], $recovery['recovered_value_breakdown']);
-        $this->assertTrue($recovery['normalization_partial']);
+        $this->assertFalse($recovery['normalization_partial']);
+        $this->assertSame('XOF', data_get($recovery, 'recovered_value_normalization_meta.currency_aliases.0.canonical_currency'));
 
         Carbon::setTestNow();
     }

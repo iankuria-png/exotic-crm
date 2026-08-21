@@ -224,15 +224,22 @@ function ExecutiveSummary({ summary = {}, narrative }) {
     return (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="CEO readout" title="The week in operating terms" />
-            {narrative ? <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-700">{narrative}</p> : null}
+            {narrative ? (
+                <div className="mt-3 max-w-4xl space-y-2 text-sm leading-6 text-slate-700">
+                    {splitSentences(narrative).slice(0, 3).map((sentence, index) => (
+                        <p key={index}>{highlightFacts(sentence)}</p>
+                    ))}
+                </div>
+            ) : null}
             <div className="mt-5 grid gap-4 md:grid-cols-3">
                 {groups.map(([title, items]) => (
-                    <div key={title}>
+                    <div key={title} className="rounded-lg border border-slate-100 bg-slate-50/70 p-3">
                         <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-                        <ul className="mt-2 space-y-2">
+                        <ul className="mt-3 space-y-2.5">
                             {items.slice(0, 4).map((item, index) => (
-                                <li key={`${title}-${index}`} className="text-sm leading-5 text-slate-600">
-                                    {item}
+                                <li key={`${title}-${index}`} className="flex gap-2 text-sm leading-5 text-slate-600">
+                                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-500" />
+                                    <span>{highlightFacts(item)}</span>
                                 </li>
                             ))}
                         </ul>
@@ -244,11 +251,14 @@ function ExecutiveSummary({ summary = {}, narrative }) {
 }
 
 function CustomerMovement({ movement = {} }) {
+    const snapshot = movement.active_subscribers_snapshot || {};
     const rows = [
         ['Created profiles', movement.created_profiles, movement.created_profiles_comparison],
         ['New paid customers', movement.new_paid_customers, movement.new_paid_customers_comparison],
         ['Renewed profiles', movement.renewed_profiles, movement.renewed_profiles_comparison],
-        ['Expired profiles', movement.expired_profiles, null],
+        ['Churned profiles', movement.churned_profiles, movement.churned_profiles_comparison],
+        ['Lost to churn', movement.lost_value_to_churn_display || formatMoneyValue(movement.lost_value_to_churn, movement.lost_value_to_churn_currency), null],
+        ['User snapshot', formatNumber(snapshot.current), { delta_percent: snapshot.delta_percent }],
         ['Renewals due', movement.renewals_due, null],
         ['Renewal payments', movement.renewal_payments, null],
     ];
@@ -265,6 +275,9 @@ function CustomerMovement({ movement = {} }) {
                 Net active movement: <span className="font-semibold text-slate-950">{signedNumber(movement.net_active_movement)}</span>
                 {movement.renewal_save_rate !== null && movement.renewal_save_rate !== undefined
                     ? ` - Renewal save rate ${formatPercent(movement.renewal_save_rate)}`
+                    : ''}
+                {snapshot.prior !== null && snapshot.prior !== undefined
+                    ? ` - Active paid users ${formatNumber(snapshot.current)} vs ${formatNumber(snapshot.prior)}`
                     : ''}
             </div>
         </section>
@@ -344,6 +357,8 @@ function PaymentRecovery({ recovery = {} }) {
 }
 
 function TeamExecution({ execution = {} }) {
+    const members = Array.isArray(execution.members) ? execution.members : [];
+
     return (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="Team execution" title="Work rhythm" />
@@ -356,6 +371,44 @@ function TeamExecution({ execution = {} }) {
             <p className="mt-4 text-sm text-slate-600">
                 Active time was {deltaText(execution.active_hours_delta_percent)} and actions were {deltaText(execution.total_actions_delta_percent)} vs prior week.
             </p>
+            {members.length ? (
+                <div className="mt-5 overflow-x-auto rounded-lg border border-slate-100">
+                    <table className="min-w-full text-left text-sm">
+                        <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
+                            <tr>
+                                <th className="px-3 py-2 font-semibold">Person</th>
+                                <th className="px-3 py-2 font-semibold">Revenue</th>
+                                <th className="px-3 py-2 font-semibold">Hours</th>
+                                <th className="px-3 py-2 font-semibold">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {members.map((member) => (
+                                <tr key={member.user_id}>
+                                    <td className="px-3 py-3">
+                                        <p className="font-semibold text-slate-900">{member.name}</p>
+                                        <p className="text-xs text-slate-500">{member.role}</p>
+                                    </td>
+                                    <td className="px-3 py-3 font-mono text-slate-800">
+                                        {member.currency} {formatCompact(member.revenue)}
+                                        <span className={`ml-2 text-xs ${Number(member.revenue_delta || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                            {signedMoney(member.revenue_delta, member.currency)}
+                                        </span>
+                                    </td>
+                                    <td className="px-3 py-3 text-slate-700">
+                                        {formatCompact(member.active_hours)}h
+                                        <span className="ml-2 text-xs text-slate-500">{deltaText(member.active_hours_delta_percent)}</span>
+                                    </td>
+                                    <td className="px-3 py-3 text-slate-700">
+                                        {formatNumber(member.actions)}
+                                        <span className="ml-2 text-xs text-slate-500">{deltaText(member.actions_delta_percent)}</span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : null}
         </section>
     );
 }
@@ -530,6 +583,21 @@ function formatRecoveryMoney(recovery, key) {
     return parts.length ? parts.join(' + ') : 'Not available';
 }
 
+function formatMoneyValue(value, currency = 'USD') {
+    if (value === null || value === undefined) {
+        return 'Not available';
+    }
+
+    return `${currency || ''} ${formatCompact(value)}`.trim();
+}
+
+function signedMoney(value, currency = 'USD') {
+    const number = Number(value || 0);
+    const sign = number > 0 ? '+' : number < 0 ? '-' : '';
+
+    return `${sign}${currency || ''} ${formatCompact(Math.abs(number))}`.trim();
+}
+
 function signedNumber(value) {
     const number = Number(value || 0);
     return `${number > 0 ? '+' : ''}${formatCompact(number)}`;
@@ -560,4 +628,23 @@ function formatDateTime(value) {
         hour: '2-digit',
         minute: '2-digit',
     });
+}
+
+function splitSentences(text) {
+    return String(text || '')
+        .split(/(?<=[.!?])\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function highlightFacts(text) {
+    const pattern = /((?:USD|KES|TZS|GHS|NGN|ZMW|UGX|CDF|XOF|XAF|CFA)\s?[-+]?[0-9][0-9,]*(?:\.[0-9]+)?|[-+]?[0-9][0-9,]*(?:\.[0-9]+)?%|Week\s[0-9]+|[0-9][0-9,]*\s?(?:payments|profiles|customers|actions|hours|active hours))/gi;
+    const isFact = new RegExp(pattern.source, 'i');
+    const parts = String(text || '').split(pattern);
+
+    return parts.map((part, index) => (
+        isFact.test(part)
+            ? <strong key={index} className="font-semibold text-slate-950">{part}</strong>
+            : <React.Fragment key={index}>{part}</React.Fragment>
+    ));
 }

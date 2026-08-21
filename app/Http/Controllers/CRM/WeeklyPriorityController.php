@@ -110,7 +110,7 @@ class WeeklyPriorityController extends Controller
             'week_end' => 'sometimes|nullable|date|after_or_equal:week_start',
             'due_at' => 'sometimes|nullable|date',
             'completion_mode' => 'sometimes|required|in:manual,metric,hybrid',
-            'metric_key' => 'sometimes|nullable|in:revenue,average_daily_revenue,payment_recovery_rate,new_paid_customers,expired_profiles,team_active_hours',
+            'metric_key' => 'sometimes|nullable|in:revenue,average_daily_revenue,payment_recovery_rate,new_paid_customers,active_subscriber_snapshot,churned_profiles,lost_value_to_churn,team_active_hours',
             'target_operator' => 'sometimes|nullable|in:gte,lte',
             'target_value' => 'sometimes|nullable|numeric|min:0',
             'target_currency' => 'sometimes|nullable|string|max:8',
