@@ -848,14 +848,6 @@ function OperationsDashboard({ user }) {
 
             <p className="px-1 text-xs text-slate-500">Click any metric card to open the relevant action queue.</p>
 
-            <WeeklyPrioritiesPanel
-                title="Weekly Operating Priorities"
-                subtitle="CEO/admin priorities for this week, including overdue and completed work."
-                audience="all"
-                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
-                markets={platforms}
-            />
-
             <ProfileMovementWidget
                 data={profileMovementQuery.data}
                 isLoading={profileMovementQuery.isLoading}
@@ -1105,6 +1097,14 @@ function OperationsDashboard({ user }) {
                     ) : null}
                 </div>
             </section>
+
+            <WeeklyPrioritiesPanel
+                title="Weekly Operating Priorities"
+                subtitle="CEO/admin priorities for this week, including overdue and completed work."
+                audience="all"
+                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
+                markets={platforms}
+            />
         </div>
     );
 }

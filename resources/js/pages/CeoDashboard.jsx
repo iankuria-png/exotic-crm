@@ -348,14 +348,6 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            <WeeklyPrioritiesPanel
-                title="CEO Priority Board"
-                subtitle="This week's decisions, metric targets, and overdue follow-through in one operating queue."
-                audience="all"
-                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
-                markets={marketOptions}
-            />
-
             <RevenueTrendWidget
                 data={trendQuery.data}
                 isLoading={trendQuery.isLoading}
@@ -465,6 +457,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 subtitle={engagementMarketName
                     ? `WordPress profile performance for ${engagementMarketName} across the selected window. Deltas compare against the previous matching window.`
                     : undefined}
+            />
+
+            <WeeklyPrioritiesPanel
+                title="CEO Priority Board"
+                subtitle="This week's decisions, metric targets, and overdue follow-through in one operating queue."
+                audience="all"
+                allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
+                markets={marketOptions}
             />
         </div>
     );
