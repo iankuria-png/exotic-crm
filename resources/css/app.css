@@ -73,6 +73,63 @@
                focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100;
     }
 
+    @media print {
+        @page {
+            size: A4;
+            margin: 12mm;
+        }
+
+        html,
+        body,
+        #root {
+            background: #ffffff !important;
+        }
+
+        .briefing-no-print {
+            display: none !important;
+        }
+
+        .briefing-print-root {
+            max-width: none !important;
+            padding: 0 !important;
+        }
+
+        .briefing-print-root header {
+            margin-bottom: 14px !important;
+            padding-bottom: 14px !important;
+        }
+
+        .briefing-print-root section,
+        .briefing-print-root article,
+        .briefing-print-root table,
+        .briefing-print-root .rounded-lg,
+        .briefing-print-root .rounded-xl {
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .briefing-print-root .shadow-sm,
+        .briefing-print-root .shadow-lg {
+            box-shadow: none !important;
+        }
+
+        .briefing-print-root .bg-white,
+        .briefing-print-root .bg-slate-50,
+        .briefing-print-root .bg-slate-50\/70,
+        .briefing-print-root .bg-slate-50\/80 {
+            background: #ffffff !important;
+        }
+
+        .briefing-print-root h1 {
+            font-size: 28px !important;
+            line-height: 1.14 !important;
+        }
+
+        .briefing-print-root h2 {
+            font-size: 18px !important;
+        }
+    }
+
     .crm-filter-row {
         @apply rounded-xl border border-slate-200 bg-white p-3 shadow-sm;
     }

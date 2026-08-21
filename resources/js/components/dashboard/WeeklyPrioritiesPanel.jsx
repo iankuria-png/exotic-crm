@@ -70,10 +70,10 @@ function priorityTabCounts(priorities) {
 
 function SelectControl({ className = '', children, ...props }) {
     return (
-        <span className="relative block">
+        <span className="relative block w-full">
             <select
                 {...props}
-                className={`${className} appearance-none pr-10`}
+                className={`w-full appearance-none pr-10 ${className}`}
             >
                 {children}
             </select>
@@ -212,8 +212,8 @@ export default function WeeklyPrioritiesPanel({
             </div>
 
             {allowCreate ? (
-                <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-                    <div className="grid gap-3">
+                <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4">
+                    <div className="grid gap-4">
                         <label className="space-y-1">
                             <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Priority</span>
                             <input
@@ -224,7 +224,7 @@ export default function WeeklyPrioritiesPanel({
                                 disabled={createMutation.isPending}
                             />
                         </label>
-                        <div className="grid gap-3 lg:grid-cols-[1fr_140px_140px_140px]">
+                        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(14rem,1.2fr)_minmax(10rem,0.8fr)_minmax(9rem,0.65fr)_minmax(10rem,0.8fr)]">
                             <label className="space-y-1">
                                 <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Metric link</span>
                                 <SelectControl
@@ -279,42 +279,51 @@ export default function WeeklyPrioritiesPanel({
                                 />
                             </label>
                         </div>
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_140px_auto]">
-                            <SelectControl
-                                value={draft.platform_id}
-                                onChange={(event) => setDraft((current) => ({ ...current, platform_id: event.target.value }))}
-                                className="crm-select bg-white"
-                                disabled={createMutation.isPending || markets.length === 0}
-                                aria-label="Priority market"
-                            >
-                                <option value="">All markets</option>
-                                {markets.map((market) => (
-                                    <option key={market.id || market.platform_id} value={market.id || market.platform_id}>
-                                        {market.name || market.platform_name}
-                                    </option>
-                                ))}
-                            </SelectControl>
-                            <SelectControl
-                                value={draft.target_operator}
-                                onChange={(event) => setDraft((current) => ({ ...current, target_operator: event.target.value }))}
-                                className="crm-select bg-white"
-                                disabled={createMutation.isPending || !draft.metric_key}
-                                aria-label="Target operator"
-                            >
-                                <option value="gte">At least</option>
-                                <option value="lte">At most</option>
-                            </SelectControl>
-                            <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={draft.target_value}
-                                onChange={(event) => setDraft((current) => ({ ...current, target_value: event.target.value }))}
-                                className="crm-input bg-white"
-                                placeholder="Target"
-                                disabled={createMutation.isPending || !draft.metric_key}
-                            />
-                            <button type="submit" className="crm-btn-primary" disabled={createMutation.isPending || !draft.title.trim()}>
+                        <div className="grid gap-3 lg:grid-cols-[minmax(14rem,1fr)_minmax(8rem,0.4fr)_minmax(9rem,0.45fr)_auto] lg:items-end">
+                            <label className="space-y-1">
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Market</span>
+                                <SelectControl
+                                    value={draft.platform_id}
+                                    onChange={(event) => setDraft((current) => ({ ...current, platform_id: event.target.value }))}
+                                    className="crm-select bg-white"
+                                    disabled={createMutation.isPending || markets.length === 0}
+                                    aria-label="Priority market"
+                                >
+                                    <option value="">All markets</option>
+                                    {markets.map((market) => (
+                                        <option key={market.id || market.platform_id} value={market.id || market.platform_id}>
+                                            {market.name || market.platform_name}
+                                        </option>
+                                    ))}
+                                </SelectControl>
+                            </label>
+                            <label className="space-y-1">
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Target rule</span>
+                                <SelectControl
+                                    value={draft.target_operator}
+                                    onChange={(event) => setDraft((current) => ({ ...current, target_operator: event.target.value }))}
+                                    className="crm-select bg-white"
+                                    disabled={createMutation.isPending || !draft.metric_key}
+                                    aria-label="Target operator"
+                                >
+                                    <option value="gte">At least</option>
+                                    <option value="lte">At most</option>
+                                </SelectControl>
+                            </label>
+                            <label className="space-y-1">
+                                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Target</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={draft.target_value}
+                                    onChange={(event) => setDraft((current) => ({ ...current, target_value: event.target.value }))}
+                                    className="crm-input bg-white"
+                                    placeholder="Target"
+                                    disabled={createMutation.isPending || !draft.metric_key}
+                                />
+                            </label>
+                            <button type="submit" className="crm-btn-primary min-h-[42px]" disabled={createMutation.isPending || !draft.title.trim()}>
                                 {createMutation.isPending ? 'Saving...' : 'Set priority'}
                             </button>
                         </div>
