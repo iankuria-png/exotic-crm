@@ -43,14 +43,15 @@ class BriefingService
      * @param  string  $audience  ceo|sales
      * @return array{status:string, audience:string, dry_run:bool, period:array, briefings:array, reason?:string, run_id?:int|null, cost_usd?:float}
      */
-    public function run(string $audience, bool $dryRun = false, ?Carbon $date = null, ?int $triggeredBy = null): array
+    public function run(string $audience, bool $dryRun = false, ?Carbon $date = null, ?int $triggeredBy = null, bool $sendSms = true): array
     {
         $audience = in_array($audience, ['ceo', 'sales'], true) ? $audience : 'sales';
         $window = $this->resolvePeriod($date);
 
         // P1-8: a disabled feature must produce no AI call and no SMS when the
-        // schedule fires. Manual dry-runs are still allowed so admins can preview.
-        if (! $this->settings->enabled() && ! $dryRun) {
+        // schedule fires. Manual dry-runs and scorecard-only generation are still
+        // allowed so admins can preview or backfill a shareable report.
+        if (! $this->settings->enabled() && ! $dryRun && $sendSms) {
             return [
                 'status' => 'skipped',
                 'reason' => 'disabled',
@@ -126,6 +127,7 @@ class BriefingService
                     $recipient,
                     $briefing,
                     $dryRun,
+                    $sendSms,
                 );
                 $briefingPayload['recipients'][] = $assembled;
             }
@@ -149,6 +151,11 @@ class BriefingService
             'cost_usd' => round($runCost, 6),
             'briefings' => $briefings,
         ];
+    }
+
+    public function generateScorecard(string $audience = 'ceo', ?Carbon $date = null, ?int $triggeredBy = null): array
+    {
+        return $this->run($audience, false, $date, $triggeredBy, false);
     }
 
     /**
@@ -538,6 +545,7 @@ PROMPT;
         array $recipient,
         ?Briefing $briefing,
         bool $dryRun,
+        bool $sendSms = true,
     ): array {
         $token = Str::random(32);
         $link = $this->buildLink($token);
@@ -574,6 +582,18 @@ PROMPT;
             'delivery_status' => 'pending',
             'opt_out_snapshot' => false,
         ]);
+
+        if (! $sendSms) {
+            $row->update([
+                'delivery_status' => 'scorecard_only',
+            ]);
+
+            return $base + [
+                'delivery_status' => 'scorecard_only',
+                'share_token' => $token,
+                'recipient_id' => $row->id,
+            ];
+        }
 
         $delivery = $this->dispatch($recipient, $platformIds, $fit['text'], $row->id);
 

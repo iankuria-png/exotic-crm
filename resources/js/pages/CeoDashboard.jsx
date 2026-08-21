@@ -14,6 +14,7 @@ import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidg
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import MarketHealthWidget from '../components/dashboard/MarketHealthWidget';
 import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
+import ScorecardArchiveModal from '../components/dashboard/ScorecardArchiveModal';
 import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
@@ -92,6 +93,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [recentChannel, setRecentChannel] = useState('all');
     const [recentAgentId, setRecentAgentId] = useState('all');
     const [engagementMarket, setEngagementMarket] = useState(null);
+    const [scorecardModalOpen, setScorecardModalOpen] = useState(false);
+    const canUseScorecards = Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role));
 
     const queryParams = useMemo(() => ({
         horizon,
@@ -105,6 +108,13 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         queryKey: ['ceo-dashboard', 'markets'],
         queryFn: () => api.get('/crm/dashboard/my-markets').then((response) => response.data),
         staleTime: 120_000,
+    });
+
+    const scorecardsQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'scorecards'],
+        queryFn: () => api.get('/crm/settings/ai/scorecards').then((response) => response.data),
+        enabled: canUseScorecards,
+        staleTime: 30_000,
     });
 
     const summaryQuery = useQuery({
@@ -290,6 +300,29 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         },
     });
 
+    const generateScorecardMutation = useMutation({
+        mutationFn: (weekStart) => api.post('/crm/settings/ai/scorecards/generate', {
+            week_start: weekStart,
+        }).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.setQueryData(['ceo-dashboard', 'scorecards'], response);
+            queryClient.invalidateQueries({ queryKey: ['ai-briefing-history'] });
+            toast.success('Scorecard generated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not generate that scorecard.');
+        },
+    });
+
+    const openScorecard = (url) => {
+        if (!url) {
+            toast.error('This scorecard does not have a share link yet.');
+            return;
+        }
+
+        navigate(url);
+    };
+
     const engagementSwitcher = (
         <select
             value={engagementPlatform || ''}
@@ -327,7 +360,24 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onPlatformChange={handleMarketScope}
                 reporting={reporting}
                 onSwitchAdmin={onSwitchAdminView}
+                scorecardSummary={scorecardsQuery.data}
+                scorecardsLoading={scorecardsQuery.isLoading}
+                onOpenScorecards={canUseScorecards ? () => setScorecardModalOpen(true) : null}
             />
+
+            {canUseScorecards ? (
+                <ScorecardArchiveModal
+                    open={scorecardModalOpen}
+                    data={scorecardsQuery.data}
+                    isLoading={scorecardsQuery.isLoading}
+                    isError={scorecardsQuery.isError}
+                    onClose={() => setScorecardModalOpen(false)}
+                    onRetry={() => scorecardsQuery.refetch()}
+                    onOpenScorecard={openScorecard}
+                    onGenerate={(weekStart) => generateScorecardMutation.mutate(weekStart)}
+                    generatingWeek={generateScorecardMutation.isPending ? generateScorecardMutation.variables : null}
+                />
+            ) : null}
 
             <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-500">
                 <span>Window: <span className="font-semibold text-slate-700">{compactWindowLabel(window)}</span></span>

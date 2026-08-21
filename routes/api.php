@@ -837,6 +837,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/briefings/preview', [AiBriefingSettingsController::class, 'preview']);
         Route::post('/briefings/send', [AiBriefingSettingsController::class, 'send']);
         Route::get('/history', [AiBriefingSettingsController::class, 'history']);
+        Route::get('/scorecards', [AiBriefingSettingsController::class, 'scorecards']);
+        Route::post('/scorecards/generate', [AiBriefingSettingsController::class, 'generateScorecard']);
     });
 
     // Talk to Your Data + Project Intelligence (read / validate / summarize only).

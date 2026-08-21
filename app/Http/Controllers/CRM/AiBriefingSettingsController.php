@@ -5,6 +5,8 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunAiBriefingJob;
 use App\Models\AiInteraction;
+use App\Models\Briefing;
+use App\Models\BriefingRecipient;
 use App\Models\BriefingRun;
 use App\Models\Platform;
 use App\Models\User;
@@ -181,6 +183,41 @@ class AiBriefingSettingsController extends Controller
         ]);
     }
 
+    public function scorecards(Request $request): JsonResponse
+    {
+        return response()->json($this->scorecardArchivePayload($request));
+    }
+
+    public function generateScorecard(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'week_start' => ['required', 'date'],
+        ]);
+
+        $timezone = $this->briefingSettings->timezone();
+        $weekStart = Carbon::parse((string) $data['week_start'], $timezone)->startOfWeek(Carbon::MONDAY);
+        $periodStartUtc = $weekStart->copy()->utc();
+        $existing = $this->findCeoScorecardForPeriod($periodStartUtc);
+
+        if (! $existing) {
+            $generationDate = $weekStart->copy()->addWeek();
+            $result = $this->briefings->generateScorecard('ceo', $generationDate, $request->user()?->id);
+
+            if (($result['status'] ?? null) !== 'completed') {
+                return response()->json([
+                    'message' => match ($result['reason'] ?? null) {
+                        'no_recipients' => 'Add a CEO briefing recipient before generating a scorecard.',
+                        default => 'Could not generate the scorecard right now.',
+                    },
+                    'status' => $result['status'] ?? 'failed',
+                    'reason' => $result['reason'] ?? null,
+                ], 422);
+            }
+        }
+
+        return response()->json($this->scorecardArchivePayload($request));
+    }
+
     private function recentRuns(): array
     {
         return BriefingRun::query()
@@ -189,6 +226,97 @@ class AiBriefingSettingsController extends Controller
             ->limit(20)
             ->get()
             ->toArray();
+    }
+
+    private function scorecardArchivePayload(Request $request): array
+    {
+        $timezone = $this->briefingSettings->timezone();
+        $currentWeekStart = Carbon::now($timezone)->startOfWeek(Carbon::MONDAY)->subWeek();
+        $weeks = [];
+
+        for ($i = 0; $i < 8; $i++) {
+            $weekStart = $currentWeekStart->copy()->subWeeks($i);
+            $periodStartUtc = $weekStart->copy()->utc();
+            $briefing = $this->findCeoScorecardForPeriod($periodStartUtc);
+            $weeks[] = $this->serializeScorecardWeek($request, $weekStart, $briefing, $i === 0);
+        }
+
+        return [
+            'timezone' => $timezone,
+            'weeks' => $weeks,
+            'latest' => $weeks[0] ?? null,
+        ];
+    }
+
+    private function findCeoScorecardForPeriod(Carbon $periodStartUtc): ?Briefing
+    {
+        return Briefing::query()
+            ->with(['recipients' => fn ($query) => $query->latest('id')])
+            ->where('audience', 'ceo')
+            ->where('period', 'weekly')
+            ->whereDate('period_start', $periodStartUtc->toDateString())
+            ->where('scope_hash', Briefing::scopeHashFor(null))
+            ->latest('id')
+            ->first();
+    }
+
+    private function serializeScorecardWeek(Request $request, Carbon $weekStart, ?Briefing $briefing, bool $isLatest): array
+    {
+        $weekEnd = $weekStart->copy()->endOfWeek(Carbon::SUNDAY);
+        $recipient = $this->scorecardRecipientForUser($request, $briefing);
+        $body = $briefing?->decodedBody() ?? [];
+        $metrics = collect((array) ($body['scorecards'] ?? []))->keyBy('key');
+
+        return [
+            'week_label' => 'Week '.$weekStart->isoWeek(),
+            'week_start' => $weekStart->toDateString(),
+            'week_end' => $weekEnd->toDateString(),
+            'display' => $weekStart->format('j M').' - '.$weekEnd->format('j M Y'),
+            'is_latest' => $isLatest,
+            'exists' => $briefing !== null,
+            'briefing_id' => $briefing?->id,
+            'generated_at' => optional($briefing?->created_at)->toIso8601String(),
+            'headline' => data_get($body, 'headline'),
+            'summary_sms' => $briefing?->summary_sms,
+            'share_url' => $recipient?->share_token ? '/b/'.$recipient->share_token : null,
+            'recipient_status' => $recipient?->delivery_status,
+            'metrics' => [
+                'revenue' => $this->scorecardMetricSummary($metrics->get('revenue')),
+                'recovery' => $this->scorecardMetricSummary($metrics->get('payment_recovery_rate')),
+                'churn' => $this->scorecardMetricSummary($metrics->get('churned_profiles')),
+            ],
+        ];
+    }
+
+    private function scorecardRecipientForUser(Request $request, ?Briefing $briefing): ?BriefingRecipient
+    {
+        if (! $briefing) {
+            return null;
+        }
+
+        $userId = (int) ($request->user()?->id ?? 0);
+        $currentUserRecipient = $briefing->recipients->first(
+            fn (BriefingRecipient $recipient) => (int) $recipient->user_id === $userId
+        );
+
+        return $currentUserRecipient ?: $briefing->recipients->first();
+    }
+
+    private function scorecardMetricSummary(mixed $metric): ?array
+    {
+        if (! is_array($metric) || $metric === []) {
+            return null;
+        }
+
+        return [
+            'label' => $metric['label'] ?? null,
+            'current' => $metric['current'] ?? null,
+            'prior' => $metric['prior'] ?? null,
+            'delta_percent' => $metric['delta_percent'] ?? null,
+            'unit' => $metric['unit'] ?? null,
+            'currency' => $metric['currency'] ?? null,
+            'status' => $metric['status'] ?? null,
+        ];
     }
 
     private function eligibleUsers(): array

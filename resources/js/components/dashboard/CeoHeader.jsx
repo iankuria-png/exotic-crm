@@ -37,6 +37,15 @@ function humanizeDay(dateStr, isToday) {
     return isToday ? `${label} · today` : label;
 }
 
+function scorecardCtaText(summary, loading) {
+    if (loading) return 'Loading archive';
+
+    const latest = summary?.latest;
+    if (!latest) return 'Open archive';
+
+    return latest.exists ? `View ${latest.week_label}` : `Generate ${latest.week_label}`;
+}
+
 export default function CeoHeader({
     user,
     horizon,
@@ -52,6 +61,9 @@ export default function CeoHeader({
     onPlatformChange,
     reporting,
     onSwitchAdmin,
+    scorecardSummary,
+    scorecardsLoading = false,
+    onOpenScorecards,
 }) {
     const today = new Date().toLocaleDateString(undefined, {
         weekday: 'long',
@@ -77,13 +89,31 @@ export default function CeoHeader({
                         <p className="mt-1 text-sm text-slate-500">{today}</p>
                     </div>
 
-                    <button
-                        type="button"
-                        onClick={onSwitchAdmin}
-                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                    >
-                        Switch to Admin view
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        {onOpenScorecards ? (
+                            <button
+                                type="button"
+                                onClick={onOpenScorecards}
+                                className="group inline-flex min-h-11 items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-slate-950 text-[11px] font-bold uppercase text-white">
+                                    W
+                                </span>
+                                <span className="min-w-0">
+                                    <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700">Weekly scorecards</span>
+                                    <span className="block text-sm font-semibold text-slate-950">{scorecardCtaText(scorecardSummary, scorecardsLoading)}</span>
+                                </span>
+                            </button>
+                        ) : null}
+
+                        <button
+                            type="button"
+                            onClick={onSwitchAdmin}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            Switch to Admin view
+                        </button>
+                    </div>
                 </div>
             </div>
 

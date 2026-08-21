@@ -518,6 +518,51 @@ class AiBriefingTest extends TestCase
         ])->assertOk()->assertJsonCount(1, 'recipients');
     }
 
+    public function test_scorecard_archive_can_generate_missing_week_without_sms(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-21 12:00:00', 'Africa/Nairobi'));
+
+        try {
+            $this->bindAiJson();
+            [$platform, $product] = $this->market(['name' => 'Kenya', 'currency_code' => 'USD']);
+            $ceoUser = $this->user(['role' => 'admin', 'is_ceo' => true]);
+            $this->saveRecipients([
+                ['user_id' => $ceoUser->id, 'audience' => 'ceo', 'phone' => '254700000001'],
+            ]);
+            $this->payment($platform, $product, [
+                'amount' => 750,
+                'completed_at' => Carbon::parse('2026-08-11 10:00:00', 'Africa/Nairobi')->utc(),
+            ]);
+
+            Sanctum::actingAs($ceoUser);
+
+            $this->getJson('/api/crm/settings/ai/scorecards')
+                ->assertOk()
+                ->assertJsonPath('latest.week_label', 'Week 33')
+                ->assertJsonPath('latest.exists', false);
+
+            $payload = $this->postJson('/api/crm/settings/ai/scorecards/generate', [
+                'week_start' => '2026-08-10',
+            ])
+                ->assertOk()
+                ->json();
+
+            $this->assertTrue($payload['latest']['exists']);
+            $this->assertSame('Week 33', $payload['latest']['week_label']);
+            $this->assertSame('scorecard_only', $payload['latest']['recipient_status']);
+            $this->assertNotEmpty($payload['latest']['share_url']);
+            $this->assertSame(1, Briefing::count());
+            $this->assertSame(1, BriefingRecipient::count());
+            $this->assertSame(0, SmsLog::count());
+
+            $recipient = BriefingRecipient::first();
+            $this->assertSame('scorecard_only', $recipient->delivery_status);
+            $this->assertNull($recipient->sms_log_id);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_live_send_endpoint_requires_confirmation(): void
     {
         Sanctum::actingAs($this->user(['role' => 'admin']));
