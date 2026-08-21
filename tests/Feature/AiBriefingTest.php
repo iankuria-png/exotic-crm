@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\RunAiBriefingJob;
 use App\Models\AiInteraction;
 use App\Models\Briefing;
 use App\Models\BriefingRecipient;
@@ -15,11 +16,14 @@ use App\Models\User;
 use App\Services\Ai\AiBriefingSettingsService;
 use App\Services\Ai\BriefingService;
 use App\Services\Ai\GsmSmsLimiter;
+use App\Services\NotificationService;
 use App\Services\Seo\Llm\Adapters\DeepSeekAdapter;
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -175,6 +179,57 @@ class AiBriefingTest extends TestCase
         $this->assertNotEmpty($result['briefings'][0]['sms_digest']);
     }
 
+    public function test_ceo_briefing_routes_sms_by_recipient_phone_prefix_when_scope_is_org_wide(): void
+    {
+        $this->bindAiJson();
+        Http::fake([
+            'sms-gateway.example.test/*' => Http::response('OK', 200),
+            'karibu.briq.tz/*' => Http::response(['success' => true, 'job_id' => 'wrong-route'], 200),
+        ]);
+
+        [$kenya, $product] = $this->market(['phone_prefix' => '254', 'currency_code' => 'KES']);
+        $this->payment($kenya, $product, ['amount' => 750, 'currency' => 'KES', 'completed_at' => $this->lastWeek()]);
+
+        app(NotificationService::class)->saveSmsConfig([
+            'enabled' => true,
+            'active_provider' => 'briq',
+            'fallback_provider' => 'none',
+            'briq' => [
+                'base_url' => 'https://karibu.briq.tz',
+                'api_key' => 'global-key',
+                'sender_id' => 'TZ',
+            ],
+            'markets' => [
+                (string) $kenya->id => [
+                    'active_provider' => 'legacy_gateway',
+                    'legacy_gateway' => [
+                        'gateway_url' => 'https://sms-gateway.example.test/send',
+                        'org_code' => '76',
+                    ],
+                ],
+            ],
+        ]);
+
+        $ceoUser = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        $this->saveRecipients([
+            ['user_id' => $ceoUser->id, 'audience' => 'ceo', 'phone' => '+254769912227'],
+        ]);
+
+        $result = app(BriefingService::class)->run('ceo', false);
+
+        $this->assertSame('completed', $result['status']);
+        $this->assertSame('sent', $result['briefings'][0]['recipients'][0]['delivery_status']);
+        $this->assertDatabaseHas('sms_logs', [
+            'provider' => 'legacy_gateway',
+            'platform_id' => $kenya->id,
+            'status' => 'sent',
+            'purpose' => 'ai_briefing',
+        ]);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'sms-gateway.example.test'));
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'karibu.briq.tz'));
+    }
+
     public function test_period_is_previous_nairobi_week(): void
     {
         $this->bindAiJson();
@@ -200,7 +255,7 @@ class AiBriefingTest extends TestCase
         $this->assertSame(2, $limiter->units('€'));   // extension char
         $this->assertSame(3, $limiter->units('a€'));
 
-        $link = 'https://crm.test/b/' . Str::random(22);
+        $link = 'https://crm.test/b/'.Str::random(22);
         $fit = $limiter->fitWithLink(str_repeat('A', 400), $link);
         $this->assertLessThanOrEqual(GsmSmsLimiter::SEGMENT_UNITS, $fit['char_count']);
         $this->assertSame(1, $fit['segments']);
@@ -212,7 +267,7 @@ class AiBriefingTest extends TestCase
         $recipient = $this->seedBriefingRecipient();
         Sanctum::actingAs(User::find($recipient->user_id));
 
-        $this->getJson('/api/crm/briefings/shared/' . $recipient->share_token)
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
             ->assertOk()
             ->assertJsonPath('audience', 'ceo')
             ->assertJsonStructure(['body' => ['headline'], 'period', 'scope']);
@@ -226,7 +281,7 @@ class AiBriefingTest extends TestCase
         $stranger = $this->user(['role' => 'sales', 'is_ceo' => false]);
         Sanctum::actingAs($stranger);
 
-        $this->getJson('/api/crm/briefings/shared/' . $recipient->share_token)
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
             ->assertForbidden();
     }
 
@@ -237,7 +292,7 @@ class AiBriefingTest extends TestCase
         $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
         Sanctum::actingAs($ceo);
 
-        $this->getJson('/api/crm/briefings/shared/' . $recipient->share_token)
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
             ->assertOk();
     }
 
@@ -246,7 +301,7 @@ class AiBriefingTest extends TestCase
         $recipient = $this->seedBriefingRecipient(['expires_at' => now()->subDay()]);
         Sanctum::actingAs(User::find($recipient->user_id));
 
-        $this->getJson('/api/crm/briefings/shared/' . $recipient->share_token)
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
             ->assertStatus(410);
     }
 
@@ -254,7 +309,7 @@ class AiBriefingTest extends TestCase
     {
         Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
 
-        $this->getJson('/api/crm/briefings/shared/' . Str::random(32))
+        $this->getJson('/api/crm/briefings/shared/'.Str::random(32))
             ->assertNotFound();
     }
 
@@ -275,6 +330,37 @@ class AiBriefingTest extends TestCase
         ])->assertOk()->assertJsonCount(1, 'recipients');
     }
 
+    public function test_live_send_endpoint_requires_confirmation(): void
+    {
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $this->postJson('/api/crm/settings/ai/briefings/send', [
+            'audience' => 'ceo',
+        ])->assertStatus(422);
+    }
+
+    public function test_live_send_endpoint_schedules_future_job(): void
+    {
+        Queue::fake();
+        $admin = $this->user(['role' => 'admin']);
+        Sanctum::actingAs($admin);
+
+        $sendAt = Carbon::now('Africa/Nairobi')->addMinutes(10)->format('Y-m-d\TH:i');
+
+        $this->postJson('/api/crm/settings/ai/briefings/send', [
+            'audience' => 'ceo',
+            'send_at' => $sendAt,
+            'confirm_live' => true,
+        ])
+            ->assertAccepted()
+            ->assertJsonPath('status', 'scheduled')
+            ->assertJsonPath('audience', 'ceo');
+
+        Queue::assertPushed(RunAiBriefingJob::class, function (RunAiBriefingJob $job) use ($admin): bool {
+            return $job->audience === 'ceo' && $job->triggeredBy === $admin->id;
+        });
+    }
+
     // --- helpers -----------------------------------------------------------
 
     private function lastWeek(): Carbon
@@ -283,9 +369,9 @@ class AiBriefingTest extends TestCase
     }
 
     /** @return array{0:Platform,1:Product} */
-    private function market(): array
+    private function market(array $platformOverrides = []): array
     {
-        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $platform = Platform::factory()->create(array_merge(['currency_code' => 'USD'], $platformOverrides));
         $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
         ClientActiveSnapshot::query()->create([
             'date' => now()->toDateString(),
@@ -349,10 +435,20 @@ class AiBriefingTest extends TestCase
             ],
         ]);
 
-        $this->app->bind(DeepSeekAdapter::class, fn () => new class($json) implements LlmClient {
+        $this->app->bind(DeepSeekAdapter::class, fn () => new class($json) implements LlmClient
+        {
             public function __construct(private string $json) {}
-            public function name(): string { return 'deepseek'; }
-            public function isAvailable(): bool { return true; }
+
+            public function name(): string
+            {
+                return 'deepseek';
+            }
+
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+
             public function generate(string $system, string $user, array $opts = []): LlmResponse
             {
                 return new LlmResponse(text: $this->json, inputTokens: 100, outputTokens: 200);
@@ -383,7 +479,7 @@ class AiBriefingTest extends TestCase
     {
         return User::query()->create(array_merge([
             'name' => 'Test User',
-            'email' => Str::uuid() . '@example.test',
+            'email' => Str::uuid().'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',

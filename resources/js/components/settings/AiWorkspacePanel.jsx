@@ -93,6 +93,11 @@ function OverviewSection({ data }) {
     const insights = data.insights || {};
     const [previewAudience, setPreviewAudience] = useState('ceo');
     const [preview, setPreview] = useState(null);
+    const [liveAudience, setLiveAudience] = useState('ceo');
+    const [liveMode, setLiveMode] = useState('now');
+    const [liveAt, setLiveAt] = useState(defaultScheduledTime());
+    const [liveConfirmed, setLiveConfirmed] = useState(false);
+    const [liveResult, setLiveResult] = useState(null);
 
     const previewMutation = useMutation({
         mutationFn: (audience) => api.post('/crm/settings/ai/briefings/preview', { audience }).then((r) => r.data),
@@ -114,7 +119,33 @@ function OverviewSection({ data }) {
         onError: (err) => toast.error(err?.response?.data?.message || 'Could not update.'),
     });
 
+    const liveMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/ai/briefings/send', payload).then((r) => r.data),
+        onSuccess: (res) => {
+            setLiveResult(res);
+            setLiveConfirmed(false);
+            queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['ai-briefing-history'] });
+            if (res.status === 'scheduled') {
+                toast.success('Live briefing scheduled.');
+            } else if (res.status === 'skipped') {
+                toast.info?.(`Live send skipped: ${res.reason || 'unknown'}`);
+            } else {
+                toast.success('Live briefing sent.');
+            }
+        },
+        onError: (err) => toast.error(err?.response?.data?.message || 'Could not send live briefing.'),
+    });
+
     const recipientCount = (data.recipients || []).filter((r) => !r.opt_out).length;
+    const liveDisabled = liveMutation.isPending || !liveConfirmed || (liveMode === 'scheduled' && !liveAt);
+    const liveRecipientCount = (data.recipients || []).filter((r) => !r.opt_out && r.audience === liveAudience).length;
+    const sendLive = () =>
+        liveMutation.mutate({
+            audience: liveAudience,
+            send_at: liveMode === 'scheduled' ? liveAt : null,
+            confirm_live: true,
+        });
 
     return (
         <div className="space-y-4">
@@ -212,8 +243,127 @@ function OverviewSection({ data }) {
                     />
                 ) : null}
             </div>
+
+            <div className="crm-surface p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Live SMS test</h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                            Sends the real briefing SMS to opted-in recipients for the selected audience.
+                        </p>
+                    </div>
+                    <Badge ok={liveRecipientCount > 0}>{liveRecipientCount} recipient{liveRecipientCount === 1 ? '' : 's'}</Badge>
+                </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-[180px_1fr]">
+                    <Field label="Audience">
+                        <select
+                            value={liveAudience}
+                            onChange={(e) => setLiveAudience(e.target.value)}
+                            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500"
+                            aria-label="Live send audience"
+                        >
+                            <option value="ceo">CEO</option>
+                            <option value="sales">Sales</option>
+                        </select>
+                    </Field>
+
+                    <Field label="Send time">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="radio"
+                                    checked={liveMode === 'now'}
+                                    onChange={() => setLiveMode('now')}
+                                    className="h-4 w-4 border-slate-300 text-teal-600 focus:ring-teal-500"
+                                />
+                                Now
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="radio"
+                                    checked={liveMode === 'scheduled'}
+                                    onChange={() => setLiveMode('scheduled')}
+                                    className="h-4 w-4 border-slate-300 text-teal-600 focus:ring-teal-500"
+                                />
+                                Later
+                            </label>
+                            <input
+                                type="datetime-local"
+                                value={liveAt}
+                                min={defaultScheduledTime()}
+                                onChange={(e) => setLiveAt(e.target.value)}
+                                disabled={liveMode !== 'scheduled'}
+                                className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500 disabled:bg-slate-100 disabled:text-slate-400"
+                                aria-label="Scheduled live send time"
+                            />
+                            <span className="text-xs text-slate-500">{b.timezone || 'Africa/Nairobi'}</span>
+                        </div>
+                    </Field>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                    <label className="inline-flex items-start gap-2 text-sm text-amber-900">
+                        <input
+                            type="checkbox"
+                            checked={liveConfirmed}
+                            onChange={(e) => setLiveConfirmed(e.target.checked)}
+                            className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                        />
+                        I understand this sends actual SMS to the selected audience.
+                    </label>
+                    <button
+                        type="button"
+                        onClick={sendLive}
+                        disabled={liveDisabled}
+                        className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {liveMutation.isPending ? 'Submitting…' : liveMode === 'scheduled' ? 'Schedule live SMS' : 'Send live SMS'}
+                    </button>
+                </div>
+
+                {liveResult ? (
+                    <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm">
+                        {liveResult.status === 'scheduled' ? (
+                            <p className="font-medium text-slate-800">
+                                Scheduled for {formatDateTime(liveResult.scheduled_for)} ({liveResult.timezone}).
+                            </p>
+                        ) : liveResult.status === 'skipped' ? (
+                            <p className="font-medium text-slate-800">Skipped: {liveResult.reason || 'unknown'}</p>
+                        ) : (
+                            <>
+                                <p className="font-medium text-slate-800">
+                                    Sent for {liveResult.period?.from} → {liveResult.period?.to}; cost $
+                                    {Number(liveResult.cost_usd ?? 0).toFixed(6)}.
+                                </p>
+                                <ul className="mt-2 space-y-1">
+                                    {(liveResult.briefings || []).flatMap((br) => br.recipients || []).map((r, i) => (
+                                        <li key={i} className="flex flex-wrap items-center justify-between gap-2 rounded bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                                            <span>{r.name || `user#${r.user_id}`} · {r.phone || 'no phone'}</span>
+                                            <Badge ok={r.delivery_status === 'sent'}>{r.delivery_status}</Badge>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </>
+                        )}
+                    </div>
+                ) : null}
+            </div>
         </div>
     );
+}
+
+function defaultScheduledTime() {
+    const date = new Date(Date.now() + 5 * 60 * 1000);
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatDateTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString();
 }
 
 function Stat({ label, value }) {

@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Models\BriefingRun;
+use App\Services\Ai\AiBriefingSettingsService;
 use App\Services\Ai\BriefingService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
@@ -12,19 +14,22 @@ class RunAiBriefing extends Command
         {--audience=ceo : Audience to brief: ceo|sales}
         {--period=weekly : Reporting period (only weekly is supported)}
         {--dry-run : Compute and print the SMS + body without sending or persisting}
+        {--scheduled : Respect configured audience schedule and skip duplicate weekly sends}
         {--date= : Anchor date (Y-m-d) inside the week AFTER the period to brief; defaults to now}';
 
     protected $description = 'Generate and send the weekly AI performance briefing for an audience';
 
-    public function __construct(private readonly BriefingService $briefings)
-    {
+    public function __construct(
+        private readonly BriefingService $briefings,
+        private readonly AiBriefingSettingsService $settings,
+    ) {
         parent::__construct();
     }
 
     public function handle(): int
     {
         $audience = (string) $this->option('audience');
-        if (!in_array($audience, ['ceo', 'sales'], true)) {
+        if (! in_array($audience, ['ceo', 'sales'], true)) {
             $this->error("Invalid --audience '{$audience}'. Use ceo or sales.");
 
             return self::INVALID;
@@ -37,7 +42,14 @@ class RunAiBriefing extends Command
         }
 
         $dryRun = (bool) $this->option('dry-run');
-        $date   = null;
+        if ((bool) $this->option('scheduled') && ! $dryRun) {
+            $skipReason = $this->scheduledSkipReason($audience);
+            if ($skipReason !== null) {
+                return self::SUCCESS;
+            }
+        }
+
+        $date = null;
         if ($this->option('date')) {
             try {
                 $date = Carbon::createFromFormat('Y-m-d', (string) $this->option('date'));
@@ -61,7 +73,7 @@ class RunAiBriefing extends Command
         ));
 
         if ($result['status'] === 'skipped') {
-            $this->warn('Skipped: ' . ($result['reason'] ?? 'unknown'));
+            $this->warn('Skipped: '.($result['reason'] ?? 'unknown'));
 
             return self::SUCCESS;
         }
@@ -69,23 +81,23 @@ class RunAiBriefing extends Command
         foreach ($result['briefings'] as $i => $briefing) {
             $scope = $briefing['scope']['platform_ids'] === null
                 ? 'org-wide'
-                : 'markets [' . implode(',', $briefing['scope']['platform_ids']) . ']';
+                : 'markets ['.implode(',', $briefing['scope']['platform_ids']).']';
 
             $this->newLine();
             $this->info(sprintf('Scope #%d: %s (%s)', $i + 1, $scope, $briefing['used_ai'] ? 'AI' : 'template'));
-            $this->line('  SMS digest: ' . $briefing['sms_digest']);
+            $this->line('  SMS digest: '.$briefing['sms_digest']);
 
             foreach ($briefing['recipients'] as $r) {
                 $this->line(sprintf(
                     '  -> %s (%s) [%s, %d units / %d seg]',
-                    $r['name'] ?? 'user#' . $r['user_id'],
+                    $r['name'] ?? 'user#'.$r['user_id'],
                     $r['phone'] ?? 'no phone',
                     $r['delivery_status'],
                     $r['sms_char_count'],
                     $r['sms_segments'],
                 ));
                 if ($dryRun) {
-                    $this->line('     ' . $r['sms_text']);
+                    $this->line('     '.$r['sms_text']);
                 }
             }
         }
@@ -96,5 +108,42 @@ class RunAiBriefing extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    private function scheduledSkipReason(string $audience): ?string
+    {
+        if (! $this->settings->enabled()) {
+            return 'disabled';
+        }
+
+        $schedule = $this->settings->schedule();
+        if (! (bool) data_get($schedule, "{$audience}_enabled", true)) {
+            return 'audience_disabled';
+        }
+
+        $timezone = $this->settings->timezone();
+        $now = Carbon::now($timezone);
+        if ((int) $now->dayOfWeekIso !== 1) {
+            return 'not_monday';
+        }
+
+        $configuredTime = (string) data_get($schedule, "{$audience}_time", $audience === 'ceo' ? '07:30' : '07:45');
+        if ($now->format('H:i') !== $configuredTime) {
+            return 'not_due';
+        }
+
+        $periodStart = $now->copy()->startOfWeek(Carbon::MONDAY)->subWeek()->utc();
+        $alreadyCompleted = BriefingRun::query()
+            ->where('audience', $audience)
+            ->where('period', 'weekly')
+            ->where('dry_run', false)
+            ->where('status', 'completed')
+            ->whereBetween('period_start', [
+                $periodStart->copy()->subSecond(),
+                $periodStart->copy()->addSecond(),
+            ])
+            ->exists();
+
+        return $alreadyCompleted ? 'already_sent' : null;
     }
 }

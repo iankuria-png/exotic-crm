@@ -818,13 +818,14 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     // AI weekly briefings — shared link resolution (recipient or admin/CEO override).
     Route::get('/briefings/shared/{token}', [AiBriefingShareController::class, 'show']);
 
-    // AI workspace configuration (read/configure + dry-run preview only).
+    // AI workspace configuration (read/configure + dry-run and confirmed live sends).
     Route::middleware('role:admin,sub_admin')->prefix('settings/ai')->group(function () {
         Route::get('/', [AiBriefingSettingsController::class, 'show']);
         Route::patch('/briefings', [AiBriefingSettingsController::class, 'update']);
         Route::patch('/insights', [AiBriefingSettingsController::class, 'updateInsights']);
         Route::put('/recipients', [AiBriefingSettingsController::class, 'saveRecipients']);
         Route::post('/briefings/preview', [AiBriefingSettingsController::class, 'preview']);
+        Route::post('/briefings/send', [AiBriefingSettingsController::class, 'send']);
         Route::get('/history', [AiBriefingSettingsController::class, 'history']);
     });
 

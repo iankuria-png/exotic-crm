@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RunAiBriefingJob;
 use App\Models\AiInteraction;
 use App\Models\BriefingRun;
 use App\Models\Platform;
@@ -10,6 +11,7 @@ use App\Models\User;
 use App\Services\Ai\AiBriefingSettingsService;
 use App\Services\Ai\AiInsightsSettingsService;
 use App\Services\Ai\BriefingService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -31,11 +33,11 @@ class AiBriefingSettingsController extends Controller
     public function show(): JsonResponse
     {
         return response()->json([
-            'briefings'  => $this->briefingSettings->settings(),
-            'insights'   => $this->insightsSettings->settings(),
+            'briefings' => $this->briefingSettings->settings(),
+            'insights' => $this->insightsSettings->settings(),
             'recipients' => $this->briefingSettings->recipients(),
-            'users'      => $this->eligibleUsers(),
-            'platforms'  => Platform::query()->orderBy('name')->get(['id', 'name', 'country'])->toArray(),
+            'users' => $this->eligibleUsers(),
+            'platforms' => Platform::query()->orderBy('name')->get(['id', 'name', 'country'])->toArray(),
             'recent_runs' => $this->recentRuns(),
         ]);
     }
@@ -43,18 +45,18 @@ class AiBriefingSettingsController extends Controller
     public function update(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'enabled'             => ['sometimes', 'boolean'],
-            'admin_override'      => ['sometimes', 'boolean'],
+            'enabled' => ['sometimes', 'boolean'],
+            'admin_override' => ['sometimes', 'boolean'],
             'weekly_cost_cap_usd' => ['sometimes', 'numeric', 'min:0'],
-            'link_ttl_days'       => ['sometimes', 'integer', 'min:1', 'max:90'],
-            'timezone'            => ['sometimes', 'string', 'max:64'],
-            'base_url'            => ['sometimes', 'string', 'max:255'],
+            'link_ttl_days' => ['sometimes', 'integer', 'min:1', 'max:90'],
+            'timezone' => ['sometimes', 'string', 'max:64'],
+            'base_url' => ['sometimes', 'string', 'max:255'],
             'sms_provider_override' => ['sometimes', 'nullable', 'string', 'max:64'],
-            'schedule'            => ['sometimes', 'array'],
-            'schedule.ceo_enabled'   => ['sometimes', 'boolean'],
+            'schedule' => ['sometimes', 'array'],
+            'schedule.ceo_enabled' => ['sometimes', 'boolean'],
             'schedule.sales_enabled' => ['sometimes', 'boolean'],
-            'schedule.ceo_time'      => ['sometimes', 'string', 'regex:/^\d{2}:\d{2}$/'],
-            'schedule.sales_time'    => ['sometimes', 'string', 'regex:/^\d{2}:\d{2}$/'],
+            'schedule.ceo_time' => ['sometimes', 'string', 'regex:/^\d{2}:\d{2}$/'],
+            'schedule.sales_time' => ['sometimes', 'string', 'regex:/^\d{2}:\d{2}$/'],
         ]);
 
         $settings = $this->briefingSettings->save($data, $request->user()?->id);
@@ -65,18 +67,18 @@ class AiBriefingSettingsController extends Controller
     public function updateInsights(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'enabled'              => ['sometimes', 'boolean'],
-            'allowed_roles'        => ['sometimes', 'array'],
-            'allowed_roles.*'      => ['string', 'max:32'],
-            'sources'              => ['sometimes', 'array'],
-            'default_row_limit'    => ['sometimes', 'integer', 'min:1', 'max:10000'],
-            'max_row_limit'        => ['sometimes', 'integer', 'min:1', 'max:100000'],
-            'sql_timeout_seconds'  => ['sometimes', 'integer', 'min:1', 'max:60'],
-            'show_generated_sql'   => ['sometimes', 'boolean'],
-            'chart_suggestions'    => ['sometimes', 'boolean'],
+            'enabled' => ['sometimes', 'boolean'],
+            'allowed_roles' => ['sometimes', 'array'],
+            'allowed_roles.*' => ['string', 'max:32'],
+            'sources' => ['sometimes', 'array'],
+            'default_row_limit' => ['sometimes', 'integer', 'min:1', 'max:10000'],
+            'max_row_limit' => ['sometimes', 'integer', 'min:1', 'max:100000'],
+            'sql_timeout_seconds' => ['sometimes', 'integer', 'min:1', 'max:60'],
+            'show_generated_sql' => ['sometimes', 'boolean'],
+            'chart_suggestions' => ['sometimes', 'boolean'],
             'rate_limit_per_minute' => ['sometimes', 'integer', 'min:1', 'max:120'],
-            'daily_cost_cap_usd'   => ['sometimes', 'numeric', 'min:0'],
-            'headline_mode'        => ['sometimes', 'string', 'in:deterministic,generated'],
+            'daily_cost_cap_usd' => ['sometimes', 'numeric', 'min:0'],
+            'headline_mode' => ['sometimes', 'string', 'in:deterministic,generated'],
             'project_intelligence' => ['sometimes', 'array'],
             'project_intelligence.enabled' => ['sometimes', 'boolean'],
             'project_intelligence.commit_lookback' => ['sometimes', 'integer', 'min:1', 'max:200'],
@@ -92,14 +94,14 @@ class AiBriefingSettingsController extends Controller
     public function saveRecipients(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'recipients'                       => ['present', 'array'],
-            'recipients.*.user_id'             => ['required', 'integer', 'exists:users,id'],
-            'recipients.*.name'                => ['nullable', 'string', 'max:120'],
-            'recipients.*.phone'               => ['nullable', 'string', 'max:32'],
-            'recipients.*.audience'            => ['required', 'in:ceo,sales'],
-            'recipients.*.scope_platform_ids'  => ['nullable', 'array'],
+            'recipients' => ['present', 'array'],
+            'recipients.*.user_id' => ['required', 'integer', 'exists:users,id'],
+            'recipients.*.name' => ['nullable', 'string', 'max:120'],
+            'recipients.*.phone' => ['nullable', 'string', 'max:32'],
+            'recipients.*.audience' => ['required', 'in:ceo,sales'],
+            'recipients.*.scope_platform_ids' => ['nullable', 'array'],
             'recipients.*.scope_platform_ids.*' => ['integer'],
-            'recipients.*.opt_out'             => ['sometimes', 'boolean'],
+            'recipients.*.opt_out' => ['sometimes', 'boolean'],
         ]);
 
         $recipients = $this->briefingSettings->saveRecipients($data['recipients'], $request->user()?->id);
@@ -118,6 +120,50 @@ class AiBriefingSettingsController extends Controller
         return response()->json($result);
     }
 
+    public function send(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'audience' => ['required', 'in:ceo,sales'],
+            'send_at' => ['nullable', 'string', 'max:32'],
+            'confirm_live' => ['accepted'],
+        ]);
+
+        if (! $this->briefingSettings->enabled()) {
+            return response()->json([
+                'message' => 'Enable weekly AI briefings before sending a live SMS test.',
+            ], 422);
+        }
+
+        $timezone = $this->briefingSettings->timezone();
+        $sendAt = null;
+        if (! empty($data['send_at'])) {
+            try {
+                $sendAt = Carbon::parse((string) $data['send_at'], $timezone);
+            } catch (\Throwable) {
+                return response()->json(['message' => 'Choose a valid scheduled send time.'], 422);
+            }
+        }
+
+        $now = Carbon::now($timezone);
+        if ($sendAt && $sendAt->greaterThan($now->copy()->addMinute())) {
+            RunAiBriefingJob::dispatch(
+                (string) $data['audience'],
+                $request->user()?->id,
+            )->delay($sendAt->copy()->utc());
+
+            return response()->json([
+                'status' => 'scheduled',
+                'audience' => $data['audience'],
+                'scheduled_for' => $sendAt->toIso8601String(),
+                'timezone' => $timezone,
+            ], 202);
+        }
+
+        $result = $this->briefings->run((string) $data['audience'], false, null, $request->user()?->id);
+
+        return response()->json($result);
+    }
+
     public function history(Request $request): JsonResponse
     {
         $interactions = AiInteraction::query()
@@ -130,7 +176,7 @@ class AiBriefingSettingsController extends Controller
             ]);
 
         return response()->json([
-            'runs'         => $this->recentRuns(),
+            'runs' => $this->recentRuns(),
             'interactions' => $interactions,
         ]);
     }

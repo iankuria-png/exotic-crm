@@ -30,11 +30,11 @@ class Kernel extends ConsoleKernel
 
         // Subscription check command - RUNS DAILY AT 12:05 AM
         $schedule->command('subscriptions:check')
-                 ->name('check_subscriptions')
-                 ->dailyAt('00:05')
-                 ->withoutOverlapping(60)
-                 ->onOneServer()
-                 ->sendOutputTo(storage_path('logs/subscription_check.log'));
+            ->name('check_subscriptions')
+            ->dailyAt('00:05')
+            ->withoutOverlapping(60)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/subscription_check.log'));
 
         // CRM safety net: force-expire profiles past their WP expiry but still
         // publicly active. Hourly: on SEO-lifecycle markets the WordPress
@@ -43,11 +43,11 @@ class Kernel extends ConsoleKernel
         // Expired (published, contacts hidden) state — an hourly cadence caps the
         // window in which a lapsed profile still shows its contact details.
         $schedule->command('crm:reconcile-expired-subscriptions')
-                 ->name('crm_reconcile_expired_subscriptions')
-                 ->hourlyAt(25)
-                 ->withoutOverlapping(30)
-                 ->onOneServer()
-                 ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));
+            ->name('crm_reconcile_expired_subscriptions')
+            ->hourlyAt(25)
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));
 
         $schedule->command('crm:compute-daily-stats')
             ->name('crm_compute_daily_stats')
@@ -56,19 +56,20 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_compute_daily_stats.log'));
 
-        // Weekly AI briefings — Monday morning (Africa/Nairobi), after daily stats
-        // have been computed. The feature also self-guards on ai.briefings.enabled.
-        $schedule->command('crm:ai-briefing --audience=ceo --period=weekly')
+        // Weekly AI briefings. Poll every minute so Settings can own the actual
+        // audience time; the command self-guards on enablement, due time, and
+        // duplicate weekly sends.
+        $schedule->command('crm:ai-briefing --audience=ceo --period=weekly --scheduled')
             ->name('crm_ai_briefing_ceo')
-            ->weeklyOn(1, '07:30')
+            ->everyMinute()
             ->timezone('Africa/Nairobi')
             ->withoutOverlapping(30)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_ai_briefing.log'), true);
 
-        $schedule->command('crm:ai-briefing --audience=sales --period=weekly')
+        $schedule->command('crm:ai-briefing --audience=sales --period=weekly --scheduled')
             ->name('crm_ai_briefing_sales')
-            ->weeklyOn(1, '07:45')
+            ->everyMinute()
             ->timezone('Africa/Nairobi')
             ->withoutOverlapping(30)
             ->onOneServer()
@@ -119,7 +120,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sweep_stuck_bundles.log'));
-                 
+
         // Payment timeout handler - RUNS EVERY 5 MINUTES
         $schedule->call(function () {
             try {
@@ -129,15 +130,15 @@ class Kernel extends ConsoleKernel
             } catch (\Exception $e) {
                 Log::error('Payment timeout handler failed', [
                     'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
+                    'trace' => $e->getTraceAsString(),
                 ]);
             }
         })
-        ->name('handle_payment_timeouts')
-        ->everyFiveMinutes()
-        ->withoutOverlapping(10)
-        ->onOneServer()
-        ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
+            ->name('handle_payment_timeouts')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
 
         $clientSyncPerPage = max(1, min(100, (int) config('services.client_sync.per_page', 100)));
         $clientSyncDeltaMaxPlatforms = max(0, (int) config('services.client_sync.delta_max_platforms_per_run', 3));
@@ -183,7 +184,7 @@ class Kernel extends ConsoleKernel
             ->cron('2,17,32,47 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
-            ->skip(fn () => !Platform::query()
+            ->skip(fn () => ! Platform::query()
                 ->whereNotNull('support_board_api_url')
                 ->where('support_board_api_url', '!=', '')
                 ->whereNotNull('support_board_token')
