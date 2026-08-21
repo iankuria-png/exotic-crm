@@ -288,7 +288,7 @@ class BriefingService
 
             $result = $this->gateway->generate('briefing_'.$audience, $system, (string) $user, [
                 'user_id' => $userId,
-                'max_tokens' => 900,
+                'max_tokens' => 1800,
             ]);
 
             $parsed = $this->parseAiContent($result->text());
@@ -300,7 +300,7 @@ class BriefingService
 
             return [
                 'sms_digest' => $parsed['sms_digest'] !== '' ? $parsed['sms_digest'] : $template['sms_digest'],
-                'full_body' => $parsed['full_body'],
+                'full_body' => $this->mergeAiBody($template['full_body'], $parsed['full_body']),
                 'used_ai' => true,
                 'cost_usd' => $cost,
             ];
@@ -362,14 +362,19 @@ take destructive or write actions; this is an informational summary only.
 
 Respond with STRICT JSON (no markdown, no prose outside JSON) shaped exactly as:
 {
-  "sms_digest": "<=150 chars, plain ASCII, the single most important takeaway plus one number>",
+  "sms_digest": "<=150 chars, plain ASCII, week label + the single most important takeaway plus one number>",
   "full_body": {
-    "headline": "one-line summary",
-    "highlights": ["3-5 short bullet strings citing concrete numbers"],
-    "watch_items": ["1-3 short risk/attention bullets, e.g. renewals at risk"],
+    "headline": "one-line CEO summary grounded in the snapshot",
+    "executive_summary": {
+      "what_changed": ["2-3 short facts with current, prior, and delta context"],
+      "why_it_matters": ["2-3 operational implications"],
+      "decision_points": ["up to 3 concrete decisions/actions"]
+    },
     "narrative": "2-4 sentence plain-language explanation of the week"
   }
 }
+Do not report cumulative lapsed-base counts as a watch item unless the snapshot
+explicitly frames them as weekly flow. Prefer week labels over raw ISO dates.
 Keep sms_digest short enough to fit one SMS segment alongside a link.
 PROMPT;
     }
@@ -380,60 +385,116 @@ PROMPT;
         $currency = $snapshot['revenue']['normalized_currency'] ?? 'USD';
         $total = (float) ($snapshot['revenue']['normalized_total'] ?? 0);
         $delta = $snapshot['revenue']['delta_percent'] ?? null;
-        $subs = (int) ($snapshot['active_subscribers']['count'] ?? 0);
-        $risk = (int) ($snapshot['renewals']['risk'] ?? 0);
-        $pending = (int) ($snapshot['renewals']['pending'] ?? 0);
+        $periodLabel = (string) data_get($snapshot, 'period.label', 'Weekly');
+        $periodDisplay = (string) data_get($snapshot, 'period.display', trim((string) data_get($snapshot, 'window.from').' - '.(string) data_get($snapshot, 'window.to')));
+        $priorLabel = (string) data_get($snapshot, 'period.prior_label', 'prior week');
+        $newPaid = (int) data_get($snapshot, 'customer_movement.new_paid_customers', 0);
+        $expiredProfiles = (int) data_get($snapshot, 'customer_movement.expired_profiles', 0);
+        $renewedProfiles = (int) data_get($snapshot, 'customer_movement.renewed_profiles', 0);
+        $recoveryRate = (float) data_get($snapshot, 'payment_recovery.payment_recovery_rate', 0.0);
+        $teamHours = (float) data_get($snapshot, 'team_execution.active_hours', 0.0);
 
         $deltaStr = $delta === null ? '' : sprintf(' (%s%.1f%% WoW)', $delta >= 0 ? '+' : '', $delta);
         $money = $currency.' '.number_format($total, 0);
 
         $digest = sprintf(
-            'Weekly: rev %s%s, %d active subs, %d renewals at risk.',
+            '%s: rev %s%s; %d new paid; recovery %.1f%%.',
+            $periodLabel,
             $money,
             $deltaStr,
-            $subs,
-            $risk,
+            $newPaid,
+            $recoveryRate,
         );
 
         $highlights = [
-            sprintf('Revenue %s%s across %d payments', $money, $deltaStr, (int) ($snapshot['revenue']['payments_count'] ?? 0)),
-            sprintf('%d active subscribers', $subs),
-            sprintf('%d renewals pending, %d at risk', $pending, $risk),
+            sprintf('Revenue was %s%s across %d payments.', $money, $deltaStr, (int) ($snapshot['revenue']['payments_count'] ?? 0)),
+            sprintf('Daily revenue averaged %s %s vs %s %s in %s.', $currency, number_format((float) data_get($snapshot, 'revenue.average_daily', 0), 0), $currency, number_format((float) data_get($snapshot, 'revenue.prior_average_daily', 0), 0), $priorLabel),
+            sprintf('%d new paid customers, %d renewed profiles, %d expired profiles.', $newPaid, $renewedProfiles, $expiredProfiles),
+            sprintf('Payment recovery closed %.1f%% of failed payments.', $recoveryRate),
+            sprintf('Team logged %.1f active hours across %d actions.', $teamHours, (int) data_get($snapshot, 'team_execution.total_actions', 0)),
         ];
 
-        foreach (array_slice($snapshot['top_markets'] ?? [], 0, 3) as $market) {
-            $highlights[] = sprintf(
-                'Top market %s: %s %s',
-                $market['name'] ?? 'Unknown',
-                $market['normalized_currency'] ?? $currency,
-                number_format((float) ($market['normalized_total'] ?? 0), 0),
+        $watch = [];
+        $topDecline = collect((array) data_get($snapshot, 'market_movement.declining', []))->first();
+        if ($topDecline) {
+            $watch[] = sprintf(
+                '%s declined by %s %s vs %s.',
+                $topDecline['name'] ?? 'A market',
+                $topDecline['currency'] ?? $currency,
+                number_format(abs((float) ($topDecline['delta'] ?? 0)), 0),
+                $priorLabel,
             );
         }
-
-        $watch = [];
-        if ($risk > 0) {
-            $watch[] = sprintf('%d renewals at risk of lapsing', $risk);
+        if ($expiredProfiles > $newPaid) {
+            $watch[] = sprintf('%d profiles expired against %d new paid customers.', $expiredProfiles, $newPaid);
         }
-        if ($delta !== null && $delta < 0) {
+        if ($delta !== null && (float) $delta < 0) {
             $watch[] = sprintf('Revenue down %.1f%% vs prior week', abs((float) $delta));
         }
+
+        $focus = (array) ($snapshot['executive_focus'] ?? []);
 
         return [
             'sms_digest' => $digest,
             'full_body' => [
-                'headline' => sprintf('Weekly briefing: %s%s', $money, $deltaStr),
+                'version' => 'executive_scorecard_v2',
+                'headline' => (string) ($focus['headline'] ?? sprintf('%s scorecard: %s%s', $periodLabel, $money, $deltaStr)),
+                'period' => $snapshot['period'] ?? [],
+                'scope' => $snapshot['scope'] ?? [],
+                'scorecards' => $snapshot['scorecards'] ?? [],
+                'executive_summary' => [
+                    'what_changed' => (array) ($focus['what_changed'] ?? []),
+                    'why_it_matters' => (array) ($focus['why_it_matters'] ?? []),
+                    'decision_points' => (array) ($focus['decision_points'] ?? []),
+                ],
                 'highlights' => $highlights,
                 'watch_items' => $watch,
+                'market_movement' => $snapshot['market_movement'] ?? [],
+                'customer_movement' => $snapshot['customer_movement'] ?? [],
+                'payment_recovery' => $snapshot['payment_recovery'] ?? [],
+                'team_execution' => $snapshot['team_execution'] ?? [],
+                'data_quality' => $snapshot['data_quality'] ?? [],
                 'narrative' => sprintf(
-                    'Over the period the business recorded %s in normalized revenue%s, with %d active subscribers and %d renewals at risk.',
+                    '%s covered %s. The business recorded %s in normalized revenue%s, added %d new paid customers, renewed %d profiles, and recovered %.1f%% of failed payments.',
+                    $periodLabel,
+                    $periodDisplay,
                     $money,
                     $deltaStr,
-                    $subs,
-                    $risk,
+                    $newPaid,
+                    $renewedProfiles,
+                    $recoveryRate,
                 ),
                 'generated' => 'template',
             ],
         ];
+    }
+
+    private function mergeAiBody(array $template, array $aiBody): array
+    {
+        $merged = $template;
+
+        foreach (['headline', 'narrative'] as $key) {
+            if (isset($aiBody[$key]) && is_string($aiBody[$key]) && trim($aiBody[$key]) !== '') {
+                $merged[$key] = trim($aiBody[$key]);
+            }
+        }
+
+        if (isset($aiBody['executive_summary']) && is_array($aiBody['executive_summary'])) {
+            foreach (['what_changed', 'why_it_matters', 'decision_points'] as $key) {
+                if (isset($aiBody['executive_summary'][$key]) && is_array($aiBody['executive_summary'][$key])) {
+                    $items = array_values(array_filter(
+                        array_map(static fn ($item) => trim((string) $item), $aiBody['executive_summary'][$key]),
+                        static fn (string $item) => $item !== ''
+                    ));
+
+                    if ($items !== []) {
+                        $merged['executive_summary'][$key] = array_slice($items, 0, 4);
+                    }
+                }
+            }
+        }
+
+        return $merged;
     }
 
     private function persistBriefing(BriefingRun $run, string $audience, array $window, ?array $platformIds, array $content): Briefing

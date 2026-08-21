@@ -2,12 +2,19 @@
 
 namespace App\Services\Ai;
 
+use App\Models\AgentSession;
+use App\Models\AuditLog;
+use App\Models\Client;
 use App\Models\ClientActiveSnapshot;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Services\ChurnAggregatorService;
+use App\Services\PaymentRecoveryMetricService;
 use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +33,8 @@ class MetricsSnapshotService
     public function __construct(
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly RenewalService $renewalService,
+        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
+        private readonly ChurnAggregatorService $churnAggregatorService,
     ) {}
 
     /**
@@ -37,53 +46,100 @@ class MetricsSnapshotService
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency(null);
 
         $from = $from->copy()->startOfDay();
-        $to   = $to->copy()->endOfDay();
+        $to = $to->copy()->endOfDay();
         $days = max(1, $from->diffInDays($to) + 1);
 
-        $priorTo   = $from->copy()->subSecond();
+        $priorTo = $from->copy()->subSecond();
         $priorFrom = $priorTo->copy()->subDays($days - 1)->startOfDay();
 
-        $revenue      = $this->revenue($from, $to, $platformIds, $targetCurrency);
+        $revenue = $this->revenue($from, $to, $platformIds, $targetCurrency);
         $priorRevenue = $this->revenue($priorFrom, $priorTo, $platformIds, $targetCurrency);
 
         $renewals = $this->renewalService->buildSummary(
             $platformIds === null ? [] : ['platform_ids' => $platformIds]
         );
+        $period = $this->periodDescriptor($from, $to, $priorFrom, $priorTo);
+        $marketMovement = $this->marketMovement($from, $to, $priorFrom, $priorTo, $platformIds, $targetCurrency);
+        $customerMovement = $this->customerMovement($from, $to, $platformIds);
+        $paymentRecovery = $this->paymentRecovery($from, $to, $priorFrom, $priorTo, $platformIds, $targetCurrency);
+        $teamExecution = $this->teamExecution($from, $to, $priorFrom, $priorTo, $platformIds);
 
-        return [
+        $snapshot = [
+            'version' => 'executive_scorecard_v2',
             'scope' => [
-                'org_wide'       => $platformIds === null,
-                'platform_ids'   => $platformIds ?? [],
+                'org_wide' => $platformIds === null,
+                'platform_ids' => $platformIds ?? [],
                 'platform_names' => $this->platformNames($platformIds),
             ],
+            'period' => $period,
             'window' => [
-                'from'            => $from->toDateString(),
-                'to'              => $to->toDateString(),
-                'days'            => $days,
-                'prior_from'      => $priorFrom->toDateString(),
-                'prior_to'        => $priorTo->toDateString(),
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+                'days' => $days,
+                'prior_from' => $priorFrom->toDateString(),
+                'prior_to' => $priorTo->toDateString(),
                 'target_currency' => $targetCurrency,
             ],
             'revenue' => [
-                'normalized_total'    => $revenue['normalized_total'],
+                'normalized_total' => $revenue['normalized_total'],
                 'normalized_currency' => $revenue['normalized_currency'],
-                'payments_count'      => $revenue['payments_count'],
-                'source_breakdown'    => $revenue['source_breakdown'],
+                'payments_count' => $revenue['payments_count'],
+                'source_breakdown' => $revenue['source_breakdown'],
                 'prior_normalized_total' => $priorRevenue['normalized_total'],
-                'delta_percent'       => $this->percentDelta($revenue['normalized_total'], $priorRevenue['normalized_total']),
+                'prior_payments_count' => $priorRevenue['payments_count'],
+                'delta_percent' => $this->percentDelta($revenue['normalized_total'], $priorRevenue['normalized_total']),
+                'delta_amount' => round($revenue['normalized_total'] - $priorRevenue['normalized_total'], 2),
+                'average_daily' => round($revenue['normalized_total'] / $days, 2),
+                'prior_average_daily' => round($priorRevenue['normalized_total'] / $days, 2),
+                'average_daily_delta_percent' => $this->percentDelta(
+                    round($revenue['normalized_total'] / $days, 2),
+                    round($priorRevenue['normalized_total'] / $days, 2),
+                ),
+                'average_ticket' => $revenue['payments_count'] > 0
+                    ? round($revenue['normalized_total'] / $revenue['payments_count'], 2)
+                    : 0.0,
+                'prior_average_ticket' => $priorRevenue['payments_count'] > 0
+                    ? round($priorRevenue['normalized_total'] / $priorRevenue['payments_count'], 2)
+                    : 0.0,
             ],
             'active_subscribers' => $this->activeSubscribers($to, $platformIds),
             'renewals' => [
-                'risk'            => (int) ($renewals['risk'] ?? 0),
-                'pending'         => (int) ($renewals['pending'] ?? 0),
-                'expired_deals'   => (int) ($renewals['expired_deals'] ?? 0),
-                'lapsed_deals'    => (int) ($renewals['lapsed_deals'] ?? 0),
-                'active_deals'    => (int) ($renewals['active_deals'] ?? 0),
-                'pipeline_value'  => (float) ($renewals['pipeline_value'] ?? 0),
+                'risk' => (int) ($renewals['risk'] ?? 0),
+                'pending' => (int) ($renewals['pending'] ?? 0),
+                'expired_deals' => (int) ($renewals['expired_deals'] ?? 0),
+                'lapsed_deals' => (int) ($renewals['lapsed_deals'] ?? 0),
+                'active_deals' => (int) ($renewals['active_deals'] ?? 0),
+                'pipeline_value' => (float) ($renewals['pipeline_value'] ?? 0),
             ],
             'top_markets' => $this->topMarkets($from, $to, $platformIds, $targetCurrency),
-            'top_agents'  => $this->topAgents($from, $to, $platformIds, $targetCurrency),
+            'top_agents' => $this->topAgents($from, $to, $platformIds, $targetCurrency),
+            'market_movement' => $marketMovement,
+            'customer_movement' => $customerMovement,
+            'payment_recovery' => $paymentRecovery,
+            'team_execution' => $teamExecution,
+            'data_quality' => [
+                'generated_at' => Carbon::now()->toIso8601String(),
+                'freshness_label' => 'Generated '.Carbon::now()->timezone(config('app.timezone', 'Africa/Nairobi'))->format('d M Y H:i'),
+                'confidence' => 'medium',
+                'caveats' => array_values(array_filter([
+                    'Revenue uses reportable successful payments with wallet top-ups excluded.',
+                    'Team active hours are CRM session time and may include work outside a specific market scope.',
+                    (($paymentRecovery['normalization_partial'] ?? false) ? 'Some payment recovery values could not be fully currency-normalized.' : null),
+                ])),
+            ],
         ];
+
+        $snapshot['scorecards'] = $this->scorecards(
+            $revenue,
+            $priorRevenue,
+            $customerMovement,
+            $paymentRecovery,
+            $teamExecution,
+            $days,
+        );
+        $snapshot['executive_focus'] = $this->executiveFocus($snapshot);
+
+        return $snapshot;
     }
 
     /**
@@ -109,13 +165,13 @@ class MetricsSnapshotService
             ->limit($limit)
             ->get()
             ->map(fn ($deal) => [
-                'deal_id'    => (int) $deal->id,
-                'client_id'  => $deal->client_id ? (int) $deal->client_id : null,
+                'deal_id' => (int) $deal->id,
+                'client_id' => $deal->client_id ? (int) $deal->client_id : null,
                 'client_name' => $deal->client?->name,
-                'phone'      => $deal->client?->phone_normalized,
-                'market'     => $deal->platform?->name,
-                'amount'     => $deal->amount !== null ? (float) $deal->amount : null,
-                'currency'   => $deal->currency,
+                'phone' => $deal->client?->phone_normalized,
+                'market' => $deal->platform?->name,
+                'amount' => $deal->amount !== null ? (float) $deal->amount : null,
+                'currency' => $deal->currency,
                 'expires_at' => optional($deal->expires_at)->toIso8601String(),
             ])
             ->all();
@@ -160,7 +216,7 @@ class MetricsSnapshotService
             ->excludingWalletTopups()
             ->whereBetween('payments.created_at', [$from, $to])
             ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
-            ->select(DB::raw($this->dateExpression() . ' as event_date'))
+            ->select(DB::raw($this->dateExpression().' as event_date'))
             ->selectRaw('payments.platform_id as platform_id')
             ->selectRaw('platforms.country as platform_country')
             ->selectRaw('platforms.name as platform_name')
@@ -219,10 +275,10 @@ class MetricsSnapshotService
         $normalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $query, $targetCurrency, false);
 
         return [
-            'normalized_total'    => (float) ($normalized['normalized_total'] ?? 0),
+            'normalized_total' => (float) ($normalized['normalized_total'] ?? 0),
             'normalized_currency' => $normalized['normalized_currency'] ?? $targetCurrency,
-            'source_breakdown'    => $normalized['source_breakdown'] ?? [],
-            'payments_count'      => (int) (clone $query)->count(),
+            'source_breakdown' => $normalized['source_breakdown'] ?? [],
+            'payments_count' => (int) (clone $query)->count(),
         ];
     }
 
@@ -261,7 +317,7 @@ class MetricsSnapshotService
             ->selectRaw('platforms.name as platform_name')
             ->selectRaw('platforms.country as platform_country')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
-            ->selectRaw($this->dateExpression() . ' as event_date')
+            ->selectRaw($this->dateExpression().' as event_date')
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
             ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
@@ -275,18 +331,398 @@ class MetricsSnapshotService
                 $normalized = $this->reportingCurrencyService->normalizeEventRows($group, $targetCurrency, false);
 
                 return [
-                    'platform_id'         => (int) $group->first()->platform_id,
-                    'name'                => (string) ($group->first()->platform_name ?: 'Unassigned market'),
-                    'country'             => (string) ($group->first()->platform_country ?: ''),
-                    'normalized_total'    => (float) ($normalized['normalized_total'] ?? 0),
+                    'platform_id' => (int) $group->first()->platform_id,
+                    'name' => (string) ($group->first()->platform_name ?: 'Unassigned market'),
+                    'country' => (string) ($group->first()->platform_country ?: ''),
+                    'normalized_total' => (float) ($normalized['normalized_total'] ?? 0),
                     'normalized_currency' => $normalized['normalized_currency'] ?? $targetCurrency,
-                    'payments_count'      => (int) $group->sum('payments_count'),
+                    'payments_count' => (int) $group->sum('payments_count'),
                 ];
             })
             ->sortByDesc('normalized_total')
             ->take($limit)
             ->values()
             ->all();
+    }
+
+    private function marketMovement(
+        Carbon $from,
+        Carbon $to,
+        Carbon $priorFrom,
+        Carbon $priorTo,
+        ?array $platformIds,
+        string $targetCurrency
+    ): array {
+        $current = collect($this->topMarkets($from, $to, $platformIds, $targetCurrency, 100))
+            ->keyBy('platform_id');
+        $prior = collect($this->topMarkets($priorFrom, $priorTo, $platformIds, $targetCurrency, 100))
+            ->keyBy('platform_id');
+        $total = max(0.0, (float) $current->sum('normalized_total'));
+
+        $rows = $current
+            ->keys()
+            ->merge($prior->keys())
+            ->unique()
+            ->map(function ($id) use ($current, $prior, $targetCurrency, $total) {
+                $cur = $current->get($id, []);
+                $pri = $prior->get($id, []);
+                $currentValue = (float) ($cur['normalized_total'] ?? 0);
+                $priorValue = (float) ($pri['normalized_total'] ?? 0);
+                $delta = round($currentValue - $priorValue, 2);
+
+                return [
+                    'platform_id' => (int) $id,
+                    'name' => (string) (($cur['name'] ?? null) ?: ($pri['name'] ?? 'Unknown market')),
+                    'country' => (string) (($cur['country'] ?? null) ?: ($pri['country'] ?? '')),
+                    'current' => $currentValue,
+                    'prior' => $priorValue,
+                    'delta' => $delta,
+                    'delta_percent' => $this->percentDelta($currentValue, $priorValue),
+                    'share_percent' => $total > 0 ? round(($currentValue / $total) * 100, 1) : 0.0,
+                    'payments_count' => (int) ($cur['payments_count'] ?? 0),
+                    'currency' => (string) (($cur['normalized_currency'] ?? null) ?: $targetCurrency),
+                    'direction' => $this->direction($currentValue, $priorValue),
+                ];
+            })
+            ->values();
+
+        $topMarket = $rows->sortByDesc('current')->first();
+
+        return [
+            'growing' => $rows
+                ->filter(fn (array $row) => (float) $row['delta'] > 0)
+                ->sortByDesc('delta')
+                ->take(5)
+                ->values()
+                ->all(),
+            'declining' => $rows
+                ->filter(fn (array $row) => (float) $row['delta'] < 0)
+                ->sortBy('delta')
+                ->take(5)
+                ->values()
+                ->all(),
+            'largest' => $rows
+                ->sortByDesc('current')
+                ->take(5)
+                ->values()
+                ->all(),
+            'concentration' => [
+                'top_market' => $topMarket,
+                'top_market_share_percent' => (float) ($topMarket['share_percent'] ?? 0),
+            ],
+        ];
+    }
+
+    private function customerMovement(Carbon $from, Carbon $to, ?array $platformIds): array
+    {
+        $ids = $platformIds ?? [];
+        $movement = $this->churnAggregatorService->movement($from->copy(), $to->copy(), $ids, 'week');
+        $totals = (array) ($movement['totals'] ?? []);
+        $comparison = (array) ($movement['comparison'] ?? []);
+
+        $expiredProfiles = Client::query()
+            ->whereBetween('lifecycle_expired_at', [$from, $to])
+            ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->count();
+
+        $expiredDeals = Deal::query()
+            ->whereBetween('expires_at', [$from, $to])
+            ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->count();
+
+        $renewalsDue = Deal::query()
+            ->whereBetween('expires_at', [$from, $to])
+            ->whereIn('status', ['active', 'expired', 'renewed'])
+            ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->count();
+
+        $renewalPayments = (clone $this->basePayments($from, $to, $platformIds))
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
+            ->where(function (Builder $query) {
+                $query->where('payments.subscription_lifecycle', 'renewal')
+                    ->orWhere('deals.subscription_lifecycle', 'renewal');
+            })
+            ->count();
+
+        return [
+            'created_profiles' => (int) ($totals['created_profiles'] ?? 0),
+            'created_profiles_comparison' => $this->normalizeCountComparison($comparison['created_profiles'] ?? null),
+            'new_paid_customers' => (int) ($totals['new_paid_activations'] ?? 0),
+            'new_paid_customers_comparison' => $this->normalizeCountComparison($comparison['new_paid_activations'] ?? null),
+            'renewed_profiles' => (int) ($totals['renewed_profiles'] ?? 0),
+            'renewed_profiles_comparison' => $this->normalizeCountComparison($comparison['renewed_profiles'] ?? null),
+            'reactivated_profiles' => (int) ($totals['reactivated_profiles'] ?? 0),
+            'expired_profiles' => (int) $expiredProfiles,
+            'inactive_profiles' => (int) ($totals['inactive_profiles'] ?? 0),
+            'inactive_profiles_comparison' => $this->normalizeCountComparison($comparison['inactive_profiles'] ?? null),
+            'expired_deals' => (int) $expiredDeals,
+            'renewals_due' => (int) $renewalsDue,
+            'renewal_payments' => (int) $renewalPayments,
+            'renewal_save_rate' => $renewalsDue > 0 ? round(($renewalPayments / $renewalsDue) * 100, 1) : null,
+            'net_active_movement' => (int) ($totals['net_active_movement'] ?? 0),
+            'net_active_movement_comparison' => $this->normalizeCountComparison($comparison['net_active_movement'] ?? null),
+            'definition' => $movement['definition'] ?? [],
+        ];
+    }
+
+    private function paymentRecovery(
+        Carbon $from,
+        Carbon $to,
+        Carbon $priorFrom,
+        Carbon $priorTo,
+        ?array $platformIds,
+        string $targetCurrency
+    ): array {
+        $current = $this->paymentRecoveryMetricService->compute($platformIds, $from, $to);
+        $prior = $this->paymentRecoveryMetricService->compute($platformIds, $priorFrom, $priorTo);
+        $failed = $this->reportingCurrencyService->normalizeBreakdown(
+            (array) ($current['failed_amount_breakdown'] ?? []),
+            $to,
+            $targetCurrency,
+            false
+        );
+        $recovered = $this->reportingCurrencyService->normalizeBreakdown(
+            (array) ($current['recovered_amount_breakdown'] ?? []),
+            $to,
+            $targetCurrency,
+            false
+        );
+        $lost = $this->reportingCurrencyService->normalizeBreakdown(
+            (array) ($current['lost_amount_breakdown'] ?? []),
+            $to,
+            $targetCurrency,
+            false
+        );
+
+        return [
+            'failed_payments' => (int) ($current['failed_payments'] ?? 0),
+            'recovered_payments' => (int) ($current['recovered_payments'] ?? 0),
+            'lost_payments' => (int) ($current['lost_payments'] ?? 0),
+            'payment_recovery_rate' => (float) ($current['payment_recovery_rate'] ?? 0.0),
+            'prior_payment_recovery_rate' => (float) ($prior['payment_recovery_rate'] ?? 0.0),
+            'payment_recovery_rate_delta' => round(
+                (float) ($current['payment_recovery_rate'] ?? 0.0) - (float) ($prior['payment_recovery_rate'] ?? 0.0),
+                1,
+            ),
+            'failed_customers' => (int) ($current['failed_customers'] ?? 0),
+            'recovered_customers' => (int) ($current['recovered_customers'] ?? 0),
+            'lost_customers' => (int) ($current['lost_customers'] ?? 0),
+            'customer_recovery_rate' => (float) ($current['customer_recovery_rate'] ?? 0.0),
+            'failed_value' => (float) ($failed['normalized_total'] ?? 0.0),
+            'recovered_value' => (float) ($recovered['normalized_total'] ?? 0.0),
+            'lost_value' => (float) ($lost['normalized_total'] ?? 0.0),
+            'currency' => $targetCurrency,
+            'normalization_partial' => (bool) data_get($failed, 'normalization_meta.partial', false)
+                || (bool) data_get($recovered, 'normalization_meta.partial', false)
+                || (bool) data_get($lost, 'normalization_meta.partial', false),
+        ];
+    }
+
+    private function teamExecution(Carbon $from, Carbon $to, Carbon $priorFrom, Carbon $priorTo, ?array $platformIds): array
+    {
+        $current = $this->teamExecutionForRange($from, $to, $platformIds);
+        $prior = $this->teamExecutionForRange($priorFrom, $priorTo, $platformIds);
+
+        return [
+            'active_seconds' => $current['active_seconds'],
+            'active_hours' => round($current['active_seconds'] / 3600, 2),
+            'prior_active_seconds' => $prior['active_seconds'],
+            'prior_active_hours' => round($prior['active_seconds'] / 3600, 2),
+            'active_hours_delta_percent' => $this->percentDelta($current['active_seconds'], $prior['active_seconds']),
+            'active_members' => $current['active_members'],
+            'prior_active_members' => $prior['active_members'],
+            'total_actions' => $current['total_actions'],
+            'prior_total_actions' => $prior['total_actions'],
+            'total_actions_delta_percent' => $this->percentDelta($current['total_actions'], $prior['total_actions']),
+            'actions_per_hour' => $current['active_seconds'] > 0
+                ? round($current['total_actions'] / ($current['active_seconds'] / 3600), 1)
+                : 0.0,
+            'prior_actions_per_hour' => $prior['active_seconds'] > 0
+                ? round($prior['total_actions'] / ($prior['active_seconds'] / 3600), 1)
+                : 0.0,
+        ];
+    }
+
+    private function teamExecutionForRange(Carbon $from, Carbon $to, ?array $platformIds): array
+    {
+        $sessions = AgentSession::query()
+            ->where(function (Builder $query) use ($from, $to) {
+                $query->where('started_at', '<=', $to)
+                    ->where(function (Builder $endQuery) use ($from) {
+                        $endQuery->whereNull('ended_at')
+                            ->orWhere('ended_at', '>=', $from);
+                    });
+            })
+            ->get(['user_id', 'started_at', 'last_heartbeat_at', 'ended_at']);
+
+        $seconds = 0;
+        foreach ($sessions as $session) {
+            $started = $this->safeCarbon($session->started_at);
+            $ended = $this->safeCarbon($session->ended_at ?: $session->last_heartbeat_at ?: $session->started_at);
+
+            if (! $started || ! $ended) {
+                continue;
+            }
+
+            $clampedStart = $started->greaterThan($from) ? $started : $from->copy();
+            $clampedEnd = $ended->lessThan($to) ? $ended : $to->copy();
+            if ($clampedEnd->greaterThan($clampedStart)) {
+                $seconds += $clampedStart->diffInSeconds($clampedEnd);
+            }
+        }
+
+        $actions = AuditLog::query()
+            ->whereBetween('created_at', [$from, $to])
+            ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->count();
+
+        return [
+            'active_seconds' => (int) $seconds,
+            'active_members' => (int) $sessions->pluck('user_id')->filter()->unique()->count(),
+            'total_actions' => (int) $actions,
+        ];
+    }
+
+    private function scorecards(
+        array $revenue,
+        array $priorRevenue,
+        array $customerMovement,
+        array $paymentRecovery,
+        array $teamExecution,
+        int $days
+    ): array {
+        $currency = (string) ($revenue['normalized_currency'] ?? 'USD');
+        $daily = round((float) ($revenue['normalized_total'] ?? 0) / $days, 2);
+        $priorDaily = round((float) ($priorRevenue['normalized_total'] ?? 0) / $days, 2);
+
+        return [
+            $this->scorecard('revenue', 'Revenue', (float) ($revenue['normalized_total'] ?? 0), (float) ($priorRevenue['normalized_total'] ?? 0), 'money', $currency),
+            $this->scorecard('average_daily_revenue', 'Daily average', $daily, $priorDaily, 'money', $currency),
+            $this->scorecard('payments_count', 'Payments', (int) ($revenue['payments_count'] ?? 0), (int) ($priorRevenue['payments_count'] ?? 0), 'count'),
+            $this->scorecard('new_paid_customers', 'New paid customers', (int) ($customerMovement['new_paid_customers'] ?? 0), data_get($customerMovement, 'new_paid_customers_comparison.prior'), 'count'),
+            $this->scorecard('expired_profiles', 'Expired profiles', (int) ($customerMovement['expired_profiles'] ?? 0), null, 'count', null, 'lower_is_better'),
+            $this->scorecard('payment_recovery_rate', 'Payment recovery', (float) ($paymentRecovery['payment_recovery_rate'] ?? 0), (float) ($paymentRecovery['prior_payment_recovery_rate'] ?? 0), 'percent'),
+            $this->scorecard('team_active_hours', 'Team active time', (float) ($teamExecution['active_hours'] ?? 0), (float) ($teamExecution['prior_active_hours'] ?? 0), 'hours'),
+            $this->scorecard('actions_per_hour', 'Actions/hour', (float) ($teamExecution['actions_per_hour'] ?? 0), (float) ($teamExecution['prior_actions_per_hour'] ?? 0), 'rate'),
+        ];
+    }
+
+    private function normalizeCountComparison(?array $comparison): ?array
+    {
+        if ($comparison === null) {
+            return null;
+        }
+
+        return [
+            'current' => (int) ($comparison['current'] ?? 0),
+            'prior' => (int) ($comparison['previous'] ?? ($comparison['prior'] ?? 0)),
+            'delta' => (int) ($comparison['delta'] ?? 0),
+            'delta_percent' => $comparison['percent'] ?? ($comparison['delta_percent'] ?? null),
+        ];
+    }
+
+    private function scorecard(
+        string $key,
+        string $label,
+        float|int $current,
+        float|int|null $prior,
+        string $unit,
+        ?string $currency = null,
+        string $polarity = 'higher_is_better'
+    ): array {
+        $delta = $prior === null ? null : round((float) $current - (float) $prior, 2);
+        $deltaPercent = $prior === null ? null : $this->percentDelta((float) $current, (float) $prior);
+        $direction = $prior === null ? 'unknown' : $this->direction((float) $current, (float) $prior);
+
+        return [
+            'key' => $key,
+            'label' => $label,
+            'current' => $current,
+            'prior' => $prior,
+            'delta' => $delta,
+            'delta_percent' => $deltaPercent,
+            'direction' => $direction,
+            'unit' => $unit,
+            'currency' => $currency,
+            'polarity' => $polarity,
+            'status' => $this->scorecardStatus($direction, $polarity),
+        ];
+    }
+
+    private function executiveFocus(array $snapshot): array
+    {
+        $revenue = $snapshot['revenue'] ?? [];
+        $markets = $snapshot['market_movement'] ?? [];
+        $customers = $snapshot['customer_movement'] ?? [];
+        $recovery = $snapshot['payment_recovery'] ?? [];
+        $team = $snapshot['team_execution'] ?? [];
+        $currency = (string) ($revenue['normalized_currency'] ?? 'USD');
+        $total = $currency.' '.number_format((float) ($revenue['normalized_total'] ?? 0), 0);
+        $delta = $revenue['delta_percent'] ?? null;
+        $headline = 'Revenue '.($delta !== null && $delta < 0 ? 'declined' : 'finished').' at '.$total;
+
+        if ($delta !== null) {
+            $headline .= sprintf(' (%s%.1f%% vs %s)', $delta >= 0 ? '+' : '', $delta, data_get($snapshot, 'period.prior_label', 'prior week'));
+        }
+
+        $growing = collect($markets['growing'] ?? [])->first();
+        $declining = collect($markets['declining'] ?? [])->first();
+
+        return [
+            'headline' => $headline,
+            'what_changed' => array_values(array_filter([
+                sprintf(
+                    'Daily revenue averaged %s %s, %s%.1f%% vs %s.',
+                    $currency,
+                    number_format((float) ($revenue['average_daily'] ?? 0), 0),
+                    ((float) ($revenue['average_daily_delta_percent'] ?? 0)) >= 0 ? '+' : '',
+                    (float) ($revenue['average_daily_delta_percent'] ?? 0),
+                    data_get($snapshot, 'period.prior_label', 'prior week'),
+                ),
+                $growing ? sprintf('%s added the most growth (%s %s).', $growing['name'], $currency, number_format((float) $growing['delta'], 0)) : null,
+                $declining ? sprintf('%s had the sharpest decline (%s %s).', $declining['name'], $currency, number_format(abs((float) $declining['delta']), 0)) : null,
+            ])),
+            'why_it_matters' => array_values(array_filter([
+                sprintf(
+                    '%d new paid customers, %d renewed profiles, and %d expired profiles changed the customer base.',
+                    (int) ($customers['new_paid_customers'] ?? 0),
+                    (int) ($customers['renewed_profiles'] ?? 0),
+                    (int) ($customers['expired_profiles'] ?? 0),
+                ),
+                sprintf(
+                    'Payment recovery is %.1f%%, with %s %s recovered and %s %s still unrecovered.',
+                    (float) ($recovery['payment_recovery_rate'] ?? 0),
+                    (string) ($recovery['currency'] ?? $currency),
+                    number_format((float) ($recovery['recovered_value'] ?? 0), 0),
+                    (string) ($recovery['currency'] ?? $currency),
+                    number_format((float) ($recovery['lost_value'] ?? 0), 0),
+                ),
+                sprintf(
+                    'Team active time was %.1fh across %d actions.',
+                    (float) ($team['active_hours'] ?? 0),
+                    (int) ($team['total_actions'] ?? 0),
+                ),
+            ])),
+            'decision_points' => array_values(array_filter([
+                $declining ? sprintf('Review %s decline and decide whether this is market demand, payment friction, or team coverage.', $declining['name']) : null,
+                ((float) ($recovery['payment_recovery_rate'] ?? 0)) < 60.0 ? 'Prioritize failed-payment recovery plays before opening new acquisition spend.' : null,
+                ((int) ($customers['expired_profiles'] ?? 0)) > ((int) ($customers['new_paid_customers'] ?? 0)) ? 'Treat expired profiles as a weekly flow metric and assign renewal recovery owners.' : null,
+            ])),
+        ];
+    }
+
+    private function scorecardStatus(string $direction, string $polarity): string
+    {
+        if ($direction === 'flat' || $direction === 'unknown') {
+            return 'neutral';
+        }
+
+        $positive = $direction === 'up';
+        if ($polarity === 'lower_is_better') {
+            $positive = ! $positive;
+        }
+
+        return $positive ? 'good' : 'watch';
     }
 
     private function topAgents(Carbon $from, Carbon $to, ?array $platformIds, string $targetCurrency, int $limit = 5): array
@@ -300,7 +736,7 @@ class MetricsSnapshotService
             ->selectRaw('users.name as agent_name')
             ->selectRaw('users.role as agent_role')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
-            ->selectRaw($this->dateExpression() . ' as event_date')
+            ->selectRaw($this->dateExpression().' as event_date')
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
             ->groupBy('deals.assigned_to', 'users.name', 'users.role')
@@ -314,12 +750,12 @@ class MetricsSnapshotService
                 $normalized = $this->reportingCurrencyService->normalizeEventRows($group, $targetCurrency, false);
 
                 return [
-                    'agent_id'            => (int) $group->first()->agent_id,
-                    'name'                => (string) $group->first()->agent_name,
-                    'role'                => (string) $group->first()->agent_role,
-                    'normalized_total'    => (float) ($normalized['normalized_total'] ?? 0),
+                    'agent_id' => (int) $group->first()->agent_id,
+                    'name' => (string) $group->first()->agent_name,
+                    'role' => (string) $group->first()->agent_role,
+                    'normalized_total' => (float) ($normalized['normalized_total'] ?? 0),
                     'normalized_currency' => $normalized['normalized_currency'] ?? $targetCurrency,
-                    'payments_count'      => (int) $group->sum('payments_count'),
+                    'payments_count' => (int) $group->sum('payments_count'),
                 ];
             })
             ->sortByDesc('normalized_total')
@@ -367,11 +803,73 @@ class MetricsSnapshotService
         return round((((float) $current - (float) $prior) / abs((float) $prior)) * 100, 1);
     }
 
+    private function direction(float|int|null $current, float|int|null $prior): string
+    {
+        if ($current === null || $prior === null) {
+            return 'unknown';
+        }
+
+        if ((float) $current > (float) $prior) {
+            return 'up';
+        }
+
+        if ((float) $current < (float) $prior) {
+            return 'down';
+        }
+
+        return 'flat';
+    }
+
+    private function periodDescriptor(Carbon $from, Carbon $to, Carbon $priorFrom, Carbon $priorTo): array
+    {
+        return [
+            'label' => 'Week '.$from->isoWeek(),
+            'iso_week' => sprintf('%d-W%02d', $from->isoWeekYear(), $from->isoWeek()),
+            'display' => $this->dateRangeDisplay($from, $to),
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+            'prior_label' => 'Week '.$priorFrom->isoWeek(),
+            'prior_iso_week' => sprintf('%d-W%02d', $priorFrom->isoWeekYear(), $priorFrom->isoWeek()),
+            'prior_display' => $this->dateRangeDisplay($priorFrom, $priorTo),
+            'prior_from' => $priorFrom->toDateString(),
+            'prior_to' => $priorTo->toDateString(),
+        ];
+    }
+
+    private function dateRangeDisplay(Carbon $from, Carbon $to): string
+    {
+        if ($from->year === $to->year && $from->month === $to->month) {
+            return $from->format('j').'-'.$to->format('j M Y');
+        }
+
+        if ($from->year === $to->year) {
+            return $from->format('j M').'-'.$to->format('j M Y');
+        }
+
+        return $from->format('j M Y').'-'.$to->format('j M Y');
+    }
+
+    private function safeCarbon(mixed $value): ?Carbon
+    {
+        if ($value instanceof CarbonInterface) {
+            return Carbon::instance($value);
+        }
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     private function dateExpression(): string
     {
         return DB::connection()->getDriverName() === 'sqlite'
             ? 'date(COALESCE(payments.completed_at, payments.created_at))'
             : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
     }
-
 }

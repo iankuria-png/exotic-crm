@@ -3,11 +3,15 @@
 namespace Tests\Feature;
 
 use App\Jobs\RunAiBriefingJob;
+use App\Models\AgentSession;
 use App\Models\AiInteraction;
+use App\Models\AuditLog;
 use App\Models\Briefing;
 use App\Models\BriefingRecipient;
 use App\Models\BriefingRun;
+use App\Models\Client;
 use App\Models\ClientActiveSnapshot;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
@@ -245,6 +249,118 @@ class AiBriefingTest extends TestCase
         $this->assertSame('2026-05-18', $result['period']['from']);
         $this->assertSame('2026-05-24', $result['period']['to']);
         $this->assertSame('Africa/Nairobi', $result['period']['timezone']);
+    }
+
+    public function test_briefing_body_uses_executive_scorecard_v2_snapshot(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-21 12:00:00', 'Africa/Nairobi'));
+        $this->bindAiJson();
+        [$kenya, $product] = $this->market(['name' => 'Kenya', 'currency_code' => 'USD']);
+        [$ghana] = $this->market(['name' => 'Ghana', 'currency_code' => 'USD']);
+        $ceoUser = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        $this->saveRecipients([
+            ['user_id' => $ceoUser->id, 'audience' => 'ceo', 'phone' => '254700000001'],
+        ]);
+
+        $currentStart = Carbon::parse('2026-08-10 10:00:00', 'Africa/Nairobi')->utc();
+        $priorStart = Carbon::parse('2026-08-03 10:00:00', 'Africa/Nairobi')->utc();
+
+        $newClient = Client::factory()->create([
+            'platform_id' => $kenya->id,
+            'created_at' => $currentStart->copy(),
+        ]);
+        $expiredClient = Client::factory()->create([
+            'platform_id' => $kenya->id,
+            'lifecycle_expired_at' => $currentStart->copy()->addDay(),
+        ]);
+        $renewalDeal = Deal::factory()->create([
+            'platform_id' => $kenya->id,
+            'client_id' => $newClient->id,
+            'product_id' => $product->id,
+            'expires_at' => $currentStart->copy()->addDays(2),
+            'subscription_lifecycle' => 'renewal',
+        ]);
+
+        $this->payment($kenya, $product, [
+            'client_id' => $newClient->id,
+            'amount' => 1000,
+            'completed_at' => $currentStart->copy(),
+            'phone' => '254700000010',
+        ]);
+        $this->payment($ghana, $product, [
+            'amount' => 800,
+            'completed_at' => $currentStart->copy()->addDay(),
+            'phone' => '233700000010',
+        ]);
+        $this->payment($kenya, $product, [
+            'client_id' => $newClient->id,
+            'deal_id' => $renewalDeal->id,
+            'amount' => 500,
+            'completed_at' => $currentStart->copy()->addDays(2),
+            'subscription_lifecycle' => 'renewal',
+            'phone' => '254700000011',
+        ]);
+        $this->payment($kenya, $product, [
+            'amount' => 300,
+            'completed_at' => $priorStart->copy(),
+            'phone' => '254700000012',
+        ]);
+        $this->payment($ghana, $product, [
+            'amount' => 1200,
+            'completed_at' => $priorStart->copy()->addDay(),
+            'phone' => '233700000012',
+        ]);
+        $this->payment($kenya, $product, [
+            'status' => 'failed',
+            'amount' => 200,
+            'created_at' => $currentStart->copy()->addHours(1),
+            'completed_at' => null,
+            'phone' => '254700000013',
+        ]);
+        $this->payment($kenya, $product, [
+            'amount' => 200,
+            'completed_at' => $currentStart->copy()->addHours(3),
+            'phone' => '254700000013',
+        ]);
+
+        AgentSession::query()->create([
+            'user_id' => $ceoUser->id,
+            'session_token' => (string) Str::uuid(),
+            'started_at' => $currentStart->copy(),
+            'last_heartbeat_at' => $currentStart->copy()->addHours(2),
+            'ended_at' => $currentStart->copy()->addHours(2),
+        ]);
+        AuditLog::query()->create([
+            'platform_id' => $kenya->id,
+            'actor_id' => $ceoUser->id,
+            'action' => 'briefing_fixture',
+            'entity_type' => 'client',
+            'entity_id' => $expiredClient->id,
+            'created_at' => $currentStart->copy()->addHour(),
+        ]);
+
+        $result = app(BriefingService::class)->run('ceo', false);
+        $body = $result['briefings'][0]['full_body'];
+
+        $this->assertSame('executive_scorecard_v2', $body['version']);
+        $this->assertSame('Week 33', $body['period']['label']);
+        $this->assertSame('10-16 Aug 2026', $body['period']['display']);
+        $this->assertNotEmpty($body['scorecards']);
+        $this->assertArrayHasKey('market_movement', $body);
+        $this->assertArrayHasKey('customer_movement', $body);
+        $this->assertArrayHasKey('payment_recovery', $body);
+        $this->assertArrayHasKey('team_execution', $body);
+        $this->assertSame(1, $body['customer_movement']['expired_profiles']);
+        $this->assertGreaterThanOrEqual(50.0, $body['payment_recovery']['payment_recovery_rate']);
+
+        $recipient = BriefingRecipient::first();
+        Sanctum::actingAs($ceoUser);
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)
+            ->assertOk()
+            ->assertJsonPath('period.label', 'Week 33')
+            ->assertJsonPath('body.version', 'executive_scorecard_v2');
+
+        Carbon::setTestNow();
     }
 
     public function test_gsm_limiter_counts_extension_chars_as_two_units(): void

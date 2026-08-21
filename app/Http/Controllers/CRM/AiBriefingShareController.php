@@ -28,7 +28,7 @@ class AiBriefingShareController extends Controller
             ->where('share_token', $token)
             ->first();
 
-        if (!$recipient) {
+        if (! $recipient) {
             return response()->json(['message' => 'Briefing not found.'], 404);
         }
 
@@ -37,7 +37,7 @@ class AiBriefingShareController extends Controller
         }
 
         $user = $request->user();
-        if (!$this->authorizes($user, $recipient)) {
+        if (! $this->authorizes($user, $recipient)) {
             return response()->json(['message' => 'You are not authorized to view this briefing.'], 403);
         }
 
@@ -46,22 +46,27 @@ class AiBriefingShareController extends Controller
         }
 
         $briefing = $recipient->briefing;
+        $body = $briefing->decodedBody();
 
         return response()->json([
-            'audience'   => $briefing->audience,
-            'period'     => [
-                'period'       => $briefing->period,
+            'audience' => $briefing->audience,
+            'period' => [
+                'period' => $briefing->period,
                 'period_start' => optional($briefing->period_start)->toIso8601String(),
-                'period_end'   => optional($briefing->period_end)->toIso8601String(),
+                'period_end' => optional($briefing->period_end)->toIso8601String(),
+                'label' => data_get($body, 'period.label'),
+                'display' => data_get($body, 'period.display'),
+                'prior_label' => data_get($body, 'period.prior_label'),
+                'prior_display' => data_get($body, 'period.prior_display'),
             ],
             'scope' => [
-                'org_wide'     => empty($briefing->scope_platform_ids),
+                'org_wide' => empty($briefing->scope_platform_ids),
                 'platform_ids' => $briefing->scope_platform_ids ?? [],
             ],
             'summary_sms' => $briefing->summary_sms,
-            'body'        => $briefing->decodedBody(),
-            'recipient'   => [
-                'name'      => $recipient->name,
+            'body' => $body,
+            'recipient' => [
+                'name' => $recipient->name,
                 'opened_at' => optional($recipient->opened_at)->toIso8601String(),
             ],
             'generated_at' => optional($briefing->created_at)->toIso8601String(),
@@ -70,7 +75,7 @@ class AiBriefingShareController extends Controller
 
     private function authorizes($user, BriefingRecipient $recipient): bool
     {
-        if (!$user) {
+        if (! $user) {
             return false;
         }
 
