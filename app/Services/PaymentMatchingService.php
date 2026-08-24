@@ -123,7 +123,11 @@ class PaymentMatchingService
         $payment = $payment->fresh();
 
         // Automatically create deal if payment is completed
-        if ($payment->status === 'completed' && !$payment->deal_id && !$this->isSandboxPayment($payment)) {
+        if ($payment->status === 'completed'
+            && !$payment->deal_id
+            && $this->isSubscriptionPayment($payment)
+            && !$this->isSandboxPayment($payment)
+        ) {
             try {
                 $this->createDealFromPayment($payment, $confirmedBy);
             } catch (\Exception $e) {
@@ -341,6 +345,10 @@ class PaymentMatchingService
      */
     public function createDealFromPayment(Payment $payment, int $actorId): Deal
     {
+        if (! $this->isSubscriptionPayment($payment)) {
+            throw new \InvalidArgumentException('Only subscription payments can create live subscriptions.');
+        }
+
         if ($this->isSandboxPayment($payment)) {
             throw new \InvalidArgumentException('Sandbox payments cannot create live subscriptions.');
         }
@@ -356,6 +364,11 @@ class PaymentMatchingService
             'emit_profile_activated_timeline' => false,
             'emit_deal_activated_timeline' => true,
         ]));
+    }
+
+    private function isSubscriptionPayment(Payment $payment): bool
+    {
+        return $payment->purpose === null || (string) $payment->purpose === Payment::PURPOSE_SUBSCRIPTION;
     }
 
     /**

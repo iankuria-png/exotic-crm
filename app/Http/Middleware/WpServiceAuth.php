@@ -68,10 +68,14 @@ class WpServiceAuth
         }
 
         // --- Platform allowlist ---
-        $allowlist = (array) config('services.seo_engine.platform_allowlist', []);
+        $allowlist = (array) config('services.wp_service_auth.platform_allowlist', []);
+        if (empty($allowlist)) {
+            $allowlist = (array) config('services.seo_engine.platform_allowlist', []);
+        }
+
         if (!empty($allowlist) && !in_array($platformId, $allowlist, true)) {
             Log::warning('WpServiceAuth: platform not in allowlist', ['platform_id' => $platformId]);
-            return response()->json(['error' => 'Platform not authorized for SEO service.'], 403);
+            return response()->json(['error' => 'Platform not authorized for WordPress service.'], 403);
         }
 
         // --- Resolve platform ---

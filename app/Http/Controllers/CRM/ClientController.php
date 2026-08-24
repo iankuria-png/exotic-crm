@@ -2712,6 +2712,8 @@ class ClientController extends Controller
             'featured_expire',
             'escort_expire',
             'profile_status',
+            'crm_lifecycle_state',
+            'lifecycle_state',
             'needs_payment',
             'notactive',
         ];

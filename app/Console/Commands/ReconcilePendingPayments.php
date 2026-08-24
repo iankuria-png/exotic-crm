@@ -55,7 +55,11 @@ class ReconcilePendingPayments extends Command
                             ->whereIn('provider_type_key', ['paystack', 'pesapal', 'pawapay']);
                     });
             })
-            ->whereIn('purpose', ['wallet_topup', 'subscription'])
+            ->whereIn('purpose', [
+                Payment::PURPOSE_WALLET_TOPUP,
+                Payment::PURPOSE_SUBSCRIPTION,
+                Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+            ])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))
             ->orderBy('updated_at')
             ->limit($limit);

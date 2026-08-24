@@ -763,6 +763,7 @@ class PaymentQueueController extends Controller
             && $payment->status === 'completed'
             && $payment->client_id
             && ! $payment->deal_id
+            && $this->isSubscriptionPayment($payment)
             && $this->resolveReconciliationConfidence($payment) === 'high';
 
         return response()->json([
@@ -783,6 +784,9 @@ class PaymentQueueController extends Controller
 
         if ($payment->status !== 'completed') {
             return response()->json(['message' => 'Only completed payments can create subscriptions.'], 422);
+        }
+        if (! $this->isSubscriptionPayment($payment)) {
+            return response()->json(['message' => 'Only subscription payments can create subscriptions.'], 422);
         }
         if ($this->isNonBusinessTestPayment($payment)) {
             return response()->json(['message' => 'Test or sandbox payments cannot create live subscriptions.'], 422);
@@ -3038,6 +3042,11 @@ class PaymentQueueController extends Controller
     private function isNonBusinessTestPayment(Payment $payment): bool
     {
         return $payment->isClassifiedTest() || $this->isSandboxPayment($payment);
+    }
+
+    private function isSubscriptionPayment(Payment $payment): bool
+    {
+        return $payment->purpose === null || (string) $payment->purpose === Payment::PURPOSE_SUBSCRIPTION;
     }
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision

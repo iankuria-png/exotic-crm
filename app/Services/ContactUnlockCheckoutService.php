@@ -1,0 +1,237 @@
+<?php
+
+namespace App\Services;
+
+use App\Billing\Support\BillingSurface;
+use App\Models\Client;
+use App\Models\ContactUnlockPricingRule;
+use App\Models\Payment;
+use App\Models\Platform;
+use App\Models\VisitorContactUnlock;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+class ContactUnlockCheckoutService
+{
+    public function __construct(
+        private readonly ContactUnlockPricingService $pricingService,
+        private readonly BillingGatewayService $billingGatewayService
+    ) {
+    }
+
+    public function createIntent(
+        Platform $platform,
+        int $wpPostId,
+        int $pricingRuleId,
+        string $providerKey,
+        string $visitorPhone,
+        ?string $visitorEmail,
+        string $sessionProof,
+        string $idempotencyKey,
+        ?Request $request = null
+    ): array {
+        if (! $this->pricingService->enabledForPlatform($platform)) {
+            throw ValidationException::withMessages(['platform' => 'Contact unlock is disabled for this market.']);
+        }
+
+        $client = Client::query()
+            ->where('platform_id', (int) $platform->id)
+            ->where('wp_post_id', $wpPostId)
+            ->firstOrFail();
+
+        if (! $client->isPubliclyRestricted()) {
+            throw ValidationException::withMessages(['wp_post_id' => 'This profile is not currently inactive.']);
+        }
+
+        $rule = $this->pricingService->findActiveRule($platform, $pricingRuleId);
+        $providerKey = strtolower(trim($providerKey));
+        $providerKeys = collect($this->pricingService->providerOptions($platform))->pluck('key')->all();
+        if (! in_array($providerKey, $providerKeys, true)) {
+            throw ValidationException::withMessages(['provider_key' => 'This payment provider is not available for this market.']);
+        }
+
+        $normalizedPhone = $this->normalizePhone($visitorPhone, (string) ($platform->phone_prefix ?? ''));
+        if ($normalizedPhone === '') {
+            throw ValidationException::withMessages(['visitor_phone' => 'A valid mobile money phone number is required.']);
+        }
+
+        $idempotencyHash = $this->hashToken($idempotencyKey);
+        $sessionHash = $this->hashToken($sessionProof);
+        $email = trim((string) $visitorEmail);
+
+        $created = false;
+        $intent = DB::transaction(function () use (
+            $platform,
+            $client,
+            $rule,
+            $providerKey,
+            $normalizedPhone,
+            $email,
+            $idempotencyKey,
+            $idempotencyHash,
+            $sessionHash,
+            &$created
+        ): VisitorContactUnlock {
+            $existing = VisitorContactUnlock::query()
+                ->where('idempotency_key_hash', $idempotencyHash)
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing) {
+                return $existing->fresh(['payment', 'client', 'pricingRule']);
+            }
+
+            $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
+            $scope = (string) $rule->scope;
+            $singleProfile = $scope === VisitorContactUnlock::SCOPE_SINGLE_PROFILE;
+            $reference = 'CU-' . now()->format('ymd') . '-' . strtoupper(Str::random(8));
+
+            $payment = Payment::query()->create([
+                'user_id' => (int) $client->wp_user_id,
+                'platform_id' => (int) $platform->id,
+                'escort_post_id' => $singleProfile ? (int) $client->wp_post_id : null,
+                'client_id' => $singleProfile ? (int) $client->id : null,
+                'phone' => $normalizedPhone,
+                'amount' => number_format((float) $rule->amount, 2, '.', ''),
+                'currency' => strtoupper((string) $rule->currency),
+                'transaction_uuid' => (string) Str::uuid(),
+                'transaction_reference' => $reference,
+                'reference_number' => $reference,
+                'status' => 'initiated',
+                'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+                'source' => 'website_unlock',
+                'provider_key' => $providerKey,
+                'provider_environment' => (bool) config('services.contact_unlock.sandbox_only', true) ? 'sandbox' : null,
+                'raw_payload' => [
+                    'method' => $providerKey,
+                    'billing_surface' => BillingSurface::ContactUnlock->value,
+                    'pii' => 'visitor phone retained only for provider compatibility',
+                ],
+                'payment_data' => [
+                    'billing_surface' => BillingSurface::ContactUnlock->value,
+                    'unlock_scope' => $scope,
+                    'wp_post_id' => (int) $client->wp_post_id,
+                    'client_id' => (int) $client->id,
+                    'idempotency_key_hash' => $idempotencyHash,
+                    'pricing_rule_id' => (int) $rule->id,
+                ],
+            ]);
+
+            $unlock = VisitorContactUnlock::query()->create([
+                'platform_id' => (int) $platform->id,
+                'client_id' => $singleProfile ? (int) $client->id : null,
+                'wp_post_id' => $singleProfile ? (int) $client->wp_post_id : null,
+                'payment_id' => (int) $payment->id,
+                'pricing_rule_id' => (int) $rule->id,
+                'scope' => $scope,
+                'status' => VisitorContactUnlock::STATUS_INITIATED,
+                'visitor_phone_hash' => $this->hashToken($normalizedPhone),
+                'visitor_phone_masked' => $this->maskPhone($normalizedPhone),
+                'visitor_email_hash' => $email !== '' ? $this->hashToken(strtolower($email)) : null,
+                'visitor_email_masked' => $email !== '' ? $this->maskEmail($email) : null,
+                'idempotency_key_hash' => $idempotencyHash,
+                'session_token_hash' => $sessionHash,
+                'public_token_hash' => $this->hashToken($publicToken),
+                'metadata_json' => [
+                    'origin_wp_post_id' => (int) $client->wp_post_id,
+                    'idempotency_key_hash' => $idempotencyHash,
+                ],
+            ]);
+
+            $payment->forceFill([
+                'payment_data' => array_merge($payment->payment_data ?? [], [
+                    'unlock_id' => (int) $unlock->id,
+                ]),
+            ])->save();
+
+            $created = true;
+
+            return $unlock->fresh(['payment', 'client', 'pricingRule']);
+        });
+
+        $payment = $intent->payment;
+        $metadata = is_array($intent->metadata_json) ? $intent->metadata_json : [];
+        $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
+
+        if ($created && $payment) {
+            $action = $this->billingGatewayService->initiateContactUnlock($payment, $providerKey, [
+                'phone' => $normalizedPhone,
+                'idempotency_key' => $idempotencyKey,
+                'description' => 'Contact unlock',
+                'environment' => (bool) config('services.contact_unlock.sandbox_only', true) ? 'sandbox' : null,
+            ], $request);
+
+            $intent->forceFill([
+                'status' => VisitorContactUnlock::STATUS_PENDING_PAYMENT,
+                'metadata_json' => array_merge($metadata, [
+                    'provider_action' => $this->publicAction($action),
+                ]),
+            ])->save();
+        }
+
+        $fresh = $intent->fresh(['payment', 'client', 'pricingRule']);
+        $freshMetadata = is_array($fresh->metadata_json) ? $fresh->metadata_json : [];
+
+        return [
+            'unlock_reference' => (int) $fresh->id,
+            'public_token' => $publicToken,
+            'status' => (string) $fresh->status,
+            'replayed' => ! $created,
+            'payment' => [
+                'id' => (int) ($fresh->payment?->id ?? 0),
+                'reference' => (string) ($fresh->payment?->reference_number ?? ''),
+                'status' => (string) ($fresh->payment?->status ?? ''),
+                'amount' => (float) ($fresh->payment?->amount ?? 0),
+                'currency' => (string) ($fresh->payment?->currency ?? ''),
+            ],
+            'action' => $freshMetadata['provider_action'] ?? data_get($fresh->payment?->payment_data, 'resume'),
+            'expires_at' => $fresh->expires_at?->toIso8601String(),
+        ];
+    }
+
+    private function publicAction(array $action): array
+    {
+        unset($action['provider_payload']);
+        return $action;
+    }
+
+    private function normalizePhone(string $phone, string $prefix): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        $prefix = preg_replace('/\D+/', '', $prefix);
+
+        if ($digits === '') {
+            return '';
+        }
+
+        if (str_starts_with($digits, '0') && $prefix !== '') {
+            $digits = $prefix . substr($digits, 1);
+        }
+
+        return strlen($digits) >= 8 ? $digits : '';
+    }
+
+    private function maskPhone(string $phone): string
+    {
+        return strlen($phone) <= 4 ? '****' : substr($phone, 0, 3) . str_repeat('*', max(2, strlen($phone) - 6)) . substr($phone, -3);
+    }
+
+    private function maskEmail(string $email): string
+    {
+        [$local, $domain] = array_pad(explode('@', $email, 2), 2, '');
+        return substr($local, 0, 1) . '***@' . $domain;
+    }
+
+    private function hashToken(string $token): string
+    {
+        return hash_hmac('sha256', $token, (string) config('app.key'));
+    }
+
+    private function derivePublicToken(string $idempotencyKey, string $sessionHash): string
+    {
+        $raw = hash_hmac('sha256', $idempotencyKey . '|' . $sessionHash, (string) config('app.key'), true);
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+}

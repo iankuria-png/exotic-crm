@@ -17,6 +17,10 @@ class Payment extends Model
 {
     use HasFactory;
 
+    public const PURPOSE_SUBSCRIPTION = 'subscription';
+    public const PURPOSE_WALLET_TOPUP = 'wallet_topup';
+    public const PURPOSE_VISITOR_CONTACT_UNLOCK = 'visitor_contact_unlock';
+
     private static array $schemaSupportCache = [];
 
     protected static function booted(): void
@@ -253,13 +257,29 @@ class Payment extends Model
     {
         return $query->where(function ($builder) {
             $builder->whereNull('purpose')
-                ->orWhere('purpose', '!=', 'wallet_topup');
+                ->orWhereNotIn('purpose', [
+                    self::PURPOSE_WALLET_TOPUP,
+                    self::PURPOSE_VISITOR_CONTACT_UNLOCK,
+                ]);
         });
     }
 
     public function scopeWalletTopups($query)
     {
-        return $query->where('purpose', 'wallet_topup');
+        return $query->where('purpose', self::PURPOSE_WALLET_TOPUP);
+    }
+
+    public function scopeSubscriptionRevenue($query)
+    {
+        return $query->where(function ($builder) {
+            $builder->whereNull('purpose')
+                ->orWhere('purpose', self::PURPOSE_SUBSCRIPTION);
+        });
+    }
+
+    public function scopeContactUnlockRevenue($query)
+    {
+        return $query->where('purpose', self::PURPOSE_VISITOR_CONTACT_UNLOCK);
     }
 
     public function scopeSandboxTest(Builder $query): Builder

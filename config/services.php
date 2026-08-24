@@ -110,6 +110,24 @@ return [
         'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),
     ],
 
+    'wp_service_auth' => [
+        'platform_allowlist' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', env('WP_SERVICE_AUTH_PLATFORM_ALLOWLIST', ''))
+        ))),
+    ],
+
+    'contact_unlock' => [
+        'enabled' => filter_var(env('CONTACT_UNLOCK_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'market_ids' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', env('CONTACT_UNLOCK_MARKET_IDS', ''))
+        ))),
+        'sandbox_only' => filter_var(env('CONTACT_UNLOCK_SANDBOX_ONLY', true), FILTER_VALIDATE_BOOL),
+        'session_idle_minutes' => (int) env('CONTACT_UNLOCK_SESSION_IDLE_MINUTES', 30),
+        'session_absolute_hours' => (int) env('CONTACT_UNLOCK_SESSION_ABSOLUTE_HOURS', 24),
+    ],
+
     'client_sync' => [
         'per_page' => (int) env('CRM_CLIENT_SYNC_PER_PAGE', 100),
         'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 3),

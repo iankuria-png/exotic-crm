@@ -185,6 +185,10 @@ class SubscriptionProvisioningService
             throw new InvalidArgumentException('Payment must be completed to create a subscription.');
         }
 
+        if ($payment->purpose !== null && (string) $payment->purpose !== Payment::PURPOSE_SUBSCRIPTION) {
+            throw new InvalidArgumentException('Only subscription payments can provision subscriptions.');
+        }
+
         if ($this->isSandboxPayment($payment)) {
             throw new InvalidArgumentException('Sandbox payments cannot provision live subscriptions.');
         }

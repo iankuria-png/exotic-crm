@@ -27,6 +27,7 @@ use App\Http\Controllers\CRM\ClientErrorController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\ComplianceController as CrmComplianceController;
+use App\Http\Controllers\CRM\ContactUnlockAdminController;
 use App\Http\Controllers\CRM\ConversationController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\DealController;
@@ -82,6 +83,7 @@ use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleCont
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
 use App\Http\Controllers\CRM\WeeklyPriorityController;
 use App\Http\Controllers\Wp\ComplianceController as WpComplianceController;
+use App\Http\Controllers\Wp\ContactUnlockController as WpContactUnlockController;
 use App\Http\Controllers\Wp\WpSeoController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -99,6 +101,13 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/compliance')->group(funct
     Route::get('/creator-agreement/current', [WpComplianceController::class, 'currentAgreement']);
     Route::post('/creator-agreement/acceptances', [WpComplianceController::class, 'storeAgreementAcceptance']);
     Route::post('/content-declarations', [WpComplianceController::class, 'storeContentDeclaration']);
+});
+
+Route::middleware(['wp.service.auth'])->prefix('wp-svc/contact-unlock')->group(function () {
+    Route::post('/config', [WpContactUnlockController::class, 'config']);
+    Route::post('/intents', [WpContactUnlockController::class, 'createIntent']);
+    Route::post('/status', [WpContactUnlockController::class, 'status']);
+    Route::post('/reveal', [WpContactUnlockController::class, 'reveal']);
 });
 
 // ==================== CRM ROUTES ====================
@@ -699,6 +708,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::put('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'storeBillingWalletRules']);
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
+    Route::get('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'index'])->middleware('role:admin,sub_admin');
+    Route::put('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'update'])->middleware('role:admin,sub_admin');
+    Route::delete('/settings/billing/contact-unlock/rules/{rule}', [ContactUnlockAdminController::class, 'destroyRule'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'billingManualPaymentMethods']);
     Route::put('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'storeBillingManualPaymentMethods']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');

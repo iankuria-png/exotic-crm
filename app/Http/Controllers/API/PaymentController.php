@@ -485,31 +485,25 @@ class PaymentController extends Controller
                     'platform_id' => $payment->platform_id,
                 ]);
 
-                $completion = $payment->purpose === 'wallet_topup'
-                    ? $this->paymentCompletionService->completeTopupPayment($payment, $resource, [
-                        'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
-                        'raw_payload' => [
-                            'webhook_data' => $rawData,
-                            'processed_at' => now()->toDateTimeString(),
-                        ],
-                    ])
-                    : $this->paymentCompletionService->completeSubscriptionPayment($payment, $resource, [
-                        'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
-                        'raw_payload' => [
-                            'webhook_data' => $rawData,
-                            'processed_at' => now()->toDateTimeString(),
-                        ],
-                        'metadata' => $metadata,
-                        'raw_context' => $rawData,
-                        'confirmed_at' => $payment->confirmed_at ?? now(),
-                        'match_confidence' => $payment->match_confidence ?: 'auto_high',
-                        'reconciliation_confidence' => 'high',
-                        'reconciliation_state' => 'resolved',
-                        'payment_method' => $this->paymentCompletionService->resolvePaymentMethod($payment, $metadata, $rawData),
-                        'emit_payment_received_timeline' => true,
-                        'emit_profile_activated_timeline' => false,
-                        'emit_deal_activated_timeline' => true,
-                    ]);
+                $completionOptions = [
+                    'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
+                    'raw_payload' => [
+                        'webhook_data' => $rawData,
+                        'processed_at' => now()->toDateTimeString(),
+                    ],
+                    'metadata' => $metadata,
+                    'raw_context' => $rawData,
+                    'confirmed_at' => $payment->confirmed_at ?? now(),
+                    'match_confidence' => $payment->match_confidence ?: 'auto_high',
+                    'reconciliation_confidence' => 'high',
+                    'reconciliation_state' => 'resolved',
+                    'payment_method' => $this->paymentCompletionService->resolvePaymentMethod($payment, $metadata, $rawData),
+                    'emit_payment_received_timeline' => true,
+                    'emit_profile_activated_timeline' => false,
+                    'emit_deal_activated_timeline' => true,
+                ];
+
+                $completion = $this->paymentCompletionService->complete($payment, $resource, $completionOptions);
 
                 $payment = $completion['payment'];
                 $deal = $completion['deal'] ?? null;
@@ -520,7 +514,7 @@ class PaymentController extends Controller
                     'success' => $deal !== null,
                 ]);
 
-                if ((string) $payment->purpose !== 'wallet_topup') {
+                if ($payment->purpose === null || (string) $payment->purpose === Payment::PURPOSE_SUBSCRIPTION) {
                     $message = $this->generateSuccessMessage($payment, $payment->transaction_reference);
                     $this->saveSMSLog($payment, $message, 'sent');
                 }

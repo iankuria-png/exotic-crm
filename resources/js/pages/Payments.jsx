@@ -13,6 +13,7 @@ import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
+import ContactUnlockTab from '../components/billing/ContactUnlockTab';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
@@ -1520,6 +1521,7 @@ export default function Payments() {
     const canViewTests = user?.role === 'admin';
     const canManageBundleFinanceReview = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canAccessFraudAudit = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canAccessContactUnlocks = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
@@ -1569,7 +1571,10 @@ export default function Payments() {
         if (workspaceTab === 'fraud' && !canAccessFraudAudit) {
             setWorkspaceTab('payments');
         }
-    }, [canAccessFraudAudit, workspaceTab]);
+        if (workspaceTab === 'contact_unlock' && !canAccessContactUnlocks) {
+            setWorkspaceTab('payments');
+        }
+    }, [canAccessContactUnlocks, canAccessFraudAudit, workspaceTab]);
     const [confidenceFilter, setConfidenceFilter] = useState(() => {
         const requested = (searchParams.get('match_confidence') || '').trim();
         return allowedConfidenceFilters.has(requested) ? requested : '';
@@ -3418,11 +3423,12 @@ export default function Payments() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <p className="text-sm font-semibold text-slate-900">Payment workspace</p>
-                        <p className="mt-1 text-xs text-slate-500">Switch between the live payment queue and failed-payment recovery analysis.</p>
+                        <p className="mt-1 text-xs text-slate-500">Switch between subscription payments, unlock revenue, recovery, and fraud review.</p>
                     </div>
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                         {[
                             ['payments', 'Payment queue'],
+                            ...(canAccessContactUnlocks ? [['contact_unlock', 'Contact Unlocks']] : []),
                             ['recovery', 'Failed recovery'],
                             ...(canAccessFraudAudit ? [['fraud', 'Fraud audit']] : []),
                         ].map(([key, label]) => (
@@ -3473,6 +3479,10 @@ export default function Payments() {
                     isRangeInvalid={isRangeInvalid}
                     onPresetChange={applyRecoveryPreset}
                 />
+            ) : workspaceTab === 'contact_unlock' && canAccessContactUnlocks ? (
+                <section className="-mx-5 sm:mx-0">
+                    <ContactUnlockTab />
+                </section>
             ) : workspaceTab === 'fraud' && canAccessFraudAudit ? (
                 <FraudAuditWorkspace
                     platformOptions={platformOptions}

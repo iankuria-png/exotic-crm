@@ -105,6 +105,33 @@ class LegacyPaymentCompatibilityTest extends TestCase
             ->assertJsonPath('data.sandbox_suppressed', true);
     }
 
+    public function test_subscription_revenue_scope_excludes_contact_unlock_payments(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'amount' => 1000,
+            'currency' => 'KES',
+            'transaction_uuid' => 'txn-subscription-001',
+            'status' => 'completed',
+            'purpose' => Payment::PURPOSE_SUBSCRIPTION,
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'amount' => 250,
+            'currency' => 'KES',
+            'transaction_uuid' => 'txn-unlock-001',
+            'status' => 'completed',
+            'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+        ]);
+
+        $this->assertSame(1, Payment::query()->excludingWalletTopups()->count());
+        $this->assertSame(1, Payment::query()->subscriptionRevenue()->count());
+        $this->assertSame(1, Payment::query()->contactUnlockRevenue()->count());
+    }
+
     private function createPlatform(string $name): Platform
     {
         return Platform::query()->create([

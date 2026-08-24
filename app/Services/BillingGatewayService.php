@@ -7,6 +7,7 @@ use App\Billing\Providers\PawaPay\PawaPayCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\Support\BillingProviderTransactionRecorder;
+use App\Billing\Support\BillingSurface;
 use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\BillingProviderTransaction;
 use App\Models\BillingWebhookEvent;
@@ -173,6 +174,46 @@ class BillingGatewayService
     public function initiateStkForRouting(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
         return $this->initiateMpesaStk($payment, $context, $options, $request);
+    }
+
+    public function initiateContactUnlock(
+        Payment $payment,
+        string $provider,
+        array $options = [],
+        ?Request $request = null
+    ): array {
+        if ((string) $payment->purpose !== Payment::PURPOSE_VISITOR_CONTACT_UNLOCK) {
+            throw new InvalidArgumentException('Only visitor contact unlock payments can use this checkout path.');
+        }
+
+        $payment->loadMissing(['client', 'platform']);
+        $platform = $payment->platform ?: Platform::query()->findOrFail((int) $payment->platform_id);
+        $environmentOverride = $options['environment'] ?? ($payment->provider_environment ?: null);
+        $context = $this->billingModeService->providerContext(
+            $platform,
+            $provider,
+            true,
+            $environmentOverride,
+            BillingSurface::ContactUnlock->value
+        );
+
+        $payment->forceFill([
+            'provider_key' => $provider,
+            'provider_environment' => $context['environment'] ?? $payment->provider_environment,
+            'payment_data' => array_merge($payment->payment_data ?? [], [
+                'billing_surface' => BillingSurface::ContactUnlock->value,
+                'provider' => $provider,
+            ]),
+        ])->save();
+
+        $dispatchContext = array_merge($context, [
+            'provider_key' => $provider,
+        ]);
+
+        return app(ProviderRoutingDispatcher::class)->dispatch($payment, $dispatchContext, array_merge($options, [
+            'request' => $request,
+            'description' => $options['description'] ?? 'Contact unlock',
+        ]));
     }
 
     /**
@@ -481,7 +522,7 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if (!in_array((string) $payment->purpose, ['wallet_topup', 'subscription'], true)
+        if (!in_array((string) $payment->purpose, [Payment::PURPOSE_WALLET_TOPUP, Payment::PURPOSE_SUBSCRIPTION, Payment::PURPOSE_VISITOR_CONTACT_UNLOCK], true)
             || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)
         ) {
             throw new InvalidArgumentException('M-Pesa callback does not target a supported payment.');
@@ -910,6 +951,8 @@ class BillingGatewayService
     private function initiatePawaPay(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
         $requestMeta = $this->hostedCheckoutRequestMeta($payment, $request);
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $billingSurface = (string) ($paymentData['billing_surface'] ?? ($payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK ? BillingSurface::ContactUnlock->value : 'wallet_topup'));
         $attemptStartedAt = microtime(true);
 
         try {
@@ -924,7 +967,7 @@ class BillingGatewayService
                 'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
                 'request_meta' => $requestMeta,
                 'response_meta' => [
-                    'billing_surface' => 'wallet_topup',
+                    'billing_surface' => $billingSurface,
                 ],
             ]);
             throw $exception;
@@ -953,7 +996,7 @@ class BillingGatewayService
             'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
             'request_meta' => $requestMeta,
             'response_meta' => [
-                'billing_surface' => 'wallet_topup',
+                'billing_surface' => $billingSurface,
                 'provider_reference' => $action['provider_reference'] ?? null,
                 'checkout_url' => $action['url'] ?? null,
             ],
@@ -966,9 +1009,11 @@ class BillingGatewayService
 
     private function hostedCheckoutRequestMeta(Payment $payment, ?Request $request = null): array
     {
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $billingSurface = (string) ($paymentData['billing_surface'] ?? ($payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK ? BillingSurface::ContactUnlock->value : 'wallet_topup'));
         $extra = [
             'channel' => 'hosted_checkout',
-            'billing_surface' => 'wallet_topup',
+            'billing_surface' => $billingSurface,
             'requested_provider' => (string) $payment->provider_key,
             'platform_id' => (int) $payment->platform_id,
             'client_id' => (int) $payment->client_id,
@@ -1012,11 +1057,14 @@ class BillingGatewayService
         $credentials = $context['provider_credentials'];
         $transport = (string) ($credentials['transport'] ?? 'django_proxy');
         $phone = trim((string) ($options['phone'] ?? $payment->phone ?? ''));
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $billingSurface = (string) ($paymentData['billing_surface'] ?? ($payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK ? BillingSurface::ContactUnlock->value : 'wallet_topup'));
         $requestMeta = $this->requestMetaFromRequest($request, [
-            'channel' => 'wallet_topup_stk',
-            'phone' => $phone,
+            'channel' => $billingSurface === BillingSurface::ContactUnlock->value ? 'contact_unlock_stk' : 'wallet_topup_stk',
+            'phone_masked' => $this->maskPhoneForAttempt($phone),
             'amount' => (float) $payment->amount,
             'purpose' => $payment->purpose,
+            'billing_surface' => $billingSurface,
         ]);
         $provider = 'kopokopo_direct';
         $providerEnvironment = $payment->provider_environment ?: ($context['environment'] ?? null);
@@ -1034,7 +1082,7 @@ class BillingGatewayService
             }
 
             if ($transport !== 'direct_provider') {
-                throw new InvalidArgumentException('M-Pesa wallet top-up requires the direct_provider transport for this CRM contract.');
+                throw new InvalidArgumentException('M-Pesa STK requires the direct_provider transport for this CRM contract.');
             }
 
             $result = $this->kopokopoCompatibilityAdapter->initiateStkPush(
@@ -1310,6 +1358,18 @@ class BillingGatewayService
         }
 
         return $this->paymentAttemptService->requestMetaFromRequest($request, $extra);
+    }
+
+    private function maskPhoneForAttempt(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if (!$digits) {
+            return '';
+        }
+
+        return strlen($digits) <= 6
+            ? str_repeat('*', strlen($digits))
+            : substr($digits, 0, 3) . str_repeat('*', strlen($digits) - 6) . substr($digits, -3);
     }
 
     private function actorIdFromRequest(?Request $request): ?int

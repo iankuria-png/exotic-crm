@@ -22,6 +22,7 @@ class PaymentCompletionService
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly WalletSyncService $walletSyncService,
         private readonly WalletSettingsService $walletSettingsService,
+        private readonly ContactUnlockFulfillmentService $contactUnlockFulfillmentService,
         private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer,
         private readonly SettlementTolerancePolicy $settlementTolerancePolicy,
         private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder
@@ -31,9 +32,12 @@ class PaymentCompletionService
     public function complete(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         return match ((string) $payment->purpose) {
-            'wallet_topup' => $this->completeTopupPayment($payment, $providerPayload, $options),
-            'subscription' => $this->completeSubscriptionPayment($payment, $providerPayload, $options),
-            default => $this->completeGenericPayment($payment, $providerPayload, $options),
+            Payment::PURPOSE_WALLET_TOPUP => $this->completeTopupPayment($payment, $providerPayload, $options),
+            Payment::PURPOSE_SUBSCRIPTION => $this->completeSubscriptionPayment($payment, $providerPayload, $options),
+            Payment::PURPOSE_VISITOR_CONTACT_UNLOCK => $this->completeContactUnlockPayment($payment, $providerPayload, $options),
+            default => $payment->purpose === null
+                ? $this->completeSubscriptionPayment($payment, $providerPayload, $options)
+                : $this->completeGenericPayment($payment, $providerPayload, $options),
         };
     }
 
@@ -342,6 +346,51 @@ class PaymentCompletionService
                 ),
             ])),
             'replayed' => false,
+        ];
+    }
+
+    public function completeContactUnlockPayment(Payment $payment, array $providerPayload = [], array $options = []): array
+    {
+        if ((string) $payment->purpose !== Payment::PURPOSE_VISITOR_CONTACT_UNLOCK) {
+            throw new InvalidArgumentException('Only visitor contact unlock payments can activate unlock entitlements.');
+        }
+
+        $settlementAssessment = $this->settlementTolerancePolicy->evaluate($payment, $providerPayload, $options);
+        $this->billingProviderTransactionRecorder->recordSettlement($payment, $settlementAssessment, $providerPayload);
+
+        if ($this->shouldHoldForSettlementReview($settlementAssessment)) {
+            return [
+                'payment' => $this->markPaymentForSettlementReview($payment, $providerPayload, array_merge($options, [
+                    'payment_intent_status' => $this->settlementIntentStatus($settlementAssessment),
+                    'transition' => 'contact_unlock_settlement_review',
+                    'payment_data' => array_merge(
+                        is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                        [
+                            'settlement_assessment' => $settlementAssessment,
+                        ]
+                    ),
+                ])),
+                'unlocked' => false,
+            ];
+        }
+
+        $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+            'transition' => 'contact_unlock_provider_succeeded',
+            'payment_data' => array_merge(
+                is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                [
+                    'settlement_assessment' => $settlementAssessment,
+                    'settlement_review_required' => false,
+                ]
+            ),
+        ]));
+
+        $unlock = $this->contactUnlockFulfillmentService->fulfill($payment, $providerPayload);
+
+        return [
+            'payment' => $payment->fresh(['platform', 'client', 'deal', 'product']),
+            'unlock' => $unlock,
+            'unlocked' => true,
         ];
     }
 
