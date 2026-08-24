@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Billing\Support\BillingSurface;
 use App\Models\Client;
-use App\Models\ContactUnlockPricingRule;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
@@ -20,8 +19,7 @@ class ContactUnlockCheckoutService
     public function __construct(
         private readonly ContactUnlockPricingService $pricingService,
         private readonly BillingGatewayService $billingGatewayService
-    ) {
-    }
+    ) {}
 
     public function createIntent(
         Platform $platform,
@@ -32,6 +30,7 @@ class ContactUnlockCheckoutService
         ?string $visitorEmail,
         string $sessionProof,
         string $idempotencyKey,
+        array $visitorContext = [],
         ?Request $request = null
     ): array {
         if (! $this->pricingService->enabledForPlatform($platform)) {
@@ -76,6 +75,8 @@ class ContactUnlockCheckoutService
             $idempotencyHash,
             $sessionHash,
             $checkoutEnvironment,
+            $visitorContext,
+            $request,
             &$created
         ): VisitorContactUnlock {
             $existing = VisitorContactUnlock::query()
@@ -90,7 +91,7 @@ class ContactUnlockCheckoutService
             $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
             $scope = (string) $rule->scope;
             $singleProfile = $scope === VisitorContactUnlock::SCOPE_SINGLE_PROFILE;
-            $reference = 'CU-' . now()->format('ymd') . '-' . strtoupper(Str::random(8));
+            $reference = 'CU-'.now()->format('ymd').'-'.strtoupper(Str::random(8));
 
             $payment = Payment::query()->create([
                 'user_id' => (int) $client->wp_user_id,
@@ -141,6 +142,7 @@ class ContactUnlockCheckoutService
                 'metadata_json' => [
                     'origin_wp_post_id' => (int) $client->wp_post_id,
                     'idempotency_key_hash' => $idempotencyHash,
+                    'visitor_context' => $this->visitorContext($visitorContext, $request),
                 ],
             ]);
 
@@ -175,7 +177,7 @@ class ContactUnlockCheckoutService
                     ]),
                 ])->save();
             } catch (Throwable $exception) {
-                $reference = 'cu_' . strtolower(Str::random(10));
+                $reference = 'cu_'.strtolower(Str::random(10));
                 $message = $this->publicCheckoutFailureMessage($exception, $providerKey, $checkoutEnvironment, $reference);
                 $errorPayload = [
                     'reference' => $reference,
@@ -240,6 +242,7 @@ class ContactUnlockCheckoutService
     private function publicAction(array $action): array
     {
         unset($action['provider_payload']);
+
         return $action;
     }
 
@@ -276,7 +279,7 @@ class ContactUnlockCheckoutService
         }
 
         if (str_starts_with($digits, '0') && $prefix !== '') {
-            $digits = $prefix . substr($digits, 1);
+            $digits = $prefix.substr($digits, 1);
         }
 
         return strlen($digits) >= 8 ? $digits : '';
@@ -284,13 +287,14 @@ class ContactUnlockCheckoutService
 
     private function maskPhone(string $phone): string
     {
-        return strlen($phone) <= 4 ? '****' : substr($phone, 0, 3) . str_repeat('*', max(2, strlen($phone) - 6)) . substr($phone, -3);
+        return strlen($phone) <= 4 ? '****' : substr($phone, 0, 3).str_repeat('*', max(2, strlen($phone) - 6)).substr($phone, -3);
     }
 
     private function maskEmail(string $email): string
     {
         [$local, $domain] = array_pad(explode('@', $email, 2), 2, '');
-        return substr($local, 0, 1) . '***@' . $domain;
+
+        return substr($local, 0, 1).'***@'.$domain;
     }
 
     private function hashToken(string $token): string
@@ -298,9 +302,119 @@ class ContactUnlockCheckoutService
         return hash_hmac('sha256', $token, (string) config('app.key'));
     }
 
+    private function visitorContext(array $context, ?Request $request): array
+    {
+        $browser = is_array($context['browser'] ?? null) ? $context['browser'] : $context;
+        $requestContext = is_array($context['request'] ?? null) ? $context['request'] : [];
+        $ipAddress = trim((string) ($requestContext['ip_address'] ?? $request?->ip() ?? ''));
+
+        return [
+            'browser' => [
+                'locale' => $this->stringValue($browser['locale'] ?? ''),
+                'languages' => $this->stringList($browser['languages'] ?? []),
+                'timezone' => $this->stringValue($browser['timezone'] ?? ''),
+                'timezone_offset_minutes' => $this->integerValue($browser['timezone_offset_minutes'] ?? null),
+                'platform' => $this->stringValue($browser['platform'] ?? ''),
+                'user_agent_platform' => $this->stringValue($browser['user_agent_platform'] ?? ''),
+                'mobile_hint' => is_bool($browser['mobile_hint'] ?? null) ? (bool) $browser['mobile_hint'] : null,
+                'brands' => $this->browserBrands($browser['brands'] ?? []),
+                'viewport' => [
+                    'width' => $this->integerValue(data_get($browser, 'viewport.width')),
+                    'height' => $this->integerValue(data_get($browser, 'viewport.height')),
+                    'pixel_ratio' => $this->numericValue(data_get($browser, 'viewport.pixel_ratio')),
+                ],
+                'screen' => [
+                    'width' => $this->integerValue(data_get($browser, 'screen.width')),
+                    'height' => $this->integerValue(data_get($browser, 'screen.height')),
+                    'color_depth' => $this->integerValue(data_get($browser, 'screen.color_depth')),
+                ],
+                'device' => [
+                    'max_touch_points' => $this->integerValue(data_get($browser, 'device.max_touch_points')),
+                    'hardware_concurrency' => $this->integerValue(data_get($browser, 'device.hardware_concurrency')),
+                    'device_memory_gb' => $this->numericValue(data_get($browser, 'device.device_memory_gb')),
+                ],
+                'current_path' => $this->stringValue($browser['current_path'] ?? '', 180),
+                'referrer_host' => $this->stringValue($browser['referrer_host'] ?? '', 120),
+                'referrer_path' => $this->stringValue($browser['referrer_path'] ?? '', 180),
+            ],
+            'request' => [
+                'ip_hash' => $ipAddress !== '' ? $this->hashToken($ipAddress) : null,
+                'ip_masked' => $ipAddress !== '' ? $this->maskIp($ipAddress) : '',
+                'user_agent' => $this->stringValue($requestContext['user_agent'] ?? $request?->userAgent() ?? '', 320),
+                'accept_language' => $this->stringValue($requestContext['accept_language'] ?? $request?->header('Accept-Language', '') ?? '', 180),
+            ],
+        ];
+    }
+
+    private function stringValue(mixed $value, int $maxLength = 120): string
+    {
+        return Str::limit(trim((string) $value), $maxLength, '');
+    }
+
+    private function stringList(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return collect($value)
+            ->filter(fn ($item) => is_scalar($item))
+            ->map(fn ($item) => $this->stringValue($item, 40))
+            ->filter()
+            ->take(6)
+            ->values()
+            ->all();
+    }
+
+    private function browserBrands(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return collect($value)
+            ->filter(fn ($item) => is_array($item))
+            ->map(fn ($item) => [
+                'brand' => $this->stringValue($item['brand'] ?? '', 60),
+                'version' => $this->stringValue($item['version'] ?? '', 20),
+            ])
+            ->filter(fn ($item) => $item['brand'] !== '')
+            ->take(4)
+            ->values()
+            ->all();
+    }
+
+    private function integerValue(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    private function numericValue(mixed $value): int|float|null
+    {
+        return is_numeric($value) ? (float) $value : null;
+    }
+
+    private function maskIp(string $ipAddress): string
+    {
+        if (filter_var($ipAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $parts = explode('.', $ipAddress);
+
+            return sprintf('%s.%s.%s.*', $parts[0] ?? '*', $parts[1] ?? '*', $parts[2] ?? '*');
+        }
+
+        if (filter_var($ipAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $parts = explode(':', $ipAddress);
+
+            return implode(':', array_slice($parts, 0, 3)).':*';
+        }
+
+        return '';
+    }
+
     private function derivePublicToken(string $idempotencyKey, string $sessionHash): string
     {
-        $raw = hash_hmac('sha256', $idempotencyKey . '|' . $sessionHash, (string) config('app.key'), true);
+        $raw = hash_hmac('sha256', $idempotencyKey.'|'.$sessionHash, (string) config('app.key'), true);
+
         return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
     }
 }

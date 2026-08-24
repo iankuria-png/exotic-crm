@@ -9,6 +9,22 @@ const SCOPE_OPTIONS = [
     { value: 'market_inactive_profiles', label: 'All inactive contacts' },
 ];
 
+const UNLOCK_STATUS_OPTIONS = ['initiated', 'pending_payment', 'active', 'failed', 'expired', 'revoked', 'refunded'];
+const PAYMENT_STATUS_OPTIONS = ['initiated', 'pending', 'completed', 'failed', 'canceled'];
+const PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+const DEFAULT_UNLOCK_FILTERS = {
+    search: '',
+    platform_id: 'all',
+    status: 'all',
+    payment_status: 'all',
+    scope: 'all',
+    sort: 'id',
+    direction: 'desc',
+    page: 1,
+    per_page: 10,
+};
+
 function firstErrorMessage(error) {
     const validation = error?.response?.data?.errors;
     if (validation && typeof validation === 'object') {
@@ -73,6 +89,49 @@ function providerLabel(provider) {
     return titleize(key || 'Provider');
 }
 
+function shortDate(value) {
+    if (!value) return '';
+    return new Date(value).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function sortLabel(key, filters) {
+    if (filters.sort !== key) return 'Sort';
+    return filters.direction === 'asc' ? 'Asc' : 'Desc';
+}
+
+function buildUnlockParams(filters) {
+    return Object.entries(filters).reduce((params, [key, value]) => {
+        if (value === '' || value === 'all' || value === null || value === undefined) {
+            return params;
+        }
+        params[key] = value;
+        return params;
+    }, {});
+}
+
+function visitorDeviceLabel(context = {}) {
+    const platform = context.platform || '';
+    const mobile = context.mobile_hint === true || Number(context.device?.max_touch_points || 0) > 0;
+    if (platform && mobile) return `${platform} mobile`;
+    if (platform) return platform;
+    return mobile ? 'Touch device' : 'Device unknown';
+}
+
+function visitorContextParts(context = {}) {
+    return [
+        context.locale || '',
+        context.timezone || '',
+        visitorDeviceLabel(context),
+        context.viewport?.width && context.viewport?.height ? `${context.viewport.width}x${context.viewport.height}` : '',
+        context.ip_masked ? `IP ${context.ip_masked}` : '',
+    ].filter(Boolean);
+}
+
 export default function ContactUnlockTab() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -80,10 +139,13 @@ export default function ContactUnlockTab() {
     const [sandboxOnly, setSandboxOnly] = useState(true);
     const [marketIds, setMarketIds] = useState([]);
     const [rules, setRules] = useState([]);
+    const [unlockFilters, setUnlockFilters] = useState(DEFAULT_UNLOCK_FILTERS);
 
     const unlockQuery = useQuery({
-        queryKey: ['billing-contact-unlock'],
-        queryFn: () => api.get('/crm/settings/billing/contact-unlock').then((response) => response.data),
+        queryKey: ['billing-contact-unlock', unlockFilters],
+        queryFn: () => api.get('/crm/settings/billing/contact-unlock', {
+            params: buildUnlockParams(unlockFilters),
+        }).then((response) => response.data),
         staleTime: 30_000,
     });
 
@@ -91,6 +153,14 @@ export default function ContactUnlockTab() {
     const markets = data.markets || [];
     const summary = data.summary || {};
     const recentUnlocks = data.recent_unlocks || [];
+    const unlocksMeta = data.recent_unlocks_meta || {
+        current_page: 1,
+        last_page: 1,
+        per_page: unlockFilters.per_page,
+        total: recentUnlocks.length,
+        from: recentUnlocks.length ? 1 : 0,
+        to: recentUnlocks.length,
+    };
 
     useEffect(() => {
         if (!unlockQuery.data) return;
@@ -124,7 +194,8 @@ export default function ContactUnlockTab() {
                 })),
         }).then((response) => response.data),
         onSuccess: (payload) => {
-            queryClient.setQueryData(['billing-contact-unlock'], payload);
+            queryClient.setQueryData(['billing-contact-unlock', unlockFilters], payload);
+            queryClient.invalidateQueries({ queryKey: ['billing-contact-unlock'] });
             toast.success('Contact unlock settings saved.');
         },
         onError: (error) => toast.error(firstErrorMessage(error)),
@@ -133,7 +204,8 @@ export default function ContactUnlockTab() {
     const deleteMutation = useMutation({
         mutationFn: (ruleId) => api.delete(`/crm/settings/billing/contact-unlock/rules/${ruleId}`).then((response) => response.data),
         onSuccess: (payload) => {
-            queryClient.setQueryData(['billing-contact-unlock'], payload);
+            queryClient.setQueryData(['billing-contact-unlock', unlockFilters], payload);
+            queryClient.invalidateQueries({ queryKey: ['billing-contact-unlock'] });
             toast.success('Pricing rule removed.');
         },
         onError: (error) => toast.error(firstErrorMessage(error)),
@@ -161,6 +233,34 @@ export default function ContactUnlockTab() {
         }
 
         setRules((current) => current.filter((_, ruleIndex) => ruleIndex !== index));
+    }
+
+    function updateUnlockFilter(key, value) {
+        setUnlockFilters((current) => ({
+            ...current,
+            [key]: value,
+            page: 1,
+        }));
+    }
+
+    function setUnlockPage(page) {
+        setUnlockFilters((current) => ({
+            ...current,
+            page: Math.max(1, Math.min(Number(page) || 1, Number(unlocksMeta.last_page || 1))),
+        }));
+    }
+
+    function toggleUnlockSort(key) {
+        setUnlockFilters((current) => ({
+            ...current,
+            sort: key,
+            direction: current.sort === key && current.direction === 'desc' ? 'asc' : 'desc',
+            page: 1,
+        }));
+    }
+
+    function resetUnlockFilters() {
+        setUnlockFilters(DEFAULT_UNLOCK_FILTERS);
     }
 
     if (unlockQuery.isLoading) {
@@ -401,24 +501,125 @@ export default function ContactUnlockTab() {
                         <h4 className="mt-1 text-lg font-semibold text-slate-950">Recent unlocks</h4>
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                        {recentUnlocks.length} latest records
+                        {unlocksMeta.total || 0} records
+                    </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 xl:grid-cols-[minmax(220px,1.2fr)_repeat(5,minmax(140px,1fr))_auto]">
+                    <label className="min-w-0 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Search
+                        <input
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.search}
+                            onChange={(event) => updateUnlockFilter('search', event.target.value)}
+                            placeholder="Reference, visitor, profile"
+                        />
+                    </label>
+                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Market
+                        <select
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.platform_id}
+                            onChange={(event) => updateUnlockFilter('platform_id', event.target.value)}
+                        >
+                            <option value="all">All markets</option>
+                            {markets.map((market) => (
+                                <option key={market.id} value={market.id}>{market.name}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Entitlement
+                        <select
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.status}
+                            onChange={(event) => updateUnlockFilter('status', event.target.value)}
+                        >
+                            <option value="all">All statuses</option>
+                            {UNLOCK_STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>{titleize(status)}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Payment
+                        <select
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.payment_status}
+                            onChange={(event) => updateUnlockFilter('payment_status', event.target.value)}
+                        >
+                            <option value="all">All payments</option>
+                            {PAYMENT_STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>{titleize(status)}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Scope
+                        <select
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.scope}
+                            onChange={(event) => updateUnlockFilter('scope', event.target.value)}
+                        >
+                            <option value="all">All scopes</option>
+                            {SCOPE_OPTIONS.map((scope) => (
+                                <option key={scope.value} value={scope.value}>{scope.label}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Rows
+                        <select
+                            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
+                            value={unlockFilters.per_page}
+                            onChange={(event) => updateUnlockFilter('per_page', Number(event.target.value))}
+                        >
+                            {PER_PAGE_OPTIONS.map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <div className="flex items-end">
+                        <button
+                            type="button"
+                            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 hover:text-slate-950"
+                            onClick={resetUnlockFilters}
+                        >
+                            Reset
+                        </button>
                     </div>
                 </div>
 
                 <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                    <div className="hidden grid-cols-[92px_1fr_1fr_1.2fr_1fr] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 xl:grid">
-                        <span>Reference</span>
-                        <span>Profile</span>
-                        <span>Status</span>
-                        <span>Payment</span>
-                        <span>Visitor</span>
+                    <div className="hidden grid-cols-[92px_1fr_1fr_1.25fr_1.25fr] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 xl:grid">
+                        {[
+                            ['id', 'Reference'],
+                            ['profile', 'Profile'],
+                            ['status', 'Status'],
+                            ['amount', 'Payment'],
+                            ['visitor', 'Visitor'],
+                        ].map(([key, label]) => (
+                            <button
+                                key={key}
+                                type="button"
+                                className="flex items-center gap-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 hover:text-slate-900"
+                                onClick={() => toggleUnlockSort(key)}
+                            >
+                                <span>{label}</span>
+                                <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-slate-500">
+                                    {sortLabel(key, unlockFilters)}
+                                </span>
+                            </button>
+                        ))}
                     </div>
-                    <div className="divide-y divide-slate-100">
+                    <div className={`divide-y divide-slate-100 ${unlockQuery.isFetching ? 'opacity-60' : ''}`}>
                         {recentUnlocks.map((unlock) => {
                             const payment = unlock.payment || {};
+                            const visitorContext = unlock.visitor_context || {};
+                            const contextParts = visitorContextParts(visitorContext);
                             const paymentReference = payment.reference || (payment.id ? `#${payment.id}` : '-');
                             return (
-                                <div key={unlock.id} className="grid gap-4 px-4 py-4 text-sm transition-colors hover:bg-slate-50/70 xl:grid-cols-[92px_1fr_1fr_1.2fr_1fr] xl:items-start">
+                                <div key={unlock.id} className="grid gap-4 px-4 py-4 text-sm transition-colors hover:bg-slate-50/70 xl:grid-cols-[92px_1fr_1fr_1.25fr_1.25fr] xl:items-start">
                                     <div>
                                         <p className="font-semibold text-slate-950">#{unlock.id}</p>
                                         <p className="mt-1 text-xs text-slate-500">{unlock.market || 'Market'}</p>
@@ -465,14 +666,58 @@ export default function ContactUnlockTab() {
                                     </div>
                                     <div>
                                         <p className="font-semibold text-slate-700">{unlock.visitor_phone_masked || unlock.visitor_email_masked || '-'}</p>
-                                        <p className="mt-1 text-xs text-slate-500">{unlock.created_at ? new Date(unlock.created_at).toLocaleString() : ''}</p>
+                                        {unlock.visitor_email_masked ? (
+                                            <p className="mt-1 text-xs text-slate-500">{unlock.visitor_email_masked}</p>
+                                        ) : null}
+                                        {contextParts.length ? (
+                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                {contextParts.slice(0, 5).map((part) => (
+                                                    <span key={part} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                                        {part}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                        {visitorContext.referrer_host ? (
+                                            <p className="mt-2 truncate text-xs text-slate-500" title={`${visitorContext.referrer_host}${visitorContext.referrer_path || ''}`}>
+                                                Ref {visitorContext.referrer_host}{visitorContext.referrer_path || ''}
+                                            </p>
+                                        ) : null}
+                                        <p className="mt-2 text-xs text-slate-500">{shortDate(unlock.created_at)}</p>
                                     </div>
                                 </div>
                             );
                         })}
                         {!recentUnlocks.length ? (
-                            <div className="px-4 py-8 text-center text-sm text-slate-500">No visitor unlocks yet.</div>
+                            <div className="px-4 py-8 text-center text-sm text-slate-500">No visitor unlocks match these filters.</div>
                         ) : null}
+                    </div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+                    <p>
+                        Showing {unlocksMeta.from || 0}-{unlocksMeta.to || 0} of {unlocksMeta.total || 0}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={Number(unlocksMeta.current_page || 1) <= 1}
+                            onClick={() => setUnlockPage(Number(unlocksMeta.current_page || 1) - 1)}
+                        >
+                            Previous
+                        </button>
+                        <span className="min-w-24 text-center text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                            Page {unlocksMeta.current_page || 1} / {unlocksMeta.last_page || 1}
+                        </span>
+                        <button
+                            type="button"
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={Number(unlocksMeta.current_page || 1) >= Number(unlocksMeta.last_page || 1)}
+                            onClick={() => setUnlockPage(Number(unlocksMeta.current_page || 1) + 1)}
+                        >
+                            Next
+                        </button>
                     </div>
                 </div>
             </section>

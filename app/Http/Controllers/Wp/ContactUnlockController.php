@@ -17,8 +17,7 @@ class ContactUnlockController extends Controller
         private readonly ContactUnlockPricingService $pricingService,
         private readonly ContactUnlockCheckoutService $checkoutService,
         private readonly ContactUnlockRevealService $revealService
-    ) {
-    }
+    ) {}
 
     public function config(Request $request): JsonResponse
     {
@@ -77,6 +76,7 @@ class ContactUnlockController extends Controller
             'visitor_phone' => 'required|string|max:40',
             'visitor_email' => 'nullable|email|max:190',
             'session_proof' => 'required|string|min:20|max:190',
+            'visitor_context' => 'nullable|array',
         ]);
 
         $idempotencyKey = trim((string) $request->header('X-Idempotency-Key', ''));
@@ -93,6 +93,7 @@ class ContactUnlockController extends Controller
             $validated['visitor_email'] ?? null,
             (string) $validated['session_proof'],
             $idempotencyKey,
+            $validated['visitor_context'] ?? [],
             $request
         ));
     }
@@ -135,6 +136,7 @@ class ContactUnlockController extends Controller
     {
         /** @var Platform $platform */
         $platform = $request->attributes->get('platform');
+
         return $platform;
     }
 
