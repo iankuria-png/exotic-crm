@@ -82,6 +82,20 @@ function statusClasses(status) {
     return 'border-slate-200 bg-slate-50 text-slate-600';
 }
 
+function readinessStatusClasses(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'ready' || normalized === 'pass') {
+        return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    }
+    if (normalized === 'blocked' || normalized === 'fail') {
+        return 'border-rose-200 bg-rose-50 text-rose-700';
+    }
+    if (normalized === 'warning' || normalized === 'warn') {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+    return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
 function providerLabel(provider) {
     const key = String(provider || '').toLowerCase();
     if (key === 'pawapay') return 'pawaPay';
@@ -140,6 +154,8 @@ export default function ContactUnlockTab() {
     const [marketIds, setMarketIds] = useState([]);
     const [rules, setRules] = useState([]);
     const [unlockFilters, setUnlockFilters] = useState(DEFAULT_UNLOCK_FILTERS);
+    const [readinessMarketId, setReadinessMarketId] = useState('all');
+    const [readinessResult, setReadinessResult] = useState(null);
 
     const unlockQuery = useQuery({
         queryKey: ['billing-contact-unlock', unlockFilters],
@@ -209,6 +225,25 @@ export default function ContactUnlockTab() {
             toast.success('Pricing rule removed.');
         },
         onError: (error) => toast.error(firstErrorMessage(error)),
+    });
+
+    const readinessMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/billing/contact-unlock/readiness', {
+            ...(readinessMarketId !== 'all' ? { platform_id: Number(readinessMarketId) } : {}),
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            setReadinessResult(payload);
+            const blocked = Number(payload?.summary?.blocked || 0);
+            const warnings = Number(payload?.summary?.warning || 0);
+            if (blocked > 0) {
+                toast.error(`${blocked} market${blocked === 1 ? '' : 's'} blocked contact unlock readiness.`);
+            } else if (warnings > 0) {
+                toast.info(`Contact unlock readiness completed with ${warnings} warning${warnings === 1 ? '' : 's'}.`);
+            } else {
+                toast.success('Contact unlock readiness passed.');
+            }
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'CRM could not run contact unlock readiness checks.'),
     });
 
     function updateRule(index, patch) {
@@ -315,6 +350,89 @@ export default function ContactUnlockTab() {
                         </div>
                     </div>
                 </div>
+            </section>
+
+            <section className="rounded-xl border border-sky-200 bg-sky-50 p-5 shadow-sm shadow-slate-950/[0.02]">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <h4 className="text-base font-semibold text-slate-950">Readiness check</h4>
+                        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-700">
+                            Verify the full checkout path: CRM availability, pricing, provider runtime, inactive profile sample,
+                            and the market WordPress contact-unlock proxy back to CRM.
+                        </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <select
+                            className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm text-slate-900"
+                            value={readinessMarketId}
+                            onChange={(event) => setReadinessMarketId(event.target.value)}
+                        >
+                            <option value="all">All active markets</option>
+                            {markets.map((market) => (
+                                <option key={market.id} value={market.id}>{market.name}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            className="rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                            disabled={readinessMutation.isPending}
+                            onClick={() => readinessMutation.mutate()}
+                        >
+                            {readinessMutation.isPending ? 'Checking…' : 'Run readiness'}
+                        </button>
+                    </div>
+                </div>
+
+                {readinessResult ? (
+                    <div className="mt-4 space-y-3">
+                        <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600">
+                                {readinessResult.summary?.markets_checked || 0} checked
+                            </span>
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                                {readinessResult.summary?.ready || 0} ready
+                            </span>
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">
+                                {readinessResult.summary?.warning || 0} warning
+                            </span>
+                            <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-rose-700">
+                                {readinessResult.summary?.blocked || 0} blocked
+                            </span>
+                        </div>
+
+                        {(readinessResult.markets || []).map((market) => (
+                            <div key={market.platform_id} className="rounded-lg border border-sky-100 bg-white p-4">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <h5 className="font-semibold text-slate-950">{market.name}</h5>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            {market.domain || 'No domain'} · {market.currency_code || 'No currency'}
+                                            {market.sample_profile?.wp_post_id ? ` · sample #${market.sample_profile.wp_post_id}` : ''}
+                                        </p>
+                                    </div>
+                                    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${readinessStatusClasses(market.status)}`}>
+                                        {titleize(market.status)}
+                                    </span>
+                                </div>
+
+                                <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                                    {(market.checks || []).map((check) => (
+                                        <div key={check.key} className={`rounded-lg border p-3 text-sm ${readinessStatusClasses(check.status)}`}>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className="font-semibold">{check.label}</span>
+                                                <span className="text-xs font-bold uppercase">{titleize(check.status)}</span>
+                                            </div>
+                                            <p className="mt-1 leading-5">{check.message}</p>
+                                            {check.hint ? <p className="mt-2 text-xs font-semibold">{check.hint}</p> : null}
+                                            {check.endpoint ? <p className="mt-2 break-all font-mono text-[11px] opacity-80">{check.endpoint}</p> : null}
+                                            {check.http_status ? <p className="mt-1 text-xs opacity-80">HTTP {check.http_status} · {check.latency_ms || 0} ms</p> : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">

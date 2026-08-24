@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockPricingService;
+use App\Services\ContactUnlockReadinessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,7 +18,8 @@ use Illuminate\Validation\Rule;
 class ContactUnlockAdminController extends Controller
 {
     public function __construct(
-        private readonly ContactUnlockPricingService $pricingService
+        private readonly ContactUnlockPricingService $pricingService,
+        private readonly ContactUnlockReadinessService $readinessService
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -158,6 +160,17 @@ class ContactUnlockAdminController extends Controller
         }
 
         return $this->index($request);
+    }
+
+    public function readiness(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+        ]);
+
+        return response()->json($this->readinessService->check(
+            ! empty($validated['platform_id']) ? (int) $validated['platform_id'] : null
+        ));
     }
 
     private function nativeRevenue($query): array

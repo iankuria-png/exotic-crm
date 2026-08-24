@@ -711,6 +711,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
     Route::get('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'index'])->middleware('role:admin,sub_admin');
     Route::put('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'update'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/billing/contact-unlock/readiness', [ContactUnlockAdminController::class, 'readiness'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/billing/contact-unlock/rules/{rule}', [ContactUnlockAdminController::class, 'destroyRule'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'billingManualPaymentMethods']);
     Route::put('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'storeBillingManualPaymentMethods']);
