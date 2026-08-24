@@ -409,9 +409,16 @@ class WpSyncService
      * hide contacts, show the inactive notice, disable editing, and — for archived —
      * exclude it from city/category listings while keeping its URL indexable.
      */
-    public function setLifecycleState(int $postId, string $state): array
+    public function setLifecycleState(int $postId, string $state, array $context = []): array
     {
-        return $this->post("/clients/{$postId}/lifecycle", ['state' => $state]);
+        $payload = array_filter([
+            'state' => $state,
+            'escort_expire' => $context['escort_expire'] ?? null,
+            'product_type' => $context['product_type'] ?? null,
+            'crm_deal_id' => $context['crm_deal_id'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        return $this->post("/clients/{$postId}/lifecycle", $payload);
     }
 
     /**

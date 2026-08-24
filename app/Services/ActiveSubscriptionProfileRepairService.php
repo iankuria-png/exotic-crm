@@ -117,6 +117,19 @@ class ActiveSubscriptionProfileRepairService
             return $row;
         }
 
+        if ((int) ($client->wp_post_id ?? 0) > 0) {
+            WpSyncService::forPlatform((int) $client->platform_id)->setLifecycleState(
+                (int) $client->wp_post_id,
+                ClientLifecycleState::ACTIVE,
+                [
+                    'escort_expire' => $columns['escort_expire'],
+                    'product_type' => (string) $deal->plan_type,
+                    'crm_deal_id' => (int) $deal->id,
+                ]
+            );
+            $row['wp_lifecycle_state_synced'] = true;
+        }
+
         Client::withoutRetentionRefresh(function () use ($client, $columns): void {
             $client->forceFill($columns)->save();
         });

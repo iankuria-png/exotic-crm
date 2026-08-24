@@ -7,6 +7,8 @@ use App\Models\Deal;
 use App\Models\Platform;
 use App\Support\ClientLifecycleState;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as ClientRequest;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -42,6 +44,11 @@ class RepairActiveSubscriptionProfilesCommandTest extends TestCase
             'activated_at' => now(),
             'expires_at' => now()->addDays(7),
         ]);
+        $baseUrl = rtrim($platform->wp_api_url, '/');
+
+        Http::fake([
+            "{$baseUrl}/clients/{$client->wp_post_id}/lifecycle" => Http::response(['ok' => true], 200),
+        ]);
 
         $this->artisan('crm:repair-active-subscription-profiles', ['--client' => $client->id])
             ->expectsOutputToContain('DRY-RUN')
@@ -66,6 +73,14 @@ class RepairActiveSubscriptionProfilesCommandTest extends TestCase
         $this->assertTrue((bool) $fresh->premium);
         $this->assertTrue((bool) $fresh->featured);
         $this->assertNull($fresh->churned_at);
+        Http::assertSent(function (ClientRequest $request) use ($baseUrl, $client, $deal): bool {
+            return $request->url() === "{$baseUrl}/clients/{$client->wp_post_id}/lifecycle"
+                && $request->method() === 'POST'
+                && (string) $request['state'] === ClientLifecycleState::ACTIVE
+                && (int) $request['escort_expire'] === $deal->expires_at->timestamp
+                && (string) $request['product_type'] === 'vip'
+                && (int) $request['crm_deal_id'] === (int) $deal->id;
+        });
 
         $this->assertDatabaseHas('timeline_events', [
             'entity_type' => 'client',
