@@ -13,6 +13,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Models\VisitorContactUnlock;
 use App\Services\AuditService;
 use App\Services\AutoPush\AutoPushBoostLimitService;
 use App\Services\AutoPush\AutoPushBoostService;
@@ -114,6 +115,7 @@ class ClientController extends Controller
         $validated = $request->validate([
             'segment' => 'nullable|string|in:'.implode(',', ClientSegmentService::keys()),
             'city_key' => 'nullable|string|max:120',
+            'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
             'per_page' => 'nullable|integer|in:25,50,100,150',
         ]);
 
@@ -283,6 +285,10 @@ class ClientController extends Controller
             $query->where('created_at', '<=', $this->parseClientDateBoundary((string) $request->input('created_to'), endOfDay: true));
         }
 
+        if (! empty($validated['contact_unlock'])) {
+            $this->applyContactUnlockClientFilter($query, $validated['contact_unlock']);
+        }
+
         $statsQuery = clone $query;
         $segmentCounts = $this->clientSegmentService->segmentCounts(clone $statsQuery);
 
@@ -336,6 +342,10 @@ class ClientController extends Controller
             'closed_recent' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(30))->count(),
             'closed_recent_7d' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(7))->count(),
             'purging_soon' => (clone $closedStatsBase)->closed()->whereNotNull('purge_after')->where('purge_after', '<=', now()->addDays(7))->count(),
+            'contact_unlock_attempted' => $this->countContactUnlockClients(clone $statsQuery, 'attempted'),
+            'contact_unlock_successful' => $this->countContactUnlockClients(clone $statsQuery, 'successful'),
+            'contact_unlock_failed' => $this->countContactUnlockClients(clone $statsQuery, 'failed'),
+            'contact_unlock_pending' => $this->countContactUnlockClients(clone $statsQuery, 'pending'),
         ];
 
         $sortBy = (string) $request->input('sort_by', 'updated_at');
@@ -353,6 +363,7 @@ class ClientController extends Controller
 
             $clients = $query->paginate((int) ($validated['per_page'] ?? 25));
             $this->decorateClientListRows($clients->getCollection());
+            $this->decorateContactUnlockSummaries($clients->getCollection());
 
             $payload = $clients->toArray();
         }
@@ -391,6 +402,7 @@ class ClientController extends Controller
 
             $clients = $fallbackQuery->paginate($perPage);
             $this->decorateClientListRows($clients->getCollection());
+            $this->decorateContactUnlockSummaries($clients->getCollection());
 
             $payload = $clients->toArray();
             $payload['meta'] = array_merge($payload['meta'] ?? [], [
@@ -441,6 +453,7 @@ class ClientController extends Controller
             ->values();
 
         $this->decorateClientListRows($clients);
+        $this->decorateContactUnlockSummaries($clients);
 
         $paginator = new LengthAwarePaginator(
             $clients,
@@ -792,8 +805,48 @@ class ClientController extends Controller
         $this->decorateExpiryState($client);
         $this->decorateLifetimeValue(collect([$client]));
         $client->setAttribute('boost_limit', $this->autoPushBoostLimitService->stateForClient($client, $request->user()));
+        $client->setAttribute('contact_unlock_summary', $this->contactUnlockSummaryForClient($client));
 
         return response()->json($client);
+    }
+
+    public function contactUnlocks(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'status' => 'nullable|string|max:60',
+            'payment_status' => 'nullable|string|max:60',
+            'per_page' => 'nullable|integer|in:10,25,50',
+        ]);
+
+        $baseQuery = $this->contactUnlocksForClientQuery($client);
+        $summary = $this->summarizeContactUnlockRows((clone $baseQuery)->with('payment')->get());
+
+        $query = (clone $baseQuery)
+            ->with([
+                'payment:id,client_id,status,amount,currency,reference_number,provider_key,provider_environment,failure_reason,payment_data,raw_payload,created_at,completed_at',
+                'pricingRule:id,label,scope,duration_days',
+            ])
+            ->latest('id');
+
+        if (! empty($validated['status'])) {
+            $query->where('status', $validated['status']);
+        }
+
+        if (! empty($validated['payment_status'])) {
+            $query->whereHas('payment', function ($paymentQuery) use ($validated): void {
+                $paymentQuery->where('status', $validated['payment_status']);
+            });
+        }
+
+        $unlocks = $query->paginate((int) ($validated['per_page'] ?? 25));
+        $unlocks->getCollection()->transform(fn (VisitorContactUnlock $unlock): array => $this->serializeContactUnlockForClient($unlock));
+
+        return response()->json([
+            'summary' => $summary,
+            'unlocks' => $unlocks,
+        ]);
     }
 
     public function updateRiskState(Request $request, Client $client)
@@ -1288,6 +1341,254 @@ class ClientController extends Controller
                 $this->canBulkDeactivateNoSubscriptionClient($client)
             );
         });
+    }
+
+    private function decorateContactUnlockSummaries($clients): void
+    {
+        $collection = $clients instanceof EloquentCollection
+            ? $clients
+            : new EloquentCollection($clients->all());
+
+        if ($collection->isEmpty()) {
+            return;
+        }
+
+        $clientIds = $collection->pluck('id')->map(fn ($id) => (int) $id)->filter()->values();
+        $platformIds = $collection->pluck('platform_id')->map(fn ($id) => (int) $id)->filter()->unique()->values();
+        $wpPostIds = $collection->pluck('wp_post_id')->map(fn ($id) => (int) $id)->filter()->unique()->values();
+
+        $unlocks = VisitorContactUnlock::query()
+            ->with('payment:id,status,amount,currency,created_at,completed_at')
+            ->where(function ($query) use ($clientIds, $platformIds, $wpPostIds): void {
+                if ($clientIds->isNotEmpty()) {
+                    $query->whereIn('client_id', $clientIds->all());
+                }
+
+                if ($platformIds->isNotEmpty() && $wpPostIds->isNotEmpty()) {
+                    $query->orWhere(function ($wpQuery) use ($platformIds, $wpPostIds): void {
+                        $wpQuery->whereIn('platform_id', $platformIds->all())
+                            ->whereIn('wp_post_id', $wpPostIds->all());
+                    });
+                }
+            })
+            ->get();
+
+        $byClientId = $unlocks->whereNotNull('client_id')->groupBy(fn (VisitorContactUnlock $unlock) => (int) $unlock->client_id);
+        $byWpPost = $unlocks->whereNotNull('wp_post_id')->groupBy(fn (VisitorContactUnlock $unlock) => ((int) $unlock->platform_id).'|'.((int) $unlock->wp_post_id));
+
+        $collection->each(function (Client $client) use ($byClientId, $byWpPost): void {
+            $matched = collect();
+            $clientKey = (int) $client->id;
+            $wpKey = ((int) $client->platform_id).'|'.((int) $client->wp_post_id);
+
+            if ($byClientId->has($clientKey)) {
+                $matched = $matched->merge($byClientId->get($clientKey));
+            }
+
+            if ((int) $client->wp_post_id > 0 && $byWpPost->has($wpKey)) {
+                $matched = $matched->merge($byWpPost->get($wpKey));
+            }
+
+            $client->setAttribute('contact_unlock_summary', $this->summarizeContactUnlockRows($matched->unique('id')->values()));
+        });
+    }
+
+    private function contactUnlockSummaryForClient(Client $client): array
+    {
+        return $this->summarizeContactUnlockRows(
+            $this->contactUnlocksForClientQuery($client)->with('payment')->get()
+        );
+    }
+
+    private function contactUnlocksForClientQuery(Client $client)
+    {
+        return VisitorContactUnlock::query()
+            ->where('platform_id', (int) $client->platform_id)
+            ->where(function ($query) use ($client): void {
+                $query->where('client_id', (int) $client->id);
+
+                if ((int) $client->wp_post_id > 0) {
+                    $query->orWhere('wp_post_id', (int) $client->wp_post_id)
+                        ->orWhere('metadata_json->origin_wp_post_id', (int) $client->wp_post_id);
+                }
+            });
+    }
+
+    private function summarizeContactUnlockRows($unlocks): array
+    {
+        $collection = collect($unlocks);
+        $successful = $collection->filter(fn (VisitorContactUnlock $unlock) => $this->contactUnlockMatchesOutcome($unlock, 'successful'));
+        $failed = $collection->filter(fn (VisitorContactUnlock $unlock) => $this->contactUnlockMatchesOutcome($unlock, 'failed'));
+        $pending = $collection->filter(fn (VisitorContactUnlock $unlock) => $this->contactUnlockMatchesOutcome($unlock, 'pending'));
+        $successfulPayments = $collection
+            ->pluck('payment')
+            ->filter(fn ($payment) => $payment && in_array((string) $payment->status, Payment::SUCCESSFUL_STATUSES, true))
+            ->unique('id')
+            ->values();
+
+        $revenueNative = $successfulPayments
+            ->groupBy(fn ($payment) => strtoupper((string) ($payment->currency ?: 'KES')))
+            ->map(fn ($payments) => round((float) $payments->sum(fn ($payment) => (float) $payment->amount), 2))
+            ->sortKeys()
+            ->all();
+
+        $lastAttemptedAt = $collection->max('created_at');
+        $lastSuccessfulAt = $successful->max(fn (VisitorContactUnlock $unlock) => $unlock->payment?->completed_at ?: $unlock->last_revealed_at ?: $unlock->created_at);
+
+        return [
+            'attempts' => $collection->count(),
+            'successful' => $successful->count(),
+            'failed' => $failed->count(),
+            'pending' => $pending->count(),
+            'reveal_count' => (int) $collection->sum(fn (VisitorContactUnlock $unlock) => (int) $unlock->reveal_count),
+            'revenue_native' => $revenueNative,
+            'last_attempted_at' => $lastAttemptedAt ? Carbon::parse($lastAttemptedAt)->toIso8601String() : null,
+            'last_successful_at' => $lastSuccessfulAt ? Carbon::parse($lastSuccessfulAt)->toIso8601String() : null,
+        ];
+    }
+
+    private function countContactUnlockClients($query, string $filter): int
+    {
+        $this->applyContactUnlockClientFilter($query, $filter);
+
+        return (int) $query->count();
+    }
+
+    private function applyContactUnlockClientFilter($query, string $filter): void
+    {
+        $query->whereExists(function ($unlockQuery) use ($filter): void {
+            $unlockQuery
+                ->selectRaw('1')
+                ->from('visitor_contact_unlocks')
+                ->leftJoin('payments as contact_unlock_payments', 'contact_unlock_payments.id', '=', 'visitor_contact_unlocks.payment_id')
+                ->whereColumn('visitor_contact_unlocks.platform_id', 'clients.platform_id')
+                ->where(function ($matchQuery): void {
+                    $matchQuery->whereColumn('visitor_contact_unlocks.client_id', 'clients.id')
+                        ->orWhere(function ($wpQuery): void {
+                            $wpQuery->whereNotNull('clients.wp_post_id')
+                                ->whereColumn('visitor_contact_unlocks.wp_post_id', 'clients.wp_post_id');
+                        });
+                });
+
+            $this->applyContactUnlockOutcomeFilter($unlockQuery, $filter);
+        });
+    }
+
+    private function applyContactUnlockOutcomeFilter($query, string $filter): void
+    {
+        if ($filter === 'successful') {
+            $query->where(function ($statusQuery): void {
+                $statusQuery->where('visitor_contact_unlocks.status', VisitorContactUnlock::STATUS_ACTIVE)
+                    ->orWhereIn('contact_unlock_payments.status', Payment::SUCCESSFUL_STATUSES);
+            });
+
+            return;
+        }
+
+        if ($filter === 'failed') {
+            $query->where(function ($statusQuery): void {
+                $statusQuery->whereIn('visitor_contact_unlocks.status', [
+                    VisitorContactUnlock::STATUS_FAILED,
+                    VisitorContactUnlock::STATUS_REVOKED,
+                    VisitorContactUnlock::STATUS_REFUNDED,
+                ])->orWhereIn('contact_unlock_payments.status', ['failed', 'cancelled', 'canceled']);
+            });
+
+            return;
+        }
+
+        if ($filter === 'pending') {
+            $query->where(function ($statusQuery): void {
+                $statusQuery->whereIn('visitor_contact_unlocks.status', [
+                    VisitorContactUnlock::STATUS_INITIATED,
+                    VisitorContactUnlock::STATUS_PENDING_PAYMENT,
+                ])->orWhereIn('contact_unlock_payments.status', ['initiated', 'pending', 'processing']);
+            });
+        }
+    }
+
+    private function contactUnlockMatchesOutcome(VisitorContactUnlock $unlock, string $filter): bool
+    {
+        $paymentStatus = (string) ($unlock->payment?->status ?? '');
+        $unlockStatus = (string) $unlock->status;
+
+        return match ($filter) {
+            'successful' => $unlockStatus === VisitorContactUnlock::STATUS_ACTIVE || in_array($paymentStatus, Payment::SUCCESSFUL_STATUSES, true),
+            'failed' => in_array($unlockStatus, [VisitorContactUnlock::STATUS_FAILED, VisitorContactUnlock::STATUS_REVOKED, VisitorContactUnlock::STATUS_REFUNDED], true)
+                || in_array($paymentStatus, ['failed', 'cancelled', 'canceled'], true),
+            'pending' => in_array($unlockStatus, [VisitorContactUnlock::STATUS_INITIATED, VisitorContactUnlock::STATUS_PENDING_PAYMENT], true)
+                || in_array($paymentStatus, ['initiated', 'pending', 'processing'], true),
+            default => true,
+        };
+    }
+
+    private function serializeContactUnlockForClient(VisitorContactUnlock $unlock): array
+    {
+        $metadata = is_array($unlock->metadata_json) ? $unlock->metadata_json : [];
+        $payment = $unlock->payment;
+        $checkoutError = is_array($metadata['checkout_error'] ?? null) ? $metadata['checkout_error'] : [];
+
+        return [
+            'id' => (int) $unlock->id,
+            'scope' => (string) $unlock->scope,
+            'status' => (string) $unlock->status,
+            'pricing_label' => (string) ($unlock->pricingRule?->label ?? ''),
+            'visitor_phone_masked' => (string) ($unlock->visitor_phone_masked ?? ''),
+            'visitor_email_masked' => (string) ($unlock->visitor_email_masked ?? ''),
+            'visitor_context' => $this->serializeVisitorContext($metadata),
+            'reveal_count' => (int) $unlock->reveal_count,
+            'starts_at' => $unlock->starts_at?->toIso8601String(),
+            'expires_at' => $unlock->expires_at?->toIso8601String(),
+            'last_revealed_at' => $unlock->last_revealed_at?->toIso8601String(),
+            'created_at' => $unlock->created_at?->toIso8601String(),
+            'payment' => [
+                'id' => (int) ($payment?->id ?? 0),
+                'status' => (string) ($payment?->status ?? ''),
+                'amount' => (float) ($payment?->amount ?? 0),
+                'currency' => (string) ($payment?->currency ?? ''),
+                'reference' => (string) ($payment?->reference_number ?? ''),
+                'provider_key' => (string) ($payment?->provider_key ?? ''),
+                'provider_environment' => (string) ($payment?->provider_environment ?? ''),
+                'failure_reason' => (string) ($payment?->failure_reason ?? data_get($checkoutError, 'message', '')),
+                'completed_at' => $payment?->completed_at?->toIso8601String(),
+            ],
+        ];
+    }
+
+    private function serializeVisitorContext(array $metadata): array
+    {
+        $context = data_get($metadata, 'visitor_context', []);
+        $browser = is_array(data_get($context, 'browser')) ? data_get($context, 'browser') : [];
+        $request = is_array(data_get($context, 'request')) ? data_get($context, 'request') : [];
+
+        return [
+            'locale' => (string) data_get($browser, 'locale', ''),
+            'languages' => array_values(array_filter((array) data_get($browser, 'languages', []))),
+            'timezone' => (string) data_get($browser, 'timezone', ''),
+            'timezone_offset_minutes' => data_get($browser, 'timezone_offset_minutes'),
+            'platform' => (string) (data_get($browser, 'user_agent_platform') ?: data_get($browser, 'platform', '')),
+            'mobile_hint' => data_get($browser, 'mobile_hint'),
+            'viewport' => [
+                'width' => data_get($browser, 'viewport.width'),
+                'height' => data_get($browser, 'viewport.height'),
+                'pixel_ratio' => data_get($browser, 'viewport.pixel_ratio'),
+            ],
+            'screen' => [
+                'width' => data_get($browser, 'screen.width'),
+                'height' => data_get($browser, 'screen.height'),
+            ],
+            'device' => [
+                'max_touch_points' => data_get($browser, 'device.max_touch_points'),
+                'hardware_concurrency' => data_get($browser, 'device.hardware_concurrency'),
+                'device_memory_gb' => data_get($browser, 'device.device_memory_gb'),
+            ],
+            'brands' => array_values((array) data_get($browser, 'brands', [])),
+            'current_path' => (string) data_get($browser, 'current_path', ''),
+            'referrer_host' => (string) data_get($browser, 'referrer_host', ''),
+            'referrer_path' => (string) data_get($browser, 'referrer_path', ''),
+            'ip_masked' => (string) data_get($request, 'ip_masked', ''),
+            'accept_language' => (string) data_get($request, 'accept_language', ''),
+        ];
     }
 
     private function canBulkDeactivateNoSubscriptionClient(Client $client): bool

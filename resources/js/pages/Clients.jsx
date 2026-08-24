@@ -356,6 +356,37 @@ function ClientValueCell({ row }) {
     );
 }
 
+function formatUnlockRevenue(summary = {}) {
+    const entries = Object.entries(summary.revenue_native || {}).filter(([, value]) => Number(value || 0) > 0);
+
+    if (!entries.length) {
+        return 'No revenue';
+    }
+
+    return entries.map(([currency, value]) => formatCurrency(value, currency)).join(' + ');
+}
+
+function ClientUnlockCell({ row }) {
+    const summary = row.contact_unlock_summary || {};
+    const attempts = Number(summary.attempts || 0);
+
+    if (!attempts) {
+        return <span className="text-xs text-slate-400">—</span>;
+    }
+
+    const successful = Number(summary.successful || 0);
+    const failed = Number(summary.failed || 0);
+    const pending = Number(summary.pending || 0);
+
+    return (
+        <div className="min-w-[128px]">
+            <p className="text-sm font-semibold text-slate-900">{attempts.toLocaleString()} attempt{attempts === 1 ? '' : 's'}</p>
+            <p className="mt-0.5 text-[11px] text-slate-500">{successful} success · {pending} pending · {failed} failed</p>
+            <p className="mt-1 truncate text-[11px] font-semibold text-teal-700" title={formatUnlockRevenue(summary)}>{formatUnlockRevenue(summary)}</p>
+        </div>
+    );
+}
+
 function formatRelativeFromUnix(unixTs) {
     const ts = Number(unixTs || 0);
     if (!ts) return '—';
@@ -488,6 +519,7 @@ export default function Clients() {
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
     const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
     const allowedClientSegments = new Set(CLIENT_SEGMENT_KEYS);
+    const allowedContactUnlockFilters = new Set(['attempted', 'successful', 'failed', 'pending']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -590,6 +622,10 @@ export default function Clients() {
         const requested = (searchParams.get('segment') || '').trim();
         return allowedClientSegments.has(requested) ? requested : '';
     });
+    const [contactUnlockFilter, setContactUnlockFilter] = useState(() => {
+        const requested = (searchParams.get('contact_unlock') || '').trim();
+        return allowedContactUnlockFilters.has(requested) ? requested : '';
+    });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [createModalInitialPlatformId, setCreateModalInitialPlatformId] = useState('');
@@ -665,6 +701,7 @@ export default function Clients() {
             retentionBandFilter,
             behaviorTagFilter,
             segmentFilter,
+            contactUnlockFilter,
             resolvedCreatedRange.createdFrom,
             resolvedCreatedRange.createdTo,
             sortParams.sort_by,
@@ -689,6 +726,7 @@ export default function Clients() {
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
                     ...(segmentFilter && { segment: segmentFilter }),
+                    ...(contactUnlockFilter && { contact_unlock: contactUnlockFilter }),
                     ...(resolvedCreatedRange.createdFrom && { created_from: resolvedCreatedRange.createdFrom }),
                     ...(resolvedCreatedRange.createdTo && { created_to: resolvedCreatedRange.createdTo }),
                     ...sortParams,
@@ -1397,6 +1435,10 @@ export default function Clients() {
                 with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
                 expired_public: Number(data.stats.expired_public || 0),
+                contact_unlock_attempted: Number(data.stats.contact_unlock_attempted || 0),
+                contact_unlock_successful: Number(data.stats.contact_unlock_successful || 0),
+                contact_unlock_failed: Number(data.stats.contact_unlock_failed || 0),
+                contact_unlock_pending: Number(data.stats.contact_unlock_pending || 0),
                 total: Number(data.stats.total || 0),
                 segments: data.stats.segments || {},
             };
@@ -1414,6 +1456,10 @@ export default function Clients() {
             with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
             expired_public: rows.filter((row) => String(row.expiry_state || '') === 'expired_public').length,
+            contact_unlock_attempted: rows.filter((row) => Number(row.contact_unlock_summary?.attempts || 0) > 0).length,
+            contact_unlock_successful: rows.filter((row) => Number(row.contact_unlock_summary?.successful || 0) > 0).length,
+            contact_unlock_failed: rows.filter((row) => Number(row.contact_unlock_summary?.failed || 0) > 0).length,
+            contact_unlock_pending: rows.filter((row) => Number(row.contact_unlock_summary?.pending || 0) > 0).length,
             total: Number(data?.total || rows.length),
             segments: {},
         };
@@ -1434,6 +1480,7 @@ export default function Clients() {
             && onlineFilter === ''
             && newUsersFilter === ''
             && segmentFilter === ''
+            && contactUnlockFilter === ''
         ) return 'active';
 
         if (
@@ -1447,6 +1494,7 @@ export default function Clients() {
             && behaviorTagFilter === ''
             && hasChatFilter === ''
             && segmentFilter === ''
+            && contactUnlockFilter === ''
         ) return 'new_users';
 
         if (
@@ -1456,6 +1504,7 @@ export default function Clients() {
             && onlineFilter === ''
             && newUsersFilter === ''
             && segmentFilter === ''
+            && contactUnlockFilter === ''
         ) return 'verified';
 
         if (
@@ -1467,11 +1516,13 @@ export default function Clients() {
             && newUsersFilter === ''
             && behaviorTagFilter === ''
             && segmentFilter === ''
+            && contactUnlockFilter === ''
         ) return 'retention_watch';
 
         return '';
     }, [
         behaviorTagFilter,
+        contactUnlockFilter,
         hasChatFilter,
         newUsersFilter,
         onlineFilter,
@@ -1497,6 +1548,7 @@ export default function Clients() {
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
             setSegmentFilter('');
+            setContactUnlockFilter('');
             setPage(1);
             return;
         }
@@ -1510,6 +1562,7 @@ export default function Clients() {
             setCreatedTo('');
             setSegmentFilter('');
             setCityKeyFilter('');
+            setContactUnlockFilter('');
         } else if (metricKey === 'new_users') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1519,6 +1572,7 @@ export default function Clients() {
             setCreatedTo('');
             setSegmentFilter('');
             setCityKeyFilter('');
+            setContactUnlockFilter('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1531,6 +1585,7 @@ export default function Clients() {
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
             setSegmentFilter('');
+            setContactUnlockFilter('');
         } else if (metricKey === 'retention_watch') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1543,6 +1598,7 @@ export default function Clients() {
             setRetentionBandFilter('watch');
             setBehaviorTagFilter('');
             setSegmentFilter('');
+            setContactUnlockFilter('');
         }
 
         setOnlineFilter('');
@@ -1569,6 +1625,7 @@ export default function Clients() {
         || retentionBandFilter
         || behaviorTagFilter
         || segmentFilter
+        || contactUnlockFilter
         || newUsersFilter
         || createdFrom
         || createdTo
@@ -1925,6 +1982,13 @@ export default function Clients() {
                 );
             },
             render: (row) => <ClientValueCell row={row} />,
+        },
+        {
+            key: 'contact_unlocks',
+            label: 'Unlocks',
+            width: '160px',
+            cellClassName: 'w-[160px] max-w-[160px]',
+            render: (row) => <ClientUnlockCell row={row} />,
         },
         {
             key: 'online',
@@ -2374,6 +2438,19 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Unlocks"
+                        value={contactUnlockFilter}
+                        onChange={(event) => { setContactUnlockFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All clients' },
+                            { value: 'attempted', label: `Tried to unlock${stats.contact_unlock_attempted ? ` · ${stats.contact_unlock_attempted}` : ''}` },
+                            { value: 'successful', label: `Successful unlocks${stats.contact_unlock_successful ? ` · ${stats.contact_unlock_successful}` : ''}` },
+                            { value: 'pending', label: `Pending unlocks${stats.contact_unlock_pending ? ` · ${stats.contact_unlock_pending}` : ''}` },
+                            { value: 'failed', label: `Failed unlocks${stats.contact_unlock_failed ? ` · ${stats.contact_unlock_failed}` : ''}` },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Sort"
                         value={sortOption}
                         onChange={(event) => { setSortOption(event.target.value); setPage(1); }}
@@ -2520,6 +2597,7 @@ export default function Clients() {
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
                                 setSegmentFilter('');
+                                setContactUnlockFilter('');
                                 setNewUsersFilter('');
                                 setCreatedFrom('');
                                 setCreatedTo('');

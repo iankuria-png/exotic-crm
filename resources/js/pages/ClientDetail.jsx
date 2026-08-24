@@ -567,6 +567,147 @@ function toDateString(date) {
 
 const FOREVER_PLAN_TOOLTIP = 'Reference: This profile is intentionally kept active to avoid zero-escort locations, which protects search ranking.';
 
+function formatUnlockRevenue(summary) {
+    const entries = Object.entries(summary?.revenue_native || {}).filter(([, value]) => Number(value || 0) > 0);
+
+    if (!entries.length) {
+        return 'KES 0';
+    }
+
+    return entries.map(([currency, value]) => formatCurrency(value, currency)).join(' + ');
+}
+
+function contactUnlockStatusBadge(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'active' || normalized === 'completed') {
+        return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    }
+    if (['failed', 'revoked', 'refunded', 'cancelled', 'canceled'].includes(normalized)) {
+        return 'bg-rose-50 text-rose-700 ring-rose-200';
+    }
+    if (normalized === 'expired') {
+        return 'bg-slate-100 text-slate-600 ring-slate-200';
+    }
+    return 'bg-amber-50 text-amber-700 ring-amber-200';
+}
+
+function visitorContextChips(context = {}) {
+    const viewport = context.viewport || {};
+    const screen = context.screen || {};
+    const device = context.device || {};
+    const chips = [
+        context.locale || context.accept_language || null,
+        context.timezone || null,
+        context.platform || null,
+        context.mobile_hint === true ? 'Mobile hint' : context.mobile_hint === false ? 'Desktop hint' : null,
+        viewport.width && viewport.height ? `${viewport.width}x${viewport.height} viewport` : null,
+        screen.width && screen.height ? `${screen.width}x${screen.height} screen` : null,
+        device.max_touch_points ? `${device.max_touch_points} touch points` : null,
+        context.ip_masked ? `IP ${context.ip_masked}` : null,
+        context.referrer_host ? `Ref ${context.referrer_host}` : null,
+    ];
+
+    return chips.filter(Boolean).slice(0, 8);
+}
+
+function ContactUnlockMetric({ label, value, detail }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-white p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+            <p className="mt-2 text-2xl font-semibold text-slate-950">{value}</p>
+            {detail ? <p className="mt-1 text-xs text-slate-500">{detail}</p> : null}
+        </div>
+    );
+}
+
+function ContactUnlocksTab({ data, isLoading }) {
+    const summary = data?.summary || {};
+    const unlocks = data?.unlocks?.data || [];
+
+    if (isLoading) {
+        return <section className="crm-surface p-8 text-center text-sm text-slate-500">Loading contact unlock activity...</section>;
+    }
+
+    return (
+        <div className="space-y-4">
+            <section className="grid gap-3 md:grid-cols-4">
+                <ContactUnlockMetric label="Attempts" value={summary.attempts || 0} detail={`Last: ${formatDateTime(summary.last_attempted_at)}`} />
+                <ContactUnlockMetric label="Successful" value={summary.successful || 0} detail={`Last: ${formatDateTime(summary.last_successful_at)}`} />
+                <ContactUnlockMetric label="Revenue" value={formatUnlockRevenue(summary)} detail="Successful unlock payments" />
+                <ContactUnlockMetric label="Reveals" value={summary.reveal_count || 0} detail={`${summary.pending || 0} pending · ${summary.failed || 0} failed`} />
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Contact Unlock Trail</h3>
+                        <p className="crm-panel-subtitle">Visitor attempts, payment outcome, unlock timing, and browser context for this profile.</p>
+                    </div>
+                </header>
+                {unlocks.length > 0 ? (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                                <tr>
+                                    <th className="px-4 py-3 font-semibold">Visitor</th>
+                                    <th className="px-4 py-3 font-semibold">Outcome</th>
+                                    <th className="px-4 py-3 font-semibold">Payment</th>
+                                    <th className="px-4 py-3 font-semibold">Timing</th>
+                                    <th className="px-4 py-3 font-semibold">Browser Context</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                                {unlocks.map((unlock) => {
+                                    const contextChips = visitorContextChips(unlock.visitor_context || {});
+                                    const payment = unlock.payment || {};
+                                    return (
+                                        <tr key={unlock.id} className="align-top">
+                                            <td className="px-4 py-4">
+                                                <p className="font-semibold text-slate-900">{unlock.visitor_phone_masked || 'Phone hidden'}</p>
+                                                <p className="mt-1 text-xs text-slate-500">{unlock.visitor_email_masked || 'No email captured'}</p>
+                                                <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">#{unlock.id} · {titleize(unlock.scope)}</p>
+                                            </td>
+                                            <td className="px-4 py-4">
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${contactUnlockStatusBadge(unlock.status)}`}>{titleize(unlock.status)}</span>
+                                                    {payment.status ? <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${contactUnlockStatusBadge(payment.status)}`}>{titleize(payment.status)}</span> : null}
+                                                </div>
+                                                {payment.failure_reason ? <p className="mt-2 max-w-xs text-xs text-rose-600">{payment.failure_reason}</p> : null}
+                                            </td>
+                                            <td className="px-4 py-4">
+                                                <p className="font-semibold text-slate-900">{formatCurrency(payment.amount || 0, payment.currency || 'KES')}</p>
+                                                <p className="mt-1 text-xs text-slate-500">{payment.provider_key || 'No provider'}{payment.provider_environment ? ` · ${payment.provider_environment}` : ''}</p>
+                                                {payment.reference ? <p className="mt-2 inline-flex rounded-md bg-slate-50 px-2 py-1 font-mono text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{payment.reference}</p> : null}
+                                            </td>
+                                            <td className="px-4 py-4 text-xs text-slate-600">
+                                                <p><span className="font-semibold text-slate-500">Attempted:</span> {formatDateTime(unlock.created_at)}</p>
+                                                <p className="mt-1"><span className="font-semibold text-slate-500">Completed:</span> {formatDateTime(payment.completed_at)}</p>
+                                                <p className="mt-1"><span className="font-semibold text-slate-500">Revealed:</span> {formatDateTime(unlock.last_revealed_at)} · {unlock.reveal_count || 0}x</p>
+                                                <p className="mt-1"><span className="font-semibold text-slate-500">Expires:</span> {formatDateTime(unlock.expires_at)}</p>
+                                            </td>
+                                            <td className="px-4 py-4">
+                                                {contextChips.length > 0 ? (
+                                                    <div className="flex max-w-md flex-wrap gap-1.5">
+                                                        {contextChips.map((chip) => (
+                                                            <span key={chip} className="rounded-full bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{chip}</span>
+                                                        ))}
+                                                    </div>
+                                                ) : <span className="text-xs text-slate-400">No browser context captured.</span>}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <div className="p-8 text-center text-sm text-slate-500">No contact unlock attempts recorded for this profile yet.</div>
+                )}
+            </section>
+        </div>
+    );
+}
+
 function ProfileInfoCard({ title, children }) {
     return (
         <section className="crm-surface p-5">
@@ -1050,6 +1191,12 @@ export default function ClientDetail() {
         queryKey: ['client-timeline', id],
         queryFn: () => api.get(`/crm/clients/${id}/timeline`).then((r) => r.data),
         enabled: activeTab === 'timeline',
+    });
+
+    const { data: contactUnlockData, isLoading: contactUnlockLoading } = useQuery({
+        queryKey: ['client-contact-unlocks', id],
+        queryFn: () => api.get(`/crm/clients/${id}/contact-unlocks`).then((r) => r.data),
+        enabled: activeTab === 'contact_unlocks',
     });
 
     const { data: products } = useQuery({
@@ -1957,6 +2104,7 @@ export default function ClientDetail() {
             { key: 'chat', label: 'Chat' },
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
+            { key: 'contact_unlocks', label: `Unlocks (${client?.contact_unlock_summary?.attempts || 0})` },
             // Staff can edit Expired/Archived profiles — the front-end edit lock
             // applies to the advertiser on the website, not to the CRM team, who
             // still need to work these accounts during a win-back.
@@ -4516,6 +4664,10 @@ export default function ClientDetail() {
                         <section className="crm-surface p-8 text-center text-sm text-slate-500">No payments recorded.</section>
                     )}
                 </div>
+            ) : null}
+
+            {activeTab === 'contact_unlocks' ? (
+                <ContactUnlocksTab data={contactUnlockData} isLoading={contactUnlockLoading} />
             ) : null}
 
             {activeTab === 'edit_profile' && !isReadOnly ? (

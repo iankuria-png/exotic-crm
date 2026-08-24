@@ -382,6 +382,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/bulk-expire', [ClientController::class, 'bulkExpire'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-seo-placeholder-private', [ClientController::class, 'bulkTakeSeoPlaceholdersPrivate'])->middleware('role:admin,sub_admin');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/contact-unlocks', [ClientController::class, 'contactUnlocks'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/quick-replies', [ClientController::class, 'quickReplies'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/risk-state', [ClientController::class, 'updateRiskState'])->middleware('role:admin,sub_admin,sales,field_sales');
