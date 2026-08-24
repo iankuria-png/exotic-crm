@@ -46,6 +46,33 @@ function normalizeRule(rule) {
     };
 }
 
+function titleize(value) {
+    return String(value || '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function statusClasses(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (['active', 'completed', 'unlocked'].includes(normalized)) {
+        return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    }
+    if (['failed', 'revoked', 'refunded', 'expired'].includes(normalized)) {
+        return 'border-rose-200 bg-rose-50 text-rose-700';
+    }
+    if (['pending', 'pending_payment', 'initiated'].includes(normalized)) {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+    return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function providerLabel(provider) {
+    const key = String(provider || '').toLowerCase();
+    if (key === 'pawapay') return 'pawaPay';
+    if (key === 'kopokopo') return 'KopoKopo';
+    return titleize(key || 'Provider');
+}
+
 export default function ContactUnlockTab() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -368,49 +395,85 @@ export default function ContactUnlockTab() {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <h4 className="text-base font-semibold text-slate-950">Recent unlocks</h4>
-                <div className="mt-4 overflow-x-auto">
-                    <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                        <thead>
-                            <tr className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                                <th className="px-3 py-2">Reference</th>
-                                <th className="px-3 py-2">Market</th>
-                                <th className="px-3 py-2">Profile</th>
-                                <th className="px-3 py-2">Status</th>
-                                <th className="px-3 py-2">Payment</th>
-                                <th className="px-3 py-2">Visitor</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {recentUnlocks.map((unlock) => (
-                                <tr key={unlock.id}>
-                                    <td className="px-3 py-3 font-semibold text-slate-900">#{unlock.id}</td>
-                                    <td className="px-3 py-3 text-slate-600">{unlock.market}</td>
-                                    <td className="px-3 py-3 text-slate-900">{unlock.profile?.name || unlock.profile?.wp_post_id || '-'}</td>
-                                    <td className="px-3 py-3 text-slate-600">{unlock.status}</td>
-                                    <td className="px-3 py-3 text-slate-600">
-                                        {unlock.payment?.currency ? formatCurrency(unlock.payment.amount, unlock.payment.currency) : '-'}
-                                        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-400">
-                                            <span>{unlock.payment?.status || '-'}</span>
-                                            {unlock.payment?.provider_key ? <span>{unlock.payment.provider_key}</span> : null}
-                                            {unlock.payment?.provider_environment ? <span>{unlock.payment.provider_environment}</span> : null}
-                                        </div>
-                                        {unlock.payment?.failure_reason ? (
-                                            <p className="mt-1 max-w-md text-xs leading-5 text-rose-700">
-                                                {unlock.payment.failure_reason}
-                                            </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Live checkout trail</p>
+                        <h4 className="mt-1 text-lg font-semibold text-slate-950">Recent unlocks</h4>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                        {recentUnlocks.length} latest records
+                    </div>
+                </div>
+
+                <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+                    <div className="hidden grid-cols-[92px_1fr_1fr_1.2fr_1fr] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 xl:grid">
+                        <span>Reference</span>
+                        <span>Profile</span>
+                        <span>Status</span>
+                        <span>Payment</span>
+                        <span>Visitor</span>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                        {recentUnlocks.map((unlock) => {
+                            const payment = unlock.payment || {};
+                            const paymentReference = payment.reference || (payment.id ? `#${payment.id}` : '-');
+                            return (
+                                <div key={unlock.id} className="grid gap-4 px-4 py-4 text-sm transition-colors hover:bg-slate-50/70 xl:grid-cols-[92px_1fr_1fr_1.2fr_1fr] xl:items-start">
+                                    <div>
+                                        <p className="font-semibold text-slate-950">#{unlock.id}</p>
+                                        <p className="mt-1 text-xs text-slate-500">{unlock.market || 'Market'}</p>
+                                    </div>
+                                    <div className="min-w-0">
+                                        {unlock.profile?.url ? (
+                                            <a className="font-semibold text-slate-950 underline-offset-4 hover:text-teal-700 hover:underline" href={unlock.profile.url} target="_blank" rel="noreferrer">
+                                                {unlock.profile?.name || unlock.profile?.wp_post_id || 'Profile'}
+                                            </a>
+                                        ) : (
+                                            <p className="font-semibold text-slate-950">{unlock.profile?.name || unlock.profile?.wp_post_id || '-'}</p>
+                                        )}
+                                        <p className="mt-1 text-xs text-slate-500">{unlock.scope === 'market_inactive_profiles' ? 'All inactive contacts' : 'Single profile'}</p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClasses(unlock.status)}`}>
+                                            {titleize(unlock.status || 'unknown')}
+                                        </span>
+                                        {payment.status ? (
+                                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClasses(payment.status)}`}>
+                                                Payment {titleize(payment.status)}
+                                            </span>
                                         ) : null}
-                                    </td>
-                                    <td className="px-3 py-3 text-slate-600">{unlock.visitor_phone_masked || unlock.visitor_email_masked || '-'}</td>
-                                </tr>
-                            ))}
-                            {!recentUnlocks.length ? (
-                                <tr>
-                                    <td colSpan={6} className="px-3 py-6 text-center text-slate-500">No visitor unlocks yet.</td>
-                                </tr>
-                            ) : null}
-                        </tbody>
-                    </table>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="font-semibold text-slate-950">
+                                            {payment.currency ? formatCurrency(payment.amount, payment.currency) : '-'}
+                                        </p>
+                                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                            {payment.provider_key ? (
+                                                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600">{providerLabel(payment.provider_key)}</span>
+                                            ) : null}
+                                            {payment.provider_environment ? (
+                                                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600">{titleize(payment.provider_environment)}</span>
+                                            ) : null}
+                                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-500">{paymentReference}</span>
+                                        </div>
+                                        {payment.failure_reason ? (
+                                            <div className="mt-3 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
+                                                {payment.failure_reason}
+                                                {payment.error_reference ? <span className="mt-1 block font-semibold">Reference {payment.error_reference}</span> : null}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    <div>
+                                        <p className="font-semibold text-slate-700">{unlock.visitor_phone_masked || unlock.visitor_email_masked || '-'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">{unlock.created_at ? new Date(unlock.created_at).toLocaleString() : ''}</p>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {!recentUnlocks.length ? (
+                            <div className="px-4 py-8 text-center text-sm text-slate-500">No visitor unlocks yet.</div>
+                        ) : null}
+                    </div>
                 </div>
             </section>
         </div>

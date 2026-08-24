@@ -93,14 +93,16 @@ class ContactUnlockPricingService
         if ($currency === 'KES' || str_contains($country, 'kenya')) {
             $providers[] = [
                 'key' => 'kopokopo',
-                'label' => 'M-Pesa',
+                'label' => 'M-Pesa prompt',
+                'description' => 'Pay from the phone prompt',
                 'rail' => 'mobile_money',
             ];
         }
 
         $providers[] = [
             'key' => 'pawapay',
-            'label' => 'Mobile money',
+            'label' => 'pawaPay checkout',
+            'description' => 'Pay on the secure payment page',
             'rail' => 'mobile_money',
         ];
 

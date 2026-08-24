@@ -187,6 +187,7 @@ class ContactUnlockAdminController extends Controller
                 'url' => (string) ($unlock->client?->wp_profile_permalink ?? ''),
             ],
             'payment' => [
+                'id' => (int) ($unlock->payment?->id ?? 0),
                 'status' => (string) ($unlock->payment?->status ?? ''),
                 'amount' => (float) ($unlock->payment?->amount ?? 0),
                 'currency' => (string) ($unlock->payment?->currency ?? ''),
