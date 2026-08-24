@@ -123,7 +123,7 @@ return [
             'intval',
             explode(',', env('CONTACT_UNLOCK_MARKET_IDS', ''))
         ))),
-        'sandbox_only' => filter_var(env('CONTACT_UNLOCK_SANDBOX_ONLY', true), FILTER_VALIDATE_BOOL),
+        'sandbox_only' => filter_var(env('CONTACT_UNLOCK_SANDBOX_ONLY', env('APP_ENV', 'production') !== 'production'), FILTER_VALIDATE_BOOL),
         'session_idle_minutes' => (int) env('CONTACT_UNLOCK_SESSION_IDLE_MINUTES', 30),
         'session_absolute_hours' => (int) env('CONTACT_UNLOCK_SESSION_ABSOLUTE_HOURS', 24),
     ],

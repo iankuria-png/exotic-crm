@@ -47,7 +47,7 @@ class ContactUnlockAdminController extends Controller
             'settings' => [
                 'enabled' => $this->pricingService->globallyEnabled(),
                 'market_ids' => $this->pricingService->enabledMarketIds(),
-                'sandbox_only' => (bool) config('services.contact_unlock.sandbox_only', true),
+                'sandbox_only' => $this->pricingService->sandboxOnly(),
             ],
             'summary' => [
                 'total_unlocks' => (int) VisitorContactUnlock::query()->count(),
@@ -67,7 +67,7 @@ class ContactUnlockAdminController extends Controller
             ])->values(),
             'pricing_rules' => $rules,
             'recent_unlocks' => VisitorContactUnlock::query()
-                ->with(['platform:id,name,currency_code', 'client:id,name,wp_post_id,wp_profile_permalink', 'payment:id,status,amount,currency,reference_number'])
+                ->with(['platform:id,name,currency_code', 'client:id,name,wp_post_id,wp_profile_permalink', 'payment:id,status,amount,currency,reference_number,failure_reason,payment_data,provider_key,provider_environment'])
                 ->latest('id')
                 ->limit(25)
                 ->get()
@@ -80,6 +80,7 @@ class ContactUnlockAdminController extends Controller
     {
         $validated = $request->validate([
             'enabled' => 'required|boolean',
+            'sandbox_only' => 'required|boolean',
             'market_ids' => 'array',
             'market_ids.*' => 'integer|exists:platforms,id',
             'pricing_rules' => 'array',
@@ -100,6 +101,7 @@ class ContactUnlockAdminController extends Controller
             $this->pricingService->updateAvailability(
                 (bool) $validated['enabled'],
                 $validated['market_ids'] ?? [],
+                (bool) $validated['sandbox_only'],
                 (int) $request->user()->id
             );
 
@@ -170,6 +172,10 @@ class ContactUnlockAdminController extends Controller
 
     private function serializeUnlock(VisitorContactUnlock $unlock): array
     {
+        $metadata = is_array($unlock->metadata_json) ? $unlock->metadata_json : [];
+        $paymentData = is_array($unlock->payment?->payment_data) ? $unlock->payment->payment_data : [];
+        $checkoutError = data_get($metadata, 'checkout_error', data_get($paymentData, 'checkout_error', []));
+
         return [
             'id' => (int) $unlock->id,
             'status' => (string) $unlock->status,
@@ -185,6 +191,10 @@ class ContactUnlockAdminController extends Controller
                 'amount' => (float) ($unlock->payment?->amount ?? 0),
                 'currency' => (string) ($unlock->payment?->currency ?? ''),
                 'reference' => (string) ($unlock->payment?->reference_number ?? ''),
+                'provider_key' => (string) ($unlock->payment?->provider_key ?? ''),
+                'provider_environment' => (string) ($unlock->payment?->provider_environment ?? ''),
+                'failure_reason' => (string) ($unlock->payment?->failure_reason ?? data_get($checkoutError, 'message', '')),
+                'error_reference' => (string) data_get($checkoutError, 'reference', ''),
             ],
             'visitor_phone_masked' => (string) ($unlock->visitor_phone_masked ?? ''),
             'visitor_email_masked' => (string) ($unlock->visitor_email_masked ?? ''),

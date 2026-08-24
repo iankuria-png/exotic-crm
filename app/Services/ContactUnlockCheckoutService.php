@@ -10,8 +10,10 @@ use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class ContactUnlockCheckoutService
 {
@@ -60,6 +62,7 @@ class ContactUnlockCheckoutService
         $idempotencyHash = $this->hashToken($idempotencyKey);
         $sessionHash = $this->hashToken($sessionProof);
         $email = trim((string) $visitorEmail);
+        $checkoutEnvironment = $this->pricingService->checkoutEnvironment();
 
         $created = false;
         $intent = DB::transaction(function () use (
@@ -72,6 +75,7 @@ class ContactUnlockCheckoutService
             $idempotencyKey,
             $idempotencyHash,
             $sessionHash,
+            $checkoutEnvironment,
             &$created
         ): VisitorContactUnlock {
             $existing = VisitorContactUnlock::query()
@@ -103,7 +107,7 @@ class ContactUnlockCheckoutService
                 'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
                 'source' => 'website_unlock',
                 'provider_key' => $providerKey,
-                'provider_environment' => (bool) config('services.contact_unlock.sandbox_only', true) ? 'sandbox' : null,
+                'provider_environment' => $checkoutEnvironment,
                 'raw_payload' => [
                     'method' => $providerKey,
                     'billing_surface' => BillingSurface::ContactUnlock->value,
@@ -156,19 +160,61 @@ class ContactUnlockCheckoutService
         $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
 
         if ($created && $payment) {
-            $action = $this->billingGatewayService->initiateContactUnlock($payment, $providerKey, [
-                'phone' => $normalizedPhone,
-                'idempotency_key' => $idempotencyKey,
-                'description' => 'Contact unlock',
-                'environment' => (bool) config('services.contact_unlock.sandbox_only', true) ? 'sandbox' : null,
-            ], $request);
+            try {
+                $action = $this->billingGatewayService->initiateContactUnlock($payment, $providerKey, [
+                    'phone' => $normalizedPhone,
+                    'idempotency_key' => $idempotencyKey,
+                    'description' => 'Contact unlock',
+                    'environment' => $checkoutEnvironment,
+                ], $request);
 
-            $intent->forceFill([
-                'status' => VisitorContactUnlock::STATUS_PENDING_PAYMENT,
-                'metadata_json' => array_merge($metadata, [
-                    'provider_action' => $this->publicAction($action),
-                ]),
-            ])->save();
+                $intent->forceFill([
+                    'status' => VisitorContactUnlock::STATUS_PENDING_PAYMENT,
+                    'metadata_json' => array_merge($metadata, [
+                        'provider_action' => $this->publicAction($action),
+                    ]),
+                ])->save();
+            } catch (Throwable $exception) {
+                $reference = 'cu_' . strtolower(Str::random(10));
+                $message = $this->publicCheckoutFailureMessage($exception, $providerKey, $checkoutEnvironment, $reference);
+                $errorPayload = [
+                    'reference' => $reference,
+                    'provider_key' => $providerKey,
+                    'provider_environment' => $checkoutEnvironment ?: 'billing_default',
+                    'message' => $message,
+                    'exception' => class_basename($exception),
+                ];
+
+                Log::warning('contact_unlock.checkout_failed', [
+                    'reference' => $reference,
+                    'platform_id' => (int) $platform->id,
+                    'unlock_id' => (int) $intent->id,
+                    'payment_id' => (int) $payment->id,
+                    'provider_key' => $providerKey,
+                    'provider_environment' => $checkoutEnvironment ?: 'billing_default',
+                    'exception' => get_class($exception),
+                    'exception_message' => $exception->getMessage(),
+                ]);
+
+                $intent->forceFill([
+                    'status' => VisitorContactUnlock::STATUS_FAILED,
+                    'metadata_json' => array_merge($metadata, [
+                        'checkout_error' => $errorPayload,
+                    ]),
+                ])->save();
+
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => $message,
+                    'payment_data' => array_merge($payment->payment_data ?? [], [
+                        'checkout_error' => $errorPayload,
+                    ]),
+                ])->save();
+
+                throw ValidationException::withMessages([
+                    'provider_key' => $message,
+                ]);
+            }
         }
 
         $fresh = $intent->fresh(['payment', 'client', 'pricingRule']);
@@ -195,6 +241,29 @@ class ContactUnlockCheckoutService
     {
         unset($action['provider_payload']);
         return $action;
+    }
+
+    private function publicCheckoutFailureMessage(Throwable $exception, string $providerKey, ?string $environment, string $reference): string
+    {
+        $rawMessage = strtolower($exception->getMessage());
+        $environmentLabel = $environment === 'sandbox' ? 'sandbox' : 'production/default';
+        $providerLabel = strtoupper(str_replace('_', ' ', $providerKey));
+
+        if (
+            str_contains($rawMessage, 'disabled')
+            || str_contains($rawMessage, 'credential')
+            || str_contains($rawMessage, 'provider')
+            || str_contains($rawMessage, 'routing')
+        ) {
+            return sprintf(
+                'Contact unlock checkout is not configured for %s in %s mode. Check the market provider profile and routing in CRM. Reference %s.',
+                $providerLabel,
+                $environmentLabel,
+                $reference
+            );
+        }
+
+        return sprintf('Contact unlock checkout could not be started. Reference %s.', $reference);
     }
 
     private function normalizePhone(string $phone, string $prefix): string

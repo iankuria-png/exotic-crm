@@ -50,6 +50,7 @@ export default function ContactUnlockTab() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [enabled, setEnabled] = useState(false);
+    const [sandboxOnly, setSandboxOnly] = useState(true);
     const [marketIds, setMarketIds] = useState([]);
     const [rules, setRules] = useState([]);
 
@@ -67,6 +68,7 @@ export default function ContactUnlockTab() {
     useEffect(() => {
         if (!unlockQuery.data) return;
         setEnabled(Boolean(unlockQuery.data.settings?.enabled));
+        setSandboxOnly(unlockQuery.data.settings?.sandbox_only !== false);
         setMarketIds((unlockQuery.data.settings?.market_ids || []).map(Number));
         setRules((unlockQuery.data.pricing_rules || []).map(normalizeRule));
     }, [unlockQuery.data]);
@@ -82,6 +84,7 @@ export default function ContactUnlockTab() {
     const saveMutation = useMutation({
         mutationFn: () => api.put('/crm/settings/billing/contact-unlock', {
             enabled,
+            sandbox_only: sandboxOnly,
             market_ids: marketIds,
             pricing_rules: rules
                 .filter((rule) => rule.platform_id && rule.label && rule.amount)
@@ -204,6 +207,31 @@ export default function ContactUnlockTab() {
                         />
                         Feature enabled
                     </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                    <div>
+                        <h5 className="text-sm font-semibold text-amber-950">Checkout environment</h5>
+                        <p className="mt-1 text-sm text-amber-800">
+                            Production provider profiles need production/default mode. Sandbox-only mode is for test profiles and will not use the live Kenya pawaPay profile.
+                        </p>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-amber-200 bg-white p-1 text-sm font-semibold shadow-sm">
+                        <button
+                            type="button"
+                            className={`rounded-md px-4 py-2 ${!sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+                            onClick={() => setSandboxOnly(false)}
+                        >
+                            Production/default
+                        </button>
+                        <button
+                            type="button"
+                            className={`rounded-md px-4 py-2 ${sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+                            onClick={() => setSandboxOnly(true)}
+                        >
+                            Sandbox only
+                        </button>
+                    </div>
                 </div>
 
                 <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
@@ -362,7 +390,16 @@ export default function ContactUnlockTab() {
                                     <td className="px-3 py-3 text-slate-600">{unlock.status}</td>
                                     <td className="px-3 py-3 text-slate-600">
                                         {unlock.payment?.currency ? formatCurrency(unlock.payment.amount, unlock.payment.currency) : '-'}
-                                        <span className="ml-2 text-xs text-slate-400">{unlock.payment?.status}</span>
+                                        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-400">
+                                            <span>{unlock.payment?.status || '-'}</span>
+                                            {unlock.payment?.provider_key ? <span>{unlock.payment.provider_key}</span> : null}
+                                            {unlock.payment?.provider_environment ? <span>{unlock.payment.provider_environment}</span> : null}
+                                        </div>
+                                        {unlock.payment?.failure_reason ? (
+                                            <p className="mt-1 max-w-md text-xs leading-5 text-rose-700">
+                                                {unlock.payment.failure_reason}
+                                            </p>
+                                        ) : null}
                                     </td>
                                     <td className="px-3 py-3 text-slate-600">{unlock.visitor_phone_masked || unlock.visitor_email_masked || '-'}</td>
                                 </tr>
