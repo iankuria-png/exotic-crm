@@ -2,9 +2,12 @@
 
 namespace Tests\Feature\Seo;
 
+use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Services\Seo\BioGenerationService;
+use App\Services\WordPressSyncKeyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Tests\TestCase;
 
 /**
@@ -114,6 +117,33 @@ class WpServiceAuthTest extends TestCase
         $headers = $this->signHeaders($platform->id, $body);
 
         $response = $this->postJson('/api/wp-svc/seo/generate-bio', $body, $headers);
+        $response->assertStatus(200)
+            ->assertJsonStructure(['bio_html', 'score', 'breakdown', 'provider_used']);
+    }
+
+    public function test_database_shared_key_overrides_stale_env_key(): void
+    {
+        $platform = $this->makePlatform();
+        $databaseKey = 'database-managed-key-67890';
+
+        config([
+            'services.exotic_crm_sync.shared_key' => 'stale-env-key',
+            'services.seo_engine.platform_allowlist' => [],
+        ]);
+
+        IntegrationSetting::query()->create([
+            'key' => WordPressSyncKeyService::SETTINGS_KEY,
+            'value' => [
+                'cipher' => Crypt::encryptString($databaseKey),
+                'rotated_at' => now()->toIso8601String(),
+            ],
+        ]);
+
+        $body = ['profile_snapshot' => ['name' => 'Anna', 'city' => 'Kampala']];
+        $headers = $this->signHeaders($platform->id, $body, $databaseKey);
+
+        $response = $this->postJson('/api/wp-svc/seo/generate-bio', $body, $headers);
+
         $response->assertStatus(200)
             ->assertJsonStructure(['bio_html', 'score', 'breakdown', 'provider_used']);
     }

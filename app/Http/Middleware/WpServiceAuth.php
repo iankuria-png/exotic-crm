@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Platform;
+use App\Services\WordPressSyncKeyService;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -25,7 +26,8 @@ class WpServiceAuth
 
     public function handle(Request $request, Closure $next): Response
     {
-        $sharedKey = trim((string) config('services.exotic_crm_sync.shared_key', ''));
+        $sharedKey = app(WordPressSyncKeyService::class)->currentRaw()
+            ?? trim((string) config('services.exotic_crm_sync.shared_key', ''));
 
         if ($sharedKey === '') {
             Log::error('WpServiceAuth: EXOTIC_CRM_SYNC_SHARED_KEY not configured.');
