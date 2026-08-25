@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockPricingService;
+use App\Services\ContactUnlockPulseService;
 use App\Services\ContactUnlockReadinessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,8 @@ class ContactUnlockAdminController extends Controller
 {
     public function __construct(
         private readonly ContactUnlockPricingService $pricingService,
-        private readonly ContactUnlockReadinessService $readinessService
+        private readonly ContactUnlockReadinessService $readinessService,
+        private readonly ContactUnlockPulseService $pulseService
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -173,6 +175,21 @@ class ContactUnlockAdminController extends Controller
         ));
     }
 
+    public function pulse(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'range' => ['nullable', Rule::in(['today', '7d', '30d'])],
+            'timezone' => 'nullable|string|max:80',
+        ]);
+
+        return response()->json($this->pulseService->summary(
+            ! empty($validated['platform_id']) ? (int) $validated['platform_id'] : null,
+            (string) ($validated['range'] ?? 'today'),
+            $validated['timezone'] ?? null
+        ));
+    }
+
     private function nativeRevenue($query): array
     {
         return $query
@@ -305,6 +322,11 @@ class ContactUnlockAdminController extends Controller
                 'provider_environment' => (string) ($unlock->payment?->provider_environment ?? ''),
                 'failure_reason' => (string) ($unlock->payment?->failure_reason ?? data_get($checkoutError, 'message', '')),
                 'error_reference' => (string) data_get($checkoutError, 'reference', ''),
+            ],
+            'pricing' => [
+                'gross_amount' => (float) ($unlock->gross_amount ?? $unlock->payment?->amount ?? 0),
+                'credit_amount' => (float) ($unlock->credit_amount ?? 0),
+                'amount_due' => (float) ($unlock->amount_due ?? $unlock->payment?->amount ?? 0),
             ],
             'visitor_phone_masked' => (string) ($unlock->visitor_phone_masked ?? ''),
             'visitor_email_masked' => (string) ($unlock->visitor_email_masked ?? ''),

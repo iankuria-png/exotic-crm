@@ -18,7 +18,8 @@ class ContactUnlockCheckoutService
 {
     public function __construct(
         private readonly ContactUnlockPricingService $pricingService,
-        private readonly BillingGatewayService $billingGatewayService
+        private readonly BillingGatewayService $billingGatewayService,
+        private readonly ContactUnlockUpgradeQuoteService $upgradeQuoteService
     ) {}
 
     public function createIntent(
@@ -31,7 +32,8 @@ class ContactUnlockCheckoutService
         string $sessionProof,
         string $idempotencyKey,
         array $visitorContext = [],
-        ?Request $request = null
+        ?Request $request = null,
+        ?string $upgradeQuoteToken = null
     ): array {
         if (! $this->pricingService->enabledForPlatform($platform)) {
             throw ValidationException::withMessages(['platform' => 'Contact unlock is disabled for this market.']);
@@ -74,9 +76,11 @@ class ContactUnlockCheckoutService
             $idempotencyKey,
             $idempotencyHash,
             $sessionHash,
+            $sessionProof,
             $checkoutEnvironment,
             $visitorContext,
             $request,
+            $upgradeQuoteToken,
             &$created
         ): VisitorContactUnlock {
             $existing = VisitorContactUnlock::query()
@@ -91,6 +95,13 @@ class ContactUnlockCheckoutService
             $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
             $scope = (string) $rule->scope;
             $singleProfile = $scope === VisitorContactUnlock::SCOPE_SINGLE_PROFILE;
+            $credit = $this->upgradeQuoteService->prepareCheckoutCredit(
+                $platform,
+                $rule,
+                $sessionProof,
+                $normalizedPhone,
+                $upgradeQuoteToken
+            );
             $reference = 'CU-'.now()->format('ymd').'-'.strtoupper(Str::random(8));
 
             $payment = Payment::query()->create([
@@ -99,7 +110,7 @@ class ContactUnlockCheckoutService
                 'escort_post_id' => $singleProfile ? (int) $client->wp_post_id : null,
                 'client_id' => $singleProfile ? (int) $client->id : null,
                 'phone' => $normalizedPhone,
-                'amount' => number_format((float) $rule->amount, 2, '.', ''),
+                'amount' => number_format((float) $credit['amount_due'], 2, '.', ''),
                 'currency' => strtoupper((string) $rule->currency),
                 'transaction_uuid' => (string) Str::uuid(),
                 'transaction_reference' => $reference,
@@ -121,6 +132,10 @@ class ContactUnlockCheckoutService
                     'client_id' => (int) $client->id,
                     'idempotency_key_hash' => $idempotencyHash,
                     'pricing_rule_id' => (int) $rule->id,
+                    'gross_amount' => (float) $credit['gross_amount'],
+                    'credit_amount' => (float) $credit['credit_amount'],
+                    'amount_due' => (float) $credit['amount_due'],
+                    'upgrade_quote_id' => $credit['quote']?->id,
                 ],
             ]);
 
@@ -132,6 +147,9 @@ class ContactUnlockCheckoutService
                 'pricing_rule_id' => (int) $rule->id,
                 'scope' => $scope,
                 'status' => VisitorContactUnlock::STATUS_INITIATED,
+                'gross_amount' => number_format((float) $credit['gross_amount'], 2, '.', ''),
+                'credit_amount' => number_format((float) $credit['credit_amount'], 2, '.', ''),
+                'amount_due' => number_format((float) $credit['amount_due'], 2, '.', ''),
                 'visitor_phone_hash' => $this->hashToken($normalizedPhone),
                 'visitor_phone_masked' => $this->maskPhone($normalizedPhone),
                 'visitor_email_hash' => $email !== '' ? $this->hashToken(strtolower($email)) : null,
@@ -139,12 +157,16 @@ class ContactUnlockCheckoutService
                 'idempotency_key_hash' => $idempotencyHash,
                 'session_token_hash' => $sessionHash,
                 'public_token_hash' => $this->hashToken($publicToken),
+                'upgraded_from_unlock_id' => $credit['sources']->isNotEmpty() ? (int) $credit['sources']->first()->id : null,
                 'metadata_json' => [
                     'origin_wp_post_id' => (int) $client->wp_post_id,
                     'idempotency_key_hash' => $idempotencyHash,
+                    'upgrade_quote_id' => $credit['quote']?->id,
                     'visitor_context' => $this->visitorContext($visitorContext, $request),
                 ],
             ]);
+
+            $this->upgradeQuoteService->reserveCredits($unlock->fresh(['payment']), $credit['sources']);
 
             $payment->forceFill([
                 'payment_data' => array_merge($payment->payment_data ?? [], [
@@ -162,6 +184,52 @@ class ContactUnlockCheckoutService
         $publicToken = $this->derivePublicToken($idempotencyKey, $sessionHash);
 
         if ($created && $payment) {
+            if ((float) $intent->amount_due <= 0) {
+                $durationDays = max(1, (int) ($intent->pricingRule?->duration_days ?? 1));
+                $startsAt = now();
+                $metadata = is_array($intent->metadata_json) ? $intent->metadata_json : [];
+
+                $payment->forceFill([
+                    'status' => 'completed',
+                    'completed_at' => now(),
+                    'payment_data' => array_merge($payment->payment_data ?? [], [
+                        'zero_due_upgrade' => true,
+                    ]),
+                ])->save();
+
+                $intent->forceFill([
+                    'status' => VisitorContactUnlock::STATUS_ACTIVE,
+                    'starts_at' => $startsAt,
+                    'expires_at' => $startsAt->copy()->addDays($durationDays),
+                    'metadata_json' => array_merge($metadata, [
+                        'zero_due_upgrade' => true,
+                    ]),
+                ])->save();
+
+                $this->upgradeQuoteService->applyReservedCredits($intent);
+
+                $fresh = $intent->fresh(['payment', 'client', 'pricingRule']);
+
+                return [
+                    'unlock_reference' => (int) $fresh->id,
+                    'public_token' => $publicToken,
+                    'status' => (string) $fresh->status,
+                    'replayed' => false,
+                    'payment' => [
+                        'id' => (int) ($fresh->payment?->id ?? 0),
+                        'reference' => (string) ($fresh->payment?->reference_number ?? ''),
+                        'status' => (string) ($fresh->payment?->status ?? ''),
+                        'amount' => (float) ($fresh->payment?->amount ?? 0),
+                        'currency' => (string) ($fresh->payment?->currency ?? ''),
+                    ],
+                    'gross_amount' => (float) ($fresh->gross_amount ?? $fresh->payment?->amount ?? 0),
+                    'credit_amount' => (float) ($fresh->credit_amount ?? 0),
+                    'amount_due' => (float) ($fresh->amount_due ?? $fresh->payment?->amount ?? 0),
+                    'action' => null,
+                    'expires_at' => $fresh->expires_at?->toIso8601String(),
+                ];
+            }
+
             try {
                 $action = $this->billingGatewayService->initiateContactUnlock($payment, $providerKey, [
                     'phone' => $normalizedPhone,
@@ -204,6 +272,7 @@ class ContactUnlockCheckoutService
                         'checkout_error' => $errorPayload,
                     ]),
                 ])->save();
+                $this->upgradeQuoteService->releaseReservedCredits($intent);
 
                 $payment->forceFill([
                     'status' => 'failed',
@@ -234,6 +303,9 @@ class ContactUnlockCheckoutService
                 'amount' => (float) ($fresh->payment?->amount ?? 0),
                 'currency' => (string) ($fresh->payment?->currency ?? ''),
             ],
+            'gross_amount' => (float) ($fresh->gross_amount ?? $fresh->payment?->amount ?? 0),
+            'credit_amount' => (float) ($fresh->credit_amount ?? 0),
+            'amount_due' => (float) ($fresh->amount_due ?? $fresh->payment?->amount ?? 0),
             'action' => $freshMetadata['provider_action'] ?? data_get($fresh->payment?->payment_data, 'resume'),
             'expires_at' => $fresh->expires_at?->toIso8601String(),
         ];

@@ -8,6 +8,10 @@ use Illuminate\Support\Facades\DB;
 
 class ContactUnlockFulfillmentService
 {
+    public function __construct(
+        private readonly ContactUnlockUpgradeQuoteService $upgradeQuoteService
+    ) {}
+
     public function fulfill(Payment $payment, array $providerPayload = []): VisitorContactUnlock
     {
         return DB::transaction(function () use ($payment, $providerPayload): VisitorContactUnlock {
@@ -36,6 +40,8 @@ class ContactUnlockFulfillmentService
                 'expires_at' => now()->addDays($durationDays),
                 'metadata_json' => $metadata,
             ])->save();
+
+            $this->upgradeQuoteService->applyReservedCredits($unlock);
 
             return $unlock->fresh(['payment', 'client', 'pricingRule']);
         });

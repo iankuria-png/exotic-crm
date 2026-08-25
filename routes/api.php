@@ -108,6 +108,8 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/contact-unlock')->group(f
     Route::post('/intents', [WpContactUnlockController::class, 'createIntent']);
     Route::post('/status', [WpContactUnlockController::class, 'status']);
     Route::post('/reveal', [WpContactUnlockController::class, 'reveal']);
+    Route::post('/upgrade-quote', [WpContactUnlockController::class, 'upgradeQuote']);
+    Route::post('/events', [WpContactUnlockController::class, 'event']);
 });
 
 // ==================== CRM ROUTES ====================
@@ -710,6 +712,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
     Route::get('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'index'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/billing/contact-unlock/pulse', [ContactUnlockAdminController::class, 'pulse'])->middleware('role:admin,sub_admin');
     Route::put('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'update'])->middleware('role:admin,sub_admin');
     Route::post('/settings/billing/contact-unlock/readiness', [ContactUnlockAdminController::class, 'readiness'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/billing/contact-unlock/rules/{rule}', [ContactUnlockAdminController::class, 'destroyRule'])->middleware('role:admin,sub_admin');

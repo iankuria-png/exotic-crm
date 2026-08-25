@@ -12,6 +12,11 @@ const SCOPE_OPTIONS = [
 const UNLOCK_STATUS_OPTIONS = ['initiated', 'pending_payment', 'active', 'failed', 'expired', 'revoked', 'refunded'];
 const PAYMENT_STATUS_OPTIONS = ['initiated', 'pending', 'completed', 'failed', 'canceled'];
 const PER_PAGE_OPTIONS = [10, 25, 50, 100];
+const PULSE_RANGE_OPTIONS = [
+    { value: 'today', label: 'Today' },
+    { value: '7d', label: '7 days' },
+    { value: '30d', label: '30 days' },
+];
 
 const DEFAULT_UNLOCK_FILTERS = {
     search: '',
@@ -128,6 +133,26 @@ function buildUnlockParams(filters) {
     }, {});
 }
 
+function moneyRowsLabel(rows = [], fallback = '-') {
+    if (!rows.length) return fallback;
+    return rows
+        .map((entry) => formatCurrency(entry.amount || 0, entry.currency || 'USD'))
+        .join(' + ');
+}
+
+function perViewRevenueRows(rows = [], views = 0) {
+    const denominator = Number(views || 0);
+    if (!denominator) return [];
+    return rows.map((entry) => ({
+        ...entry,
+        amount: Number(entry.amount || 0) / denominator,
+    }));
+}
+
+function percentLabel(value) {
+    return `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 1)}%`;
+}
+
 function visitorDeviceLabel(context = {}) {
     const platform = context.platform || '';
     const mobile = context.mobile_hint === true || Number(context.device?.max_touch_points || 0) > 0;
@@ -156,6 +181,8 @@ export default function ContactUnlockTab() {
     const [unlockFilters, setUnlockFilters] = useState(DEFAULT_UNLOCK_FILTERS);
     const [readinessMarketId, setReadinessMarketId] = useState('all');
     const [readinessResult, setReadinessResult] = useState(null);
+    const [pulseRange, setPulseRange] = useState('today');
+    const [pulseMarketId, setPulseMarketId] = useState('all');
 
     const unlockQuery = useQuery({
         queryKey: ['billing-contact-unlock', unlockFilters],
@@ -177,6 +204,31 @@ export default function ContactUnlockTab() {
         from: recentUnlocks.length ? 1 : 0,
         to: recentUnlocks.length,
     };
+
+    const pulseQuery = useQuery({
+        queryKey: ['billing-contact-unlock-pulse', pulseRange, pulseMarketId],
+        queryFn: () => api.get('/crm/settings/billing/contact-unlock/pulse', {
+            params: {
+                range: pulseRange,
+                ...(pulseMarketId !== 'all' ? { platform_id: Number(pulseMarketId) } : {}),
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            },
+        }).then((response) => response.data),
+        enabled: Boolean(unlockQuery.data),
+        staleTime: 30_000,
+    });
+
+    const pulse = pulseQuery.data || {};
+    const pulseKpis = pulse.kpis || {};
+    const pulseRevenue = pulseKpis.revenue || [];
+    const pulseAverageOrderValue = pulseKpis.average_order_value || [];
+    const pulseRevenuePerView = perViewRevenueRows(pulseRevenue, pulseKpis.eligible_profile_views);
+    const pulseTopGroups = [
+        { key: 'cities', title: 'Top cities', rows: pulse.top_cities || [] },
+        { key: 'profiles', title: 'Top profiles', rows: pulse.top_profiles || [] },
+        { key: 'sources', title: 'Top converting traffic sources', rows: pulse.top_sources || [] },
+        { key: 'hours', title: 'Top hours', rows: pulse.top_hours || [] },
+    ];
 
     useEffect(() => {
         if (!unlockQuery.data) return;
@@ -319,6 +371,104 @@ export default function ContactUnlockTab() {
 
     return (
         <div className="space-y-5 p-5">
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.02]">
+                <div className="border-b border-slate-100 bg-slate-950 px-5 py-4 text-white">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                        <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-200">
+                                Contact Unlock Pulse
+                            </p>
+                            <h3 className="mt-2 text-2xl font-semibold tracking-tight">
+                                Paid-contact demand, live funnel, and upgrade momentum
+                            </h3>
+                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                                A same-day operating view for profile demand, checkout health, buyer quality, and all-access upsell adoption.
+                            </p>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                            <select
+                                className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm font-semibold text-white"
+                                value={pulseMarketId}
+                                onChange={(event) => setPulseMarketId(event.target.value)}
+                            >
+                                <option className="text-slate-900" value="all">All markets</option>
+                                {markets.map((market) => (
+                                    <option className="text-slate-900" key={market.id} value={market.id}>{market.name}</option>
+                                ))}
+                            </select>
+                            <div className="inline-flex rounded-lg border border-white/10 bg-white/10 p-1">
+                                {PULSE_RANGE_OPTIONS.map((option) => (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        className={`rounded-md px-3 py-1.5 text-sm font-semibold ${pulseRange === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white'}`}
+                                        onClick={() => setPulseRange(option.value)}
+                                    >
+                                        {option.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className={`p-5 ${pulseQuery.isFetching ? 'opacity-70' : ''}`}>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        {[
+                            ['Eligible profile views', pulseKpis.eligible_profile_views ?? 0],
+                            ['Unlock CTA clicks', `${pulseKpis.unlock_cta_clicks ?? 0} · ${percentLabel(pulseKpis.cta_rate_percent)} CTA`],
+                            ['Checkout starts', `${pulseKpis.checkout_starts ?? 0} · ${percentLabel(pulseKpis.checkout_rate_percent)} checkout`],
+                            ['Successful payments', `${pulseKpis.successful_payments ?? 0} · ${percentLabel(pulseKpis.payment_completion_percent)} complete`],
+                            ['Pending payments', pulseKpis.pending_payments ?? 0],
+                            ['Unlock conversion', percentLabel(pulseKpis.unlock_conversion_percent)],
+                            ['Revenue', moneyRowsLabel(pulseRevenue, 'No revenue yet')],
+                            ['Average order value', moneyRowsLabel(pulseAverageOrderValue, '-')],
+                            ['Single-profile purchases', pulseKpis.single_profile_purchases ?? 0],
+                            ['Full-access purchases', pulseKpis.full_access_purchases ?? 0],
+                            ['Revenue/profile view', moneyRowsLabel(pulseRevenuePerView, '-')],
+                            ['Repeat and upgrades', `${percentLabel(pulseKpis.repeat_buyer_percent)} repeat · ${percentLabel(pulseKpis.upgrade_rate_percent)} upgrade`],
+                        ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+                                <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{value}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-sm font-semibold text-emerald-950">Advertiser recovery signal</p>
+                            <p className="text-sm text-emerald-800">
+                                {pulseKpis.renewed_after_paid_demand ?? 0} inactive advertiser{Number(pulseKpis.renewed_after_paid_demand || 0) === 1 ? '' : 's'} renewed after paid-contact demand
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 xl:grid-cols-4">
+                        {pulseTopGroups.map((group) => (
+                            <div key={group.key} className="rounded-xl border border-slate-200 bg-white p-4">
+                                <h4 className="text-sm font-semibold text-slate-950">{group.title}</h4>
+                                <div className="mt-3 space-y-2">
+                                    {group.rows.length ? group.rows.map((row, index) => (
+                                        <div key={`${group.key}-${row.label}-${index}`} className="flex items-center justify-between gap-3 text-sm">
+                                            <div className="min-w-0">
+                                                <p className="truncate font-semibold text-slate-700">{row.label || 'Unknown'}</p>
+                                                {row.amount ? <p className="text-xs text-slate-500">{Number(row.amount).toLocaleString()} paid volume</p> : null}
+                                            </div>
+                                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                {row.count || 0}
+                                            </span>
+                                        </div>
+                                    )) : (
+                                        <p className="text-sm text-slate-500">No signal yet.</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
                     <div>
@@ -733,6 +883,7 @@ export default function ContactUnlockTab() {
                     <div className={`divide-y divide-slate-100 ${unlockQuery.isFetching ? 'opacity-60' : ''}`}>
                         {recentUnlocks.map((unlock) => {
                             const payment = unlock.payment || {};
+                            const pricing = unlock.pricing || {};
                             const visitorContext = unlock.visitor_context || {};
                             const contextParts = visitorContextParts(visitorContext);
                             const paymentReference = payment.reference || (payment.id ? `#${payment.id}` : '-');
@@ -766,6 +917,11 @@ export default function ContactUnlockTab() {
                                         <p className="font-semibold text-slate-950">
                                             {payment.currency ? formatCurrency(payment.amount, payment.currency) : '-'}
                                         </p>
+                                        {Number(pricing.credit_amount || 0) > 0 ? (
+                                            <p className="mt-1 text-xs font-semibold text-emerald-700">
+                                                {formatCurrency(pricing.credit_amount, payment.currency || 'USD')} credited from earlier unlocks
+                                            </p>
+                                        ) : null}
                                         <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                             {payment.provider_key ? (
                                                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600">{providerLabel(payment.provider_key)}</span>

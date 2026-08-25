@@ -26,6 +26,9 @@ class VisitorContactUnlock extends Model
         'pricing_rule_id',
         'scope',
         'status',
+        'gross_amount',
+        'credit_amount',
+        'amount_due',
         'visitor_phone_hash',
         'visitor_phone_masked',
         'visitor_email_hash',
@@ -33,6 +36,11 @@ class VisitorContactUnlock extends Model
         'idempotency_key_hash',
         'session_token_hash',
         'public_token_hash',
+        'upgraded_from_unlock_id',
+        'credit_reserved_for_unlock_id',
+        'credit_reserved_until',
+        'credited_to_upgrade_unlock_id',
+        'credit_applied_at',
         'starts_at',
         'expires_at',
         'last_revealed_at',
@@ -43,6 +51,11 @@ class VisitorContactUnlock extends Model
     protected $casts = [
         'starts_at' => 'datetime',
         'expires_at' => 'datetime',
+        'gross_amount' => 'decimal:2',
+        'credit_amount' => 'decimal:2',
+        'amount_due' => 'decimal:2',
+        'credit_reserved_until' => 'datetime',
+        'credit_applied_at' => 'datetime',
         'last_revealed_at' => 'datetime',
         'reveal_count' => 'integer',
         'metadata_json' => 'array',
@@ -66,6 +79,16 @@ class VisitorContactUnlock extends Model
     public function pricingRule()
     {
         return $this->belongsTo(ContactUnlockPricingRule::class, 'pricing_rule_id');
+    }
+
+    public function upgradeCredits()
+    {
+        return $this->hasMany(ContactUnlockUpgradeCredit::class, 'upgrade_unlock_id');
+    }
+
+    public function creditedSources()
+    {
+        return $this->hasMany(ContactUnlockUpgradeCredit::class, 'source_unlock_id');
     }
 
     public function scopeActive(Builder $query): Builder

@@ -253,6 +253,11 @@ class Payment extends Model
         return $this->hasOne(PaymentManualSubmission::class);
     }
 
+    public function contactUnlock()
+    {
+        return $this->hasOne(VisitorContactUnlock::class);
+    }
+
     public function scopeExcludingWalletTopups($query)
     {
         return $query->where(function ($builder) {

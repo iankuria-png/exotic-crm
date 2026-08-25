@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Services\ContactUnlockCheckoutService;
+use App\Services\ContactUnlockEventService;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockRevealService;
+use App\Services\ContactUnlockUpgradeQuoteService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,7 +18,9 @@ class ContactUnlockController extends Controller
     public function __construct(
         private readonly ContactUnlockPricingService $pricingService,
         private readonly ContactUnlockCheckoutService $checkoutService,
-        private readonly ContactUnlockRevealService $revealService
+        private readonly ContactUnlockRevealService $revealService,
+        private readonly ContactUnlockUpgradeQuoteService $upgradeQuoteService,
+        private readonly ContactUnlockEventService $eventService
     ) {}
 
     public function config(Request $request): JsonResponse
@@ -55,6 +59,7 @@ class ContactUnlockController extends Controller
                 'id' => (int) $platform->id,
                 'name' => (string) $platform->name,
                 'currency' => (string) ($platform->currency_code ?: ''),
+                'phone_prefix' => (string) ($platform->phone_prefix ?: ''),
             ],
             'profile' => [
                 'wp_post_id' => (int) $validated['wp_post_id'],
@@ -77,6 +82,7 @@ class ContactUnlockController extends Controller
             'visitor_email' => 'nullable|email|max:190',
             'session_proof' => 'required|string|min:20|max:190',
             'visitor_context' => 'nullable|array',
+            'upgrade_quote_token' => 'nullable|string|min:20|max:190',
         ]);
 
         $idempotencyKey = trim((string) $request->header('X-Idempotency-Key', ''));
@@ -94,6 +100,54 @@ class ContactUnlockController extends Controller
             (string) $validated['session_proof'],
             $idempotencyKey,
             $validated['visitor_context'] ?? [],
+            $request,
+            $validated['upgrade_quote_token'] ?? null
+        ));
+    }
+
+    public function upgradeQuote(Request $request): JsonResponse
+    {
+        $platform = $this->platform($request);
+        $validated = $request->validate([
+            'wp_post_id' => 'required|integer|min:1',
+            'target_scope' => 'nullable|string|in:market_inactive_profiles',
+            'pricing_rule_id' => 'required|integer|min:1',
+            'public_tokens' => 'nullable|array|max:10',
+            'public_tokens.*' => 'string|min:20|max:190',
+            'visitor_phone' => 'nullable|string|max:40',
+            'session_proof' => 'required|string|min:20|max:190',
+        ]);
+
+        return $this->noStore($this->upgradeQuoteService->quote(
+            $platform,
+            (int) $validated['wp_post_id'],
+            (int) $validated['pricing_rule_id'],
+            $validated['public_tokens'] ?? [],
+            $validated['visitor_phone'] ?? null,
+            (string) $validated['session_proof']
+        ));
+    }
+
+    public function event(Request $request): JsonResponse
+    {
+        $platform = $this->platform($request);
+        $validated = $request->validate([
+            'wp_post_id' => 'required|integer|min:1',
+            'event_id' => 'required|string|max:120',
+            'event_type' => 'required|string|max:40',
+            'public_token' => 'nullable|string|min:20|max:190',
+            'session_proof' => 'required|string|min:20|max:190',
+            'visitor_context' => 'nullable|array',
+        ]);
+
+        return $this->noStore($this->eventService->record(
+            $platform,
+            (int) $validated['wp_post_id'],
+            (string) $validated['event_id'],
+            (string) $validated['event_type'],
+            (string) $validated['session_proof'],
+            $validated['visitor_context'] ?? [],
+            $validated['public_token'] ?? null,
             $request
         ));
     }
