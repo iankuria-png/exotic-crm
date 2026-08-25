@@ -25,6 +25,7 @@ class WpServiceAuthTest extends TestCase
 
         config([
             'services.exotic_crm_sync.shared_key' => self::SHARED_KEY,
+            'services.wp_service_auth.platform_allowlist' => [],
             'services.seo_engine.enabled' => true,
             'services.seo_engine.platform_allowlist' => [],
             'services.seo_engine.providers' => [],
@@ -98,7 +99,7 @@ class WpServiceAuthTest extends TestCase
     public function test_rejects_platform_not_in_allowlist(): void
     {
         $platform = $this->makePlatform();
-        config(['services.seo_engine.platform_allowlist' => [99999]]);
+        config(['services.wp_service_auth.platform_allowlist' => [99999]]);
 
         $body = ['profile_snapshot' => ['name' => 'A']];
         $headers = $this->signHeaders($platform->id, $body);
@@ -107,11 +108,28 @@ class WpServiceAuthTest extends TestCase
         $response->assertStatus(403);
     }
 
+    public function test_ignores_seo_engine_allowlist_when_wp_service_allowlist_is_empty(): void
+    {
+        $platform = $this->makePlatform();
+        config([
+            'services.wp_service_auth.platform_allowlist' => [],
+            'services.seo_engine.platform_allowlist' => [99999],
+        ]);
+
+        $body = ['profile_snapshot' => ['name' => 'Anna', 'city' => 'Lubumbashi']];
+        $headers = $this->signHeaders($platform->id, $body);
+
+        $response = $this->postJson('/api/wp-svc/seo/generate-bio', $body, $headers);
+
+        $response->assertStatus(200)
+            ->assertJsonStructure(['bio_html', 'score', 'breakdown', 'provider_used']);
+    }
+
     public function test_accepts_valid_request_in_empty_allowlist(): void
     {
         $platform = $this->makePlatform();
         // empty allowlist = allow all
-        config(['services.seo_engine.platform_allowlist' => []]);
+        config(['services.wp_service_auth.platform_allowlist' => []]);
 
         $body = ['profile_snapshot' => ['name' => 'Anna', 'city' => 'Nairobi']];
         $headers = $this->signHeaders($platform->id, $body);
@@ -151,7 +169,7 @@ class WpServiceAuthTest extends TestCase
     public function test_accepts_valid_request_in_explicit_allowlist(): void
     {
         $platform = $this->makePlatform();
-        config(['services.seo_engine.platform_allowlist' => [$platform->id]]);
+        config(['services.wp_service_auth.platform_allowlist' => [$platform->id]]);
 
         $body = ['profile_snapshot' => ['name' => 'Anna', 'city' => 'Nairobi']];
         $headers = $this->signHeaders($platform->id, $body);

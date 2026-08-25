@@ -14,7 +14,7 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Required headers:
  *   X-Exotic-CRM-Sync-Key   — shared HMAC key (constant-time compared)
- *   X-Exotic-Platform-Id    — numeric platform ID, must be in allowlist
+ *   X-Exotic-Platform-Id    — numeric platform ID, optionally gated by WP service allowlist
  *   X-Exotic-Timestamp      — Unix epoch, rejected if >5 min skew
  *   X-Exotic-Signature      — hash_hmac('sha256', timestamp.'.'.rawBody, key)
  *
@@ -70,10 +70,9 @@ class WpServiceAuth
         }
 
         // --- Platform allowlist ---
+        // Empty WP service allowlist means any real platform can use shared-key auth.
+        // SEO Engine rollout settings must not gate unrelated WP service integrations.
         $allowlist = (array) config('services.wp_service_auth.platform_allowlist', []);
-        if (empty($allowlist)) {
-            $allowlist = (array) config('services.seo_engine.platform_allowlist', []);
-        }
 
         if (!empty($allowlist) && !in_array($platformId, $allowlist, true)) {
             Log::warning('WpServiceAuth: platform not in allowlist', ['platform_id' => $platformId]);
