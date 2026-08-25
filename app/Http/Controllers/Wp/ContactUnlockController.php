@@ -10,6 +10,7 @@ use App\Services\ContactUnlockEventService;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockRevealService;
 use App\Services\ContactUnlockUpgradeQuoteService;
+use App\Support\ClientLifecycleState;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -49,6 +50,13 @@ class ContactUnlockController extends Controller
                 'duration_days' => (int) $rule->duration_days,
             ])->values()
             : collect();
+        $restrictedProfileCount = $enabled
+            ? Client::query()
+                ->where('platform_id', (int) $platform->id)
+                ->where('profile_status', 'publish')
+                ->whereIn('lifecycle_state', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED])
+                ->count()
+            : 0;
 
         return $this->noStore([
             'enabled' => $enabled && $rules->isNotEmpty(),
@@ -60,6 +68,7 @@ class ContactUnlockController extends Controller
                 'name' => (string) $platform->name,
                 'currency' => (string) ($platform->currency_code ?: ''),
                 'phone_prefix' => (string) ($platform->phone_prefix ?: ''),
+                'restricted_profile_count' => (int) $restrictedProfileCount,
             ],
             'profile' => [
                 'wp_post_id' => (int) $validated['wp_post_id'],
