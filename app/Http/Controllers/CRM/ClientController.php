@@ -2407,7 +2407,7 @@ class ClientController extends Controller
         ];
 
         $limitState = $this->autoPushBoostLimitService->reserveForClient($client, $request->user(), $hours);
-        if (!($limitState['allowed'] ?? false)) {
+        if (! ($limitState['allowed'] ?? false)) {
             return response()->json([
                 'status' => 'boost_limited',
                 'message' => sprintf(
@@ -4053,6 +4053,58 @@ class ClientController extends Controller
             'url' => $result['url'],
             'expires_at' => $expiresAt,
             'target' => $target,
+        ]);
+    }
+
+    public function debugLoginAsClient(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'target' => 'nullable|in:edit_profile,change_password,profile,home',
+            'reason' => 'nullable|string|max:500',
+            'source' => 'nullable|string|max:100',
+        ]);
+
+        $target = (string) ($validated['target'] ?? 'profile');
+
+        try {
+            $diagnostics = $this->credentialDeliveryService->debugClientSessionLink($client, [
+                'target' => $target,
+                'reason' => $validated['reason'] ?? 'Client session debug from CRM',
+                'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#'.(int) $request->user()?->id))),
+            ]);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (RequestException $exception) {
+            Log::error('Client session debug request failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'status' => $exception->response?->status(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client session debug could not create a WordPress session link.',
+                'status' => $exception->response?->status(),
+            ], 502);
+        } catch (\Throwable $exception) {
+            Log::error('Client session debug failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client session debug failed. Please retry.',
+            ], 500);
+        }
+
+        return response()->json([
+            'message' => 'Client session debug completed. The generated debug session link was consumed by the probe.',
+            'diagnostics' => $diagnostics,
         ]);
     }
 

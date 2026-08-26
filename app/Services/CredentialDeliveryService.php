@@ -13,6 +13,7 @@ use App\Support\ClientProfileUrl;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
@@ -185,6 +186,66 @@ class CredentialDeliveryService
             'url' => $url,
             'expires_at' => $result['expires_at'] ?? null,
             'target' => (string) ($result['target'] ?? $target),
+        ];
+    }
+
+    public function debugClientSessionLink(Client $client, array $payload): array
+    {
+        $client->loadMissing('platform');
+        $platform = $client->platform;
+
+        if (! $platform) {
+            throw new \InvalidArgumentException('Client platform is required to debug a client session link.');
+        }
+
+        if (! $this->canGenerateSessionLink($client, $platform)) {
+            throw new \InvalidArgumentException(self::LOGIN_AS_CLIENT_DISABLED_MESSAGE);
+        }
+
+        $postId = (int) ($client->wp_post_id ?? 0);
+        $target = trim((string) ($payload['target'] ?? 'profile'));
+        if ($target === '') {
+            $target = 'profile';
+        }
+
+        $wpResult = (new WpSyncService($platform))->createClientSessionLink($postId, [
+            'target' => $target,
+            'issued_by' => trim((string) ($payload['issued_by'] ?? 'crm-debug')),
+            'reason' => trim((string) ($payload['reason'] ?? 'Client session debug from CRM')),
+        ]);
+
+        $generatedUrl = trim((string) ($wpResult['url'] ?? ''));
+
+        return [
+            'client' => [
+                'id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'wp_post_id' => $postId,
+                'wp_user_id_present' => (int) ($client->wp_user_id ?? 0) > 0,
+                'wp_profile_permalink' => $this->sanitizeClientSessionUrl($client->wp_profile_permalink ?? null),
+            ],
+            'request' => [
+                'target' => $target,
+            ],
+            'wordpress' => [
+                'api_url' => rtrim((string) ($platform->wp_api_url ?? ''), '/'),
+                'session_link_endpoint' => rtrim((string) ($platform->wp_api_url ?? ''), '/')."/clients/{$postId}/session-link",
+                'response' => [
+                    'has_url' => $generatedUrl !== '',
+                    'url' => $this->sanitizeClientSessionUrl($generatedUrl),
+                    'url_shape' => $this->classifyClientSessionUrl($generatedUrl),
+                    'query_keys' => $this->queryKeys($generatedUrl),
+                    'expires_at' => $wpResult['expires_at'] ?? null,
+                    'target' => $wpResult['target'] ?? null,
+                    'resolved_target' => $wpResult['resolved_target'] ?? null,
+                    'target_url' => $this->sanitizeClientSessionUrl($wpResult['target_url'] ?? null),
+                    'profile_url' => $this->sanitizeClientSessionUrl($wpResult['profile_url'] ?? null),
+                    'edit_profile_url' => $this->sanitizeClientSessionUrl($wpResult['edit_profile_url'] ?? null),
+                    'change_password_url' => $this->sanitizeClientSessionUrl($wpResult['change_password_url'] ?? null),
+                    'target_fallback_used' => $wpResult['target_fallback_used'] ?? null,
+                ],
+            ],
+            'probe' => $this->probeGeneratedClientSessionUrl($generatedUrl),
         ];
     }
 
@@ -556,6 +617,164 @@ class CredentialDeliveryService
     private function canGenerateSessionLink(Client $client, Platform $platform): bool
     {
         return (int) ($client->wp_post_id ?? 0) > 0 && $this->hasWordPressApiCredentials($platform);
+    }
+
+    private function probeGeneratedClientSessionUrl(string $url): array
+    {
+        $url = trim($url);
+
+        $probe = [
+            'attempted' => false,
+            'consumes_generated_session' => true,
+            'method' => 'GET',
+            'allow_redirects' => false,
+            'status' => null,
+            'redirect_location' => null,
+            'redirect_location_shape' => null,
+            'has_set_cookie' => false,
+            'content_type' => null,
+            'error' => null,
+        ];
+
+        if ($url === '') {
+            $probe['error'] = 'WordPress did not return a URL to probe.';
+
+            return $probe;
+        }
+
+        $parts = parse_url($url);
+        if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            $probe['error'] = 'WordPress returned a malformed URL.';
+
+            return $probe;
+        }
+
+        try {
+            $response = Http::withOptions(['allow_redirects' => false])
+                ->timeout(15)
+                ->get($url);
+        } catch (\Throwable $exception) {
+            $probe['attempted'] = true;
+            $probe['error'] = $this->sanitizeClientSessionDiagnosticText($exception->getMessage(), $url);
+
+            return $probe;
+        }
+
+        $location = $response->header('Location');
+
+        return array_merge($probe, [
+            'attempted' => true,
+            'status' => $response->status(),
+            'redirect_location' => $this->sanitizeClientSessionUrl($location),
+            'redirect_location_shape' => $this->classifyClientSessionUrl($location),
+            'has_set_cookie' => filled($response->header('Set-Cookie')),
+            'content_type' => $response->header('Content-Type'),
+        ]);
+    }
+
+    private function classifyClientSessionUrl(?string $url): ?string
+    {
+        $url = trim((string) ($url ?? ''));
+        if ($url === '') {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (! is_array($parts)) {
+            return 'malformed';
+        }
+
+        parse_str((string) ($parts['query'] ?? ''), $query);
+        $path = strtolower((string) ($parts['path'] ?? ''));
+
+        if (($query['action'] ?? null) === 'exotic_crm_client_session' && array_key_exists('token', $query)) {
+            return 'admin_post_consumer';
+        }
+
+        if (array_key_exists('crm_client_session', $query)) {
+            return in_array($path, ['', '/'], true)
+                ? 'legacy_home_query_consumer'
+                : 'legacy_path_query_consumer';
+        }
+
+        if (in_array($path, ['', '/'], true)) {
+            return 'homepage';
+        }
+
+        return 'ordinary_url';
+    }
+
+    private function queryKeys(?string $url): array
+    {
+        $query = (string) (parse_url((string) ($url ?? ''), PHP_URL_QUERY) ?? '');
+        if ($query === '') {
+            return [];
+        }
+
+        parse_str($query, $values);
+
+        return array_values(array_unique(array_map('strval', array_keys($values))));
+    }
+
+    private function sanitizeClientSessionUrl($url): ?string
+    {
+        $url = trim((string) ($url ?? ''));
+        if ($url === '') {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (! is_array($parts)) {
+            return '[malformed-url]';
+        }
+
+        $query = [];
+        if (isset($parts['query'])) {
+            parse_str((string) $parts['query'], $query);
+            foreach (['token', 'crm_client_session', '_wpnonce', 'password', 'pass'] as $sensitiveKey) {
+                if (array_key_exists($sensitiveKey, $query)) {
+                    $query[$sensitiveKey] = '[redacted]';
+                }
+            }
+        }
+
+        $rebuilt = '';
+        if (isset($parts['scheme'])) {
+            $rebuilt .= $parts['scheme'].'://';
+        }
+        if (isset($parts['user'])) {
+            $rebuilt .= '[redacted]@';
+        }
+        if (isset($parts['host'])) {
+            $rebuilt .= $parts['host'];
+        }
+        if (isset($parts['port'])) {
+            $rebuilt .= ':'.$parts['port'];
+        }
+        $rebuilt .= $parts['path'] ?? '';
+
+        if (! empty($query)) {
+            $rebuilt .= '?'.http_build_query($query);
+        }
+
+        if (isset($parts['fragment'])) {
+            $rebuilt .= '#'.$parts['fragment'];
+        }
+
+        return $rebuilt !== '' ? $rebuilt : $url;
+    }
+
+    private function sanitizeClientSessionDiagnosticText(string $message, ?string $url = null): string
+    {
+        if ($url) {
+            $message = str_replace($url, (string) $this->sanitizeClientSessionUrl($url), $message);
+        }
+
+        return (string) preg_replace(
+            '/((?:token|crm_client_session|_wpnonce|password|pass)=)[^\\s&"\']+/i',
+            '$1[redacted]',
+            $message
+        );
     }
 
     private function resolveTemplate(int $platformId, string $category, string $channel): ?Template
