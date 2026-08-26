@@ -2,19 +2,22 @@
 
 namespace App\Services;
 
-use App\Models\Client;
 use App\Models\ContactUnlockEvent;
 use App\Models\Payment;
-use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
 class ContactUnlockPulseService
 {
-    public function summary(?int $platformId = null, string $range = 'today', ?string $timezone = null): array
+    public function __construct(
+        private readonly ReportingCurrencyService $reportingCurrencyService
+    ) {}
+
+    public function summary(?int $platformId = null, string $range = 'today', ?string $timezone = null, ?string $targetCurrency = null): array
     {
         [$from, $to] = $this->window($range, $timezone);
+        $resolvedTargetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
 
         $eventBase = ContactUnlockEvent::query()
             ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
@@ -30,6 +33,7 @@ class ContactUnlockPulseService
             ->whereBetween(DB::raw('COALESCE(completed_at, updated_at, created_at)'), [$from, $to]);
 
         $successfulPayments = (clone $paymentBase)->whereIn('status', Payment::SUCCESSFUL_STATUSES);
+        $successfulNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $successfulPayments, $resolvedTargetCurrency);
         $checkoutStarts = (int) (clone $unlockBase)->count();
         $ctaClicks = (int) (clone $eventBase)->where('event_type', ContactUnlockEvent::TYPE_CTA_CLICK)->count();
         $eligibleViews = (int) (clone $eventBase)->where('event_type', ContactUnlockEvent::TYPE_ELIGIBLE_VIEW)->count();
@@ -55,7 +59,14 @@ class ContactUnlockPulseService
                 'payment_completion_percent' => $this->percent($successfulCount, $checkoutStarts),
                 'unlock_conversion_percent' => $this->percent($successfulCount, $eligibleViews),
                 'revenue' => $this->revenueRows(clone $successfulPayments),
+                'revenue_normalized' => $successfulNormalized['normalized_total'],
+                'revenue_normalized_display' => $successfulNormalized['normalized_display'],
+                'revenue_normalization_meta' => $successfulNormalized['normalization_meta'],
+                'normalized_currency' => $resolvedTargetCurrency,
                 'average_order_value' => $this->averageRows(clone $successfulPayments),
+                'average_order_value_normalized' => $successfulCount > 0 && $successfulNormalized['normalized_total'] !== null
+                    ? round((float) $successfulNormalized['normalized_total'] / $successfulCount, 2)
+                    : null,
                 'single_profile_purchases' => $this->scopePurchases(clone $successfulPayments, VisitorContactUnlock::SCOPE_SINGLE_PROFILE),
                 'full_access_purchases' => $this->scopePurchases(clone $successfulPayments, VisitorContactUnlock::SCOPE_MARKET_INACTIVE_PROFILES),
                 'repeat_buyer_percent' => $this->repeatBuyerPercent($platformId, $from, $to),

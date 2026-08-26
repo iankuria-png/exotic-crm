@@ -11,6 +11,7 @@ use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockPulseService;
 use App\Services\ContactUnlockReadinessService;
+use App\Services\ReportingCurrencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +22,8 @@ class ContactUnlockAdminController extends Controller
     public function __construct(
         private readonly ContactUnlockPricingService $pricingService,
         private readonly ContactUnlockReadinessService $readinessService,
-        private readonly ContactUnlockPulseService $pulseService
+        private readonly ContactUnlockPulseService $pulseService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -39,7 +41,12 @@ class ContactUnlockAdminController extends Controller
             'search' => 'nullable|string|max:120',
             'sort' => ['nullable', Rule::in(['id', 'created_at', 'status', 'scope', 'amount', 'payment_status', 'visitor', 'profile', 'market'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
+            'currency_mode' => ['nullable', Rule::in(['native', 'flat'])],
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
+
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($filters['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode($filters['currency_mode'] ?? null, true);
 
         $markets = Platform::query()
             ->where('is_active', true)
@@ -61,6 +68,7 @@ class ContactUnlockAdminController extends Controller
 
         $paymentQuery = Payment::query()->contactUnlockRevenue();
         $confirmedQuery = (clone $paymentQuery)->where('status', 'completed');
+        $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedQuery, $targetCurrency);
         $recentUnlocks = $this->recentUnlocks($filters);
 
         return response()->json([
@@ -75,6 +83,11 @@ class ContactUnlockAdminController extends Controller
                 'pending_unlocks' => (int) ($unlockStats[VisitorContactUnlock::STATUS_PENDING_PAYMENT] ?? 0),
                 'completed_payments' => (int) (clone $confirmedQuery)->count(),
                 'confirmed_revenue_native' => $this->nativeRevenue((clone $confirmedQuery)),
+                'confirmed_revenue_normalized' => $confirmedNormalized['normalized_total'],
+                'confirmed_revenue_normalized_display' => $confirmedNormalized['normalized_display'],
+                'confirmed_revenue_normalization_meta' => $confirmedNormalized['normalization_meta'],
+                'normalized_currency' => $targetCurrency,
+                'currency_mode' => $currencyMode,
             ],
             'markets' => $markets->map(fn (Platform $platform) => [
                 'id' => (int) $platform->id,
@@ -181,12 +194,14 @@ class ContactUnlockAdminController extends Controller
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'range' => ['nullable', Rule::in(['today', '7d', '30d'])],
             'timezone' => 'nullable|string|max:80',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         return response()->json($this->pulseService->summary(
             ! empty($validated['platform_id']) ? (int) $validated['platform_id'] : null,
             (string) ($validated['range'] ?? 'today'),
-            $validated['timezone'] ?? null
+            $validated['timezone'] ?? null,
+            $validated['reporting_currency'] ?? null
         ));
     }
 

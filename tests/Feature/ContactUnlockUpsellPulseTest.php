@@ -7,6 +7,7 @@ use App\Models\ContactUnlockEvent;
 use App\Models\ContactUnlockPricingRule;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\ReportingFxRate;
 use App\Models\User;
 use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockUpgradeQuoteService;
@@ -140,6 +141,7 @@ class ContactUnlockUpsellPulseTest extends TestCase
 
     public function test_contact_unlock_pulse_reports_funnel_and_paid_mix(): void
     {
+        config(['services.reporting_fx.enabled' => true]);
         [$platform, $client, $singleRule, $fullRule] = $this->configuredUnlockMarket();
         $sessionProof = str_repeat('pulse-session-', 3);
         $publicToken = str_repeat('pulse-public-', 3);
@@ -188,9 +190,18 @@ class ContactUnlockUpsellPulseTest extends TestCase
             ]);
         }
 
+        ReportingFxRate::query()->create([
+            'provider' => 'currencyapi',
+            'source_currency' => 'KES',
+            'target_currency' => 'USD',
+            'rate_date' => now()->toDateString(),
+            'rate' => '0.0077000000',
+            'fetched_at' => now(),
+        ]);
+
         Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
 
-        $response = $this->getJson('/api/crm/settings/billing/contact-unlock/pulse?range=today&platform_id='.$platform->id);
+        $response = $this->getJson('/api/crm/settings/billing/contact-unlock/pulse?range=today&platform_id='.$platform->id.'&reporting_currency=USD');
 
         $response->assertOk()
             ->assertJsonPath('kpis.eligible_profile_views', 1)
@@ -200,8 +211,43 @@ class ContactUnlockUpsellPulseTest extends TestCase
             ->assertJsonPath('kpis.single_profile_purchases', 1)
             ->assertJsonPath('kpis.full_access_purchases', 1)
             ->assertJsonPath('kpis.upgrade_rate_percent', 50)
+            ->assertJsonPath('kpis.revenue_normalized', 7.69)
+            ->assertJsonPath('kpis.normalized_currency', 'USD')
+            ->assertJsonPath('kpis.revenue_normalization_meta.partial', false)
             ->assertJsonPath('top_sources.0.label', 'google')
             ->assertJsonPath('top_hours.0.label', '14:00');
+    }
+
+    public function test_contact_unlock_admin_summary_exposes_fx_normalized_revenue(): void
+    {
+        config(['services.reporting_fx.enabled' => true]);
+        [$platform, $client, $singleRule] = $this->configuredUnlockMarket();
+
+        $this->paidUnlock($platform, $client, $singleRule, [
+            'amount' => 1000,
+            'public_token' => str_repeat('workspace-token-', 3),
+        ]);
+
+        ReportingFxRate::query()->create([
+            'provider' => 'currencyapi',
+            'source_currency' => 'KES',
+            'target_currency' => 'USD',
+            'rate_date' => now()->toDateString(),
+            'rate' => '0.0077000000',
+            'fetched_at' => now(),
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $response = $this->getJson('/api/crm/settings/billing/contact-unlock?currency_mode=flat&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('summary.confirmed_revenue_native.0.currency', 'KES')
+            ->assertJsonPath('summary.confirmed_revenue_native.0.amount', 1000)
+            ->assertJsonPath('summary.confirmed_revenue_normalized', 7.7)
+            ->assertJsonPath('summary.confirmed_revenue_normalization_meta.partial', false)
+            ->assertJsonPath('summary.normalized_currency', 'USD')
+            ->assertJsonPath('summary.currency_mode', 'flat');
     }
 
     private function configuredUnlockMarket(): array

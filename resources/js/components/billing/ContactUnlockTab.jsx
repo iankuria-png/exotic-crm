@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import { formatCurrency } from '../../utils/currency';
+import ReportingCurrencyControl from '../ReportingCurrencyControl';
+import FxNormalizationNotice from '../FxNormalizationNotice';
+import useReportingCurrency from '../../hooks/useReportingCurrency';
 
 const SCOPE_OPTIONS = [
     { value: 'single_profile', label: 'One-time profile unlock' },
@@ -28,6 +31,23 @@ const DEFAULT_UNLOCK_FILTERS = {
     direction: 'desc',
     page: 1,
     per_page: 10,
+};
+
+const SECTION_LINKS = [
+    { id: 'contact-unlock-revenue', label: 'Revenue' },
+    { id: 'contact-unlock-signals', label: 'Demand' },
+    { id: 'contact-unlock-readiness', label: 'Readiness' },
+    { id: 'contact-unlock-availability', label: 'Availability' },
+    { id: 'contact-unlock-pricing', label: 'Pricing' },
+    { id: 'contact-unlock-trail', label: 'Trail' },
+];
+
+const DEFAULT_OPEN_SECTIONS = {
+    signals: false,
+    readiness: false,
+    availability: false,
+    pricing: false,
+    trail: false,
 };
 
 function firstErrorMessage(error) {
@@ -171,6 +191,121 @@ function visitorContextParts(context = {}) {
     ].filter(Boolean);
 }
 
+function revenueDisplay({ rows = [], normalizedAmount, normalizedDisplay, normalizedCurrency, reporting, emptyLabel = 'No revenue yet' }) {
+    if (reporting?.isFlat && normalizedAmount !== null && normalizedAmount !== undefined) {
+        return {
+            value: normalizedDisplay || formatCurrency(normalizedAmount, normalizedCurrency || reporting.targetCurrency),
+            hint: `Normalized to ${normalizedCurrency || reporting.targetCurrency}`,
+        };
+    }
+
+    return {
+        value: moneyRowsLabel(rows, emptyLabel),
+        hint: reporting?.isFlat ? 'Native value; FX incomplete' : 'Native currencies',
+    };
+}
+
+function nativeRevenueCount(rows = []) {
+    return rows.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+}
+
+function compactNumber(value) {
+    return Number(value || 0).toLocaleString();
+}
+
+function MiniMetric({ label, value, hint, tone = 'slate' }) {
+    const toneClasses = {
+        slate: 'border-slate-200 bg-white text-slate-950',
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-950',
+        amber: 'border-amber-200 bg-amber-50 text-amber-950',
+        sky: 'border-sky-200 bg-sky-50 text-sky-950',
+    };
+
+    return (
+        <div className={`rounded-lg border p-3 ${toneClasses[tone] || toneClasses.slate}`}>
+            <p className="text-xs font-semibold text-slate-500">{label}</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>
+            {hint ? <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p> : null}
+        </div>
+    );
+}
+
+function FunnelStep({ label, count, rate, tone = 'slate' }) {
+    const barTone = {
+        slate: 'accent-slate-700',
+        teal: 'accent-teal-700',
+        emerald: 'accent-emerald-600',
+        amber: 'accent-amber-500',
+    }[tone] || 'accent-slate-700';
+    const width = Math.max(4, Math.min(100, Number(rate || 0)));
+
+    return (
+        <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="flex items-baseline justify-between gap-3">
+                <p className="text-xs font-semibold text-slate-500">{label}</p>
+                <p className="text-sm font-semibold tabular-nums text-slate-900">{compactNumber(count)}</p>
+            </div>
+            <progress className={`mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100 ${barTone}`} value={width} max="100" aria-label={`${label} rate`} />
+            <p className="mt-2 text-xs text-slate-500">{percentLabel(rate)} rate</p>
+        </div>
+    );
+}
+
+function SectionNav() {
+    return (
+        <nav className="sticky top-2 z-10 overflow-x-auto rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm shadow-slate-950/[0.03] backdrop-blur" aria-label="Contact unlock sections">
+            <div className="flex min-w-max gap-1">
+                {SECTION_LINKS.map((item) => (
+                    <a
+                        key={item.id}
+                        href={`#${item.id}`}
+                        className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                        {item.label}
+                    </a>
+                ))}
+            </div>
+        </nav>
+    );
+}
+
+function WorkSection({ id, title, description, summary, open, onToggle, children, actions, tone = 'slate' }) {
+    const toneClasses = {
+        slate: 'border-slate-200 bg-white',
+        sky: 'border-sky-200 bg-sky-50',
+        amber: 'border-amber-200 bg-amber-50',
+    };
+
+    return (
+        <section id={id} className={`scroll-mt-24 rounded-xl border p-4 shadow-sm shadow-slate-950/[0.02] ${toneClasses[tone] || toneClasses.slate}`}>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <h3 className="text-lg font-semibold text-slate-950">{title}</h3>
+                    {description ? <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p> : null}
+                    {summary ? <p className="mt-2 text-sm font-semibold text-slate-700">{summary}</p> : null}
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    {actions}
+                    <button
+                        type="button"
+                        className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        aria-expanded={open}
+                        aria-controls={`${id}-panel`}
+                        onClick={onToggle}
+                    >
+                        {open ? 'Hide' : 'Open'} <span aria-hidden="true">{open ? '-' : '+'}</span>
+                    </button>
+                </div>
+            </div>
+            {open ? (
+                <div id={`${id}-panel`} className="mt-4">
+                    {children}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
 export default function ContactUnlockTab() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -183,11 +318,17 @@ export default function ContactUnlockTab() {
     const [readinessResult, setReadinessResult] = useState(null);
     const [pulseRange, setPulseRange] = useState('today');
     const [pulseMarketId, setPulseMarketId] = useState('all');
+    const [openSections, setOpenSections] = useState(DEFAULT_OPEN_SECTIONS);
+    const reportingCurrency = useReportingCurrency({ preferFlat: true });
+    const unlockQueryKey = ['billing-contact-unlock', unlockFilters, reportingCurrency.displayMode, reportingCurrency.targetCurrency];
 
     const unlockQuery = useQuery({
-        queryKey: ['billing-contact-unlock', unlockFilters],
+        queryKey: unlockQueryKey,
         queryFn: () => api.get('/crm/settings/billing/contact-unlock', {
-            params: buildUnlockParams(unlockFilters),
+            params: {
+                ...buildUnlockParams(unlockFilters),
+                ...reportingCurrency.queryParams,
+            },
         }).then((response) => response.data),
         staleTime: 30_000,
     });
@@ -206,11 +347,12 @@ export default function ContactUnlockTab() {
     };
 
     const pulseQuery = useQuery({
-        queryKey: ['billing-contact-unlock-pulse', pulseRange, pulseMarketId],
+        queryKey: ['billing-contact-unlock-pulse', pulseRange, pulseMarketId, reportingCurrency.targetCurrency],
         queryFn: () => api.get('/crm/settings/billing/contact-unlock/pulse', {
             params: {
                 range: pulseRange,
                 ...(pulseMarketId !== 'all' ? { platform_id: Number(pulseMarketId) } : {}),
+                reporting_currency: reportingCurrency.targetCurrency,
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             },
         }).then((response) => response.data),
@@ -223,6 +365,21 @@ export default function ContactUnlockTab() {
     const pulseRevenue = pulseKpis.revenue || [];
     const pulseAverageOrderValue = pulseKpis.average_order_value || [];
     const pulseRevenuePerView = perViewRevenueRows(pulseRevenue, pulseKpis.eligible_profile_views);
+    const pulseRevenueDisplay = revenueDisplay({
+        rows: pulseRevenue,
+        normalizedAmount: pulseKpis.revenue_normalized,
+        normalizedDisplay: pulseKpis.revenue_normalized_display,
+        normalizedCurrency: pulseKpis.normalized_currency || reportingCurrency.targetCurrency,
+        reporting: reportingCurrency,
+    });
+    const summaryRevenueDisplay = revenueDisplay({
+        rows: summary.confirmed_revenue_native || [],
+        normalizedAmount: summary.confirmed_revenue_normalized,
+        normalizedDisplay: summary.confirmed_revenue_normalized_display,
+        normalizedCurrency: summary.normalized_currency || reportingCurrency.targetCurrency,
+        reporting: reportingCurrency,
+        emptyLabel: 'No confirmed revenue yet',
+    });
     const pulseTopGroups = [
         { key: 'cities', title: 'Top cities', rows: pulse.top_cities || [] },
         { key: 'profiles', title: 'Top profiles', rows: pulse.top_profiles || [] },
@@ -237,14 +394,6 @@ export default function ContactUnlockTab() {
         setMarketIds((unlockQuery.data.settings?.market_ids || []).map(Number));
         setRules((unlockQuery.data.pricing_rules || []).map(normalizeRule));
     }, [unlockQuery.data]);
-
-    const revenueLabel = useMemo(() => {
-        const entries = summary.confirmed_revenue_native || [];
-        if (!entries.length) return 'No confirmed revenue yet';
-        return entries
-            .map((entry) => `${formatCurrency(entry.amount, entry.currency || 'USD')} (${entry.count})`)
-            .join(' + ');
-    }, [summary.confirmed_revenue_native]);
 
     const saveMutation = useMutation({
         mutationFn: () => api.put('/crm/settings/billing/contact-unlock', {
@@ -262,7 +411,7 @@ export default function ContactUnlockTab() {
                 })),
         }).then((response) => response.data),
         onSuccess: (payload) => {
-            queryClient.setQueryData(['billing-contact-unlock', unlockFilters], payload);
+            queryClient.setQueryData(unlockQueryKey, payload);
             queryClient.invalidateQueries({ queryKey: ['billing-contact-unlock'] });
             toast.success('Contact unlock settings saved.');
         },
@@ -272,7 +421,7 @@ export default function ContactUnlockTab() {
     const deleteMutation = useMutation({
         mutationFn: (ruleId) => api.delete(`/crm/settings/billing/contact-unlock/rules/${ruleId}`).then((response) => response.data),
         onSuccess: (payload) => {
-            queryClient.setQueryData(['billing-contact-unlock', unlockFilters], payload);
+            queryClient.setQueryData(unlockQueryKey, payload);
             queryClient.invalidateQueries({ queryKey: ['billing-contact-unlock'] });
             toast.success('Pricing rule removed.');
         },
@@ -350,6 +499,13 @@ export default function ContactUnlockTab() {
         setUnlockFilters(DEFAULT_UNLOCK_FILTERS);
     }
 
+    function toggleSection(section) {
+        setOpenSections((current) => ({
+            ...current,
+            [section]: !current[section],
+        }));
+    }
+
     if (unlockQuery.isLoading) {
         return (
             <div className="p-5">
@@ -370,152 +526,162 @@ export default function ContactUnlockTab() {
     }
 
     return (
-        <div className="space-y-5 p-5">
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.02]">
-                <div className="border-b border-slate-100 bg-slate-950 px-5 py-4 text-white">
+        <div className="space-y-4 p-4 sm:p-5">
+            <section id="contact-unlock-revenue" className="scroll-mt-24 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.02]">
+                <div className="bg-slate-950 px-4 py-4 text-white sm:px-5">
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-                        <div>
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-200">
-                                Contact Unlock Pulse
-                            </p>
-                            <h3 className="mt-2 text-2xl font-semibold tracking-tight">
-                                Paid-contact demand, live funnel, and upgrade momentum
+                        <div className="max-w-3xl">
+                            <p className="text-xs font-semibold text-teal-200">Contact unlock workspace</p>
+                            <h3 className="mt-2 text-2xl font-semibold leading-tight sm:text-3xl">
+                                Revenue, funnel health, and checkout control in one operating view
                             </h3>
-                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                                A same-day operating view for profile demand, checkout health, buyer quality, and all-access upsell adoption.
+                            <p className="mt-2 text-sm leading-6 text-slate-300">
+                                Confirmed visitor unlock payments stay separate from subscription revenue, while the setup controls stay tucked away until you need them.
                             </p>
                         </div>
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                            <select
-                                className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm font-semibold text-white"
-                                value={pulseMarketId}
-                                onChange={(event) => setPulseMarketId(event.target.value)}
-                            >
-                                <option className="text-slate-900" value="all">All markets</option>
-                                {markets.map((market) => (
-                                    <option className="text-slate-900" key={market.id} value={market.id}>{market.name}</option>
-                                ))}
-                            </select>
-                            <div className="inline-flex rounded-lg border border-white/10 bg-white/10 p-1">
-                                {PULSE_RANGE_OPTIONS.map((option) => (
-                                    <button
-                                        key={option.value}
-                                        type="button"
-                                        className={`rounded-md px-3 py-1.5 text-sm font-semibold ${pulseRange === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white'}`}
-                                        onClick={() => setPulseRange(option.value)}
-                                    >
-                                        {option.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className={`p-5 ${pulseQuery.isFetching ? 'opacity-70' : ''}`}>
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        {[
-                            ['Eligible profile views', pulseKpis.eligible_profile_views ?? 0],
-                            ['Unlock CTA clicks', `${pulseKpis.unlock_cta_clicks ?? 0} · ${percentLabel(pulseKpis.cta_rate_percent)} CTA`],
-                            ['Checkout starts', `${pulseKpis.checkout_starts ?? 0} · ${percentLabel(pulseKpis.checkout_rate_percent)} checkout`],
-                            ['Successful payments', `${pulseKpis.successful_payments ?? 0} · ${percentLabel(pulseKpis.payment_completion_percent)} complete`],
-                            ['Pending payments', pulseKpis.pending_payments ?? 0],
-                            ['Unlock conversion', percentLabel(pulseKpis.unlock_conversion_percent)],
-                            ['Revenue', moneyRowsLabel(pulseRevenue, 'No revenue yet')],
-                            ['Average order value', moneyRowsLabel(pulseAverageOrderValue, '-')],
-                            ['Single-profile purchases', pulseKpis.single_profile_purchases ?? 0],
-                            ['Full-access purchases', pulseKpis.full_access_purchases ?? 0],
-                            ['Revenue/profile view', moneyRowsLabel(pulseRevenuePerView, '-')],
-                            ['Repeat and upgrades', `${percentLabel(pulseKpis.repeat_buyer_percent)} repeat · ${percentLabel(pulseKpis.upgrade_rate_percent)} upgrade`],
-                        ].map(([label, value]) => (
-                            <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
-                                <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{value}</p>
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-sm font-semibold text-emerald-950">Advertiser recovery signal</p>
-                            <p className="text-sm text-emerald-800">
-                                {pulseKpis.renewed_after_paid_demand ?? 0} inactive advertiser{Number(pulseKpis.renewed_after_paid_demand || 0) === 1 ? '' : 's'} renewed after paid-contact demand
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="mt-4 grid gap-4 xl:grid-cols-4">
-                        {pulseTopGroups.map((group) => (
-                            <div key={group.key} className="rounded-xl border border-slate-200 bg-white p-4">
-                                <h4 className="text-sm font-semibold text-slate-950">{group.title}</h4>
-                                <div className="mt-3 space-y-2">
-                                    {group.rows.length ? group.rows.map((row, index) => (
-                                        <div key={`${group.key}-${row.label}-${index}`} className="flex items-center justify-between gap-3 text-sm">
-                                            <div className="min-w-0">
-                                                <p className="truncate font-semibold text-slate-700">{row.label || 'Unknown'}</p>
-                                                {row.amount ? <p className="text-xs text-slate-500">{Number(row.amount).toLocaleString()} paid volume</p> : null}
-                                            </div>
-                                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                                                {row.count || 0}
-                                            </span>
-                                        </div>
-                                    )) : (
-                                        <p className="text-sm text-slate-500">No signal yet.</p>
-                                    )}
+                        <div className="flex flex-col gap-2 lg:items-end">
+                            <ReportingCurrencyControl reporting={reportingCurrency} className="justify-start lg:justify-end" />
+                            <div className="flex flex-col gap-2 sm:flex-row">
+                                <select
+                                    className="min-h-11 rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+                                    value={pulseMarketId}
+                                    onChange={(event) => setPulseMarketId(event.target.value)}
+                                    aria-label="Contact unlock market"
+                                >
+                                    <option className="text-slate-900" value="all">All markets</option>
+                                    {markets.map((market) => (
+                                        <option className="text-slate-900" key={market.id} value={market.id}>{market.name}</option>
+                                    ))}
+                                </select>
+                                <div className="inline-flex min-h-11 rounded-lg border border-white/15 bg-white/10 p-1">
+                                    {PULSE_RANGE_OPTIONS.map((option) => (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            className={`rounded-md px-3 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300 ${pulseRange === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white'}`}
+                                            onClick={() => setPulseRange(option.value)}
+                                        >
+                                            {option.label}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
-                        ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className={`grid gap-4 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)] ${pulseQuery.isFetching || unlockQuery.isFetching ? 'opacity-70' : ''}`}>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                        <p className="text-sm font-semibold text-emerald-800">Confirmed unlock revenue</p>
+                        <p className="mt-2 text-3xl font-semibold leading-tight text-emerald-950 sm:text-4xl">
+                            {summaryRevenueDisplay.value}
+                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-emerald-800">
+                            <span>{summaryRevenueDisplay.hint}</span>
+                            <span>{nativeRevenueCount(summary.confirmed_revenue_native || [])} completed payments</span>
+                            <FxNormalizationNotice meta={reportingCurrency.isFlat ? summary.confirmed_revenue_normalization_meta : null} />
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                            <MiniMetric label="Active unlocks" value={compactNumber(summary.active_unlocks)} tone="emerald" />
+                            <MiniMetric label="Pending payment" value={compactNumber(summary.pending_unlocks)} tone={Number(summary.pending_unlocks || 0) > 0 ? 'amber' : 'slate'} />
+                            <MiniMetric label="Total unlocks" value={compactNumber(summary.total_unlocks)} />
+                        </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-700">Selected window revenue</p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-950">{pulseRevenueDisplay.value}</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                {pulseRevenueDisplay.hint}
+                            </div>
+                        </div>
+                        <FxNormalizationNotice meta={reportingCurrency.isFlat ? pulseKpis.revenue_normalization_meta : null} className="mt-2" />
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <MiniMetric
+                                label="AOV"
+                                value={reportingCurrency.isFlat && pulseKpis.average_order_value_normalized !== null && pulseKpis.average_order_value_normalized !== undefined
+                                    ? formatCurrency(pulseKpis.average_order_value_normalized, pulseKpis.normalized_currency || reportingCurrency.targetCurrency)
+                                    : moneyRowsLabel(pulseAverageOrderValue, '-')}
+                                hint={`${compactNumber(pulseKpis.successful_payments)} successful`}
+                            />
+                            <MiniMetric
+                                label="Repeat and upgrades"
+                                value={`${percentLabel(pulseKpis.repeat_buyer_percent)} / ${percentLabel(pulseKpis.upgrade_rate_percent)}`}
+                                hint="Repeat buyers / upgrades"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="xl:col-span-2">
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <FunnelStep label="Eligible views" count={pulseKpis.eligible_profile_views} rate={100} tone="slate" />
+                            <FunnelStep label="CTA clicks" count={pulseKpis.unlock_cta_clicks} rate={pulseKpis.cta_rate_percent} tone="teal" />
+                            <FunnelStep label="Checkout starts" count={pulseKpis.checkout_starts} rate={pulseKpis.checkout_rate_percent} tone="amber" />
+                            <FunnelStep label="Paid unlocks" count={pulseKpis.successful_payments} rate={pulseKpis.payment_completion_percent} tone="emerald" />
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                    <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Contact unlock revenue
-                        </p>
-                        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            Visitor payments for inactive profile contacts
-                        </h3>
-                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                            This is separate from escort subscriptions. Confirmed unlock payments reveal contact details
-                            only and do not create deals, renew packages, or count toward subscription revenue.
-                        </p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Active unlocks</p>
-                            <p className="mt-2 text-2xl font-semibold text-slate-950">{summary.active_unlocks || 0}</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pending</p>
-                            <p className="mt-2 text-2xl font-semibold text-slate-950">{summary.pending_unlocks || 0}</p>
-                        </div>
-                        <div className="col-span-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-                                Confirmed unlock revenue
-                            </p>
-                            <p className="mt-2 text-lg font-semibold text-emerald-950">{revenueLabel}</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
+            <SectionNav />
 
-            <section className="rounded-xl border border-sky-200 bg-sky-50 p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <h4 className="text-base font-semibold text-slate-950">Readiness check</h4>
-                        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-700">
-                            Verify the full checkout path: CRM availability, pricing, provider runtime, inactive profile sample,
-                            and the market WordPress contact-unlock proxy back to CRM.
-                        </p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <WorkSection
+                id="contact-unlock-signals"
+                title="Demand patterns"
+                description="Open this when you need market, profile, source, and hour context behind the revenue."
+                summary={`${compactNumber(pulseKpis.renewed_after_paid_demand)} inactive advertisers renewed after paid-contact demand`}
+                open={openSections.signals}
+                onToggle={() => toggleSection('signals')}
+            >
+                <div className="grid gap-4 xl:grid-cols-4">
+                    {pulseTopGroups.map((group) => (
+                        <div key={group.key} className="rounded-xl border border-slate-200 bg-white p-4">
+                            <h4 className="text-sm font-semibold text-slate-950">{group.title}</h4>
+                            <div className="mt-3 space-y-2">
+                                {group.rows.length ? group.rows.map((row, index) => (
+                                    <div key={`${group.key}-${row.label}-${index}`} className="flex items-center justify-between gap-3 text-sm">
+                                        <div className="min-w-0">
+                                            <p className="truncate font-semibold text-slate-700">{row.label || 'Unknown'}</p>
+                                            {row.amount ? <p className="text-xs text-slate-500">{Number(row.amount).toLocaleString()} paid volume</p> : null}
+                                        </div>
+                                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                            {row.count || 0}
+                                        </span>
+                                    </div>
+                                )) : (
+                                    <p className="text-sm text-slate-500">No signal yet.</p>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <MiniMetric label="Unlock conversion" value={percentLabel(pulseKpis.unlock_conversion_percent)} />
+                    <MiniMetric label="Pending payments" value={compactNumber(pulseKpis.pending_payments)} tone={Number(pulseKpis.pending_payments || 0) > 0 ? 'amber' : 'slate'} />
+                    <MiniMetric label="Single-profile purchases" value={compactNumber(pulseKpis.single_profile_purchases)} />
+                    <MiniMetric label="Full-access purchases" value={compactNumber(pulseKpis.full_access_purchases)} />
+                    <MiniMetric label="Revenue per view" value={moneyRowsLabel(pulseRevenuePerView, '-')} />
+                </div>
+            </WorkSection>
+
+            <WorkSection
+                id="contact-unlock-readiness"
+                title="Readiness check"
+                description="Verify CRM availability, pricing, provider runtime, inactive profile sample, and the WordPress proxy."
+                summary={readinessResult ? `${readinessResult.summary?.ready || 0} ready, ${readinessResult.summary?.warning || 0} warning, ${readinessResult.summary?.blocked || 0} blocked` : 'Run only when setup or provider routing changes.'}
+                open={openSections.readiness}
+                onToggle={() => toggleSection('readiness')}
+                tone="sky"
+                actions={(
+                    <>
                         <select
-                            className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm text-slate-900"
+                            className="min-h-10 rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                             value={readinessMarketId}
                             onChange={(event) => setReadinessMarketId(event.target.value)}
+                            aria-label="Readiness market"
                         >
                             <option value="all">All active markets</option>
                             {markets.map((market) => (
@@ -524,17 +690,17 @@ export default function ContactUnlockTab() {
                         </select>
                         <button
                             type="button"
-                            className="rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                            className="min-h-10 rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
                             disabled={readinessMutation.isPending}
                             onClick={() => readinessMutation.mutate()}
                         >
                             {readinessMutation.isPending ? 'Checking…' : 'Run readiness'}
                         </button>
-                    </div>
-                </div>
-
+                    </>
+                )}
+            >
                 {readinessResult ? (
-                    <div className="mt-4 space-y-3">
+                    <div className="space-y-3">
                         <div className="flex flex-wrap gap-2 text-xs font-semibold">
                             <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600">
                                 {readinessResult.summary?.markets_checked || 0} checked
@@ -582,18 +748,22 @@ export default function ContactUnlockTab() {
                             </div>
                         ))}
                     </div>
-                ) : null}
-            </section>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <h4 className="text-base font-semibold text-slate-950">Availability</h4>
-                        <p className="mt-1 text-sm text-slate-600">
-                            Enable the paywall only on markets with mobile-money rails and active pricing.
-                        </p>
+                ) : (
+                    <div className="rounded-lg border border-sky-100 bg-white p-4 text-sm text-slate-600">
+                        Pick a market and run readiness to see pass, warning, and blocked checks here.
                     </div>
-                    <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                )}
+            </WorkSection>
+
+            <WorkSection
+                id="contact-unlock-availability"
+                title="Availability"
+                description="Enable the paywall only on markets with mobile-money rails and active pricing."
+                summary={`${marketIds.length} of ${markets.length} markets enabled. ${sandboxOnly ? 'Sandbox only' : 'Production/default'} checkout mode.`}
+                open={openSections.availability}
+                onToggle={() => toggleSection('availability')}
+                actions={(
+                    <label className="inline-flex min-h-10 cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
                         <input
                             type="checkbox"
                             className="h-4 w-4 rounded border-slate-300 text-teal-600"
@@ -602,9 +772,9 @@ export default function ContactUnlockTab() {
                         />
                         Feature enabled
                     </label>
-                </div>
-
-                <div className="mt-4 grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                )}
+            >
+                <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
                     <div>
                         <h5 className="text-sm font-semibold text-amber-950">Checkout environment</h5>
                         <p className="mt-1 text-sm text-amber-800">
@@ -614,14 +784,14 @@ export default function ContactUnlockTab() {
                     <div className="inline-flex rounded-lg border border-amber-200 bg-white p-1 text-sm font-semibold shadow-sm">
                         <button
                             type="button"
-                            className={`rounded-md px-4 py-2 ${!sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+                            className={`min-h-10 rounded-md px-4 py-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${!sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
                             onClick={() => setSandboxOnly(false)}
                         >
                             Production/default
                         </button>
                         <button
                             type="button"
-                            className={`rounded-md px-4 py-2 ${sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+                            className={`min-h-10 rounded-md px-4 py-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${sandboxOnly ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
                             onClick={() => setSandboxOnly(true)}
                         >
                             Sandbox only
@@ -633,7 +803,7 @@ export default function ContactUnlockTab() {
                     {markets.map((market) => (
                         <label
                             key={market.id}
-                            className="flex min-w-0 cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm"
+                            className={`flex min-w-0 cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-3 text-sm transition ${marketIds.includes(Number(market.id)) ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
                         >
                             <span className="min-w-0">
                                 <span className="block truncate font-semibold text-slate-900">{market.name}</span>
@@ -648,28 +818,30 @@ export default function ContactUnlockTab() {
                         </label>
                     ))}
                 </div>
-            </section>
+            </WorkSection>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <h4 className="text-base font-semibold text-slate-950">Pricing rules</h4>
-                        <p className="mt-1 text-sm text-slate-600">Configure one-time and all-inactive access per market.</p>
-                    </div>
+            <WorkSection
+                id="contact-unlock-pricing"
+                title="Pricing rules"
+                description="Configure one-time and all-inactive access per market."
+                summary={`${rules.filter((rule) => rule.is_active).length} active rules across ${new Set(rules.map((rule) => rule.platform_id).filter(Boolean)).size} markets`}
+                open={openSections.pricing}
+                onToggle={() => toggleSection('pricing')}
+                actions={(
                     <button
                         type="button"
-                        className="rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white"
+                        className="min-h-10 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                         onClick={() => setRules((current) => [...current, blankRule(markets)])}
                     >
                         Add rule
                     </button>
-                </div>
-
-                <div className="mt-4 space-y-3">
+                )}
+            >
+                <div className="space-y-3">
                     {rules.map((rule, index) => (
                         <div key={`${rule.id || 'new'}-${index}`} className="grid gap-3 rounded-lg border border-slate-200 p-4 xl:grid-cols-[1.15fr_1fr_.7fr_.7fr_.55fr_auto]">
                             <select
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                 value={rule.platform_id}
                                 onChange={(event) => {
                                     const market = markets.find((item) => Number(item.id) === Number(event.target.value));
@@ -684,7 +856,7 @@ export default function ContactUnlockTab() {
                                 ))}
                             </select>
                             <select
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                 value={rule.scope}
                                 onChange={(event) => updateRule(index, { scope: event.target.value })}
                             >
@@ -693,28 +865,31 @@ export default function ContactUnlockTab() {
                                 ))}
                             </select>
                             <input
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                 value={rule.label}
                                 onChange={(event) => updateRule(index, { label: event.target.value })}
                                 placeholder="Display label"
+                                aria-label="Display label"
                             />
                             <div className="grid grid-cols-[72px_1fr] gap-2">
                                 <input
-                                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase"
+                                    className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                     value={rule.currency}
                                     onChange={(event) => updateRule(index, { currency: event.target.value.toUpperCase().slice(0, 3) })}
+                                    aria-label="Currency"
                                 />
                                 <input
-                                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                    className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                     type="number"
                                     min="1"
                                     value={rule.amount}
                                     onChange={(event) => updateRule(index, { amount: event.target.value })}
                                     placeholder="Amount"
+                                    aria-label="Amount"
                                 />
                             </div>
                             <input
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                className="min-h-11 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                 type="number"
                                 min="1"
                                 max="366"
@@ -734,7 +909,7 @@ export default function ContactUnlockTab() {
                                 </label>
                                 <button
                                     type="button"
-                                    className="rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700"
+                                    className="min-h-10 rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                                     onClick={() => removeRule(index, rule)}
                                 >
                                     Remove
@@ -753,28 +928,30 @@ export default function ContactUnlockTab() {
                 <div className="mt-5 flex justify-end">
                     <button
                         type="button"
-                        className="rounded-lg bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                        className="min-h-11 rounded-lg bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
                         disabled={saveMutation.isPending}
                         onClick={() => saveMutation.mutate()}
                     >
                         {saveMutation.isPending ? 'Saving…' : 'Save contact unlock'}
                     </button>
                 </div>
-            </section>
+            </WorkSection>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Live checkout trail</p>
-                        <h4 className="mt-1 text-lg font-semibold text-slate-950">Recent unlocks</h4>
-                    </div>
+            <WorkSection
+                id="contact-unlock-trail"
+                title="Live checkout trail"
+                description="Search recent visitor attempts, payment outcomes, references, and browser context."
+                summary={`Showing ${unlocksMeta.from || 0}-${unlocksMeta.to || 0} of ${unlocksMeta.total || 0}`}
+                open={openSections.trail}
+                onToggle={() => toggleSection('trail')}
+                actions={(
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
                         {unlocksMeta.total || 0} records
                     </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 xl:grid-cols-[minmax(220px,1.2fr)_repeat(5,minmax(140px,1fr))_auto]">
-                    <label className="min-w-0 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                )}
+            >
+                <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 xl:grid-cols-[minmax(220px,1.2fr)_repeat(5,minmax(140px,1fr))_auto]">
+                    <label className="min-w-0 text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Search
                         <input
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -783,7 +960,7 @@ export default function ContactUnlockTab() {
                             placeholder="Reference, visitor, profile"
                         />
                     </label>
-                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Market
                         <select
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -796,7 +973,7 @@ export default function ContactUnlockTab() {
                             ))}
                         </select>
                     </label>
-                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Entitlement
                         <select
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -809,7 +986,7 @@ export default function ContactUnlockTab() {
                             ))}
                         </select>
                     </label>
-                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Payment
                         <select
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -822,7 +999,7 @@ export default function ContactUnlockTab() {
                             ))}
                         </select>
                     </label>
-                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Scope
                         <select
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -835,7 +1012,7 @@ export default function ContactUnlockTab() {
                             ))}
                         </select>
                     </label>
-                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <label className="text-xs font-semibold uppercase tracking-normal text-slate-500">
                         Rows
                         <select
                             className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
@@ -850,7 +1027,7 @@ export default function ContactUnlockTab() {
                     <div className="flex items-end">
                         <button
                             type="button"
-                            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 hover:text-slate-950"
+                            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                             onClick={resetUnlockFilters}
                         >
                             Reset
@@ -859,7 +1036,7 @@ export default function ContactUnlockTab() {
                 </div>
 
                 <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                    <div className="hidden grid-cols-[92px_1fr_1fr_1.25fr_1.25fr] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 xl:grid">
+                    <div className="hidden grid-cols-[92px_1fr_1fr_1.25fr_1.25fr] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-semibold uppercase tracking-normal text-slate-500 xl:grid">
                         {[
                             ['id', 'Reference'],
                             ['profile', 'Profile'],
@@ -870,7 +1047,7 @@ export default function ContactUnlockTab() {
                             <button
                                 key={key}
                                 type="button"
-                                className="flex items-center gap-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 hover:text-slate-900"
+                                className="flex items-center gap-2 text-left text-[10px] font-semibold uppercase tracking-normal text-slate-500 hover:text-slate-900"
                                 onClick={() => toggleUnlockSort(key)}
                             >
                                 <span>{label}</span>
@@ -975,18 +1152,18 @@ export default function ContactUnlockTab() {
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 transition hover:border-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={Number(unlocksMeta.current_page || 1) <= 1}
                             onClick={() => setUnlockPage(Number(unlocksMeta.current_page || 1) - 1)}
                         >
                             Previous
                         </button>
-                        <span className="min-w-24 text-center text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        <span className="min-w-24 text-center text-xs font-semibold uppercase tracking-normal text-slate-500">
                             Page {unlocksMeta.current_page || 1} / {unlocksMeta.last_page || 1}
                         </span>
                         <button
                             type="button"
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 transition hover:border-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={Number(unlocksMeta.current_page || 1) >= Number(unlocksMeta.last_page || 1)}
                             onClick={() => setUnlockPage(Number(unlocksMeta.current_page || 1) + 1)}
                         >
@@ -994,7 +1171,7 @@ export default function ContactUnlockTab() {
                         </button>
                     </div>
                 </div>
-            </section>
+            </WorkSection>
         </div>
     );
 }
