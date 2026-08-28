@@ -34,6 +34,12 @@ class KopoKopoCompatibilityAdapter
 
     private function service(): KopokopoService
     {
-        return app(KopokopoService::class) ?: $this->kopokopoService;
+        $resolved = app(KopokopoService::class);
+
+        if ($resolved instanceof KopokopoService && get_class($resolved) !== KopokopoService::class) {
+            return $resolved;
+        }
+
+        return $this->kopokopoService;
     }
 }

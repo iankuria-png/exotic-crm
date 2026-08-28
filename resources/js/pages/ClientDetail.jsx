@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import api from '../services/api';
@@ -620,7 +620,7 @@ function ContactUnlockMetric({ label, value, detail }) {
     );
 }
 
-function ContactUnlocksTab({ data, isLoading }) {
+function ContactUnlocksTab({ data, isLoading, client }) {
     const summary = data?.summary || {};
     const unlocks = data?.unlocks?.data || [];
 
@@ -643,6 +643,11 @@ function ContactUnlocksTab({ data, isLoading }) {
                         <h3 className="crm-panel-title">Contact Unlock Trail</h3>
                         <p className="crm-panel-subtitle">Visitor attempts, payment outcome, unlock timing, and browser context for this profile.</p>
                     </div>
+                    {client?.wp_post_id ? (
+                        <Link className="crm-btn-secondary" to={`/visitors?tab=unlocks&search=${encodeURIComponent(client.wp_post_id)}`}>
+                            View in Web Visitors
+                        </Link>
+                    ) : null}
                 </header>
                 {unlocks.length > 0 ? (
                     <div className="overflow-x-auto">
@@ -4667,7 +4672,7 @@ export default function ClientDetail() {
             ) : null}
 
             {activeTab === 'contact_unlocks' ? (
-                <ContactUnlocksTab data={contactUnlockData} isLoading={contactUnlockLoading} />
+                <ContactUnlocksTab data={contactUnlockData} isLoading={contactUnlockLoading} client={client} />
             ) : null}
 
             {activeTab === 'edit_profile' && !isReadOnly ? (

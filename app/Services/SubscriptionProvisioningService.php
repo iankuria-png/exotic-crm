@@ -40,7 +40,8 @@ class SubscriptionProvisioningService
                 $client,
                 $deal,
                 false,
-                'subscription_activation_already_active'
+                'subscription_activation_already_active',
+                false
             );
 
             return $deal->fresh(['client', 'product', 'platform']);
@@ -108,7 +109,8 @@ class SubscriptionProvisioningService
             $repairClient,
             $deal->fresh(),
             false,
-            'subscription_activation'
+            'subscription_activation',
+            false
         );
 
         // The profile is live again, so put back the bio exactly as the advertiser

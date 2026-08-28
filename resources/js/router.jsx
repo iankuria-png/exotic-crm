@@ -8,6 +8,7 @@ import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Deals from './pages/Deals';
 import Payments from './pages/Payments';
+import WebVisitors from './pages/WebVisitors';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
@@ -137,6 +138,7 @@ export default function AppRouter() {
                 <Route path="clients/:id" element={<ClientDetail />} />
                 <Route path="deals" element={<Deals />} />
                 <Route path="payments" element={<Payments />} />
+                <Route path="visitors" element={<WebVisitors />} />
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />

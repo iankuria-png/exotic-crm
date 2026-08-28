@@ -24,7 +24,7 @@ class PaymentQueueQueryBuilder
             'matched' => 'nullable|in:matched,unmatched',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
-            'purpose' => 'nullable|in:wallet_topup,non_wallet',
+            'purpose' => 'nullable|in:wallet_topup,non_wallet,subscription,contact_unlock',
             'collection_channel' => 'nullable|in:self_service,manual,other',
             'manual_submission' => 'nullable|in:with_proof,without_proof,pending_review,verified,rejected',
             'environment' => 'nullable|in:production,sandbox',
@@ -131,12 +131,7 @@ class PaymentQueueQueryBuilder
             $query->where('source', $sourceFilter);
         }
 
-        $purposeFilter = trim((string) ($validated['purpose'] ?? $request->input('purpose', '')));
-        if ($purposeFilter === 'wallet_topup') {
-            $query->walletTopups();
-        } elseif ($purposeFilter === 'non_wallet') {
-            $query->excludingWalletTopups();
-        }
+        $this->applyPurposeFilter($query, trim((string) ($validated['purpose'] ?? $request->input('purpose', ''))));
 
         $collectionChannelFilter = trim((string) ($validated['collection_channel'] ?? $request->input('collection_channel', '')));
         if ($collectionChannelFilter !== '') {
@@ -283,12 +278,7 @@ class PaymentQueueQueryBuilder
             $query->where('source', $sourceFilter);
         }
 
-        $purposeFilter = trim((string) ($validated['purpose'] ?? $request->input('purpose', '')));
-        if ($purposeFilter === 'wallet_topup') {
-            $query->walletTopups();
-        } else {
-            $query->excludingWalletTopups();
-        }
+        $this->applyPurposeFilter($query, trim((string) ($validated['purpose'] ?? $request->input('purpose', ''))));
 
         $collectionChannelFilter = trim((string) ($validated['collection_channel'] ?? $request->input('collection_channel', '')));
         if ($collectionChannelFilter !== '') {
@@ -402,6 +392,17 @@ class PaymentQueueQueryBuilder
                     });
             });
         }
+    }
+
+    private function applyPurposeFilter(Builder $query, string $purposeFilter): void
+    {
+        match ($purposeFilter) {
+            'wallet_topup' => $query->walletTopups(),
+            'subscription' => $query->subscriptionRevenue(),
+            'contact_unlock' => $query->contactUnlockRevenue(),
+            'non_wallet' => $query->excludingWalletTopups(),
+            default => $query->excludingWalletTopups(),
+        };
     }
 
     private function whereManualChannel(Builder $query): void

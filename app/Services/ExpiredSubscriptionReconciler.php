@@ -52,7 +52,7 @@ class ExpiredSubscriptionReconciler
             return false;
         }
 
-        if (app(ActiveSubscriptionProfileRepairService::class)->hasFutureActiveDeal($client)) {
+        if ($this->hasProtectiveFutureActiveDeal($client)) {
             return false;
         }
 
@@ -71,11 +71,7 @@ class ExpiredSubscriptionReconciler
             ->active() // profile_status=publish AND not needs_payment AND not notactive
             ->whereNotNull('escort_expire')
             ->where('escort_expire', '>', 0)
-            ->whereDoesntHave('deals', function ($deal): void {
-                $deal->where('status', 'active')
-                    ->whereNotNull('expires_at')
-                    ->where('expires_at', '>', now());
-            })
+            ->whereDoesntHave('deals', fn ($deal) => $this->applyProtectiveFutureActiveDealScope($deal))
             // Raw "< now" is a necessary condition (end-of-day grace only moves the
             // cutoff later), so this safely narrows the set before the precise check.
             ->where('escort_expire', '<', now()->timestamp)
@@ -92,6 +88,23 @@ class ExpiredSubscriptionReconciler
             ->filter(fn (Client $client) => $this->isStuck($client))
             ->take($limit)
             ->values();
+    }
+
+    private function hasProtectiveFutureActiveDeal(Client $client): bool
+    {
+        return $this->applyProtectiveFutureActiveDealScope($client->deals()->getQuery())->exists();
+    }
+
+    private function applyProtectiveFutureActiveDealScope($query)
+    {
+        return $query
+            ->where('status', 'active')
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '>', now())
+            ->where(function ($deal): void {
+                $deal->whereNull('origin')
+                    ->orWhere('origin', '!=', 'seo_boost');
+            });
     }
 
     /**

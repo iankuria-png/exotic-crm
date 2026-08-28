@@ -76,7 +76,7 @@ class ClientFunnelService
     public static function applyPaidHistory(Builder $query): Builder
     {
         return $query->where(function (Builder $paid) {
-            $paid->whereHas('payments', fn (Builder $paymentQuery) => $paymentQuery->reportableSuccessful())
+            $paid->whereHas('payments', fn (Builder $paymentQuery) => $paymentQuery->reportableSuccessful()->excludingWalletTopups())
                 ->orWhereHas('deals', function (Builder $dealQuery) {
                     $dealQuery->whereIn('status', self::PAID_DEAL_STATUSES);
                 });
@@ -86,7 +86,7 @@ class ClientFunnelService
     public static function applyNoPaidHistory(Builder $query): Builder
     {
         return $query
-            ->whereDoesntHave('payments', fn (Builder $paymentQuery) => $paymentQuery->reportableSuccessful())
+            ->whereDoesntHave('payments', fn (Builder $paymentQuery) => $paymentQuery->reportableSuccessful()->excludingWalletTopups())
             ->whereDoesntHave('deals', function (Builder $dealQuery) {
                 $dealQuery->whereIn('status', self::PAID_DEAL_STATUSES);
             });

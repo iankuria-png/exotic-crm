@@ -14,23 +14,23 @@ class ContactUnlockPulseService
         private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
 
-    public function summary(?int $platformId = null, string $range = 'today', ?string $timezone = null, ?string $targetCurrency = null): array
+    public function summary(int|array|null $platformIds = null, string $range = 'today', ?string $timezone = null, ?string $targetCurrency = null, ?string $fromDate = null, ?string $toDate = null): array
     {
-        [$from, $to] = $this->window($range, $timezone);
+        [$from, $to] = $this->window($range, $timezone, $fromDate, $toDate);
         $resolvedTargetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
 
         $eventBase = ContactUnlockEvent::query()
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
             ->whereBetween('occurred_at', [$from, $to]);
+        $this->applyPlatformScope($eventBase, $platformIds);
 
         $unlockBase = VisitorContactUnlock::query()
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
             ->whereBetween('created_at', [$from, $to]);
+        $this->applyPlatformScope($unlockBase, $platformIds);
 
         $paymentBase = Payment::query()
             ->contactUnlockRevenue()
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
             ->whereBetween(DB::raw('COALESCE(completed_at, updated_at, created_at)'), [$from, $to]);
+        $this->applyPlatformScope($paymentBase, $platformIds);
 
         $successfulPayments = (clone $paymentBase)->whereIn('status', Payment::SUCCESSFUL_STATUSES);
         $successfulNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $successfulPayments, $resolvedTargetCurrency);
@@ -69,21 +69,28 @@ class ContactUnlockPulseService
                     : null,
                 'single_profile_purchases' => $this->scopePurchases(clone $successfulPayments, VisitorContactUnlock::SCOPE_SINGLE_PROFILE),
                 'full_access_purchases' => $this->scopePurchases(clone $successfulPayments, VisitorContactUnlock::SCOPE_MARKET_INACTIVE_PROFILES),
-                'repeat_buyer_percent' => $this->repeatBuyerPercent($platformId, $from, $to),
-                'upgrade_rate_percent' => $this->upgradeRatePercent($platformId, $from, $to),
-                'renewed_after_paid_demand' => $this->renewedAfterDemand($platformId, $from, $to),
+                'repeat_buyer_percent' => $this->repeatBuyerPercent($platformIds, $from, $to),
+                'upgrade_rate_percent' => $this->upgradeRatePercent($platformIds, $from, $to),
+                'renewed_after_paid_demand' => $this->renewedAfterDemand($platformIds, $from, $to),
             ],
-            'top_cities' => $this->topCities($platformId, $from, $to),
-            'top_profiles' => $this->topProfiles($platformId, $from, $to),
-            'top_sources' => $this->topSources($platformId, $from, $to),
-            'top_hours' => $this->topHours($platformId, $from, $to),
+            'top_cities' => $this->topCities($platformIds, $from, $to),
+            'top_profiles' => $this->topProfiles($platformIds, $from, $to),
+            'top_sources' => $this->topSources($platformIds, $from, $to),
+            'top_hours' => $this->topHours($platformIds, $from, $to),
         ];
     }
 
-    private function window(string $range, ?string $timezone): array
+    private function window(string $range, ?string $timezone, ?string $fromDate, ?string $toDate): array
     {
         $tz = $timezone ?: config('app.timezone', 'UTC');
         $now = CarbonImmutable::now($tz);
+        if ($range === 'custom' && $fromDate && $toDate) {
+            return [
+                CarbonImmutable::parse($fromDate, $tz)->startOfDay()->utc(),
+                CarbonImmutable::parse($toDate, $tz)->endOfDay()->utc(),
+            ];
+        }
+
         $from = match ($range) {
             '7d' => $now->subDays(6)->startOfDay(),
             '30d' => $now->subDays(29)->startOfDay(),
@@ -91,6 +98,25 @@ class ContactUnlockPulseService
         };
 
         return [$from->utc(), $now->utc()];
+    }
+
+    private function applyPlatformScope($query, int|array|null $platformIds): void
+    {
+        if (is_int($platformIds)) {
+            $query->where('platform_id', $platformIds);
+
+            return;
+        }
+
+        if (is_array($platformIds)) {
+            if ($platformIds === []) {
+                $query->whereRaw('1 = 0');
+
+                return;
+            }
+
+            $query->whereIn('platform_id', $platformIds);
+        }
     }
 
     private function revenueRows($query): array
@@ -130,16 +156,16 @@ class ContactUnlockPulseService
             ->count();
     }
 
-    private function repeatBuyerPercent(?int $platformId, $from, $to): float
+    private function repeatBuyerPercent(int|array|null $platformIds, $from, $to): float
     {
         $rows = VisitorContactUnlock::query()
             ->join('payments', 'payments.id', '=', 'visitor_contact_unlocks.payment_id')
-            ->when($platformId, fn ($query) => $query->where('visitor_contact_unlocks.platform_id', $platformId))
             ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
             ->whereBetween(DB::raw('COALESCE(payments.completed_at, payments.updated_at, payments.created_at)'), [$from, $to])
             ->groupBy('visitor_contact_unlocks.visitor_phone_hash')
-            ->select('visitor_contact_unlocks.visitor_phone_hash', DB::raw('COUNT(*) as aggregate_count'))
-            ->get();
+            ->select('visitor_contact_unlocks.visitor_phone_hash', DB::raw('COUNT(*) as aggregate_count'));
+        $this->applyQualifiedPlatformScope($rows, 'visitor_contact_unlocks.platform_id', $platformIds);
+        $rows = $rows->get();
 
         if ($rows->isEmpty()) {
             return 0.0;
@@ -148,15 +174,15 @@ class ContactUnlockPulseService
         return round(($rows->where('aggregate_count', '>', 1)->count() / $rows->count()) * 100, 1);
     }
 
-    private function upgradeRatePercent(?int $platformId, $from, $to): float
+    private function upgradeRatePercent(int|array|null $platformIds, $from, $to): float
     {
         $buyers = VisitorContactUnlock::query()
             ->join('payments', 'payments.id', '=', 'visitor_contact_unlocks.payment_id')
-            ->when($platformId, fn ($query) => $query->where('visitor_contact_unlocks.platform_id', $platformId))
             ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
             ->whereBetween(DB::raw('COALESCE(payments.completed_at, payments.updated_at, payments.created_at)'), [$from, $to])
-            ->distinct()
-            ->count('visitor_contact_unlocks.visitor_phone_hash');
+            ->distinct();
+        $this->applyQualifiedPlatformScope($buyers, 'visitor_contact_unlocks.platform_id', $platformIds);
+        $buyers = $buyers->count('visitor_contact_unlocks.visitor_phone_hash');
 
         if ($buyers < 1) {
             return 0.0;
@@ -164,27 +190,27 @@ class ContactUnlockPulseService
 
         $upgraders = VisitorContactUnlock::query()
             ->join('payments', 'payments.id', '=', 'visitor_contact_unlocks.payment_id')
-            ->when($platformId, fn ($query) => $query->where('visitor_contact_unlocks.platform_id', $platformId))
             ->where('visitor_contact_unlocks.scope', VisitorContactUnlock::SCOPE_MARKET_INACTIVE_PROFILES)
             ->where('visitor_contact_unlocks.credit_amount', '>', 0)
             ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
             ->whereBetween(DB::raw('COALESCE(payments.completed_at, payments.updated_at, payments.created_at)'), [$from, $to])
-            ->distinct()
-            ->count('visitor_contact_unlocks.visitor_phone_hash');
+            ->distinct();
+        $this->applyQualifiedPlatformScope($upgraders, 'visitor_contact_unlocks.platform_id', $platformIds);
+        $upgraders = $upgraders->count('visitor_contact_unlocks.visitor_phone_hash');
 
         return round(($upgraders / $buyers) * 100, 1);
     }
 
-    private function renewedAfterDemand(?int $platformId, $from, $to): int
+    private function renewedAfterDemand(int|array|null $platformIds, $from, $to): int
     {
         $demandRows = VisitorContactUnlock::query()
             ->select('client_id', DB::raw('MIN(created_at) as first_demand_at'))
             ->whereNotNull('client_id')
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
             ->whereBetween('created_at', [$from, $to])
             ->whereHas('payment', fn ($query) => $query->whereIn('status', Payment::SUCCESSFUL_STATUSES))
-            ->groupBy('client_id')
-            ->get();
+            ->groupBy('client_id');
+        $this->applyPlatformScope($demandRows, $platformIds);
+        $demandRows = $demandRows->get();
 
         $count = 0;
         foreach ($demandRows as $row) {
@@ -201,64 +227,72 @@ class ContactUnlockPulseService
         return $count;
     }
 
-    private function topCities(?int $platformId, $from, $to): array
+    private function topCities(int|array|null $platformIds, $from, $to): array
     {
-        return ContactUnlockEvent::query()
+        $query = ContactUnlockEvent::query()
             ->join('clients', 'clients.id', '=', 'contact_unlock_events.client_id')
-            ->when($platformId, fn ($query) => $query->where('contact_unlock_events.platform_id', $platformId))
             ->whereBetween('contact_unlock_events.occurred_at', [$from, $to])
             ->whereNotNull('clients.city')
             ->groupBy('clients.city')
             ->orderByDesc('aggregate_count')
-            ->limit(6)
+            ->limit(6);
+        $this->applyQualifiedPlatformScope($query, 'contact_unlock_events.platform_id', $platformIds);
+
+        return $query
             ->get(['clients.city as label', DB::raw('COUNT(*) as aggregate_count')])
             ->map(fn ($row) => ['label' => (string) $row->label, 'count' => (int) $row->aggregate_count])
             ->values()
             ->all();
     }
 
-    private function topProfiles(?int $platformId, $from, $to): array
+    private function topProfiles(int|array|null $platformIds, $from, $to): array
     {
-        return VisitorContactUnlock::query()
+        $query = VisitorContactUnlock::query()
             ->join('payments', 'payments.id', '=', 'visitor_contact_unlocks.payment_id')
             ->leftJoin('clients', 'clients.id', '=', 'visitor_contact_unlocks.client_id')
-            ->when($platformId, fn ($query) => $query->where('visitor_contact_unlocks.platform_id', $platformId))
             ->whereBetween('visitor_contact_unlocks.created_at', [$from, $to])
             ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
             ->groupBy('visitor_contact_unlocks.client_id', 'clients.name')
             ->orderByDesc('aggregate_count')
-            ->limit(6)
+            ->limit(6);
+        $this->applyQualifiedPlatformScope($query, 'visitor_contact_unlocks.platform_id', $platformIds);
+
+        return $query
             ->get(['clients.name as label', DB::raw('COUNT(*) as aggregate_count'), DB::raw('SUM(payments.amount) as aggregate_amount')])
             ->map(fn ($row) => ['label' => (string) ($row->label ?: 'All inactive contacts'), 'count' => (int) $row->aggregate_count, 'amount' => (float) $row->aggregate_amount])
             ->values()
             ->all();
     }
 
-    private function topSources(?int $platformId, $from, $to): array
+    private function topSources(int|array|null $platformIds, $from, $to): array
     {
-        return ContactUnlockEvent::query()
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
+        $query = ContactUnlockEvent::query()
             ->where('event_type', ContactUnlockEvent::TYPE_CHECKOUT_START)
             ->whereBetween('occurred_at', [$from, $to])
             ->groupBy('traffic_source')
             ->orderByDesc('aggregate_count')
-            ->limit(6)
+            ->limit(6);
+        $this->applyPlatformScope($query, $platformIds);
+
+        return $query
             ->get(['traffic_source as label', DB::raw('COUNT(*) as aggregate_count')])
             ->map(fn ($row) => ['label' => (string) ($row->label ?: 'unknown'), 'count' => (int) $row->aggregate_count])
             ->values()
             ->all();
     }
 
-    private function topHours(?int $platformId, $from, $to): array
+    private function topHours(int|array|null $platformIds, $from, $to): array
     {
-        return ContactUnlockEvent::query()
-            ->when($platformId, fn ($query) => $query->where('platform_id', $platformId))
+        $query = ContactUnlockEvent::query()
             ->where('event_type', ContactUnlockEvent::TYPE_CHECKOUT_START)
             ->whereBetween('occurred_at', [$from, $to])
             ->whereNotNull('local_hour')
             ->groupBy('local_hour')
             ->orderByDesc('aggregate_count')
-            ->limit(6)
+            ->limit(6);
+        $this->applyPlatformScope($query, $platformIds);
+
+        return $query
             ->get(['local_hour as label', DB::raw('COUNT(*) as aggregate_count')])
             ->map(fn ($row) => ['label' => sprintf('%02d:00', (int) $row->label), 'count' => (int) $row->aggregate_count])
             ->values()
@@ -268,5 +302,24 @@ class ContactUnlockPulseService
     private function percent(int $numerator, int $denominator): float
     {
         return $denominator > 0 ? round(($numerator / $denominator) * 100, 1) : 0.0;
+    }
+
+    private function applyQualifiedPlatformScope($query, string $column, int|array|null $platformIds): void
+    {
+        if (is_int($platformIds)) {
+            $query->where($column, $platformIds);
+
+            return;
+        }
+
+        if (is_array($platformIds)) {
+            if ($platformIds === []) {
+                $query->whereRaw('1 = 0');
+
+                return;
+            }
+
+            $query->whereIn($column, $platformIds);
+        }
     }
 }

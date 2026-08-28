@@ -283,8 +283,9 @@ class ProviderStatusQueryOrchestrator
         }
 
         return match ((string) $payment->purpose) {
-            'subscription' => 'subscription_link',
-            default => 'wallet_funding',
+            Payment::PURPOSE_VISITOR_CONTACT_UNLOCK => BillingSurface::ContactUnlock->value,
+            Payment::PURPOSE_WALLET_TOPUP => BillingSurface::WalletFunding->value,
+            default => BillingSurface::SubscriptionLink->value,
         };
     }
 
@@ -299,6 +300,7 @@ class ProviderStatusQueryOrchestrator
             BillingSurface::SubscriptionInvoice->value => BillingSurface::SubscriptionInvoice->value,
             BillingSurface::WalletFunding->value => BillingSurface::WalletFunding->value,
             BillingSurface::WalletAutoRenew->value => BillingSurface::WalletAutoRenew->value,
+            BillingSurface::ContactUnlock->value => BillingSurface::ContactUnlock->value,
             BillingSurface::ManualConfirmation->value => BillingSurface::ManualConfirmation->value,
             BillingSurface::SelfCheckout->value => BillingSurface::SelfCheckout->value,
             default => null,

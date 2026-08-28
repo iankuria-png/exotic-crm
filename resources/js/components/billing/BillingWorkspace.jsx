@@ -8,7 +8,6 @@ import ProviderProfilesTab from './ProviderProfilesTab';
 import MarketRoutingTab from './MarketRoutingTab';
 import WalletRulesTab from './WalletRulesTab';
 import SubscriptionRulesTab from './SubscriptionRulesTab';
-import ContactUnlockTab from './ContactUnlockTab';
 import ManualPaymentsTab from './ManualPaymentsTab';
 import BillingSystemTab from './BillingSystemTab';
 import BillingTabNav from './BillingTabNav';
@@ -20,7 +19,6 @@ const billingTabs = [
     { id: 'market_routing', label: 'Market Routing' },
     { id: 'wallet_rules', label: 'Wallet Rules' },
     { id: 'subscription_rules', label: 'Subscription Rules' },
-    { id: 'contact_unlock', label: 'Contact Unlocks' },
     { id: 'manual_payments', label: 'Manual Payments' },
     { id: 'billing_system', label: 'Billing System' },
     { id: 'diagnostics', label: 'Diagnostics' },
@@ -218,10 +216,6 @@ export default function BillingWorkspace() {
 
             {activeTab === 'subscription_rules' ? (
                 <SubscriptionRulesTab platforms={markets} />
-            ) : null}
-
-            {activeTab === 'contact_unlock' ? (
-                <ContactUnlockTab />
             ) : null}
 
             {activeTab === 'manual_payments' ? (

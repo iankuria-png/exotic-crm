@@ -162,6 +162,7 @@ class ClientChurnStamper
 
         $paymentActivation = $client->payments()
             ->reportableSuccessful()
+            ->excludingWalletTopups()
             ->selectRaw('MIN(COALESCE(completed_at, created_at)) as first_paid_at')
             ->value('first_paid_at');
 

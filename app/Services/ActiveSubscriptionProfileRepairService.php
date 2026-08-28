@@ -73,8 +73,13 @@ class ActiveSubscriptionProfileRepairService
     /**
      * @return array<string, mixed>
      */
-    public function repairClient(Client $client, ?Deal $deal = null, bool $dryRun = false, string $source = 'active_subscription_profile_repair'): array
-    {
+    public function repairClient(
+        Client $client,
+        ?Deal $deal = null,
+        bool $dryRun = false,
+        string $source = 'active_subscription_profile_repair',
+        bool $syncWordPress = true
+    ): array {
         $client->loadMissing('platform');
         $deal ??= $this->bestFutureActiveDeal($client);
 
@@ -117,7 +122,7 @@ class ActiveSubscriptionProfileRepairService
             return $row;
         }
 
-        if ((int) ($client->wp_post_id ?? 0) > 0) {
+        if ($syncWordPress && (int) ($client->wp_post_id ?? 0) > 0) {
             WpSyncService::forPlatform((int) $client->platform_id)->setLifecycleState(
                 (int) $client->wp_post_id,
                 ClientLifecycleState::ACTIVE,

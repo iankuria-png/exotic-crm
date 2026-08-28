@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
@@ -13,7 +13,6 @@ import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
-import ContactUnlockTab from '../components/billing/ContactUnlockTab';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
@@ -21,6 +20,7 @@ import { formatCurrency } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 import { useAuth } from '../hooks/useAuth';
 import useReportingCurrency from '../hooks/useReportingCurrency';
+import contactUnlocks from '../services/contactUnlocks';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SUCCESSFUL_PAYMENT_STATUSES = ['completed', 'expired'];
@@ -1501,7 +1501,7 @@ export default function Payments() {
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import', 'orphan_manual_import']);
-    const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet']);
+    const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet', 'subscription', 'contact_unlock']);
     const allowedCollectionChannelFilters = new Set(['self_service', 'manual', 'other']);
     const allowedManualSubmissionFilters = new Set(['with_proof', 'without_proof', 'pending_review', 'verified', 'rejected']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
@@ -1521,7 +1521,6 @@ export default function Payments() {
     const canViewTests = user?.role === 'admin';
     const canManageBundleFinanceReview = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canAccessFraudAudit = ['admin', 'sub_admin'].includes(String(user?.role || ''));
-    const canAccessContactUnlocks = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
@@ -1571,10 +1570,7 @@ export default function Payments() {
         if (workspaceTab === 'fraud' && !canAccessFraudAudit) {
             setWorkspaceTab('payments');
         }
-        if (workspaceTab === 'contact_unlock' && !canAccessContactUnlocks) {
-            setWorkspaceTab('payments');
-        }
-    }, [canAccessContactUnlocks, canAccessFraudAudit, workspaceTab]);
+    }, [canAccessFraudAudit, workspaceTab]);
     const [confidenceFilter, setConfidenceFilter] = useState(() => {
         const requested = (searchParams.get('match_confidence') || '').trim();
         return allowedConfidenceFilters.has(requested) ? requested : '';
@@ -1797,6 +1793,20 @@ export default function Payments() {
             },
         }).then((response) => response.data),
         enabled: workspaceTab === 'recovery' && !isRangeInvalid,
+    });
+
+    const visitorUnlockSummaryQuery = useQuery({
+        queryKey: ['payments-visitor-unlock-summary', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryFn: () => contactUnlocks.getOverview({
+            page: 1,
+            per_page: 5,
+            ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+            ...(fromDate ? { from: fromDate } : {}),
+            ...(toDate ? { to: toDate } : {}),
+            ...reportingCurrency.queryParams,
+        }),
+        enabled: !isRangeInvalid && ['admin', 'sub_admin', 'sales'].includes(String(user?.role || '')),
+        staleTime: 30_000,
     });
 
     // Hydrate fromDate from baseline cutoff on first successful response
@@ -3419,16 +3429,27 @@ export default function Payments() {
                 </button>
             </section>
 
+            <section className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-sm font-semibold text-teal-900">Visitor unlock revenue is tracked separately.</p>
+                        <p className="mt-1 text-xs text-teal-700">
+                            {visitorUnlockSummaryQuery.isLoading ? 'Loading visitor unlock total...' : `${visitorUnlockSummaryQuery.data?.summary?.confirmed_revenue_normalized_display || 'Native unlock revenue available'} | ${Number(visitorUnlockSummaryQuery.data?.summary?.completed_payments || 0).toLocaleString()} confirmed unlock payments`}
+                        </p>
+                    </div>
+                    <Link to="/visitors" className="crm-btn-secondary bg-white">Open Web Visitors</Link>
+                </div>
+            </section>
+
             <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <p className="text-sm font-semibold text-slate-900">Payment workspace</p>
-                        <p className="mt-1 text-xs text-slate-500">Switch between subscription payments, unlock revenue, recovery, and fraud review.</p>
+                        <p className="mt-1 text-xs text-slate-500">Switch between subscription payments, recovery, and fraud review. Visitor unlock revenue has its own workspace.</p>
                     </div>
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                         {[
                             ['payments', 'Payment queue'],
-                            ...(canAccessContactUnlocks ? [['contact_unlock', 'Contact Unlocks']] : []),
                             ['recovery', 'Failed recovery'],
                             ...(canAccessFraudAudit ? [['fraud', 'Fraud audit']] : []),
                         ].map(([key, label]) => (
@@ -3479,10 +3500,6 @@ export default function Payments() {
                     isRangeInvalid={isRangeInvalid}
                     onPresetChange={applyRecoveryPreset}
                 />
-            ) : workspaceTab === 'contact_unlock' && canAccessContactUnlocks ? (
-                <section className="-mx-5 sm:mx-0">
-                    <ContactUnlockTab />
-                </section>
             ) : workspaceTab === 'fraud' && canAccessFraudAudit ? (
                 <FraudAuditWorkspace
                     platformOptions={platformOptions}
@@ -3773,7 +3790,9 @@ export default function Payments() {
                         options={[
                             { value: '', label: 'All types' },
                             { value: 'non_wallet', label: 'Subscriptions' },
+                            { value: 'subscription', label: 'Subscriptions only' },
                             { value: 'wallet_topup', label: 'Wallet top-ups' },
+                            { value: 'contact_unlock', label: 'Visitor unlocks' },
                         ]}
                     />
 

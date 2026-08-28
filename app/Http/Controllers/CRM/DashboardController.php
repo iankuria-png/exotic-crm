@@ -123,6 +123,7 @@ class DashboardController extends Controller
             $salesView = $request->boolean('sales_view') || $request->user()?->role === MarketAuthorizationService::ROLE_SALES;
             $paymentReviewQueueQuery = Payment::query()
                 ->reportableSuccessful()
+                ->excludingWalletTopups()
                 ->whereNull('client_id')
                 ->with(['platform', 'product'])
                 ->orderBy('created_at', 'desc');
@@ -181,6 +182,7 @@ class DashboardController extends Controller
                 ->whereBetween('created_at', [$from, $to]);
             $unmatchedPaymentsWindowQuery = Payment::query()
                 ->reportableSuccessful()
+                ->excludingWalletTopups()
                 ->whereNull('client_id')
                 ->whereBetween('created_at', [$from, $to]);
             $baselineCutoff = $this->resolveBaselineCutoff();
@@ -188,6 +190,7 @@ class DashboardController extends Controller
             $failedPaymentsQuery = Payment::query()->businessVisible()->where('status', 'failed');
             $unmatchedQueueQuery = Payment::query()
                 ->reportableSuccessful()
+                ->excludingWalletTopups()
                 ->whereNull('client_id')
                 ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
             if ($baselineCutoff) {

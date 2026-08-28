@@ -3,17 +3,20 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
-use App\Models\Client;
 use App\Models\ContactUnlockPricingRule;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockPulseService;
+use App\Services\ContactUnlockQueryService;
 use App\Services\ContactUnlockReadinessService;
+use App\Services\MarketAuthorizationService;
 use App\Services\ReportingCurrencyService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -23,6 +26,8 @@ class ContactUnlockAdminController extends Controller
         private readonly ContactUnlockPricingService $pricingService,
         private readonly ContactUnlockReadinessService $readinessService,
         private readonly ContactUnlockPulseService $pulseService,
+        private readonly ContactUnlockQueryService $unlockQueryService,
+        private readonly MarketAuthorizationService $marketAuthorization,
         private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
 
@@ -43,43 +48,67 @@ class ContactUnlockAdminController extends Controller
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'currency_mode' => ['nullable', Rule::in(['native', 'flat'])],
             'reporting_currency' => 'nullable|string|min:3|max:8',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
         ]);
 
+        $this->marketAuthorization->ensureRequestedPlatformIsAccessible($request);
+        $platformIds = $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+        $canManage = $this->marketAuthorization->isManager($request->user());
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($filters['reporting_currency'] ?? null);
         $currencyMode = $this->reportingCurrencyService->resolveMode($filters['currency_mode'] ?? null, true);
+        $hasDateWindow = ! empty($filters['from']) || ! empty($filters['to']);
 
         $markets = Platform::query()
             ->where('is_active', true)
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('id', $platformIds))
             ->orderBy('name')
             ->get(['id', 'name', 'country', 'domain', 'currency_code', 'phone_prefix']);
 
-        $rules = ContactUnlockPricingRule::query()
-            ->with('platform:id,name,currency_code')
-            ->orderBy('platform_id')
-            ->orderBy('amount')
-            ->get()
-            ->map(fn (ContactUnlockPricingRule $rule) => $this->serializeRule($rule))
-            ->values();
+        $rules = $canManage
+            ? ContactUnlockPricingRule::query()
+                ->with('platform:id,name,currency_code')
+                ->orderBy('platform_id')
+                ->orderBy('amount')
+                ->get()
+                ->map(fn (ContactUnlockPricingRule $rule) => $this->serializeRule($rule))
+                ->values()
+            : collect();
 
         $unlockStats = VisitorContactUnlock::query()
             ->select('status', DB::raw('COUNT(*) as aggregate_count'))
-            ->groupBy('status')
-            ->pluck('aggregate_count', 'status');
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->when(! empty($filters['platform_id']), fn (Builder $query) => $query->where('platform_id', (int) $filters['platform_id']));
+        $this->applyUnlockDateWindow($unlockStats, $filters);
+        $unlockStats = $unlockStats->groupBy('status')->pluck('aggregate_count', 'status');
 
-        $paymentQuery = Payment::query()->contactUnlockRevenue();
-        $confirmedQuery = (clone $paymentQuery)->where('status', 'completed');
+        $paymentQuery = Payment::query()
+            ->contactUnlockRevenue()
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->when(! empty($filters['platform_id']), fn (Builder $query) => $query->where('platform_id', (int) $filters['platform_id']));
+        $this->applyPaymentDateWindow($paymentQuery, $filters);
+
+        $confirmedQuery = (clone $paymentQuery)->whereIn('status', Payment::SUCCESSFUL_STATUSES);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedQuery, $targetCurrency);
-        $recentUnlocks = $this->recentUnlocks($filters);
+        $recentUnlocks = $this->recentUnlocks($filters, $platformIds);
 
-        return response()->json([
-            'settings' => [
-                'enabled' => $this->pricingService->globallyEnabled(),
-                'market_ids' => $this->pricingService->enabledMarketIds(),
-                'sandbox_only' => $this->pricingService->sandboxOnly(),
-            ],
+        $totalUnlocksQuery = VisitorContactUnlock::query()
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->when(! empty($filters['platform_id']), fn (Builder $query) => $query->where('platform_id', (int) $filters['platform_id']));
+        $this->applyUnlockDateWindow($totalUnlocksQuery, $filters);
+
+        $activeUnlocksQuery = VisitorContactUnlock::query()
+            ->active()
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->when(! empty($filters['platform_id']), fn (Builder $query) => $query->where('platform_id', (int) $filters['platform_id']));
+        $this->applyUnlockDateWindow($activeUnlocksQuery, $filters);
+
+        $payload = [
+            'permissions' => ['can_manage' => $canManage],
             'summary' => [
-                'total_unlocks' => (int) VisitorContactUnlock::query()->count(),
-                'active_unlocks' => (int) VisitorContactUnlock::query()->active()->count(),
+                'window_label' => $hasDateWindow ? 'selected range' : 'all time',
+                'total_unlocks' => (int) $totalUnlocksQuery->count(),
+                'active_unlocks' => (int) $activeUnlocksQuery->count(),
                 'pending_unlocks' => (int) ($unlockStats[VisitorContactUnlock::STATUS_PENDING_PAYMENT] ?? 0),
                 'completed_payments' => (int) (clone $confirmedQuery)->count(),
                 'confirmed_revenue_native' => $this->nativeRevenue((clone $confirmedQuery)),
@@ -98,7 +127,6 @@ class ContactUnlockAdminController extends Controller
                 'phone_prefix' => (string) ($platform->phone_prefix ?: ''),
                 'enabled' => $this->pricingService->enabledForPlatform($platform),
             ])->values(),
-            'pricing_rules' => $rules,
             'recent_unlocks' => $recentUnlocks->getCollection()
                 ->map(fn (VisitorContactUnlock $unlock) => $this->serializeUnlock($unlock))
                 ->values(),
@@ -110,7 +138,18 @@ class ContactUnlockAdminController extends Controller
                 'from' => (int) ($recentUnlocks->firstItem() ?? 0),
                 'to' => (int) ($recentUnlocks->lastItem() ?? 0),
             ],
-        ]);
+        ];
+
+        if ($canManage) {
+            $payload['settings'] = [
+                'enabled' => $this->pricingService->globallyEnabled(),
+                'market_ids' => $this->pricingService->enabledMarketIds(),
+                'sandbox_only' => $this->pricingService->sandboxOnly(),
+            ];
+            $payload['pricing_rules'] = $rules;
+        }
+
+        return response()->json($payload);
     }
 
     public function update(Request $request): JsonResponse
@@ -192,16 +231,25 @@ class ContactUnlockAdminController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
-            'range' => ['nullable', Rule::in(['today', '7d', '30d'])],
+            'range' => ['nullable', Rule::in(['today', '7d', '30d', 'custom'])],
             'timezone' => 'nullable|string|max:80',
             'reporting_currency' => 'nullable|string|min:3|max:8',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
         ]);
 
+        $this->marketAuthorization->ensureRequestedPlatformIsAccessible($request);
+        $platformIds = ! empty($validated['platform_id'])
+            ? [(int) $validated['platform_id']]
+            : $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+
         return response()->json($this->pulseService->summary(
-            ! empty($validated['platform_id']) ? (int) $validated['platform_id'] : null,
+            $platformIds,
             (string) ($validated['range'] ?? 'today'),
             $validated['timezone'] ?? null,
-            $validated['reporting_currency'] ?? null
+            $validated['reporting_currency'] ?? null,
+            $validated['from'] ?? null,
+            $validated['to'] ?? null
         ));
     }
 
@@ -220,80 +268,33 @@ class ContactUnlockAdminController extends Controller
             ->all();
     }
 
-    private function recentUnlocks(array $filters)
+    private function recentUnlocks(array $filters, ?array $platformIds)
     {
-        $query = VisitorContactUnlock::query()
-            ->with(['platform:id,name,currency_code', 'client:id,name,wp_post_id,wp_profile_permalink', 'payment:id,status,amount,currency,reference_number,failure_reason,payment_data,provider_key,provider_environment']);
+        return $this->unlockQueryService
+            ->filtered($filters, $platformIds)
+            ->paginate((int) ($filters['per_page'] ?? 10));
+    }
 
-        if (! empty($filters['platform_id'])) {
-            $query->where('platform_id', (int) $filters['platform_id']);
+    private function applyUnlockDateWindow(Builder $query, array $filters): void
+    {
+        if (! empty($filters['from'])) {
+            $query->where('created_at', '>=', Carbon::parse($filters['from'])->startOfDay());
         }
 
-        if (! empty($filters['status'])) {
-            $query->where('status', (string) $filters['status']);
+        if (! empty($filters['to'])) {
+            $query->where('created_at', '<=', Carbon::parse($filters['to'])->endOfDay());
+        }
+    }
+
+    private function applyPaymentDateWindow(Builder $query, array $filters): void
+    {
+        if (! empty($filters['from'])) {
+            $query->where(DB::raw('COALESCE(completed_at, updated_at, created_at)'), '>=', Carbon::parse($filters['from'])->startOfDay());
         }
 
-        if (! empty($filters['scope'])) {
-            $query->where('scope', (string) $filters['scope']);
+        if (! empty($filters['to'])) {
+            $query->where(DB::raw('COALESCE(completed_at, updated_at, created_at)'), '<=', Carbon::parse($filters['to'])->endOfDay());
         }
-
-        if (! empty($filters['payment_status'])) {
-            $query->whereHas('payment', fn ($paymentQuery) => $paymentQuery->where('status', (string) $filters['payment_status']));
-        }
-
-        $search = trim((string) ($filters['search'] ?? ''));
-        if ($search !== '') {
-            $like = '%'.str_replace(['%', '_'], ['\%', '\_'], $search).'%';
-            $query->where(function ($searchQuery) use ($like, $search): void {
-                if (ctype_digit($search)) {
-                    $searchQuery->orWhere('id', (int) $search);
-                }
-
-                $searchQuery
-                    ->orWhere('visitor_phone_masked', 'like', $like)
-                    ->orWhere('visitor_email_masked', 'like', $like)
-                    ->orWhereHas('client', function ($clientQuery) use ($like): void {
-                        $clientQuery
-                            ->where('name', 'like', $like)
-                            ->orWhere('wp_profile_permalink', 'like', $like);
-                    })
-                    ->orWhereHas('payment', function ($paymentQuery) use ($like): void {
-                        $paymentQuery
-                            ->where('reference_number', 'like', $like)
-                            ->orWhere('transaction_reference', 'like', $like)
-                            ->orWhere('provider_key', 'like', $like);
-                    });
-            });
-        }
-
-        $direction = (string) ($filters['direction'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
-        match ((string) ($filters['sort'] ?? 'id')) {
-            'amount' => $query->orderBy(Payment::query()
-                ->select('amount')
-                ->whereColumn('payments.id', 'visitor_contact_unlocks.payment_id')
-                ->limit(1), $direction),
-            'payment_status' => $query->orderBy(Payment::query()
-                ->select('status')
-                ->whereColumn('payments.id', 'visitor_contact_unlocks.payment_id')
-                ->limit(1), $direction),
-            'profile' => $query->orderBy(Client::query()
-                ->select('name')
-                ->whereColumn('clients.id', 'visitor_contact_unlocks.client_id')
-                ->limit(1), $direction),
-            'market' => $query->orderBy(Platform::query()
-                ->select('name')
-                ->whereColumn('platforms.id', 'visitor_contact_unlocks.platform_id')
-                ->limit(1), $direction),
-            'created_at' => $query->orderBy('created_at', $direction),
-            'status' => $query->orderBy('status', $direction),
-            'scope' => $query->orderBy('scope', $direction),
-            'visitor' => $query->orderBy('visitor_phone_masked', $direction),
-            default => $query->orderBy('id', $direction),
-        };
-
-        $query->orderBy('id', 'desc');
-
-        return $query->paginate((int) ($filters['per_page'] ?? 10));
     }
 
     private function serializeRule(ContactUnlockPricingRule $rule): array

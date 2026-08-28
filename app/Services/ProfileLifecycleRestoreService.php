@@ -154,7 +154,8 @@ class ProfileLifecycleRestoreService
                             $client,
                             null,
                             false,
-                            'profile_restore_active_subscription_skip'
+                            'profile_restore_active_subscription_skip',
+                            false
                         );
                         $skipped++;
 
@@ -271,7 +272,8 @@ class ProfileLifecycleRestoreService
                                 $client,
                                 null,
                                 false,
-                                'profile_restore_revert_active_subscription_skip'
+                                'profile_restore_revert_active_subscription_skip',
+                                false
                             );
                             $skipped++;
 
