@@ -89,6 +89,14 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_purge_closed_clients.log'));
 
+        // Signed customer-data retention: activity events expire at 180 days.
+        $schedule->command('crm:purge-customer-data')
+            ->name('crm_purge_customer_data')
+            ->dailyAt('03:10')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_purge_customer_data.log'));
+
         // Archive long-term Expired profiles (keeps them indexed, removes from listings).
         $schedule->command('crm:archive-expired')
             ->name('crm_archive_expired')

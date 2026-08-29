@@ -84,6 +84,7 @@ use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleCont
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
 use App\Http\Controllers\CRM\WeeklyPriorityController;
 use App\Http\Controllers\Wp\ComplianceController as WpComplianceController;
+use App\Http\Controllers\Wp\CustomerProductController;
 use App\Http\Controllers\Wp\ContactUnlockController as WpContactUnlockController;
 use App\Http\Controllers\Wp\WpSeoController;
 use Illuminate\Http\Request;
@@ -102,6 +103,15 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/compliance')->group(funct
     Route::get('/creator-agreement/current', [WpComplianceController::class, 'currentAgreement']);
     Route::post('/creator-agreement/acceptances', [WpComplianceController::class, 'storeAgreementAcceptance']);
     Route::post('/content-declarations', [WpComplianceController::class, 'storeContentDeclaration']);
+});
+
+Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(function () {
+    Route::post('/sync', [CustomerProductController::class, 'sync']);
+    Route::post('/saved', [CustomerProductController::class, 'savedIndex']);
+    Route::post('/saved/add', [CustomerProductController::class, 'savedStore']);
+    Route::post('/saved/remove', [CustomerProductController::class, 'savedDestroy']);
+    Route::post('/saved/merge', [CustomerProductController::class, 'savedMerge']);
+    Route::post('/forget', [CustomerProductController::class, 'forget']);
 });
 
 Route::middleware(['wp.service.auth'])->prefix('wp-svc/contact-unlock')->group(function () {

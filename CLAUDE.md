@@ -62,6 +62,9 @@ Requires Local by Flywheel running (provides MySQL + WordPress).
 ### CRM Tables (new)
 `clients`, `leads`, `deals`, `templates`, `renewal_campaigns`, `renewal_runs`, `timeline_events`, `audit_log`, `client_notes`
 
+### Customer Product Tables (My Exotic, Phase 2)
+`customer_accounts`, `customer_saved_objects`, `customer_activity_events` — see "Who is who" above.
+
 ### CRM Columns Added to Existing Tables
 - `platforms`: `wp_api_url`, `wp_api_user`, `wp_api_password`, `phone_prefix`, `timezone`, `currency_code`
 - `users`: `assigned_market_ids`, `status`
@@ -80,6 +83,30 @@ Requires Local by Flywheel running (provides MySQL + WordPress).
 - **Ads API routes:** `/api/*` — currently public (securing in Sprint 5)
 - **CRM login:** `POST /api/crm/login` — returns Sanctum bearer token
 - **WP Sync:** `http://exotic.local/wp-json/exotic-crm-sync/v1/*` — Basic Auth with Application Password
+
+## Who is who (read before naming anything)
+
+Four different people show up in this codebase. Mixing them up is the single
+most expensive mistake available here.
+
+| Term | Table | Who it is |
+|------|-------|-----------|
+| **client** | `clients` | The advertiser being sold to. Has a WP profile post. |
+| **user** | `users` | CRM staff. Sanctum-authenticated. |
+| **visitor** | `visitor_contact_unlocks` | An **anonymous** person who paid to unlock a contact. Identified by `session_token_hash`. Has no account. `client_id` on that table is the advertiser being unlocked — it is **not** the visitor. |
+| **customer** | `customer_accounts` | A logged-in WordPress site member with a My Exotic workspace. Identified only by `(platform_id, wp_user_id)`. |
+
+Rules:
+
+1. **Never name account-owned state `visitor_*`.** A customer and a visitor are
+   different subjects, and `visitor_contact_unlocks` can never be joined to a
+   customer. Phase 6 introduces `CustomerUnlockClaim` precisely so ownership has
+   somewhere legitimate to live.
+2. WordPress-facing UI calls a customer a **member**, because that is the actual
+   WP role (`escortid{uid} = 'member'`). Same person, different audience.
+3. Customer identity is asserted by WordPress inside an HMAC-signed body and
+   re-validated in `CustomerProductService`. The HMAC proves which *site* called,
+   never which *person*.
 
 ## Important Conventions
 
