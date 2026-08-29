@@ -33,6 +33,9 @@ class CustomerActivityEvent extends Model
     public const EVENT_UNLOCK_CLAIMED = 'unlock.claimed';
     public const EVENT_REACHABILITY_SUBMITTED = 'reachability.submitted';
 
+    // Phase 7: account-owned safety reports.
+    public const EVENT_REPORT_SUBMITTED = 'report.submitted';
+
     protected $fillable = [
         'customer_account_id',
         'platform_id',

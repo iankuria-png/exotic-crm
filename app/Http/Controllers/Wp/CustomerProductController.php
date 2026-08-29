@@ -7,6 +7,7 @@ use App\Models\CustomerActivityEvent;
 use App\Models\CustomerFollow;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
+use App\Models\CustomerSafetyReport;
 use App\Models\CustomerSavedSearch;
 use App\Models\CustomerUnlockClaim;
 use App\Models\Platform;
@@ -342,6 +343,52 @@ class CustomerProductController extends Controller
                 'success' => true,
                 'feedback_id' => (int) $feedback->id,
                 'status' => (string) $feedback->status,
+                'message' => "Reported. We'll check it.",
+            ], 201);
+        });
+    }
+
+    // ------------------------------------------------------------ safety centre
+
+    /**
+     * Everything the Safety Centre renders: the member's own report history and
+     * the latest reachability outcome per claimed unlock.
+     *
+     * Both reads are scoped to the resolved account, so one member can never
+     * see another member's history.
+     */
+    public function safetyIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $limit = (int) $request->input('limit', CustomerSafetyReport::HISTORY_PAGE);
+
+            return response()->json($this->summary($account) + [
+                'reports' => $this->customerProduct->safetyReports($account, $limit),
+                'report_count' => $this->customerProduct->safetyReportCount($account),
+                'report_categories' => CustomerSafetyReport::categories(),
+                'reachability' => $this->customerProduct->reachabilityHistory($account),
+            ]);
+        });
+    }
+
+    /**
+     * File a report against a profile as the signed-in member.
+     *
+     * WordPress still runs the existing report email on its own side; this call
+     * only adds the account-owned record behind it.
+     */
+    public function reportStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $report = $this->customerProduct->submitSafetyReport(
+                $account,
+                (int) $request->input('wp_post_id'),
+                (string) $request->input('category')
+            );
+
+            return response()->json([
+                'success' => true,
+                'report' => $this->customerProduct->serializeReportForResponse($report),
                 'message' => "Reported. We'll check it.",
             ], 201);
         });

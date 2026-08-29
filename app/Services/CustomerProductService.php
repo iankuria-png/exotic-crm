@@ -10,6 +10,7 @@ use App\Models\CustomerFollow;
 use App\Models\CustomerReachabilityFeedback;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
+use App\Models\CustomerSafetyReport;
 use App\Models\CustomerSavedSearch;
 use App\Models\Client;
 use App\Models\CustomerUnlockClaim;
@@ -52,6 +53,18 @@ class CustomerProductService
 
     /** A guest reveal can be claimed only while the handoff is still fresh. */
     public const UNLOCK_CLAIM_HANDOFF_MINUTES = 60;
+
+    /** Reachability rows returned to the Safety Centre, one per claimed unlock. */
+    public const REACHABILITY_HISTORY_PAGE = 60;
+
+    /**
+     * Feedback rows scanned to build that history.
+     *
+     * The collapse to one row per claim happens in PHP because a member holds
+     * very few claims; this bound keeps a pathological account from reading an
+     * unbounded table.
+     */
+    public const REACHABILITY_HISTORY_SCAN = 400;
 
     /**
      * Per-request memos.
@@ -952,6 +965,205 @@ class CustomerProductService
         return $feedback;
     }
 
+    // ------------------------------------------------------------ safety centre
+
+    public function safetyReportCount(CustomerAccount $account): int
+    {
+        return CustomerSafetyReport::query()
+            ->where('customer_account_id', $account->id)
+            ->count();
+    }
+
+    /**
+     * The member's own report history, newest first.
+     *
+     * Staff notes and the staff reviewer are never selected: a member sees what
+     * they reported, when, and a coarse status. Nothing else.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function safetyReports(CustomerAccount $account, int $limit = CustomerSafetyReport::HISTORY_PAGE): array
+    {
+        $limit = max(1, min($limit, CustomerSafetyReport::HISTORY_PAGE));
+
+        return CustomerSafetyReport::query()
+            ->with(['client:id,name,wp_post_id,wp_profile_permalink,main_image_url,display_image_url,city'])
+            ->where('customer_account_id', $account->id)
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (CustomerSafetyReport $report) => $this->serializeSafetyReport($report))
+            ->all();
+    }
+
+    /**
+     * Record a report a signed-in member filed against a profile.
+     *
+     * WordPress still sends the same admin email through the existing parent
+     * flow, so this adds account ownership without changing what staff receive
+     * or how anonymous visitors report.
+     *
+     * Re-reporting the same profile for the same reason while the first report
+     * is still open returns that report rather than stacking duplicates.
+     */
+    public function submitSafetyReport(CustomerAccount $account, int $wpPostId, string $category): CustomerSafetyReport
+    {
+        $wpPostId = $this->normalizePositiveRef($wpPostId, 'A profile id is required.');
+        $category = $this->normalizeReportCategory($category);
+
+        $existing = CustomerSafetyReport::query()
+            ->with(['client'])
+            ->where('customer_account_id', $account->id)
+            ->where('wp_post_id', $wpPostId)
+            ->where('category', $category)
+            ->whereIn('status', [CustomerSafetyReport::STATUS_RECEIVED, CustomerSafetyReport::STATUS_UNDER_REVIEW])
+            ->orderByDesc('id')
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        $recent = CustomerSafetyReport::query()
+            ->where('customer_account_id', $account->id)
+            ->where('submitted_at', '>=', Carbon::now()->subDay())
+            ->count();
+
+        if ($recent >= CustomerSafetyReport::MAX_PER_DAY) {
+            throw new InvalidArgumentException("That's a lot of reports today. Contact support instead.");
+        }
+
+        $client = Client::query()
+            ->where('platform_id', $account->platform_id)
+            ->where('wp_post_id', $wpPostId)
+            ->first();
+
+        $report = CustomerSafetyReport::query()->create([
+            'reference' => $this->generateReportReference(),
+            'customer_account_id' => (int) $account->id,
+            'platform_id' => (int) $account->platform_id,
+            'wp_post_id' => $wpPostId,
+            'client_id' => $client?->id,
+            'category' => $category,
+            'status' => CustomerSafetyReport::STATUS_RECEIVED,
+            'source' => CustomerSafetyReport::SOURCE_MEMBER_PROFILE_REPORT,
+            'submitted_at' => Carbon::now(),
+        ]);
+
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_REPORT_SUBMITTED, $wpPostId, [
+            'category' => $category,
+        ]);
+
+        return $report->fresh(['client']);
+    }
+
+    public function serializeReportForResponse(CustomerSafetyReport $report): array
+    {
+        return $this->serializeSafetyReport($report);
+    }
+
+    /**
+     * The latest reachability outcome per claimed unlock.
+     *
+     * A member thinks in contacts, not submissions, so repeating "no answer"
+     * three times about one contact collapses to a single row carrying the most
+     * recent date. `review_reason` is a staff signal and is never exposed.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function reachabilityHistory(CustomerAccount $account, int $limit = self::REACHABILITY_HISTORY_PAGE): array
+    {
+        $limit = max(1, min($limit, self::REACHABILITY_HISTORY_PAGE));
+
+        $rows = CustomerReachabilityFeedback::query()
+            ->with(['claim.client:id,name,wp_post_id,wp_profile_permalink,main_image_url,display_image_url,city'])
+            ->where('customer_account_id', $account->id)
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
+            ->limit(self::REACHABILITY_HISTORY_SCAN)
+            ->get();
+
+        $latest = [];
+        foreach ($rows as $row) {
+            $key = (int) ($row->customer_unlock_claim_id ?: 0);
+            if ($key === 0) {
+                continue;
+            }
+
+            // Rows arrive newest first, so the first one seen for a claim wins.
+            if (! isset($latest[$key])) {
+                $client = $row->claim?->client;
+                $latest[$key] = [
+                    'claim_id' => $key,
+                    'wp_post_id' => (int) $row->wp_post_id,
+                    'outcome' => (string) $row->outcome,
+                    'submitted_at' => $row->submitted_at?->toIso8601String(),
+                    'submission_count' => 0,
+                    'profile' => [
+                        'name' => (string) ($client?->name ?? ''),
+                        'url' => (string) ($client?->wp_profile_permalink ?? ''),
+                        'image' => (string) ($client?->display_image_url ?: $client?->main_image_url ?: ''),
+                        'city' => (string) ($client?->city ?? ''),
+                    ],
+                ];
+            }
+
+            $latest[$key]['submission_count']++;
+        }
+
+        return array_slice(array_values($latest), 0, $limit);
+    }
+
+    private function serializeSafetyReport(CustomerSafetyReport $report): array
+    {
+        $client = $report->client;
+
+        return [
+            'id' => (int) $report->id,
+            'reference' => (string) $report->reference,
+            'wp_post_id' => (int) $report->wp_post_id,
+            'category' => (string) $report->category,
+            'status' => (string) $report->status,
+            'open' => $report->isOpen(),
+            'submitted_at' => $report->submitted_at?->toIso8601String(),
+            'profile' => [
+                'name' => (string) ($client?->name ?? ''),
+                'url' => (string) ($client?->wp_profile_permalink ?? ''),
+                'image' => (string) ($client?->display_image_url ?: $client?->main_image_url ?: ''),
+                'city' => (string) ($client?->city ?? ''),
+            ],
+        ];
+    }
+
+    private function normalizeReportCategory(string $category): string
+    {
+        $category = strtolower(trim($category));
+        if (! in_array($category, CustomerSafetyReport::categories(), true)) {
+            throw new InvalidArgumentException('Choose what the problem is.');
+        }
+
+        return $category;
+    }
+
+    /**
+     * A short reference a member can quote to support.
+     *
+     * Deliberately not the row id: the reference is shown to people and pasted
+     * into messages, so it should not leak how many reports the site holds.
+     */
+    private function generateReportReference(): string
+    {
+        for ($attempt = 0; $attempt < 8; $attempt++) {
+            $reference = 'SR-' . strtoupper(bin2hex(random_bytes(4)));
+            if (! CustomerSafetyReport::query()->where('reference', $reference)->exists()) {
+                return $reference;
+            }
+        }
+
+        throw new InvalidArgumentException('Could not file that report. Try again.');
+    }
+
     private function serializeUnlockClaim(CustomerUnlockClaim $claim): array
     {
         $client = $claim->client;
@@ -1064,6 +1276,7 @@ class CustomerProductService
         CustomerActivityEvent::query()->where('customer_account_id', $account->id)->delete();
         CustomerUnlockClaim::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
         CustomerReachabilityFeedback::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
+        CustomerSafetyReport::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
 
         unset(
             $this->compareSetMemo[(int) $account->id],

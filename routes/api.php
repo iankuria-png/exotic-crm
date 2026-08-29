@@ -128,6 +128,8 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(functio
     Route::post('/unlocks/claim', [CustomerProductController::class, 'unlockClaim']);
     Route::post('/unlocks/reveal', [CustomerProductController::class, 'unlockReveal']);
     Route::post('/reachability', [CustomerProductController::class, 'reachabilityStore']);
+    Route::post('/safety', [CustomerProductController::class, 'safetyIndex']);
+    Route::post('/safety/report', [CustomerProductController::class, 'reportStore']);
     Route::post('/forget', [CustomerProductController::class, 'forget']);
 });
 
