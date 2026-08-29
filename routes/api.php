@@ -118,6 +118,12 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(functio
     Route::post('/compare/add', [CustomerProductController::class, 'compareStore']);
     Route::post('/compare/remove', [CustomerProductController::class, 'compareDestroy']);
     Route::post('/compare/clear', [CustomerProductController::class, 'compareClear']);
+    Route::post('/follows', [CustomerProductController::class, 'followsIndex']);
+    Route::post('/follows/add', [CustomerProductController::class, 'followStore']);
+    Route::post('/follows/remove', [CustomerProductController::class, 'followDestroy']);
+    Route::post('/saved-searches', [CustomerProductController::class, 'savedSearchesIndex']);
+    Route::post('/saved-searches/add', [CustomerProductController::class, 'savedSearchStore']);
+    Route::post('/saved-searches/remove', [CustomerProductController::class, 'savedSearchDestroy']);
     Route::post('/forget', [CustomerProductController::class, 'forget']);
 });
 

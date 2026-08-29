@@ -46,6 +46,16 @@ class CustomerAccount extends Model
         return $this->hasMany(CustomerActivityEvent::class);
     }
 
+    public function follows(): HasMany
+    {
+        return $this->hasMany(CustomerFollow::class);
+    }
+
+    public function savedSearches(): HasMany
+    {
+        return $this->hasMany(CustomerSavedSearch::class);
+    }
+
     public static function hashEmail(?string $email): ?string
     {
         $email = strtolower(trim((string) $email));

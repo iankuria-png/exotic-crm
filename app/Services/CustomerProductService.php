@@ -6,8 +6,10 @@ use App\Models\CustomerAccount;
 use App\Models\CustomerActivityEvent;
 use App\Models\CustomerCompareItem;
 use App\Models\CustomerCompareSet;
+use App\Models\CustomerFollow;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
+use App\Models\CustomerSavedSearch;
 use App\Models\Platform;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +40,9 @@ class CustomerProductService
     /** Recent views returned to the workspace in one read. */
     public const RECENT_VIEWS_PAGE = 60;
 
+    /** Members can keep a practical number of saved discovery routes. */
+    public const MAX_SAVED_SEARCHES = 50;
+
     /**
      * Per-request memos.
      *
@@ -60,6 +65,9 @@ class CustomerProductService
 
     /** @var array<int, \Illuminate\Support\Collection<int, CustomerCompareItem>> */
     private array $compareItemsMemo = [];
+
+    /** @var array<int, \Illuminate\Support\Carbon|null> */
+    private array $previousLastSeenMemo = [];
 
     public function resolveAccount(Platform $platform, array $identity): CustomerAccount
     {
@@ -91,6 +99,7 @@ class CustomerProductService
         ]);
 
         $isNew = ! $account->exists;
+        $previousLastSeen = $account->exists ? $account->last_seen_at : null;
         if ($isNew) {
             $account->first_seen_at = $now;
         }
@@ -102,6 +111,8 @@ class CustomerProductService
         $account->email_hash = CustomerAccount::hashEmail($email);
         $account->last_seen_at = $now;
         $account->save();
+
+        $this->previousLastSeenMemo[(int) $account->id] = $previousLastSeen;
 
         if ($isNew) {
             $this->recordEvent($account, CustomerActivityEvent::EVENT_ACCOUNT_LINKED);
@@ -128,6 +139,13 @@ class CustomerProductService
         return CustomerSavedObject::query()
             ->where('customer_account_id', $account->id)
             ->count();
+    }
+
+    public function previousLastSeenAt(CustomerAccount $account): ?Carbon
+    {
+        $key = (int) $account->id;
+
+        return $this->previousLastSeenMemo[$key] ?? null;
     }
 
     /**
@@ -369,15 +387,16 @@ class CustomerProductService
         return $deleted;
     }
 
-    /** Keep the newest MAX_PER_ACCOUNT rows so one member cannot grow forever. */
     /** Drop every per-request memo. Called at the start of each request. */
     private function forgetMemos(): void
     {
         $this->compareSetMemo = [];
         $this->compareItemsMemo = [];
         $this->recentCountMemo = [];
+        $this->previousLastSeenMemo = [];
     }
 
+    /** Keep the newest MAX_PER_ACCOUNT rows so one member cannot grow forever. */
     private function trimRecentViews(CustomerAccount $account): void
     {
         $overflow = $this->recentViewCount($account) - CustomerRecentView::MAX_PER_ACCOUNT;
@@ -541,6 +560,183 @@ class CustomerProductService
         return $deleted;
     }
 
+    // ---------------------------------------------------------------- follows
+
+    /** @return int[] */
+    public function followIds(CustomerAccount $account, string $type): array
+    {
+        $type = $this->normalizeFollowType($type);
+
+        return CustomerFollow::query()
+            ->where('customer_account_id', $account->id)
+            ->where('follow_type', $type)
+            ->orderByDesc('followed_at')
+            ->orderByDesc('id')
+            ->pluck('object_ref')
+            ->map(static fn ($ref) => (int) $ref)
+            ->all();
+    }
+
+    public function followCount(CustomerAccount $account): int
+    {
+        return CustomerFollow::query()
+            ->where('customer_account_id', $account->id)
+            ->count();
+    }
+
+    public function follow(CustomerAccount $account, string $type, int $objectRef): bool
+    {
+        $type = $this->normalizeFollowType($type);
+        $objectRef = $this->normalizePositiveRef($objectRef, $type === CustomerFollow::TYPE_PROFILE ? 'A profile id is required.' : 'A location id is required.');
+
+        $existing = CustomerFollow::query()
+            ->where('customer_account_id', $account->id)
+            ->where('follow_type', $type)
+            ->where('object_ref', $objectRef)
+            ->first();
+
+        if ($existing) {
+            return false;
+        }
+
+        CustomerFollow::query()->create([
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'follow_type' => $type,
+            'object_ref' => $objectRef,
+            'source' => CustomerFollow::SOURCE_WORKSPACE,
+            'followed_at' => Carbon::now(),
+        ]);
+
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_FOLLOW_ADDED, $objectRef, [
+            'follow_type' => $type,
+        ]);
+
+        return true;
+    }
+
+    public function unfollow(CustomerAccount $account, string $type, int $objectRef): bool
+    {
+        $type = $this->normalizeFollowType($type);
+        $objectRef = $this->normalizePositiveRef($objectRef, $type === CustomerFollow::TYPE_PROFILE ? 'A profile id is required.' : 'A location id is required.');
+
+        $deleted = CustomerFollow::query()
+            ->where('customer_account_id', $account->id)
+            ->where('follow_type', $type)
+            ->where('object_ref', $objectRef)
+            ->delete();
+
+        if ($deleted > 0) {
+            $this->recordEvent($account, CustomerActivityEvent::EVENT_FOLLOW_REMOVED, $objectRef, [
+                'follow_type' => $type,
+            ]);
+        }
+
+        return $deleted > 0;
+    }
+
+    // ---------------------------------------------------------- saved searches
+
+    /**
+     * @return array<int,array{id:int,route_family:string,route_value:string,refinements:array<string,mixed>,label:?string,saved_at:?string}>
+     */
+    public function savedSearches(CustomerAccount $account): array
+    {
+        return CustomerSavedSearch::query()
+            ->where('customer_account_id', $account->id)
+            ->orderByDesc('saved_at')
+            ->orderByDesc('id')
+            ->get()
+            ->map(static fn (CustomerSavedSearch $search) => [
+                'id' => (int) $search->id,
+                'route_family' => (string) $search->route_family,
+                'route_value' => (string) $search->route_value,
+                'refinements' => is_array($search->refinements_json) ? $search->refinements_json : [],
+                'label' => $search->label,
+                'saved_at' => $search->saved_at?->toIso8601String(),
+            ])
+            ->all();
+    }
+
+    public function savedSearchCount(CustomerAccount $account): int
+    {
+        return CustomerSavedSearch::query()
+            ->where('customer_account_id', $account->id)
+            ->count();
+    }
+
+    public function saveSearch(CustomerAccount $account, string $routeFamily, string $routeValue, array $refinements = [], ?string $label = null): bool
+    {
+        $routeFamily = $this->normalizeRoutePart($routeFamily, 80, 'A discovery route is required.');
+        $routeValue = $this->normalizeRoutePart($routeValue, 190, 'A discovery route is required.');
+        $refinements = $this->normalizeRefinements($refinements);
+        $hash = hash('sha256', json_encode($refinements));
+        $label = $this->trimOrNull($label, 190);
+
+        $existing = CustomerSavedSearch::query()
+            ->where('customer_account_id', $account->id)
+            ->where('route_family', $routeFamily)
+            ->where('route_value', $routeValue)
+            ->where('refinement_hash', $hash)
+            ->first();
+
+        if ($existing) {
+            $existing->saved_at = Carbon::now();
+            if ($label !== null) {
+                $existing->label = $label;
+            }
+            $existing->save();
+
+            return false;
+        }
+
+        if ($this->savedSearchCount($account) >= self::MAX_SAVED_SEARCHES) {
+            throw new InvalidArgumentException('Saved searches are full.');
+        }
+
+        CustomerSavedSearch::query()->create([
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'route_family' => $routeFamily,
+            'route_value' => $routeValue,
+            'refinement_hash' => $hash,
+            'refinements_json' => $refinements,
+            'label' => $label,
+            'saved_at' => Carbon::now(),
+        ]);
+
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_SEARCH_SAVED, null, [
+            'route_family' => $routeFamily,
+            'route_value' => $routeValue,
+        ]);
+
+        return true;
+    }
+
+    public function removeSavedSearch(CustomerAccount $account, int $savedSearchId): bool
+    {
+        $savedSearchId = $this->normalizePositiveRef($savedSearchId, 'A saved search id is required.');
+
+        $search = CustomerSavedSearch::query()
+            ->where('customer_account_id', $account->id)
+            ->where('id', $savedSearchId)
+            ->first();
+
+        if (! $search) {
+            return false;
+        }
+
+        $context = [
+            'route_family' => (string) $search->route_family,
+            'route_value' => (string) $search->route_value,
+        ];
+        $search->delete();
+
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_SEARCH_REMOVED, null, $context);
+
+        return true;
+    }
+
     private function findCompareSet(CustomerAccount $account): ?CustomerCompareSet
     {
         $key = (int) $account->id;
@@ -588,7 +784,7 @@ class CustomerProductService
             'customer_account_id' => $account->id,
             'platform_id' => $account->platform_id,
             'event_type' => $eventType,
-            'object_type' => $objectRef !== null ? CustomerSavedObject::TYPE_PROFILE : null,
+            'object_type' => $objectRef !== null ? ($context['follow_type'] ?? CustomerSavedObject::TYPE_PROFILE) : null,
             'object_ref' => $objectRef,
             'occurred_at' => Carbon::now(),
             'context_json' => empty($context) ? null : $context,
@@ -621,12 +817,15 @@ class CustomerProductService
         CustomerRecentView::query()->where('customer_account_id', $account->id)->delete();
         CustomerCompareItem::query()->where('customer_account_id', $account->id)->delete();
         CustomerCompareSet::query()->where('customer_account_id', $account->id)->delete();
+        CustomerFollow::query()->where('customer_account_id', $account->id)->delete();
+        CustomerSavedSearch::query()->where('customer_account_id', $account->id)->delete();
         CustomerActivityEvent::query()->where('customer_account_id', $account->id)->delete();
 
         unset(
             $this->compareSetMemo[(int) $account->id],
             $this->compareItemsMemo[(int) $account->id],
-            $this->recentCountMemo[(int) $account->id]
+            $this->recentCountMemo[(int) $account->id],
+            $this->previousLastSeenMemo[(int) $account->id]
         );
         $account->delete();
 
@@ -645,5 +844,83 @@ class CustomerProductService
         }
 
         return mb_substr($value, 0, $max);
+    }
+
+    private function normalizeFollowType(string $type): string
+    {
+        $type = strtolower(trim($type));
+        if (! in_array($type, [CustomerFollow::TYPE_PROFILE, CustomerFollow::TYPE_LOCATION], true)) {
+            throw new InvalidArgumentException('A supported follow type is required.');
+        }
+
+        return $type;
+    }
+
+    private function normalizePositiveRef(int $objectRef, string $message): int
+    {
+        $objectRef = (int) $objectRef;
+        if ($objectRef < 1) {
+            throw new InvalidArgumentException($message);
+        }
+
+        return $objectRef;
+    }
+
+    private function normalizeRoutePart(string $value, int $max, string $message): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace('/[^a-z0-9_:\\/-]+/', '', $value) ?? '';
+        $value = trim($value, '/');
+        if ($value === '') {
+            throw new InvalidArgumentException($message);
+        }
+
+        return mb_substr($value, 0, $max);
+    }
+
+    /**
+     * @param array<string,mixed> $refinements
+     * @return array<string,mixed>
+     */
+    private function normalizeRefinements(array $refinements): array
+    {
+        $normalized = [];
+
+        foreach (['q', 'city', 'fresh', 'verified', 'premium', 'vip', 'filters'] as $key) {
+            if (!array_key_exists($key, $refinements)) {
+                continue;
+            }
+
+            $value = $refinements[$key];
+            if ($key === 'filters') {
+                $filters = is_array($value) ? $value : [$value];
+                $filters = array_values(array_unique(array_filter(array_map(
+                    static fn ($filter) => preg_replace('/[^a-z0-9_]+/', '', strtolower(trim((string) $filter))) ?: '',
+                    $filters
+                ))));
+                if (!empty($filters)) {
+                    sort($filters);
+                    $normalized[$key] = array_slice($filters, 0, 20);
+                }
+                continue;
+            }
+
+            if (in_array($key, ['city', 'verified', 'premium', 'vip'], true)) {
+                $int = (int) $value;
+                if ($int > 0) {
+                    $normalized[$key] = $int;
+                }
+                continue;
+            }
+
+            $text = trim((string) $value);
+            if ($text !== '') {
+                $normalized[$key] = mb_substr($text, 0, $key === 'q' ? 120 : 40);
+            }
+        }
+
+        ksort($normalized);
+
+        return $normalized;
     }
 }

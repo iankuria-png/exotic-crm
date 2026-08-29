@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Wp;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerActivityEvent;
+use App\Models\CustomerFollow;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
+use App\Models\CustomerSavedSearch;
 use App\Models\Platform;
 use App\Services\CustomerProductService;
 use Illuminate\Http\JsonResponse;
@@ -196,6 +198,93 @@ class CustomerProductController extends Controller
         });
     }
 
+    // ---------------------------------------------------------------- follows
+
+    public function followsIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            return response()->json($this->summary($account));
+        });
+    }
+
+    public function followStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $created = $this->customerProduct->follow(
+                $account,
+                (string) $request->input('follow_type'),
+                (int) $request->input('object_ref')
+            );
+
+            return response()->json($this->summary($account) + [
+                'created' => $created,
+                'following' => true,
+            ], $created ? 201 : 200);
+        });
+    }
+
+    public function followDestroy(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $removed = $this->customerProduct->unfollow(
+                $account,
+                (string) $request->input('follow_type'),
+                (int) $request->input('object_ref')
+            );
+
+            return response()->json($this->summary($account) + [
+                'removed' => $removed,
+                'following' => false,
+            ]);
+        });
+    }
+
+    // ---------------------------------------------------------- saved searches
+
+    public function savedSearchesIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            return response()->json($this->summary($account) + [
+                'saved_searches' => $this->customerProduct->savedSearches($account),
+            ]);
+        });
+    }
+
+    public function savedSearchStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $refinements = $request->input('refinements', []);
+            if (! is_array($refinements)) {
+                $refinements = [];
+            }
+
+            $created = $this->customerProduct->saveSearch(
+                $account,
+                (string) $request->input('route_family'),
+                (string) $request->input('route_value'),
+                $refinements,
+                $request->input('label') !== null ? (string) $request->input('label') : null
+            );
+
+            return response()->json($this->summary($account) + [
+                'created' => $created,
+                'saved_searches' => $this->customerProduct->savedSearches($account),
+            ], $created ? 201 : 200);
+        });
+    }
+
+    public function savedSearchDestroy(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $removed = $this->customerProduct->removeSavedSearch($account, (int) $request->input('saved_search_id'));
+
+            return response()->json($this->summary($account) + [
+                'removed' => $removed,
+                'saved_searches' => $this->customerProduct->savedSearches($account),
+            ]);
+        });
+    }
+
     /** Delete every trace of a customer. Called from the WordPress user-delete hook. */
     public function forget(Request $request): JsonResponse
     {
@@ -251,6 +340,9 @@ class CustomerProductController extends Controller
     {
         $savedIds = $this->customerProduct->savedProfileIds($account);
         $compareIds = $this->customerProduct->compareProfileIds($account);
+        $followProfileIds = $this->customerProduct->followIds($account, CustomerFollow::TYPE_PROFILE);
+        $followLocationIds = $this->customerProduct->followIds($account, CustomerFollow::TYPE_LOCATION);
+        $previousLastSeenAt = $this->customerProduct->previousLastSeenAt($account);
 
         return [
             'success' => true,
@@ -263,6 +355,13 @@ class CustomerProductController extends Controller
             'compare_limit' => CustomerProductService::MAX_COMPARE_ITEMS,
             'recent_count' => $this->customerProduct->recentViewCount($account),
             'recent_limit' => CustomerRecentView::MAX_PER_ACCOUNT,
+            'follow_profile_ids' => $followProfileIds,
+            'follow_location_ids' => $followLocationIds,
+            'follow_count' => count($followProfileIds) + count($followLocationIds),
+            'saved_search_count' => $this->customerProduct->savedSearchCount($account),
+            'saved_search_limit' => CustomerSavedSearch::MAX_PER_ACCOUNT,
+            'previous_last_seen_at' => $previousLastSeenAt?->toIso8601String(),
+            'last_seen_at' => $account->last_seen_at?->toIso8601String(),
         ];
     }
 }

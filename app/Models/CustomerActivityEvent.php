@@ -23,6 +23,12 @@ class CustomerActivityEvent extends Model
     public const EVENT_COMPARE_REMOVED = 'compare.removed';
     public const EVENT_COMPARE_CLEARED = 'compare.cleared';
 
+    // Phase 4: truthful discovery follows and saved searches.
+    public const EVENT_FOLLOW_ADDED = 'follow.added';
+    public const EVENT_FOLLOW_REMOVED = 'follow.removed';
+    public const EVENT_SEARCH_SAVED = 'search.saved';
+    public const EVENT_SEARCH_REMOVED = 'search.removed';
+
     protected $fillable = [
         'customer_account_id',
         'platform_id',

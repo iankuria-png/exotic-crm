@@ -443,7 +443,7 @@ class WpCustomerRecentAndCompareTest extends TestCase
         $this->assertSame(0, CustomerCompareSet::query()->count());
     }
 
-    public function test_retention_purges_recent_views_past_180_days(): void
+    public function test_retention_purges_recent_views_past_signed_window(): void
     {
         $platform = Platform::factory()->create();
         $account = $this->seedAccount($platform);

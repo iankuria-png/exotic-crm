@@ -28,14 +28,20 @@ class CustomerProductQueryBudgetTest extends TestCase
 
     /** Measured counts at the time of writing, plus two. */
     private const BUDGETS = [
-        '/saved' => 10,
-        '/saved/add' => 14,
-        '/saved/remove' => 12,
-        '/recent' => 11,
+        '/saved' => 13,
+        '/saved/add' => 17,
+        '/saved/remove' => 15,
+        '/recent' => 14,
         '/recent/record' => 11,
-        '/compare' => 10,
-        '/compare/add' => 15,
-        '/compare/remove' => 13,
+        '/compare' => 13,
+        '/compare/add' => 18,
+        '/compare/remove' => 16,
+        '/follows' => 13,
+        '/follows/add' => 17,
+        '/follows/remove' => 15,
+        '/saved-searches' => 14,
+        '/saved-searches/add' => 19,
+        '/saved-searches/remove' => 18,
     ];
 
     protected function setUp(): void
@@ -67,6 +73,12 @@ class CustomerProductQueryBudgetTest extends TestCase
             '/compare' => [],
             '/compare/add' => ['object_ref' => 333],
             '/compare/remove' => ['object_ref' => 333],
+            '/follows' => [],
+            '/follows/add' => ['follow_type' => 'profile', 'object_ref' => 444],
+            '/follows/remove' => ['follow_type' => 'profile', 'object_ref' => 444],
+            '/saved-searches' => [],
+            '/saved-searches/add' => ['route_family' => 'build', 'route_value' => 'curvy', 'refinements' => ['fresh' => 'new_today']],
+            '/saved-searches/remove' => ['saved_search_id' => 1],
         ];
 
         $over = [];

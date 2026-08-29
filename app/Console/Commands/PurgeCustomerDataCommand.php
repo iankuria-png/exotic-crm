@@ -15,12 +15,12 @@ use Illuminate\Support\Carbon;
  * | Data              | Window                                     |
  * | ----------------- | ------------------------------------------ |
  * | Activity events   | 180 days from `occurred_at`                |
- * | Recent views      | 180 days from `last_viewed_at`             |
+ * | Recent views      | 90 days from `last_viewed_at`              |
  * | Compare sets      | 30 days after last update                  |
  *
- * Saved objects have no expiry: they live until the customer removes them or
- * the account-deletion cascade runs. Notification retention joins this command
- * when that table ships in Phase 5.
+ * Saved objects, follows, and saved searches have no expiry: they live until
+ * the customer removes them or the account-deletion cascade runs. Notification
+ * retention joins this command when that table ships in Phase 5.
  */
 class PurgeCustomerDataCommand extends Command
 {

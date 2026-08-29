@@ -13,11 +13,8 @@ class CustomerRecentView extends Model
 {
     public const TYPE_PROFILE = 'profile';
 
-    /**
-     * Recent views were not named in the signed Phase 0B retention table. This
-     * matches the activity-event window until Ian signs a different number.
-     */
-    public const RETENTION_DAYS = 180;
+    /** Signed on 2026-08-29: browsing history is kept for 90 days. */
+    public const RETENTION_DAYS = 90;
 
     /** Rows kept per member. Older views beyond this are trimmed on write. */
     public const MAX_PER_ACCOUNT = 200;
