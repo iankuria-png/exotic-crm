@@ -60,6 +60,16 @@ const contactUnlocks = {
             rowTotal: Number(response.headers?.['x-export-row-total'] || 0),
         };
     },
+
+    getSafetyReports(params = {}) {
+        return api.get('/crm/visitors/safety-reports', {
+            params: cleanParams(params),
+        }).then((response) => response.data);
+    },
+
+    updateSafetyReport(reportId, payload) {
+        return api.put(`/crm/visitors/safety-reports/${reportId}`, payload).then((response) => response.data);
+    },
 };
 
 export default contactUnlocks;

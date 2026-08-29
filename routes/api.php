@@ -28,6 +28,7 @@ use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\ComplianceController as CrmComplianceController;
 use App\Http\Controllers\CRM\ContactUnlockAdminController;
+use App\Http\Controllers\CRM\CustomerSafetyAdminController;
 use App\Http\Controllers\CRM\ContactUnlockExportController;
 use App\Http\Controllers\CRM\ConversationController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
@@ -748,6 +749,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::put('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'update'])->middleware('role:admin,sub_admin');
     Route::post('/settings/billing/contact-unlock/readiness', [ContactUnlockAdminController::class, 'readiness'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/billing/contact-unlock/rules/{rule}', [ContactUnlockAdminController::class, 'destroyRule'])->middleware('role:admin,sub_admin');
+
+    // Safety slice of the existing Web Visitors workspace. Read is available to
+    // the same roles that read the Unlocks tab; only a manager can move a
+    // report's status, because that status is what a member sees.
+    Route::get('/visitors/safety-reports', [CustomerSafetyAdminController::class, 'index'])->middleware('role:admin,sub_admin,sales');
+    Route::put('/visitors/safety-reports/{report}', [CustomerSafetyAdminController::class, 'update'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'billingManualPaymentMethods']);
     Route::put('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'storeBillingManualPaymentMethods']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');

@@ -13,8 +13,9 @@ import VisitorOverviewPanel from '../components/visitors/VisitorOverviewPanel';
 import VisitorDemandPanel from '../components/visitors/VisitorDemandPanel';
 import VisitorUnlockTrail from '../components/visitors/VisitorUnlockTrail';
 import VisitorSetupPanel from '../components/visitors/VisitorSetupPanel';
+import VisitorSafetyPanel from '../components/visitors/VisitorSafetyPanel';
 
-const VALID_TABS = ['overview', 'demand', 'unlocks', 'setup'];
+const VALID_TABS = ['overview', 'demand', 'unlocks', 'safety', 'setup'];
 const DEFAULT_TRAIL_FILTERS = {
     search: '',
     platform_id: 'all',
@@ -100,6 +101,7 @@ export default function WebVisitors() {
         { id: 'overview', label: 'Overview' },
         { id: 'demand', label: 'Demand' },
         { id: 'unlocks', label: 'Unlocks' },
+        { id: 'safety', label: 'Safety' },
         ...(canManage ? [{ id: 'setup', label: 'Setup' }] : []),
     ], [canManage]);
 
@@ -316,6 +318,15 @@ export default function WebVisitors() {
                                     isFetching={unlockQuery.isFetching}
                                     onReset={resetTrailFilters}
                                     onExport={() => contactUnlocks.exportUnlocks({ ...overviewParams, page: undefined, per_page: undefined })}
+                                    toast={toast}
+                                />
+                            ) : null}
+
+                            {activeTab === 'safety' ? (
+                                <VisitorSafetyPanel
+                                    platformId={sharedPlatformId}
+                                    fromDate={fromDate}
+                                    toDate={toDate}
                                     toast={toast}
                                 />
                             ) : null}
