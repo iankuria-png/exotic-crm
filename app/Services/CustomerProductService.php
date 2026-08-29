@@ -7,10 +7,14 @@ use App\Models\CustomerActivityEvent;
 use App\Models\CustomerCompareItem;
 use App\Models\CustomerCompareSet;
 use App\Models\CustomerFollow;
+use App\Models\CustomerReachabilityFeedback;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
 use App\Models\CustomerSavedSearch;
+use App\Models\Client;
+use App\Models\CustomerUnlockClaim;
 use App\Models\Platform;
+use App\Models\VisitorContactUnlock;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -42,6 +46,12 @@ class CustomerProductService
 
     /** Members can keep a practical number of saved discovery routes. */
     public const MAX_SAVED_SEARCHES = 50;
+
+    /** Unlock claims returned to the workspace in one read. */
+    public const UNLOCK_CLAIMS_PAGE = 60;
+
+    /** A guest reveal can be claimed only while the handoff is still fresh. */
+    public const UNLOCK_CLAIM_HANDOFF_MINUTES = 60;
 
     /**
      * Per-request memos.
@@ -737,6 +747,238 @@ class CustomerProductService
         return true;
     }
 
+    // ----------------------------------------------------------- unlock claims
+
+    public function unlockClaimCount(CustomerAccount $account): int
+    {
+        return CustomerUnlockClaim::query()
+            ->where('customer_account_id', $account->id)
+            ->count();
+    }
+
+    /**
+     * Claimed unlocks, newest first. Contact details are intentionally omitted:
+     * the member reveals a current contact through `revealClaimContact()`.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function unlockClaims(CustomerAccount $account, int $limit = self::UNLOCK_CLAIMS_PAGE): array
+    {
+        $limit = max(1, min($limit, self::UNLOCK_CLAIMS_PAGE));
+
+        return CustomerUnlockClaim::query()
+            ->with([
+                'client:id,name,wp_post_id,wp_profile_permalink,main_image_url,display_image_url,city',
+                'visitorUnlock:id,status,expires_at,last_revealed_at,scope',
+            ])
+            ->where('customer_account_id', $account->id)
+            ->orderByDesc('claimed_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (CustomerUnlockClaim $claim) => $this->serializeUnlockClaim($claim))
+            ->all();
+    }
+
+    public function claimUnlock(
+        CustomerAccount $account,
+        string $publicToken,
+        string $sessionProof,
+        int $targetWpPostId,
+        string $source
+    ): CustomerUnlockClaim {
+        $publicToken = trim($publicToken);
+        $sessionProof = trim($sessionProof);
+        $targetWpPostId = $this->normalizePositiveRef($targetWpPostId, 'A profile id is required.');
+        $source = in_array($source, [CustomerUnlockClaim::SOURCE_LOGGED_IN_REVEAL, CustomerUnlockClaim::SOURCE_POST_UNLOCK_ACCOUNT], true)
+            ? $source
+            : CustomerUnlockClaim::SOURCE_POST_UNLOCK_ACCOUNT;
+
+        if ($publicToken === '' || $sessionProof === '') {
+            throw new InvalidArgumentException("This one's not linked to your account.");
+        }
+
+        $unlock = VisitorContactUnlock::query()
+            ->where('platform_id', $account->platform_id)
+            ->where('public_token_hash', $this->hashToken($publicToken))
+            ->first();
+
+        if (! $unlock || ! hash_equals((string) $unlock->session_token_hash, $this->hashToken($sessionProof))) {
+            throw new InvalidArgumentException("This one's not linked to your account.");
+        }
+
+        if (! $unlock->isActive() || ! $unlock->last_revealed_at || $unlock->last_revealed_at->lt(Carbon::now()->subMinutes(self::UNLOCK_CLAIM_HANDOFF_MINUTES))) {
+            throw new InvalidArgumentException("This one's not linked to your account.");
+        }
+
+        $target = Client::query()
+            ->where('platform_id', $account->platform_id)
+            ->where('wp_post_id', $targetWpPostId)
+            ->first();
+
+        if (! $target || ! $this->canRevealTarget($unlock, $target)) {
+            throw new InvalidArgumentException("This one's not linked to your account.");
+        }
+
+        $claim = CustomerUnlockClaim::query()
+            ->where('visitor_contact_unlock_id', $unlock->id)
+            ->where('wp_post_id', $targetWpPostId)
+            ->first();
+
+        if ($claim && $claim->customer_account_id !== null && (int) $claim->customer_account_id !== (int) $account->id) {
+            throw new InvalidArgumentException("This one's not linked to your account.");
+        }
+
+        $created = ! $claim;
+        if ($created) {
+            $claim = new CustomerUnlockClaim([
+                'visitor_contact_unlock_id' => (int) $unlock->id,
+                'wp_post_id' => $targetWpPostId,
+                'claimed_at' => Carbon::now(),
+            ]);
+        }
+
+        $claim->fill([
+            'customer_account_id' => (int) $account->id,
+            'platform_id' => (int) $account->platform_id,
+            'client_id' => (int) $target->id,
+            'scope' => (string) $unlock->scope,
+            'status' => $this->claimStatus($unlock),
+            'expires_at' => $unlock->expires_at,
+            'last_revealed_at' => $unlock->last_revealed_at,
+            'source' => $source,
+        ]);
+        $claim->save();
+
+        if ($created) {
+            $this->recordEvent($account, CustomerActivityEvent::EVENT_UNLOCK_CLAIMED, $targetWpPostId, [
+                'visitor_contact_unlock_id' => (int) $unlock->id,
+                'source' => $source,
+                'scope' => (string) $unlock->scope,
+            ]);
+        }
+
+        return $claim->fresh(['client', 'visitorUnlock']);
+    }
+
+    public function serializeClaimForResponse(CustomerUnlockClaim $claim): array
+    {
+        return $this->serializeUnlockClaim($claim);
+    }
+
+    public function revealClaimContact(CustomerAccount $account, int $claimId): array
+    {
+        $claim = CustomerUnlockClaim::query()
+            ->with(['client', 'visitorUnlock'])
+            ->where('customer_account_id', $account->id)
+            ->where('id', $this->normalizePositiveRef($claimId, 'An unlock claim id is required.'))
+            ->first();
+
+        if (! $claim || ! $claim->client || ! $claim->visitorUnlock || ! $claim->visitorUnlock->isActive()) {
+            throw new InvalidArgumentException('This contact is no longer unlocked.');
+        }
+
+        $claim->forceFill([
+            'status' => CustomerUnlockClaim::STATUS_ACTIVE,
+            'expires_at' => $claim->visitorUnlock->expires_at,
+            'last_revealed_at' => Carbon::now(),
+        ])->save();
+
+        $client = $claim->client;
+
+        return [
+            'success' => true,
+            'claim' => $this->serializeUnlockClaim($claim->fresh(['client', 'visitorUnlock'])),
+            'contact' => [
+                'phone' => (string) $client->phone_normalized,
+                'whatsapp' => (string) $client->phone_normalized,
+                'email' => (string) $client->email,
+            ],
+        ];
+    }
+
+    public function submitReachabilityFeedback(CustomerAccount $account, int $claimId, string $outcome, ?string $note = null): CustomerReachabilityFeedback
+    {
+        $claim = CustomerUnlockClaim::query()
+            ->with(['visitorUnlock'])
+            ->where('customer_account_id', $account->id)
+            ->where('id', $this->normalizePositiveRef($claimId, 'An unlock claim id is required.'))
+            ->first();
+
+        if (! $claim || ! $claim->visitorUnlock || ! $claim->visitorUnlock->isActive() || ! $claim->last_revealed_at) {
+            throw new InvalidArgumentException('Contact feedback needs an active revealed unlock.');
+        }
+
+        $outcome = $this->normalizeReachabilityOutcome($outcome);
+        $negative = $outcome !== CustomerReachabilityFeedback::OUTCOME_REACHED;
+        $recentNegatives = $negative
+            ? CustomerReachabilityFeedback::query()
+                ->where('platform_id', $account->platform_id)
+                ->where('client_id', $claim->client_id)
+                ->whereIn('outcome', [
+                    CustomerReachabilityFeedback::OUTCOME_NO_ANSWER,
+                    CustomerReachabilityFeedback::OUTCOME_WRONG_NUMBER,
+                    CustomerReachabilityFeedback::OUTCOME_WHATSAPP_FAILED,
+                ])
+                ->where('submitted_at', '>=', Carbon::now()->subDays(30))
+                ->count()
+            : 0;
+
+        $status = $negative && $recentNegatives >= 1
+            ? CustomerReachabilityFeedback::STATUS_PENDING_REVIEW
+            : CustomerReachabilityFeedback::STATUS_RECORDED;
+
+        $feedback = CustomerReachabilityFeedback::query()->create([
+            'customer_account_id' => (int) $account->id,
+            'platform_id' => (int) $account->platform_id,
+            'customer_unlock_claim_id' => (int) $claim->id,
+            'visitor_contact_unlock_id' => (int) $claim->visitor_contact_unlock_id,
+            'wp_post_id' => (int) $claim->wp_post_id,
+            'client_id' => $claim->client_id,
+            'outcome' => $outcome,
+            'status' => $status,
+            'review_reason' => $status === CustomerReachabilityFeedback::STATUS_PENDING_REVIEW
+                ? CustomerReachabilityFeedback::REVIEW_REPEATED_NEGATIVE
+                : null,
+            'note' => $this->trimOrNull($note, 500),
+            'submitted_at' => Carbon::now(),
+        ]);
+
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_REACHABILITY_SUBMITTED, (int) $claim->wp_post_id, [
+            'outcome' => $outcome,
+            'feedback_status' => $status,
+        ]);
+
+        return $feedback;
+    }
+
+    private function serializeUnlockClaim(CustomerUnlockClaim $claim): array
+    {
+        $client = $claim->client;
+        $visitorUnlock = $claim->visitorUnlock;
+        $status = $visitorUnlock ? $this->claimStatus($visitorUnlock) : (string) $claim->status;
+
+        return [
+            'id' => (int) $claim->id,
+            'visitor_contact_unlock_id' => (int) $claim->visitor_contact_unlock_id,
+            'wp_post_id' => (int) $claim->wp_post_id,
+            'client_id' => (int) ($claim->client_id ?? 0),
+            'scope' => (string) $claim->scope,
+            'status' => $status,
+            'active' => $status === CustomerUnlockClaim::STATUS_ACTIVE,
+            'claimed_at' => $claim->claimed_at?->toIso8601String(),
+            'expires_at' => $claim->expires_at?->toIso8601String(),
+            'last_revealed_at' => $claim->last_revealed_at?->toIso8601String(),
+            'source' => (string) $claim->source,
+            'profile' => [
+                'name' => (string) ($client?->name ?? ''),
+                'url' => (string) ($client?->wp_profile_permalink ?? ''),
+                'image' => (string) ($client?->display_image_url ?: $client?->main_image_url ?: ''),
+                'city' => (string) ($client?->city ?? ''),
+            ],
+        ];
+    }
+
     private function findCompareSet(CustomerAccount $account): ?CustomerCompareSet
     {
         $key = (int) $account->id;
@@ -820,6 +1062,8 @@ class CustomerProductService
         CustomerFollow::query()->where('customer_account_id', $account->id)->delete();
         CustomerSavedSearch::query()->where('customer_account_id', $account->id)->delete();
         CustomerActivityEvent::query()->where('customer_account_id', $account->id)->delete();
+        CustomerUnlockClaim::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
+        CustomerReachabilityFeedback::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
 
         unset(
             $this->compareSetMemo[(int) $account->id],
@@ -876,6 +1120,52 @@ class CustomerProductService
         }
 
         return mb_substr($value, 0, $max);
+    }
+
+    private function claimStatus(VisitorContactUnlock $unlock): string
+    {
+        if ((string) $unlock->status === VisitorContactUnlock::STATUS_REVOKED) {
+            return CustomerUnlockClaim::STATUS_REVOKED;
+        }
+
+        return $unlock->isActive() ? CustomerUnlockClaim::STATUS_ACTIVE : CustomerUnlockClaim::STATUS_EXPIRED;
+    }
+
+    private function canRevealTarget(VisitorContactUnlock $unlock, Client $target): bool
+    {
+        if ((int) $unlock->platform_id !== (int) $target->platform_id) {
+            return false;
+        }
+
+        if ((string) $unlock->scope === VisitorContactUnlock::SCOPE_SINGLE_PROFILE) {
+            return (int) $unlock->wp_post_id === (int) $target->wp_post_id;
+        }
+
+        if ((string) $unlock->scope === VisitorContactUnlock::SCOPE_MARKET_INACTIVE_PROFILES) {
+            return $target->isPubliclyRestricted();
+        }
+
+        return false;
+    }
+
+    private function normalizeReachabilityOutcome(string $outcome): string
+    {
+        $outcome = strtolower(trim($outcome));
+        if (! in_array($outcome, [
+            CustomerReachabilityFeedback::OUTCOME_REACHED,
+            CustomerReachabilityFeedback::OUTCOME_NO_ANSWER,
+            CustomerReachabilityFeedback::OUTCOME_WRONG_NUMBER,
+            CustomerReachabilityFeedback::OUTCOME_WHATSAPP_FAILED,
+        ], true)) {
+            throw new InvalidArgumentException('Choose what happened after revealing the contact.');
+        }
+
+        return $outcome;
+    }
+
+    private function hashToken(string $token): string
+    {
+        return hash_hmac('sha256', $token, (string) config('app.key'));
     }
 
     /**

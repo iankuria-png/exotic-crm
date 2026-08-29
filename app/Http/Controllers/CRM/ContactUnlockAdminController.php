@@ -317,6 +317,11 @@ class ContactUnlockAdminController extends Controller
         $metadata = is_array($unlock->metadata_json) ? $unlock->metadata_json : [];
         $paymentData = is_array($unlock->payment?->payment_data) ? $unlock->payment->payment_data : [];
         $checkoutError = data_get($metadata, 'checkout_error', data_get($paymentData, 'checkout_error', []));
+        $claims = $unlock->customerClaims ?? collect();
+        $latestClaim = $claims->sortByDesc('id')->sortByDesc('claimed_at')->first();
+        $feedback = $claims->flatMap(fn ($claim) => $claim->reachabilityFeedback ?? collect());
+        $latestFeedback = $feedback->sortByDesc('id')->sortByDesc('submitted_at')->first();
+        $pendingFeedback = $feedback->filter(fn ($row) => (string) $row->status === 'pending_review');
 
         return [
             'id' => (int) $unlock->id,
@@ -346,6 +351,20 @@ class ContactUnlockAdminController extends Controller
             ],
             'visitor_phone_masked' => (string) ($unlock->visitor_phone_masked ?? ''),
             'visitor_email_masked' => (string) ($unlock->visitor_email_masked ?? ''),
+            'claim_review' => [
+                'claimed' => $claims->isNotEmpty(),
+                'claims_count' => $claims->count(),
+                'latest_claimed_at' => optional($claims->max('claimed_at'))->toIso8601String(),
+                'latest_source' => (string) ($latestClaim?->source ?? ''),
+                'latest_customer' => [
+                    'name' => (string) ($latestClaim?->customerAccount?->display_name ?? ''),
+                    'email' => (string) ($latestClaim?->customerAccount?->email ?? ''),
+                ],
+                'reachability_feedback_count' => $feedback->count(),
+                'pending_reachability_reviews' => $pendingFeedback->count(),
+                'latest_reachability_outcome' => (string) ($latestFeedback?->outcome ?? ''),
+                'latest_reachability_status' => (string) ($latestFeedback?->status ?? ''),
+            ],
             'visitor_context' => $this->serializeVisitorContext($metadata),
             'expires_at' => $unlock->expires_at?->toIso8601String(),
             'created_at' => $unlock->created_at?->toIso8601String(),

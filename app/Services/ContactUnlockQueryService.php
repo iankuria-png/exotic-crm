@@ -17,6 +17,9 @@ class ContactUnlockQueryService
             ->with([
                 'platform:id,name,currency_code',
                 'client:id,name,wp_post_id,wp_profile_permalink',
+                'customerClaims:id,customer_account_id,visitor_contact_unlock_id,wp_post_id,status,claimed_at,expires_at,last_revealed_at,source',
+                'customerClaims.customerAccount:id,display_name,email',
+                'customerClaims.reachabilityFeedback:id,customer_unlock_claim_id,outcome,status,submitted_at,review_reason',
                 'payment:id,status,amount,currency,reference_number,transaction_reference,failure_reason,payment_data,provider_key,provider_environment,completed_at,created_at',
             ]);
 

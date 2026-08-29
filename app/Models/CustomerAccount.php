@@ -56,6 +56,11 @@ class CustomerAccount extends Model
         return $this->hasMany(CustomerSavedSearch::class);
     }
 
+    public function unlockClaims(): HasMany
+    {
+        return $this->hasMany(CustomerUnlockClaim::class);
+    }
+
     public static function hashEmail(?string $email): ?string
     {
         $email = strtolower(trim((string) $email));

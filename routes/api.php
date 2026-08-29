@@ -124,6 +124,10 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(functio
     Route::post('/saved-searches', [CustomerProductController::class, 'savedSearchesIndex']);
     Route::post('/saved-searches/add', [CustomerProductController::class, 'savedSearchStore']);
     Route::post('/saved-searches/remove', [CustomerProductController::class, 'savedSearchDestroy']);
+    Route::post('/unlocks', [CustomerProductController::class, 'unlocksIndex']);
+    Route::post('/unlocks/claim', [CustomerProductController::class, 'unlockClaim']);
+    Route::post('/unlocks/reveal', [CustomerProductController::class, 'unlockReveal']);
+    Route::post('/reachability', [CustomerProductController::class, 'reachabilityStore']);
     Route::post('/forget', [CustomerProductController::class, 'forget']);
 });
 

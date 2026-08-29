@@ -29,6 +29,10 @@ class CustomerActivityEvent extends Model
     public const EVENT_SEARCH_SAVED = 'search.saved';
     public const EVENT_SEARCH_REMOVED = 'search.removed';
 
+    // Phase 6: owned unlocks and reachability feedback.
+    public const EVENT_UNLOCK_CLAIMED = 'unlock.claimed';
+    public const EVENT_REACHABILITY_SUBMITTED = 'reachability.submitted';
+
     protected $fillable = [
         'customer_account_id',
         'platform_id',

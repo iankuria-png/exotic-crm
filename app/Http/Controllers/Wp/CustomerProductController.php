@@ -8,6 +8,7 @@ use App\Models\CustomerFollow;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
 use App\Models\CustomerSavedSearch;
+use App\Models\CustomerUnlockClaim;
 use App\Models\Platform;
 use App\Services\CustomerProductService;
 use Illuminate\Http\JsonResponse;
@@ -285,6 +286,67 @@ class CustomerProductController extends Controller
         });
     }
 
+    // ----------------------------------------------------------- unlock claims
+
+    public function unlocksIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $limit = (int) $request->input('limit', CustomerProductService::UNLOCK_CLAIMS_PAGE);
+
+            return response()->json($this->summary($account) + [
+                'unlocks' => $this->customerProduct->unlockClaims($account, $limit),
+            ]);
+        });
+    }
+
+    public function unlockClaim(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $source = (string) $request->input('source', CustomerUnlockClaim::SOURCE_POST_UNLOCK_ACCOUNT);
+            $claim = $this->customerProduct->claimUnlock(
+                $account,
+                (string) $request->input('public_token'),
+                (string) $request->input('session_proof'),
+                (int) $request->input('target_wp_post_id'),
+                $source
+            );
+
+            return response()->json($this->summary($account) + [
+                'claimed' => true,
+                'claim' => $this->customerProduct->serializeClaimForResponse($claim),
+            ]);
+        });
+    }
+
+    public function unlockReveal(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            return response()->json($this->customerProduct->revealClaimContact(
+                $account,
+                (int) $request->input('claim_id')
+            ));
+        });
+    }
+
+    public function reachabilityStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $feedback = $this->customerProduct->submitReachabilityFeedback(
+                $account,
+                (int) $request->input('claim_id'),
+                (string) $request->input('outcome'),
+                $request->input('note') !== null ? (string) $request->input('note') : null
+            );
+
+            return response()->json([
+                'success' => true,
+                'feedback_id' => (int) $feedback->id,
+                'status' => (string) $feedback->status,
+                'message' => "Reported. We'll check it.",
+            ], 201);
+        });
+    }
+
     /** Delete every trace of a customer. Called from the WordPress user-delete hook. */
     public function forget(Request $request): JsonResponse
     {
@@ -360,6 +422,7 @@ class CustomerProductController extends Controller
             'follow_count' => count($followProfileIds) + count($followLocationIds),
             'saved_search_count' => $this->customerProduct->savedSearchCount($account),
             'saved_search_limit' => CustomerSavedSearch::MAX_PER_ACCOUNT,
+            'unlocked_count' => $this->customerProduct->unlockClaimCount($account),
             'previous_last_seen_at' => $previousLastSeenAt?->toIso8601String(),
             'last_seen_at' => $account->last_seen_at?->toIso8601String(),
         ];

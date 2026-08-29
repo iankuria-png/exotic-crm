@@ -91,6 +91,11 @@ class VisitorContactUnlock extends Model
         return $this->hasMany(ContactUnlockUpgradeCredit::class, 'source_unlock_id');
     }
 
+    public function customerClaims()
+    {
+        return $this->hasMany(CustomerUnlockClaim::class);
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query
