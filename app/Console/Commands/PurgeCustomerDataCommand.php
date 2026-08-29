@@ -3,14 +3,24 @@
 namespace App\Console\Commands;
 
 use App\Models\CustomerActivityEvent;
+use App\Models\CustomerCompareItem;
+use App\Models\CustomerCompareSet;
+use App\Models\CustomerRecentView;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 
 /**
  * Enforces the signed customer-data retention policy.
  *
- * Phase 2 owns activity events only (180 days). Notification and compare-set
- * retention join this command when those tables ship in Phases 5 and 3.
+ * | Data              | Window                                     |
+ * | ----------------- | ------------------------------------------ |
+ * | Activity events   | 180 days from `occurred_at`                |
+ * | Recent views      | 180 days from `last_viewed_at`             |
+ * | Compare sets      | 30 days after last update                  |
+ *
+ * Saved objects have no expiry: they live until the customer removes them or
+ * the account-deletion cascade runs. Notification retention joins this command
+ * when that table ships in Phase 5.
  */
 class PurgeCustomerDataCommand extends Command
 {
@@ -18,27 +28,35 @@ class PurgeCustomerDataCommand extends Command
         {--chunk=1000 : Rows deleted per batch}
         {--dry-run : Report what would be deleted without deleting it}';
 
-    protected $description = 'Delete customer activity events past the signed 180-day retention window.';
+    protected $description = 'Delete customer activity events, recent views, and compare sets past their signed retention windows.';
 
     public function handle(): int
     {
         $chunk = max(1, (int) $this->option('chunk'));
         $dryRun = (bool) $this->option('dry-run');
-        $cutoff = Carbon::now()->subDays(CustomerActivityEvent::RETENTION_DAYS);
 
-        $expired = CustomerActivityEvent::query()->where('occurred_at', '<', $cutoff);
-        $total = (clone $expired)->count();
+        $this->purgeActivityEvents($chunk, $dryRun);
+        $this->purgeRecentViews($chunk, $dryRun);
+        $this->purgeCompareSets($chunk, $dryRun);
+
+        return self::SUCCESS;
+    }
+
+    private function purgeActivityEvents(int $chunk, bool $dryRun): void
+    {
+        $cutoff = Carbon::now()->subDays(CustomerActivityEvent::RETENTION_DAYS);
+        $total = CustomerActivityEvent::query()->where('occurred_at', '<', $cutoff)->count();
 
         if ($total === 0) {
             $this->info('No customer activity events past retention.');
 
-            return self::SUCCESS;
+            return;
         }
 
         if ($dryRun) {
             $this->info(sprintf('Would delete %d customer activity events older than %s.', $total, $cutoff->toDateString()));
 
-            return self::SUCCESS;
+            return;
         }
 
         $deleted = 0;
@@ -51,7 +69,80 @@ class PurgeCustomerDataCommand extends Command
         } while ($batch > 0);
 
         $this->info(sprintf('Deleted %d customer activity events older than %s.', $deleted, $cutoff->toDateString()));
+    }
 
-        return self::SUCCESS;
+    private function purgeRecentViews(int $chunk, bool $dryRun): void
+    {
+        $cutoff = Carbon::now()->subDays(CustomerRecentView::RETENTION_DAYS);
+        $total = CustomerRecentView::query()->where('last_viewed_at', '<', $cutoff)->count();
+
+        if ($total === 0) {
+            $this->info('No customer recent views past retention.');
+
+            return;
+        }
+
+        if ($dryRun) {
+            $this->info(sprintf('Would delete %d customer recent views older than %s.', $total, $cutoff->toDateString()));
+
+            return;
+        }
+
+        $deleted = 0;
+        do {
+            $batch = CustomerRecentView::query()
+                ->where('last_viewed_at', '<', $cutoff)
+                ->limit($chunk)
+                ->delete();
+            $deleted += $batch;
+        } while ($batch > 0);
+
+        $this->info(sprintf('Deleted %d customer recent views older than %s.', $deleted, $cutoff->toDateString()));
+    }
+
+    /**
+     * The signed window is measured from the set's last update, so the whole
+     * set goes at once — items first, then the header that timed it.
+     */
+    private function purgeCompareSets(int $chunk, bool $dryRun): void
+    {
+        $cutoff = Carbon::now()->subDays(CustomerCompareSet::RETENTION_DAYS);
+        $total = CustomerCompareSet::query()->where('last_activity_at', '<', $cutoff)->count();
+
+        if ($total === 0) {
+            $this->info('No customer compare sets past retention.');
+
+            return;
+        }
+
+        if ($dryRun) {
+            $this->info(sprintf('Would delete %d customer compare sets last updated before %s.', $total, $cutoff->toDateString()));
+
+            return;
+        }
+
+        $sets = 0;
+        $items = 0;
+        do {
+            $ids = CustomerCompareSet::query()
+                ->where('last_activity_at', '<', $cutoff)
+                ->limit($chunk)
+                ->pluck('id')
+                ->all();
+
+            if (empty($ids)) {
+                break;
+            }
+
+            $items += CustomerCompareItem::query()->whereIn('compare_set_id', $ids)->delete();
+            $sets += CustomerCompareSet::query()->whereIn('id', $ids)->delete();
+        } while (true);
+
+        $this->info(sprintf(
+            'Deleted %d customer compare sets (%d items) last updated before %s.',
+            $sets,
+            $items,
+            $cutoff->toDateString()
+        ));
     }
 }

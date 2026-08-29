@@ -4,6 +4,9 @@ namespace App\Services;
 
 use App\Models\CustomerAccount;
 use App\Models\CustomerActivityEvent;
+use App\Models\CustomerCompareItem;
+use App\Models\CustomerCompareSet;
+use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
 use App\Models\Platform;
 use Illuminate\Support\Carbon;
@@ -29,8 +32,41 @@ class CustomerProductService
     /** Largest merge batch accepted from a browser-local store. */
     public const MAX_MERGE_BATCH = 100;
 
+    /** The compare tray holds four. A fifth profile is refused, not rotated. */
+    public const MAX_COMPARE_ITEMS = 4;
+
+    /** Recent views returned to the workspace in one read. */
+    public const RECENT_VIEWS_PAGE = 60;
+
+    /**
+     * Per-request memos.
+     *
+     * Every action returns the workspace summary, so without these the compare
+     * set is resolved twice and the recent-view count is counted twice on a
+     * single request.
+     *
+     * The container hands out the same service instance for more than one
+     * request, so these are NOT safe to leave standing: they are cleared in
+     * `resolveAccount()`, which every request calls exactly once before any
+     * other method. Anything that mutates the underlying rows also clears the
+     * affected memo, so a single request stays self-consistent.
+     *
+     * @var array<int, \App\Models\CustomerCompareSet|false>
+     */
+    private array $compareSetMemo = [];
+
+    /** @var array<int, int> */
+    private array $recentCountMemo = [];
+
+    /** @var array<int, \Illuminate\Support\Collection<int, CustomerCompareItem>> */
+    private array $compareItemsMemo = [];
+
     public function resolveAccount(Platform $platform, array $identity): CustomerAccount
     {
+        // The request boundary. Clearing here is what makes the memos below
+        // safe on a service instance the container reuses between requests.
+        $this->forgetMemos();
+
         $wpUserId = (int) ($identity['wp_user_id'] ?? 0);
         if ($wpUserId < 1) {
             throw new InvalidArgumentException('A WordPress user id is required.');
@@ -216,6 +252,332 @@ class CustomerProductService
         return count($fresh);
     }
 
+    // ------------------------------------------------------------ recent views
+
+    /**
+     * Recent views, newest first.
+     *
+     * @return array<int, array{object_ref:int, view_count:int, last_viewed_at:string}>
+     */
+    public function recentViews(CustomerAccount $account, int $limit = self::RECENT_VIEWS_PAGE): array
+    {
+        $limit = max(1, min($limit, CustomerRecentView::MAX_PER_ACCOUNT));
+
+        // Ordered by the monotonic view counter, not by `last_viewed_at`: two
+        // profiles opened in the same second would otherwise tie and fall back
+        // to creation order.
+        return CustomerRecentView::query()
+            ->where('customer_account_id', $account->id)
+            ->where('object_type', CustomerRecentView::TYPE_PROFILE)
+            ->orderByDesc('view_seq')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get()
+            ->map(static fn (CustomerRecentView $view) => [
+                'object_ref' => (int) $view->object_ref,
+                'view_count' => (int) $view->view_count,
+                'last_viewed_at' => $view->last_viewed_at?->toIso8601String(),
+            ])
+            ->all();
+    }
+
+    public function recentViewCount(CustomerAccount $account): int
+    {
+        $key = (int) $account->id;
+
+        if (!array_key_exists($key, $this->recentCountMemo)) {
+            $this->recentCountMemo[$key] = CustomerRecentView::query()
+                ->where('customer_account_id', $account->id)
+                ->count();
+        }
+
+        return $this->recentCountMemo[$key];
+    }
+
+    /**
+     * Record that the member opened a profile. Returns true when this is the
+     * first view of that profile, false when an existing row was bumped.
+     */
+    public function recordView(CustomerAccount $account, int $objectRef): bool
+    {
+        $objectRef = (int) $objectRef;
+        if ($objectRef < 1) {
+            throw new InvalidArgumentException('A profile id is required.');
+        }
+
+        $now = Carbon::now();
+
+        $existing = CustomerRecentView::query()
+            ->where('customer_account_id', $account->id)
+            ->where('object_type', CustomerRecentView::TYPE_PROFILE)
+            ->where('object_ref', $objectRef)
+            ->first();
+
+        $nextSeq = ((int) CustomerRecentView::query()
+            ->where('customer_account_id', $account->id)
+            ->max('view_seq')) + 1;
+
+        if ($existing) {
+            $existing->view_count = (int) $existing->view_count + 1;
+            $existing->view_seq = $nextSeq;
+            $existing->last_viewed_at = $now;
+            $existing->save();
+
+            // Row count is unchanged, so the memo stays valid and no trim is
+            // needed: a repeat view can never cross the per-account cap.
+            return false;
+        }
+
+        CustomerRecentView::query()->create([
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'object_type' => CustomerRecentView::TYPE_PROFILE,
+            'object_ref' => $objectRef,
+            'view_count' => 1,
+            'view_seq' => $nextSeq,
+            'first_viewed_at' => $now,
+            'last_viewed_at' => $now,
+        ]);
+
+        // The insert added exactly one row, so the count is known without a
+        // second COUNT query.
+        $key = (int) $account->id;
+        if (array_key_exists($key, $this->recentCountMemo)) {
+            $this->recentCountMemo[$key]++;
+        }
+
+        $this->trimRecentViews($account);
+
+        return true;
+    }
+
+    /** Clear-history. Returns the number of rows removed. */
+    public function clearRecentViews(CustomerAccount $account): int
+    {
+        $deleted = CustomerRecentView::query()
+            ->where('customer_account_id', $account->id)
+            ->delete();
+
+        $this->recentCountMemo[(int) $account->id] = 0;
+
+        if ($deleted > 0) {
+            $this->recordEvent($account, CustomerActivityEvent::EVENT_VIEWS_CLEARED, null, [
+                'cleared' => $deleted,
+            ]);
+        }
+
+        return $deleted;
+    }
+
+    /** Keep the newest MAX_PER_ACCOUNT rows so one member cannot grow forever. */
+    /** Drop every per-request memo. Called at the start of each request. */
+    private function forgetMemos(): void
+    {
+        $this->compareSetMemo = [];
+        $this->compareItemsMemo = [];
+        $this->recentCountMemo = [];
+    }
+
+    private function trimRecentViews(CustomerAccount $account): void
+    {
+        $overflow = $this->recentViewCount($account) - CustomerRecentView::MAX_PER_ACCOUNT;
+        if ($overflow < 1) {
+            return;
+        }
+
+        unset($this->recentCountMemo[(int) $account->id]);
+
+        $doomed = CustomerRecentView::query()
+            ->where('customer_account_id', $account->id)
+            ->orderBy('view_seq')
+            ->orderBy('id')
+            ->limit($overflow)
+            ->pluck('id')
+            ->all();
+
+        if (! empty($doomed)) {
+            CustomerRecentView::query()->whereIn('id', $doomed)->delete();
+        }
+    }
+
+    // ----------------------------------------------------------------- compare
+
+    /**
+     * The member's active compare set, in tray order.
+     *
+     * @return int[]
+     */
+    public function compareProfileIds(CustomerAccount $account): array
+    {
+        return $this->compareItems($account)
+            ->map(static fn (CustomerCompareItem $item) => (int) $item->object_ref)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * The tray's items, loaded once per request.
+     *
+     * The tray holds at most four rows, so loading the collection is cheaper
+     * than the COUNT and MAX(position) aggregates it replaces — and the same
+     * rows then serve the workspace summary without a third query.
+     *
+     * @return \Illuminate\Support\Collection<int, CustomerCompareItem>
+     */
+    private function compareItems(CustomerAccount $account)
+    {
+        $key = (int) $account->id;
+
+        if (!array_key_exists($key, $this->compareItemsMemo)) {
+            $set = $this->findCompareSet($account);
+
+            $this->compareItemsMemo[$key] = $set
+                ? CustomerCompareItem::query()
+                    ->where('compare_set_id', $set->id)
+                    ->where('object_type', CustomerCompareItem::TYPE_PROFILE)
+                    ->orderBy('position')
+                    ->orderBy('id')
+                    ->get()
+                : collect();
+        }
+
+        return $this->compareItemsMemo[$key];
+    }
+
+    /**
+     * Add a profile to the tray. Returns true when a row was created, false when
+     * it was already there. Throws when the tray is full — a fifth profile is
+     * refused rather than silently displacing one of the four.
+     */
+    public function addToCompare(CustomerAccount $account, int $objectRef): bool
+    {
+        $objectRef = (int) $objectRef;
+        if ($objectRef < 1) {
+            throw new InvalidArgumentException('A profile id is required.');
+        }
+
+        $set = $this->compareSet($account);
+        $items = $this->compareItems($account);
+
+        if ($items->contains(static fn (CustomerCompareItem $item) => (int) $item->object_ref === $objectRef)) {
+            $this->touchCompareSet($set);
+
+            return false;
+        }
+
+        if ($items->count() >= self::MAX_COMPARE_ITEMS) {
+            throw new InvalidArgumentException('Compare holds four. Remove one first.');
+        }
+
+        $position = (int) $items->max('position');
+
+        CustomerCompareItem::query()->create([
+            'compare_set_id' => $set->id,
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'object_type' => CustomerCompareItem::TYPE_PROFILE,
+            'object_ref' => $objectRef,
+            'position' => $position + 1,
+            'added_at' => Carbon::now(),
+        ]);
+
+        unset($this->compareItemsMemo[(int) $account->id]);
+        $this->touchCompareSet($set);
+        $this->recordEvent($account, CustomerActivityEvent::EVENT_COMPARE_ADDED, $objectRef);
+
+        return true;
+    }
+
+    /** Returns true when a row was actually removed. */
+    public function removeFromCompare(CustomerAccount $account, int $objectRef): bool
+    {
+        $objectRef = (int) $objectRef;
+        if ($objectRef < 1) {
+            throw new InvalidArgumentException('A profile id is required.');
+        }
+
+        $set = $this->findCompareSet($account);
+        if (! $set) {
+            return false;
+        }
+
+        $deleted = CustomerCompareItem::query()
+            ->where('compare_set_id', $set->id)
+            ->where('object_type', CustomerCompareItem::TYPE_PROFILE)
+            ->where('object_ref', $objectRef)
+            ->delete();
+
+        unset($this->compareItemsMemo[(int) $account->id]);
+
+        // The set header survives an empty tray on purpose: it carries the
+        // "last update" timestamp that retention is measured from.
+        $this->touchCompareSet($set);
+
+        if ($deleted > 0) {
+            $this->recordEvent($account, CustomerActivityEvent::EVENT_COMPARE_REMOVED, $objectRef);
+        }
+
+        return $deleted > 0;
+    }
+
+    /** Empty the tray. Returns the number of rows removed. */
+    public function clearCompare(CustomerAccount $account): int
+    {
+        $set = $this->findCompareSet($account);
+        if (! $set) {
+            return 0;
+        }
+
+        $deleted = CustomerCompareItem::query()->where('compare_set_id', $set->id)->delete();
+        unset($this->compareItemsMemo[(int) $account->id]);
+        $this->touchCompareSet($set);
+
+        if ($deleted > 0) {
+            $this->recordEvent($account, CustomerActivityEvent::EVENT_COMPARE_CLEARED, null, [
+                'cleared' => $deleted,
+            ]);
+        }
+
+        return $deleted;
+    }
+
+    private function findCompareSet(CustomerAccount $account): ?CustomerCompareSet
+    {
+        $key = (int) $account->id;
+
+        if (!array_key_exists($key, $this->compareSetMemo)) {
+            $this->compareSetMemo[$key] = CustomerCompareSet::query()
+                ->where('customer_account_id', $account->id)
+                ->first() ?? false;
+        }
+
+        return $this->compareSetMemo[$key] ?: null;
+    }
+
+    private function compareSet(CustomerAccount $account): CustomerCompareSet
+    {
+        $set = $this->findCompareSet($account);
+        if ($set) {
+            return $set;
+        }
+
+        $set = CustomerCompareSet::query()->create([
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'last_activity_at' => Carbon::now(),
+        ]);
+
+        $this->compareSetMemo[(int) $account->id] = $set;
+
+        return $set;
+    }
+
+    private function touchCompareSet(CustomerCompareSet $set): void
+    {
+        $set->last_activity_at = Carbon::now();
+        $set->save();
+    }
+
     public function recordEvent(
         CustomerAccount $account,
         string $eventType,
@@ -256,7 +618,16 @@ class CustomerProductService
         // Explicit child deletes: SQLite in tests does not always honour the
         // cascade, and being explicit keeps the intent readable in production.
         CustomerSavedObject::query()->where('customer_account_id', $account->id)->delete();
+        CustomerRecentView::query()->where('customer_account_id', $account->id)->delete();
+        CustomerCompareItem::query()->where('customer_account_id', $account->id)->delete();
+        CustomerCompareSet::query()->where('customer_account_id', $account->id)->delete();
         CustomerActivityEvent::query()->where('customer_account_id', $account->id)->delete();
+
+        unset(
+            $this->compareSetMemo[(int) $account->id],
+            $this->compareItemsMemo[(int) $account->id],
+            $this->recentCountMemo[(int) $account->id]
+        );
         $account->delete();
 
         return true;

@@ -111,6 +111,13 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(functio
     Route::post('/saved/add', [CustomerProductController::class, 'savedStore']);
     Route::post('/saved/remove', [CustomerProductController::class, 'savedDestroy']);
     Route::post('/saved/merge', [CustomerProductController::class, 'savedMerge']);
+    Route::post('/recent', [CustomerProductController::class, 'recentIndex']);
+    Route::post('/recent/record', [CustomerProductController::class, 'recentStore']);
+    Route::post('/recent/clear', [CustomerProductController::class, 'recentClear']);
+    Route::post('/compare', [CustomerProductController::class, 'compareIndex']);
+    Route::post('/compare/add', [CustomerProductController::class, 'compareStore']);
+    Route::post('/compare/remove', [CustomerProductController::class, 'compareDestroy']);
+    Route::post('/compare/clear', [CustomerProductController::class, 'compareClear']);
     Route::post('/forget', [CustomerProductController::class, 'forget']);
 });
 

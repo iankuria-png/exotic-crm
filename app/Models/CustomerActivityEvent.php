@@ -15,6 +15,14 @@ class CustomerActivityEvent extends Model
     public const EVENT_SAVES_MERGED = 'save.merged';
     public const EVENT_ACCOUNT_LINKED = 'account.linked';
 
+    // Phase 3. Note that an individual profile view does NOT emit an event:
+    // `customer_recent_views` is itself the record, and one event per page view
+    // would flood a 180-day table. Only the destructive actions are logged.
+    public const EVENT_VIEWS_CLEARED = 'view.cleared';
+    public const EVENT_COMPARE_ADDED = 'compare.added';
+    public const EVENT_COMPARE_REMOVED = 'compare.removed';
+    public const EVENT_COMPARE_CLEARED = 'compare.cleared';
+
     protected $fillable = [
         'customer_account_id',
         'platform_id',

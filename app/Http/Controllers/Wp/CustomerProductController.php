@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Wp;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerActivityEvent;
+use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
 use App\Models\Platform;
 use App\Services\CustomerProductService;
@@ -102,6 +103,99 @@ class CustomerProductController extends Controller
         });
     }
 
+    // ------------------------------------------------------------ recent views
+
+    /** Recent views, newest first, plus the workspace summary. */
+    public function recentIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $limit = (int) $request->input('limit', CustomerProductService::RECENT_VIEWS_PAGE);
+
+            return response()->json($this->summary($account) + [
+                'recent_views' => $this->customerProduct->recentViews($account, $limit),
+            ]);
+        });
+    }
+
+    /**
+     * Record that the member opened a profile.
+     *
+     * The hottest endpoint in the customer product: it fires once per profile
+     * page view per signed-in member. It deliberately does NOT return the
+     * workspace summary — the caller is fire-and-forget and discards the body,
+     * and building the summary would add a saved-ids read, a compare-set read,
+     * and a count to every profile view for nothing.
+     */
+    public function recentStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $created = $this->customerProduct->recordView($account, (int) $request->input('object_ref'));
+
+            return response()->json([
+                'success' => true,
+                'created' => $created,
+            ], $created ? 201 : 200);
+        });
+    }
+
+    /** Clear-history. */
+    public function recentClear(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            $cleared = $this->customerProduct->clearRecentViews($account);
+
+            return response()->json($this->summary($account) + [
+                'cleared' => $cleared,
+                'recent_views' => [],
+            ]);
+        });
+    }
+
+    // ----------------------------------------------------------------- compare
+
+    public function compareIndex(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            return response()->json($this->summary($account));
+        });
+    }
+
+    /** Add to the tray. A fifth profile is a 422 the tray can show, not a crash. */
+    public function compareStore(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $created = $this->customerProduct->addToCompare($account, (int) $request->input('object_ref'));
+
+            return response()->json($this->summary($account) + [
+                'created' => $created,
+                'in_compare' => true,
+            ], $created ? 201 : 200);
+        });
+    }
+
+    public function compareDestroy(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $removed = $this->customerProduct->removeFromCompare($account, (int) $request->input('object_ref'));
+
+            return response()->json($this->summary($account) + [
+                'removed' => $removed,
+                'in_compare' => false,
+            ]);
+        });
+    }
+
+    public function compareClear(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            $cleared = $this->customerProduct->clearCompare($account);
+
+            return response()->json($this->summary($account) + [
+                'cleared' => $cleared,
+            ]);
+        });
+    }
+
     /** Delete every trace of a customer. Called from the WordPress user-delete hook. */
     public function forget(Request $request): JsonResponse
     {
@@ -145,9 +239,18 @@ class CustomerProductController extends Controller
         }
     }
 
+    /**
+     * The workspace summary every action returns, so one round trip keeps the
+     * save control, the compare tray and the counters in agreement.
+     *
+     * Compare ids are always included because the tray holds at most four. The
+     * recent-view *list* is not: it is a wider read that only the recent-view
+     * endpoints pay for, so a save never drags sixty rows along with it.
+     */
     private function summary($account): array
     {
         $savedIds = $this->customerProduct->savedProfileIds($account);
+        $compareIds = $this->customerProduct->compareProfileIds($account);
 
         return [
             'success' => true,
@@ -155,6 +258,11 @@ class CustomerProductController extends Controller
             'saved_profile_ids' => $savedIds,
             'saved_count' => count($savedIds),
             'saved_limit' => CustomerProductService::MAX_SAVED_OBJECTS,
+            'compare_profile_ids' => $compareIds,
+            'compare_count' => count($compareIds),
+            'compare_limit' => CustomerProductService::MAX_COMPARE_ITEMS,
+            'recent_count' => $this->customerProduct->recentViewCount($account),
+            'recent_limit' => CustomerRecentView::MAX_PER_ACCOUNT,
         ];
     }
 }
