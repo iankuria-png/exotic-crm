@@ -409,6 +409,46 @@ class WpSyncService
      * hide contacts, show the inactive notice, disable editing, and — for archived —
      * exclude it from city/category listings while keeping its URL indexable.
      */
+    /**
+     * Read the My Exotic rollout state from a market.
+     *
+     * The customer-product feature flags live in each site's options table and
+     * are read by the theme on nearly every front-end request. WordPress stays
+     * the source of truth: the CRM is a remote control, so a CRM outage can
+     * never blank a member workspace.
+     */
+    public function getCustomerRollout(): array
+    {
+        return $this->get('/customer-product/rollout');
+    }
+
+    /**
+     * Flip flags, rollbacks, the master switch, or the enabled market list.
+     *
+     * `reset_flags` / `reset_rollbacks` un-pin a key so the theme's code default
+     * applies again. That distinction matters: writing `false` where the default
+     * is already `false` pins the market to a value it never chose, and a later
+     * change to the default would silently stop reaching it.
+     *
+     * @param array<string,mixed> $payload
+     */
+    public function updateCustomerRollout(array $payload): array
+    {
+        return $this->post('/customer-product/rollout', $payload);
+    }
+
+    /**
+     * Create the My Exotic private pages on a market.
+     *
+     * Provisioning normally runs only on `admin_init` behind `manage_options`,
+     * so a market can have every flag on and still render an empty workspace
+     * because nobody has loaded wp-admin since deploy.
+     */
+    public function provisionCustomerPages(): array
+    {
+        return $this->post('/customer-product/provision', []);
+    }
+
     public function setLifecycleState(int $postId, string $state, array $context = []): array
     {
         $payload = array_filter([

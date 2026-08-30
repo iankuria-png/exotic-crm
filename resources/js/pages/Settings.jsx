@@ -21,6 +21,7 @@ import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
 import FieldSalesSettingsPanel from '../components/settings/FieldSalesSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
+import CustomerRolloutPanel from '../components/settings/CustomerRolloutPanel';
 import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
@@ -38,6 +39,7 @@ const baseTabs = [
     { id: 'kyc', label: 'KYC' },
     { id: 'billing', label: 'Billing' },
     { id: 'seo-engine', label: 'SEO Engine' },
+    { id: 'my-exotic', label: 'My Exotic' },
     { id: 'auto-optimize', label: 'Auto Optimize' },
     { id: 'ai', label: 'AI Briefings' },
     { id: 'faq', label: 'FAQ & Feedback' },
@@ -9346,6 +9348,10 @@ export default function Settings() {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
+            if (tab.id === 'my-exotic') {
+                return ['admin', 'sub_admin'].includes(user?.role || '');
+            }
+
             if (tab.id === 'auto-optimize') {
                 return ['admin', 'sub_admin', 'marketing'].includes(user?.role || '');
             }
@@ -9421,6 +9427,7 @@ export default function Settings() {
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
+            {activeTab === 'my-exotic' ? <CustomerRolloutPanel canWrite={(user?.role || '') === 'admin'} /> : null}
             {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}

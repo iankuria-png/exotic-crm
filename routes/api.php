@@ -125,6 +125,9 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/customer')->group(functio
     Route::post('/saved-searches', [CustomerProductController::class, 'savedSearchesIndex']);
     Route::post('/saved-searches/add', [CustomerProductController::class, 'savedSearchStore']);
     Route::post('/saved-searches/remove', [CustomerProductController::class, 'savedSearchDestroy']);
+    Route::post('/preferences/signal', [CustomerProductController::class, 'preferenceSignal']);
+    Route::post('/preferences', [CustomerProductController::class, 'preferences']);
+    Route::post('/preferences/reset', [CustomerProductController::class, 'preferencesReset']);
     Route::post('/unlocks', [CustomerProductController::class, 'unlocksIndex']);
     Route::post('/unlocks/claim', [CustomerProductController::class, 'unlockClaim']);
     Route::post('/unlocks/reveal', [CustomerProductController::class, 'unlockReveal']);
@@ -720,6 +723,11 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/reporting-fx-rates', [SettingsController::class, 'createReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'updateReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'deleteReportingFxRate'])->middleware('role:admin,sub_admin');
+    // My Exotic rollout: read/flip the customer-product flags that otherwise
+    // need a WP-CLI or phpMyAdmin session on each market.
+    Route::get('/settings/customer-rollout', [SettingsController::class, 'customerRollout'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/customer-rollout', [SettingsController::class, 'updateCustomerRollout'])->middleware('role:admin');
+    Route::post('/settings/customer-rollout/provision', [SettingsController::class, 'provisionCustomerPages'])->middleware('role:admin');
     Route::get('/settings/lifecycle', [SettingsController::class, 'lifecycleSettings'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/lifecycle', [SettingsController::class, 'updateLifecycleSettings'])->middleware('role:admin');
     Route::get('/settings/seo-engine', [SeoSettingsController::class, 'show'])->middleware('role:admin,sub_admin');

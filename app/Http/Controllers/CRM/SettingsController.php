@@ -2966,6 +2966,186 @@ class SettingsController extends Controller
      * Global profile-lifecycle settings (master kill switch). Per-market opt-in
      * lives on the platform record and is edited via updateIntegrationPlatform.
      */
+    /**
+     * My Exotic rollout state for one market, or a roll-up across all of them.
+     *
+     * Reads live from the market's WordPress site rather than from anything the
+     * CRM stores. The flags are WordPress options by design — the theme reads
+     * them on nearly every front-end request, so making that read depend on the
+     * CRM would put a network hop in the page-render path and let a CRM outage
+     * blank the workspace. The CRM is a remote control, not the source of truth.
+     */
+    public function customerRollout(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can view the My Exotic rollout.'
+        );
+
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+        ]);
+
+        $platforms = Platform::query()
+            ->when(!empty($validated['platform_id']), fn ($q) => $q->where('id', $validated['platform_id']))
+            ->where('is_active', true)
+            ->whereNotNull('wp_api_url')
+            ->orderBy('name')
+            ->get(['id', 'name', 'country', 'domain', 'wp_api_url']);
+
+        $markets = [];
+        foreach ($platforms as $platform) {
+            $entry = [
+                'platform_id' => (int) $platform->id,
+                'name'        => (string) $platform->name,
+                'country'     => (string) $platform->country,
+                'domain'      => (string) $platform->domain,
+            ];
+
+            try {
+                // One unreachable market must not blank the whole panel: a
+                // 29-market roll-up where any single timeout returns a 500 is
+                // useless precisely when something is wrong.
+                $entry['rollout'] = WpSyncService::forPlatform((int) $platform->id)->getCustomerRollout();
+                $entry['reachable'] = true;
+                $entry['error'] = null;
+            } catch (\Throwable $exception) {
+                $entry['rollout'] = null;
+                $entry['reachable'] = false;
+                $entry['error'] = $exception->getMessage();
+            }
+
+            $markets[] = $entry;
+        }
+
+        return response()->json(['markets' => $markets]);
+    }
+
+    /**
+     * Flip flags, rollbacks, the master switch, or the market list on one market.
+     */
+    public function updateCustomerRollout(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can change the My Exotic rollout.'
+        );
+
+        $validated = $request->validate([
+            'platform_id'              => 'required|integer|exists:platforms,id',
+            'master_enabled'           => 'nullable|boolean',
+            'enabled_markets'          => 'nullable|array',
+            'enabled_markets.*'        => 'string|max:64',
+            'flags'                    => 'nullable|array',
+            'flags.*'                  => 'boolean',
+            'rollbacks'                => 'nullable|array',
+            'rollbacks.*'              => 'boolean',
+            'reset_flags'              => 'nullable|array',
+            'reset_flags.*'            => 'string|max:64',
+            'reset_rollbacks'          => 'nullable|array',
+            'reset_rollbacks.*'        => 'string|max:64',
+            'note'                     => 'nullable|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $sync = WpSyncService::forPlatform($platformId);
+
+        $before = null;
+        try {
+            $before = $sync->getCustomerRollout();
+        } catch (\Throwable $exception) {
+            // Recording the write is still worth more than refusing it because
+            // the pre-read failed; the response carries the resulting state.
+            $before = ['error' => $exception->getMessage()];
+        }
+
+        $payload = collect($validated)
+            ->only(['master_enabled', 'enabled_markets', 'flags', 'rollbacks', 'reset_flags', 'reset_rollbacks', 'note'])
+            ->reject(fn ($value) => $value === null)
+            ->all();
+
+        if (empty($payload) || $payload === ['note' => $payload['note'] ?? null]) {
+            return response()->json(['message' => 'Nothing to change.'], 422);
+        }
+
+        $after = $sync->updateCustomerRollout($payload);
+
+        \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::CUSTOMER_ROLLOUT_UPDATE, $request, [
+            'platform_id' => $platformId,
+            'before'      => $this->summariseRollout($before),
+            'after'       => $this->summariseRollout($after),
+            'changed'     => $after['changed'] ?? [],
+            'reason'      => $validated['note'] ?? 'Updated My Exotic rollout from CRM settings',
+        ]);
+
+        return response()->json($after);
+    }
+
+    /**
+     * Create the My Exotic private pages on a market.
+     *
+     * Provisioning runs only on `admin_init` behind `manage_options`, so a
+     * market can carry every flag on and still render an empty workspace
+     * because nobody has loaded wp-admin since the deploy. Nothing on the front
+     * end reports that, which is why it belongs beside the flags.
+     */
+    public function provisionCustomerPages(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can provision My Exotic pages.'
+        );
+
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $result = WpSyncService::forPlatform($platformId)->provisionCustomerPages();
+
+        \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::CUSTOMER_ROLLOUT_PROVISION, $request, [
+            'platform_id' => $platformId,
+            'created'     => $result['created'] ?? [],
+            'reason'      => 'Provisioned My Exotic private pages from CRM settings',
+        ]);
+
+        return response()->json($result);
+    }
+
+    /**
+     * Flatten a rollout payload to the parts worth keeping in an audit row.
+     *
+     * @param array<string,mixed>|null $rollout
+     * @return array<string,mixed>
+     */
+    private function summariseRollout($rollout): array
+    {
+        if (!is_array($rollout)) {
+            return [];
+        }
+
+        if (isset($rollout['error'])) {
+            return ['error' => $rollout['error']];
+        }
+
+        $effective = [];
+        foreach ($rollout['features'] ?? [] as $feature) {
+            if (!empty($feature['key'])) {
+                $effective[$feature['key']] = !empty($feature['effective']);
+            }
+        }
+
+        return [
+            'master_enabled' => $rollout['master_enabled'] ?? null,
+            'market_enabled' => $rollout['market_enabled'] ?? null,
+            'effective'      => $effective,
+            'pages_ready'    => $rollout['pages']['ready'] ?? null,
+        ];
+    }
+
     public function lifecycleSettings(Request $request)
     {
         $this->marketAuthorizationService->ensureRole(

@@ -35,6 +35,8 @@ final class CrmAuditAction
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
 
     public const LIFECYCLE_SETTINGS_UPDATE = 'lifecycle_settings_update';
+    public const CUSTOMER_ROLLOUT_UPDATE = 'customer_rollout_update';
+    public const CUSTOMER_ROLLOUT_PROVISION = 'customer_rollout_provision';
 
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
 
