@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Models\Client;
 use App\Models\Platform;
+use App\Support\WordPressSiteConnection;
 use App\Support\BioContactScrubber;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
@@ -19,17 +20,21 @@ class WpSyncService
     private string $baseUrl;
     private string $authHeader;
     private int $platformId;
+    private WordPressSiteConnection $site;
     private bool $sharedKeyEnabled;
     private int $defaultTimeout;
     private int $mediaUploadTimeout;
 
-    public function __construct(Platform $platform)
+    public function __construct(Platform|WordPressSiteConnection $site)
     {
-        $this->platformId = (int) $platform->id;
-        $this->sharedKeyEnabled = (bool) $platform->sync_shared_key_enabled;
-        $this->baseUrl = rtrim($platform->wp_api_url, '/');
+        $this->site = $site instanceof Platform
+            ? WordPressSiteConnection::fromPlatform($site)
+            : $site;
+        $this->platformId = $this->site->siteType === 'platform' ? (int) $this->site->siteId : 0;
+        $this->sharedKeyEnabled = (bool) $this->site->sharedKeyEnabled;
+        $this->baseUrl = rtrim((string) $this->site->wpApiUrl, '/');
         $this->authHeader = 'Basic ' . base64_encode(
-            $platform->wp_api_user . ':' . $platform->wp_api_password
+            (string) $this->site->wpApiUser . ':' . (string) $this->site->wpApiPassword
         );
         $isRemoteEndpoint = $this->isRemoteEndpoint($this->baseUrl);
         $this->defaultTimeout = $isRemoteEndpoint ? 60 : 30;
@@ -303,7 +308,7 @@ class WpSyncService
     public function getLocations(): array
     {
         return Cache::remember(
-            "wp-sync:{$this->platformId}:locations",
+            $this->site->cacheKey('locations'),
             now()->addMinutes(15),
             fn (): array => $this->get('/locations')
         );
@@ -312,7 +317,7 @@ class WpSyncService
     public function getCurrencies(): array
     {
         return Cache::remember(
-            "wp-sync:{$this->platformId}:currencies",
+            $this->site->cacheKey('currencies'),
             now()->addMinutes(15),
             fn (): array => $this->get('/currencies')
         );
@@ -665,7 +670,7 @@ class WpSyncService
     private function sharedKeyForPlatform(): ?string
     {
         $sharedKey = trim((string) config('services.exotic_crm_sync.shared_key', ''));
-        if ($sharedKey === '' || $this->platformId <= 0) {
+        if ($sharedKey === '' || $this->platformId <= 0 || $this->site->siteType !== 'platform') {
             return null;
         }
 

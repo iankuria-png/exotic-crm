@@ -12,10 +12,6 @@ use Illuminate\Support\Facades\Log;
  */
 class AutoOptimizeImpactService
 {
-    public function __construct(
-        private readonly WpSyncService $wpSync,
-    ) {}
-
     public function recheckDue(): int
     {
         $checked = 0;

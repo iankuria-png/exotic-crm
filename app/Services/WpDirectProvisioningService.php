@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Platform;
+use App\Support\WordPressSiteConnection;
 use App\Support\WpProfileFieldCatalog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -12,17 +13,19 @@ use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class WpDirectProvisioningService
 {
-    private Platform $platform;
+    private WordPressSiteConnection $site;
     private string $connectionName;
 
-    public function __construct(Platform $platform, ?array $connectionConfig = null)
+    public function __construct(Platform|WordPressSiteConnection $site, ?array $connectionConfig = null)
     {
-        $this->platform = $platform;
-        $this->connectionName = 'wp_provision_' . $platform->id;
+        $this->site = $site instanceof Platform
+            ? WordPressSiteConnection::fromPlatform($site)
+            : $site;
+        $this->connectionName = 'wp_provision_' . $this->site->siteType . '_' . $this->site->siteId;
 
         DynamicDatabaseService::switchConnection(
             $this->connectionName,
-            $connectionConfig ?? $platform->getConnectionConfig()
+            $connectionConfig ?? $this->site->connectionConfig()
         );
     }
 
@@ -223,7 +226,7 @@ class WpDirectProvisioningService
             'display_name' => $name,
         ]);
 
-        $prefix = (string) ($this->platform->db_prefix ?? '');
+        $prefix = (string) ($this->site->dbPrefix ?? '');
         DB::connection($this->connectionName)->table('usermeta')->insert([
             [
                 'user_id' => $userId,
@@ -283,7 +286,7 @@ class WpDirectProvisioningService
             'comment_count' => 0,
         ]);
 
-        $baseUrl = rtrim((string) ($this->platform->domain ?? ''), '/');
+        $baseUrl = rtrim((string) ($this->site->baseUrl ?? ''), '/');
         $guid = $baseUrl !== '' ? "{$baseUrl}/?p={$postId}" : "/?p={$postId}";
         $posts->where('ID', $postId)->update(['guid' => $guid]);
 
@@ -343,7 +346,7 @@ class WpDirectProvisioningService
 
     private function syncLegacySelfUploadSecretOption(int $postId, int $userId, ?string $secret = null): void
     {
-        if (!$this->platform->writesLegacySelfUploadSecretOption()) {
+        if (!$this->site->writesLegacySelfUploadSecretOption) {
             return;
         }
 
@@ -759,7 +762,7 @@ class WpDirectProvisioningService
 
     private function buildPlaceholderEmail(): string
     {
-        $domain = (string) (parse_url((string) ($this->platform->domain ?? ''), PHP_URL_HOST) ?? '');
+        $domain = (string) (parse_url((string) ($this->site->baseUrl ?? ''), PHP_URL_HOST) ?? '');
         $domain = strtolower(trim($domain));
         $domain = preg_replace('/[^a-z0-9.-]/', '', $domain) ?? '';
 

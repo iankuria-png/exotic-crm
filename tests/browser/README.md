@@ -99,10 +99,10 @@ Runnable smoke coverage:
 - `admin` sees wallet auto-renew fallback remain on the legacy path while the feature is disabled
 - `sub_admin` can reach `Settings > Wallet`
 - `sub_admin` can reach `Payments`
-- `sales` is redirected away from `Settings`
+- `sales` can reach `Settings > PBN` only and use the preview/queue shell
 - `sales` can reach `Payments`
 
-This is `10 runnable smoke checks`, not full workflow coverage.
+This is `11 runnable smoke checks`, not full workflow coverage.
 
 Optional seeded workflow coverage:
 

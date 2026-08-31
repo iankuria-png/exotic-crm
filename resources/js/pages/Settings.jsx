@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Navigate } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -13,6 +12,7 @@ import IntegrationsMetricsRow from '../components/settings/IntegrationsMetricsRo
 import IntegrationsOverviewPanel from '../components/settings/IntegrationsOverviewPanel';
 import MarketListPanel from '../components/settings/MarketListPanel';
 import MarketCreateModal from '../components/settings/MarketCreateModal';
+import PbnSitesPanel from '../components/settings/PbnSitesPanel';
 import MessagingArea from '../components/settings/messaging/MessagingArea';
 import PaymentLinkRoutingPanel from '../components/settings/PaymentLinkRoutingPanel';
 import PushRoutingPanel from '../components/settings/PushRoutingPanel';
@@ -1253,10 +1253,11 @@ function IntegrationsWorkspace({
     canManageWalletSystem,
     canManageWalletPlatforms,
     currentUserEmail,
+    currentUserRole,
 }) {
     const queryClient = useQueryClient();
     const toast = useToast();
-    const [integrationArea, setIntegrationArea] = useState('overview');
+    const [integrationArea, setIntegrationArea] = useState(currentUserRole === 'sales' ? 'pbn' : 'overview');
     const [selectedPlatformId, setSelectedPlatformId] = useState(null);
     const [editor, setEditor] = useState(null);
     const [createOpen, setCreateOpen] = useState(false);
@@ -1365,6 +1366,13 @@ function IntegrationsWorkspace({
         queryKey: ['settings-integrations'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
     });
+    const canAccessPbn = ['admin', 'sub_admin', 'sales'].includes(currentUserRole || '');
+    const pbnSitesQuery = useQuery({
+        queryKey: ['settings-pbn-sites'],
+        queryFn: () => api.get('/crm/settings/integrations/pbn-sites').then((response) => response.data),
+        enabled: canAccessPbn,
+        staleTime: 30_000,
+    });
 
     const services = data?.services || {};
     const walletConfig = data?.wallet || {};
@@ -1463,6 +1471,9 @@ function IntegrationsWorkspace({
         const requestedArea = params.get('integrationArea');
         const shouldOpenCreate = params.get('createMarket');
         const allowedAreas = new Set(['overview', 'wallet', 'markets', 'payment_links', 'messaging', 'sms', 'push', 'scraper']);
+        if (canAccessPbn) {
+            allowedAreas.add('pbn');
+        }
         if (requestedArea && allowedAreas.has(requestedArea)) {
             setIntegrationArea(requestedArea);
         }
@@ -1477,7 +1488,13 @@ function IntegrationsWorkspace({
         if (requestedPlatform > 0) {
             setSelectedPlatformId(requestedPlatform);
         }
-    }, [canCreateMarkets]);
+    }, [canAccessPbn, canCreateMarkets]);
+
+    useEffect(() => {
+        if (currentUserRole === 'sales' && integrationArea !== 'pbn') {
+            setIntegrationArea('pbn');
+        }
+    }, [currentUserRole, integrationArea]);
 
     useEffect(() => {
         if (!platformRows.length) {
@@ -3306,16 +3323,24 @@ function IntegrationsWorkspace({
     const scraperBlockedOrFailed = scraperSources.filter((source) => ['blocked', 'error'].includes(source.last_run_status)).length;
     const selectedScraperRules = scraperEditor?.parser_rules || defaultScraperRules();
     const selectedScraperCompliant = Boolean(scraperEditor?.compliance_ack_robots) && Boolean(scraperEditor?.compliance_ack_tos);
+    const pbnSites = pbnSitesQuery.data?.sites || [];
     const integrationAreas = [
         { id: 'overview', label: 'Overview', hint: 'Service health' },
         { id: 'wallet', label: 'Wallet', hint: `${walletSystemConfig?.mode || 'disabled'} • ${walletActiveMarkets}/${platformRows.length || 0} live` },
         { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
+        { id: 'pbn', label: 'PBN', hint: `${pbnSites.length} sites` },
         { id: 'payment_links', label: 'Payment Links', hint: paymentLinkReadOnly ? 'Read-only' : 'Editable routing' },
         { id: 'messaging', label: 'Messaging', hint: 'Meta Cloud API' },
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
         { id: 'push', label: 'Push Routing', hint: `${pushReadyPlatforms}/${pushConfiguredPlatforms || 0} ready` },
         { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
-    ];
+    ].filter((area) => {
+        if (area.id === 'pbn') {
+            return canAccessPbn;
+        }
+
+        return currentUserRole === 'sales' ? false : true;
+    });
     const openInitialFullSync = () => {
         if (!selectedPlatform) {
             return;
@@ -4950,6 +4975,14 @@ function IntegrationsWorkspace({
                         </div>
                     </div>
                 </section>
+            ) : null}
+
+            {integrationArea === 'pbn' ? (
+                <PbnSitesPanel
+                    currentUserRole={currentUserRole}
+                    formatDateTime={formatDateTime}
+                    statusChip={statusChip}
+                />
             ) : null}
 
             {integrationArea === 'markets' ? (
@@ -9324,6 +9357,10 @@ export default function Settings() {
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => {
+            if (isSales) {
+                return tab.id === 'integrations';
+            }
+
             if (tab.id === 'roles') {
                 return canViewRoles;
             }
@@ -9362,7 +9399,7 @@ export default function Settings() {
 
             return true;
         });
-    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles, user?.role]);
+    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles, isSales, user?.role]);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -9377,10 +9414,6 @@ export default function Settings() {
             setActiveTab(tabs[0]?.id || 'integrations');
         }
     }, [activeTab, tabs]);
-
-    if (isSales) {
-        return <Navigate to="/" replace />;
-    }
 
     return (
         <div className="space-y-4">
@@ -9410,6 +9443,7 @@ export default function Settings() {
                     canManageWalletSystem={canManageWalletSystem}
                     canManageWalletPlatforms={canManageWalletPlatforms}
                     currentUserEmail={user?.email || ''}
+                    currentUserRole={user?.role || ''}
                 />
             ) : null}
             {activeTab === 'kyc' ? (

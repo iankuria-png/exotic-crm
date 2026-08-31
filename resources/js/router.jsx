@@ -81,10 +81,7 @@ function ProtectedRoute({ children }) {
 
     if (
         user.role === 'sales'
-        && (
-            (location.pathname || '').startsWith('/push-campaigns')
-            || (location.pathname || '').startsWith('/settings')
-        )
+        && (location.pathname || '').startsWith('/push-campaigns')
     ) {
         return <Navigate to="/" replace />;
     }
