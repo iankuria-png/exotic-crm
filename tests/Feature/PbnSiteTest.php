@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\RunPbnSeedBatchJob;
 use App\Models\Client;
 use App\Models\PbnSeedBatch;
+use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
 use App\Models\PbnSeedPreview;
 use App\Models\PbnSite;
@@ -259,6 +260,167 @@ class PbnSiteTest extends TestCase
         $this->assertSame($first['wp_post_id'], $second['wp_post_id']);
         $this->assertSame(1, DB::connection($connectionName)->table('posts')->count());
         $this->assertSame(1, DB::connection($connectionName)->table('exotic_crm_provisions')->count());
+    }
+
+    public function test_pbn_operations_dashboard_lists_searches_and_paginates(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Exotic Uganda']);
+        $site = $this->pbnSite($platform, [$platform->id], ['name' => 'Manuel Escorts']);
+        $firstClient = $this->publishedClient($platform, ['name' => 'Amina Prime', 'city' => 'Kampala']);
+        $secondClient = $this->publishedClient($platform, ['name' => 'Bella Archive', 'city' => 'Entebbe']);
+        $user = $this->userFor($platform, 'admin');
+
+        $firstBatch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => $user->id,
+            'status' => PbnSeedBatch::STATUS_COMPLETED,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+            'failed_count' => 0,
+            'notes' => 'Kampala launch seed',
+        ]);
+        $secondBatch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => $user->id,
+            'status' => PbnSeedBatch::STATUS_PARTIAL,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 0,
+            'failed_count' => 1,
+            'notes' => 'Archive follow-up',
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $firstBatch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $firstClient->id,
+            'source_wp_post_id' => $firstClient->wp_post_id,
+            'target_wp_post_id' => 91001,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'payload_hash' => str_repeat('b', 64),
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $secondBatch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $secondClient->id,
+            'source_wp_post_id' => $secondClient->wp_post_id,
+            'status' => PbnSeedItem::STATUS_FAILED,
+            'failure_reason' => 'REST timeout',
+            'payload_hash' => str_repeat('c', 64),
+        ]);
+        PbnSeedEvent::create([
+            'pbn_site_id' => $site->id,
+            'batch_id' => $secondBatch->id,
+            'type' => 'item_failed',
+            'level' => 'error',
+            'message' => 'PBN seed item failed.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/pbn/overview')
+            ->assertOk()
+            ->assertJsonPath('sites.ready', 1)
+            ->assertJsonPath('items.created', 1)
+            ->assertJsonPath('items.failed', 1)
+            ->assertJsonPath('recent_failures.0.source_client.name', 'Bella Archive');
+
+        $this->getJson('/api/crm/pbn/batches?per_page=10&q=launch')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.notes', 'Kampala launch seed');
+
+        $this->getJson('/api/crm/pbn/items?q=Amina&status=created')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.source_client.name', 'Amina Prime');
+
+        $this->getJson('/api/crm/pbn/events?level=error')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.type', 'item_failed');
+    }
+
+    public function test_admin_can_preview_and_revert_created_pbn_batch(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        $site->forceFill([
+            'db_host' => 'sqlite',
+            'db_name' => $connectionConfig['database'],
+            'db_user' => 'sqlite',
+            'db_pass' => 'sqlite',
+            'db_prefix' => 'wp_',
+        ])->save();
+        $client = $this->publishedClient($platform);
+        $admin = $this->userFor($platform, 'admin');
+        $sales = $this->userFor($platform, 'sales');
+        $targetPostId = (int) DB::connection($connectionName)->table('posts')->insertGetId([
+            'post_author' => 1,
+            'post_date' => now()->format('Y-m-d H:i:s'),
+            'post_date_gmt' => now('UTC')->format('Y-m-d H:i:s'),
+            'post_title' => 'Seeded PBN Profile',
+            'post_status' => 'publish',
+            'post_name' => 'seeded-pbn-profile',
+            'post_type' => 'escort',
+            'post_modified' => now()->format('Y-m-d H:i:s'),
+            'post_modified_gmt' => now('UTC')->format('Y-m-d H:i:s'),
+        ]);
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => $admin->id,
+            'status' => PbnSeedBatch::STATUS_COMPLETED,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+            'failed_count' => 0,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => $targetPostId,
+            'target_wp_user_id' => 1,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'payload_hash' => str_repeat('d', 64),
+        ]);
+
+        Sanctum::actingAs($sales);
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/revert", [
+            'reason' => 'Sales cannot revert',
+        ])->assertForbidden();
+
+        Sanctum::actingAs($admin);
+        $this->getJson("/api/crm/pbn/batches/{$batch->id}/revert-preview")
+            ->assertOk()
+            ->assertJsonPath('can_revert', true)
+            ->assertJsonPath('eligible_count', 1);
+
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/revert", [
+            'reason' => 'Rollback launch seed',
+        ])->assertOk()
+            ->assertJsonPath('batch.status', PbnSeedBatch::STATUS_REVERTED)
+            ->assertJsonPath('batch.reverted_count', 1);
+
+        $this->assertDatabaseHas('pbn_seed_items', [
+            'batch_id' => $batch->id,
+            'target_wp_post_id' => $targetPostId,
+            'status' => PbnSeedItem::STATUS_REVERTED,
+            'reverted_by' => $admin->id,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_events', [
+            'batch_id' => $batch->id,
+            'type' => 'batch_reverted',
+        ]);
+        $this->assertSame('private', DB::connection($connectionName)->table('posts')->where('ID', $targetPostId)->value('post_status'));
     }
 
     private function pbnSite(Platform $default, array $sourceIds, array $overrides = []): PbnSite

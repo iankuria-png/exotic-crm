@@ -71,6 +71,33 @@ const autoPushNavItem = {
     icon: 'M12 3.75v3m0 10.5v3m8.25-8.25h-3M6.75 12h-3m11.031 5.281-2.122-2.122M9.341 8.219 7.22 6.098m0 11.184 2.121-2.122m5.318-5.318 2.122-2.121M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z',
 };
 
+const pbnNavItem = {
+    to: '/pbn',
+    label: 'PBN',
+    icon: 'M3.75 5.25h16.5v4.5H3.75v-4.5Zm0 9h16.5v4.5H3.75v-4.5Zm3-4.5v4.5m10.5-4.5v4.5',
+};
+
+function insertPbnWorkspaceItem(groups) {
+    return groups.map((group) => {
+        if (group.title !== 'Workspace' || group.items.some((item) => item.to === pbnNavItem.to)) {
+            return group;
+        }
+
+        const output = [];
+        group.items.forEach((item) => {
+            output.push(item);
+            if (item.to === '/clients') {
+                output.push(pbnNavItem);
+            }
+        });
+
+        return {
+            ...group,
+            items: output,
+        };
+    });
+}
+
 const resourcesGroup = {
     title: 'Resources',
     items: [
@@ -140,7 +167,7 @@ export default function Sidebar({ onClose }) {
             resourcesGroup,
         ]
         : role === 'admin' || role === 'sub_admin'
-            ? insertVisitorsGroup(navGroups.map((group) => {
+            ? insertVisitorsGroup(insertPbnWorkspaceItem(navGroups).map((group) => {
                 if (group.title !== 'Revenue') {
                     return group;
                 }
@@ -155,7 +182,7 @@ export default function Sidebar({ onClose }) {
                 };
             })).concat([resourcesGroup])
             : role === 'sales'
-                ? insertVisitorsGroup(navGroups.filter((group) => group.title !== 'Admin')).concat([resourcesGroup])
+                ? insertVisitorsGroup(insertPbnWorkspaceItem(navGroups.filter((group) => group.title !== 'Admin'))).concat([resourcesGroup])
                 : navGroups.concat([resourcesGroup]);
 
     return (

@@ -4,6 +4,7 @@ namespace App\Services\Pbn;
 
 use App\Models\Client;
 use App\Models\PbnSeedBatch;
+use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
@@ -29,6 +30,11 @@ class PbnSeedProvisioningService
             'status' => PbnSeedBatch::STATUS_RUNNING,
             'started_at' => $batch->started_at ?: now(),
         ])->save();
+        $this->recordEvent($batch, null, 'batch_started', 'info', 'PBN seed batch started.', [
+            'selected_count' => (int) $batch->selected_count,
+            'created_count' => (int) $batch->created_count,
+            'failed_count' => (int) $batch->failed_count,
+        ]);
 
         foreach ($batch->items()->whereIn('status', [
             PbnSeedItem::STATUS_QUEUED,
@@ -39,6 +45,12 @@ class PbnSeedProvisioningService
         }
 
         $this->previewService->refreshBatchCounts($batch->fresh(['targets']));
+        $fresh = $batch->fresh();
+        $this->recordEvent($fresh, null, 'batch_finished', $fresh->failed_count > 0 ? 'warning' : 'info', 'PBN seed batch finished.', [
+            'status' => (string) $fresh->status,
+            'created_count' => (int) $fresh->created_count,
+            'failed_count' => (int) $fresh->failed_count,
+        ]);
     }
 
     public function provisionItem(PbnSeedItem $item): void
@@ -59,7 +71,13 @@ class PbnSeedProvisioningService
         $item->forceFill([
             'status' => PbnSeedItem::STATUS_PROVISIONING,
             'failure_reason' => null,
+            'provision_started_at' => now(),
+            'provision_finished_at' => null,
         ])->save();
+        $this->recordEvent($item->batch, $item, 'item_started', 'info', 'PBN seed item provisioning started.', [
+            'source_client_id' => (int) $item->source_client_id,
+            'source_wp_post_id' => (int) $item->source_wp_post_id,
+        ]);
 
         try {
             $sourcePayload = WpSyncService::forPlatform((int) $item->source_platform_id)
@@ -75,7 +93,13 @@ class PbnSeedProvisioningService
                 'target_wp_user_id' => (int) $result['wp_user_id'],
                 'status' => $mediaPolicy === 'none' ? PbnSeedItem::STATUS_CREATED : PbnSeedItem::STATUS_MEDIA_PENDING,
                 'failure_reason' => null,
+                'provision_finished_at' => now(),
             ])->save();
+            $this->recordEvent($item->batch, $item, 'item_created', 'info', 'PBN seed item created on destination WordPress.', [
+                'target_wp_post_id' => (int) $result['wp_post_id'],
+                'target_wp_user_id' => (int) $result['wp_user_id'],
+                'media_policy' => $mediaPolicy,
+            ]);
         } catch (\Throwable $exception) {
             $this->markFailed($item, $exception->getMessage());
         }
@@ -178,6 +202,30 @@ class PbnSeedProvisioningService
         $item->forceFill([
             'status' => PbnSeedItem::STATUS_FAILED,
             'failure_reason' => Str::limit($message, 1000, ''),
+            'provision_finished_at' => now(),
         ])->save();
+        $this->recordEvent($item->batch, $item, 'item_failed', 'error', 'PBN seed item failed.', [
+            'source_client_id' => (int) $item->source_client_id,
+            'failure_reason' => Str::limit($message, 500, ''),
+        ]);
+    }
+
+    private function recordEvent(?PbnSeedBatch $batch, ?PbnSeedItem $item, string $type, string $level, string $message, array $context = []): void
+    {
+        $siteId = (int) ($batch?->pbn_site_id ?: $item?->pbn_site_id ?: 0);
+        if ($siteId < 1) {
+            return;
+        }
+
+        PbnSeedEvent::create([
+            'pbn_site_id' => $siteId,
+            'batch_id' => $batch?->id,
+            'item_id' => $item?->id,
+            'actor_id' => $batch?->created_by,
+            'type' => $type,
+            'level' => $level,
+            'message' => $message,
+            'context' => $context,
+        ]);
     }
 }

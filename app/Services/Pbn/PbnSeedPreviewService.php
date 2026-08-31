@@ -262,12 +262,18 @@ class PbnSeedPreviewService
         $items = $batch->items()->get(['status', 'target_id']);
         $created = $items->whereIn('status', [PbnSeedItem::STATUS_CREATED, PbnSeedItem::STATUS_MEDIA_PENDING])->count();
         $failed = $items->where('status', PbnSeedItem::STATUS_FAILED)->count();
+        $reverted = $items->where('status', PbnSeedItem::STATUS_REVERTED)->count();
         $selected = $items->count();
-        $terminal = $selected > 0 && ($created + $failed) >= $selected;
+        $terminal = $selected > 0 && ($created + $failed + $reverted) >= $selected;
 
         $status = $batch->status;
+        if ($selected > 0 && $reverted >= $selected) {
+            $status = PbnSeedBatch::STATUS_REVERTED;
+        }
         if ($terminal) {
-            $status = $failed > 0 ? PbnSeedBatch::STATUS_PARTIAL : PbnSeedBatch::STATUS_COMPLETED;
+            $status = $status === PbnSeedBatch::STATUS_REVERTED
+                ? $status
+                : ($failed > 0 ? PbnSeedBatch::STATUS_PARTIAL : PbnSeedBatch::STATUS_COMPLETED);
         } elseif ($failed > 0 || $created > 0) {
             $status = PbnSeedBatch::STATUS_RUNNING;
         }
@@ -276,6 +282,7 @@ class PbnSeedPreviewService
             'selected_count' => $selected,
             'created_count' => $created,
             'failed_count' => $failed,
+            'reverted_count' => $reverted,
             'status' => $status,
             'completed_at' => $terminal ? ($batch->completed_at ?: now()) : null,
         ])->save();
@@ -575,6 +582,7 @@ class PbnSeedPreviewService
             'selected' => (int) $batch->selected_count,
             'created' => (int) $batch->created_count,
             'failed' => (int) $batch->failed_count,
+            'reverted' => (int) $batch->reverted_count,
             'status' => (string) $batch->status,
         ];
     }

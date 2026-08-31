@@ -17,6 +17,7 @@ import PushCampaigns from './pages/PushCampaigns';
 import AutoPush from './pages/AutoPush';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import Pbn from './pages/Pbn';
 import Setup from './pages/Setup';
 import NotFound from './pages/NotFound';
 import NetworkCheck from './pages/NetworkCheck';
@@ -165,6 +166,7 @@ export default function AppRouter() {
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="admin/commissions" element={<AdminCommissions />} />
+                <Route path="pbn" element={<Pbn />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="network-check" element={<NetworkCheck />} />
                 <Route path="*" element={<NotFound />} />

@@ -261,6 +261,17 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales,field_sales');
 
+    Route::middleware('role:admin,sub_admin,sales')->prefix('pbn')->group(function () {
+        Route::get('/overview', [PbnSiteController::class, 'overview']);
+        Route::get('/batches', [PbnSiteController::class, 'batches']);
+        Route::get('/batches/{batch}', [PbnSiteController::class, 'batch']);
+        Route::get('/batches/{batch}/revert-preview', [PbnSiteController::class, 'revertPreview']);
+        Route::post('/batches/{batch}/revert', [PbnSiteController::class, 'revertBatch']);
+        Route::post('/batches/{batch}/retry', [PbnSiteController::class, 'retryBatch']);
+        Route::get('/items', [PbnSiteController::class, 'items']);
+        Route::get('/events', [PbnSiteController::class, 'events']);
+    });
+
     Route::middleware('role:admin,sub_admin,sales,field_sales')->prefix('todos')->group(function () {
         Route::get('/', [AgentTodoController::class, 'index']);
         Route::post('/', [AgentTodoController::class, 'store']);

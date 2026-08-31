@@ -12,6 +12,7 @@ class PbnSeedBatch extends Model
     public const STATUS_COMPLETED = 'completed';
     public const STATUS_FAILED = 'failed';
     public const STATUS_CANCELLED = 'cancelled';
+    public const STATUS_REVERTED = 'reverted';
 
     protected $fillable = [
         'pbn_site_id',
@@ -22,11 +23,15 @@ class PbnSeedBatch extends Model
         'selected_count',
         'created_count',
         'failed_count',
+        'reverted_count',
         'warnings',
         'copy_policy',
         'notes',
         'started_at',
         'completed_at',
+        'reverted_at',
+        'reverted_by',
+        'revert_reason',
     ];
 
     protected $casts = [
@@ -35,10 +40,13 @@ class PbnSeedBatch extends Model
         'selected_count' => 'integer',
         'created_count' => 'integer',
         'failed_count' => 'integer',
+        'reverted_count' => 'integer',
         'warnings' => 'array',
         'copy_policy' => 'array',
         'started_at' => 'datetime',
         'completed_at' => 'datetime',
+        'reverted_at' => 'datetime',
+        'reverted_by' => 'integer',
     ];
 
     public function pbnSite()
@@ -51,6 +59,11 @@ class PbnSeedBatch extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function reverter()
+    {
+        return $this->belongsTo(User::class, 'reverted_by');
+    }
+
     public function targets()
     {
         return $this->hasMany(PbnSeedTarget::class, 'batch_id');
@@ -59,5 +72,10 @@ class PbnSeedBatch extends Model
     public function items()
     {
         return $this->hasMany(PbnSeedItem::class, 'batch_id');
+    }
+
+    public function events()
+    {
+        return $this->hasMany(PbnSeedEvent::class, 'batch_id');
     }
 }

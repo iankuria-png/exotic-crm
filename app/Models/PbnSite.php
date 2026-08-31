@@ -72,8 +72,22 @@ class PbnSite extends Model
         return $this->hasMany(PbnSeedItem::class);
     }
 
+    public function seedEvents()
+    {
+        return $this->hasMany(PbnSeedEvent::class);
+    }
+
     public function getConnectionConfig(): array
     {
+        if (strtolower((string) $this->db_host) === 'sqlite') {
+            return [
+                'driver' => 'sqlite',
+                'database' => $this->db_name,
+                'prefix' => $this->db_prefix ?? '',
+                'foreign_key_constraints' => false,
+            ];
+        }
+
         return [
             'driver' => 'mysql',
             'host' => $this->db_host,

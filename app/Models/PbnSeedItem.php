@@ -13,6 +13,7 @@ class PbnSeedItem extends Model
     public const STATUS_MEDIA_PENDING = 'media_pending';
     public const STATUS_FAILED = 'failed';
     public const STATUS_SKIPPED_DUPLICATE = 'skipped_duplicate';
+    public const STATUS_REVERTED = 'reverted';
 
     protected $fillable = [
         'batch_id',
@@ -31,6 +32,13 @@ class PbnSeedItem extends Model
         'payload_hash',
         'eligibility_snapshot',
         'failure_reason',
+        'provision_started_at',
+        'provision_finished_at',
+        'original_target_post_status',
+        'reverted_at',
+        'reverted_by',
+        'revert_reason',
+        'revert_failure_reason',
     ];
 
     protected $casts = [
@@ -45,6 +53,10 @@ class PbnSeedItem extends Model
         'target_wp_user_id' => 'integer',
         'quality_score' => 'integer',
         'eligibility_snapshot' => 'array',
+        'provision_started_at' => 'datetime',
+        'provision_finished_at' => 'datetime',
+        'reverted_at' => 'datetime',
+        'reverted_by' => 'integer',
     ];
 
     public function batch()
@@ -70,5 +82,15 @@ class PbnSeedItem extends Model
     public function sourceClient()
     {
         return $this->belongsTo(Client::class, 'source_client_id');
+    }
+
+    public function reverter()
+    {
+        return $this->belongsTo(User::class, 'reverted_by');
+    }
+
+    public function events()
+    {
+        return $this->hasMany(PbnSeedEvent::class, 'item_id');
     }
 }

@@ -47,7 +47,7 @@ function stepClass(active) {
     return active ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600';
 }
 
-export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQueued }) {
+export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQueued, defaultNotes = 'Manual PBN seed from Settings' }) {
     const toast = useToast();
     const queryClient = useQueryClient();
     const [step, setStep] = useState('setup');
@@ -56,7 +56,7 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
     const [targets, setTargets] = useState([]);
     const [selectedClientIds, setSelectedClientIds] = useState([]);
     const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
-    const [notes, setNotes] = useState('Manual PBN seed from Settings');
+    const [notes, setNotes] = useState(defaultNotes);
 
     const locationsQuery = useQuery({
         queryKey: ['settings-pbn-site-locations', site?.id],
@@ -73,9 +73,9 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         setTargets([]);
         setSelectedClientIds([]);
         setDuplicateAcknowledged(false);
-        setNotes('Manual PBN seed from Settings');
+        setNotes(defaultNotes);
         setStep('setup');
-    }, [open, site]);
+    }, [defaultNotes, open, site]);
 
     useEffect(() => {
         if (!open || targets.length || !locations.length) return;

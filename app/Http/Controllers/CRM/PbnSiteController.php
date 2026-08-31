@@ -8,6 +8,7 @@ use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedItem;
 use App\Models\PbnSite;
 use App\Services\MarketAuthorizationService;
+use App\Services\Pbn\PbnOperationsService;
 use App\Services\Pbn\PbnSeedPreviewService;
 use App\Services\Pbn\PbnSeedProvisioningService;
 use App\Services\Pbn\PbnSiteService;
@@ -21,6 +22,7 @@ class PbnSiteController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PbnSiteService $siteService,
+        private readonly PbnOperationsService $operationsService,
         private readonly PbnSeedPreviewService $previewService,
         private readonly PbnSeedProvisioningService $provisioningService
     ) {
@@ -129,6 +131,75 @@ class PbnSiteController extends Controller
         ]);
     }
 
+    public function overview(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        return response()->json($this->operationsService->overview($request->user()));
+    }
+
+    public function batches(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate($this->listRules());
+
+        return response()->json($this->operationsService->batches($request->user(), $validated));
+    }
+
+    public function batch(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        return response()->json($this->operationsService->batch($request->user(), $batch));
+    }
+
+    public function items(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate($this->listRules() + [
+            'batch_id' => 'sometimes|nullable|integer|exists:pbn_seed_batches,id',
+            'source_platform_id' => 'sometimes|nullable|integer|exists:platforms,id',
+        ]);
+
+        return response()->json($this->operationsService->items($request->user(), $validated));
+    }
+
+    public function events(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate($this->listRules() + [
+            'batch_id' => 'sometimes|nullable|integer|exists:pbn_seed_batches,id',
+            'level' => 'sometimes|nullable|in:all,info,warning,error',
+        ]);
+
+        return response()->json($this->operationsService->events($request->user(), $validated));
+    }
+
+    public function revertPreview(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        return response()->json($this->operationsService->revertPreview($request->user(), $batch));
+    }
+
+    public function revertBatch(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate([
+            'reason' => 'required|string|min:6|max:1000',
+        ]);
+
+        return response()->json($this->operationsService->revertBatch(
+            $request->user(),
+            $batch,
+            (string) $validated['reason']
+        ));
+    }
+
     private function ensurePbnUser(Request $request): void
     {
         $this->marketAuthorizationService->ensureRole(
@@ -219,6 +290,17 @@ class PbnSiteController extends Controller
             'selected_client_ids.*' => 'integer|exists:clients,id',
             'duplicate_acknowledged' => 'sometimes|boolean',
             'notes' => 'nullable|string|max:1000',
+        ];
+    }
+
+    private function listRules(): array
+    {
+        return [
+            'pbn_site_id' => 'sometimes|nullable|integer|exists:pbn_sites,id',
+            'status' => 'sometimes|nullable|string|max:32',
+            'q' => 'sometimes|nullable|string|max:160',
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:10|max:100',
         ];
     }
 }
