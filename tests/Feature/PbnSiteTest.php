@@ -41,7 +41,10 @@ class PbnSiteTest extends TestCase
 
     public function test_pbn_sites_are_created_separately_from_platform_rows(): void
     {
-        $platform = Platform::factory()->create(['name' => 'Exotic Uganda']);
+        $platform = Platform::factory()->create([
+            'name' => 'Exotic Uganda',
+            'wp_api_url' => 'https://uganda.example/wp-json/exotic-crm-sync/v1',
+        ]);
         $user = $this->userFor($platform, 'admin');
         Sanctum::actingAs($user);
 
@@ -294,7 +297,10 @@ class PbnSiteTest extends TestCase
 
     public function test_pbn_operations_dashboard_lists_searches_and_paginates(): void
     {
-        $platform = Platform::factory()->create(['name' => 'Exotic Uganda']);
+        $platform = Platform::factory()->create([
+            'name' => 'Exotic Uganda',
+            'wp_api_url' => 'https://uganda.example/wp-json/exotic-crm-sync/v1',
+        ]);
         $site = $this->pbnSite($platform, [$platform->id], ['name' => 'Manuel Escorts']);
         $firstClient = $this->publishedClient($platform, ['name' => 'Amina Prime', 'city' => 'Kampala']);
         $secondClient = $this->publishedClient($platform, ['name' => 'Bella Archive', 'city' => 'Entebbe']);
@@ -367,12 +373,100 @@ class PbnSiteTest extends TestCase
         $this->getJson('/api/crm/pbn/items?q=Amina&status=created')
             ->assertOk()
             ->assertJsonPath('meta.total', 1)
-            ->assertJsonPath('data.0.source_client.name', 'Amina Prime');
+            ->assertJsonPath('data.0.source_client.name', 'Amina Prime')
+            ->assertJsonPath('data.0.source_client.profile_url', "https://uganda.example/?p={$firstClient->wp_post_id}");
 
         $this->getJson('/api/crm/pbn/events?level=error')
             ->assertOk()
             ->assertJsonPath('meta.total', 1)
             ->assertJsonPath('data.0.type', 'item_failed');
+    }
+
+    public function test_sales_can_stop_running_pbn_batch_and_observe_cancelled_items(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Exotic Uganda']);
+        $site = $this->pbnSite($platform, [$platform->id], ['name' => 'Manuel Escorts']);
+        $firstClient = $this->publishedClient($platform, ['name' => 'Queued Candidate']);
+        $secondClient = $this->publishedClient($platform, ['name' => 'Provisioning Candidate']);
+        $createdClient = $this->publishedClient($platform, ['name' => 'Created Candidate']);
+        $sales = $this->userFor($platform, 'sales');
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => $sales->id,
+            'status' => PbnSeedBatch::STATUS_RUNNING,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 3,
+            'selected_count' => 3,
+            'created_count' => 1,
+            'failed_count' => 0,
+        ]);
+
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $firstClient->id,
+            'source_wp_post_id' => $firstClient->wp_post_id,
+            'status' => PbnSeedItem::STATUS_QUEUED,
+            'payload_hash' => str_repeat('e', 64),
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $secondClient->id,
+            'source_wp_post_id' => $secondClient->wp_post_id,
+            'status' => PbnSeedItem::STATUS_PROVISIONING,
+            'payload_hash' => str_repeat('f', 64),
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $createdClient->id,
+            'source_wp_post_id' => $createdClient->wp_post_id,
+            'target_wp_post_id' => 92001,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'payload_hash' => str_repeat('a', 64),
+        ]);
+
+        Sanctum::actingAs($sales);
+
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/cancel", [
+            'reason' => 'Stopping duplicate launch',
+        ])->assertOk()
+            ->assertJsonPath('batch.status', PbnSeedBatch::STATUS_CANCELLED)
+            ->assertJsonPath('batch.created_count', 1);
+
+        $this->assertDatabaseHas('pbn_seed_batches', [
+            'id' => $batch->id,
+            'status' => PbnSeedBatch::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_items', [
+            'batch_id' => $batch->id,
+            'source_client_id' => $firstClient->id,
+            'status' => PbnSeedItem::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_items', [
+            'batch_id' => $batch->id,
+            'source_client_id' => $secondClient->id,
+            'status' => PbnSeedItem::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_items', [
+            'batch_id' => $batch->id,
+            'source_client_id' => $createdClient->id,
+            'status' => PbnSeedItem::STATUS_CREATED,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_events', [
+            'batch_id' => $batch->id,
+            'type' => 'batch_cancelled',
+            'level' => 'warning',
+        ]);
+
+        $this->getJson("/api/crm/pbn/items?batch_id={$batch->id}&status=cancelled")
+            ->assertOk()
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.status', PbnSeedItem::STATUS_CANCELLED);
     }
 
     public function test_admin_can_preview_and_revert_created_pbn_batch(): void

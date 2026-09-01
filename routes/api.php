@@ -268,6 +268,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/batches/{batch}/revert-preview', [PbnSiteController::class, 'revertPreview']);
         Route::post('/batches/{batch}/revert', [PbnSiteController::class, 'revertBatch']);
         Route::post('/batches/{batch}/retry', [PbnSiteController::class, 'retryBatch']);
+        Route::post('/batches/{batch}/cancel', [PbnSiteController::class, 'cancelBatch']);
         Route::get('/items', [PbnSiteController::class, 'items']);
         Route::get('/events', [PbnSiteController::class, 'events']);
     });

@@ -22,7 +22,7 @@ class PbnSeedProvisioningService
     public function execute(PbnSeedBatch $batch): void
     {
         $batch->loadMissing(['pbnSite', 'items.sourceClient.platform', 'targets']);
-        if (!$batch->pbnSite || in_array($batch->status, [PbnSeedBatch::STATUS_COMPLETED, PbnSeedBatch::STATUS_CANCELLED], true)) {
+        if (!$batch->pbnSite || in_array($batch->status, [PbnSeedBatch::STATUS_COMPLETED, PbnSeedBatch::STATUS_CANCELLED, PbnSeedBatch::STATUS_REVERTED], true)) {
             return;
         }
 
@@ -41,11 +41,35 @@ class PbnSeedProvisioningService
             PbnSeedItem::STATUS_SELECTED,
             PbnSeedItem::STATUS_FAILED,
         ])->with('sourceClient.platform')->orderBy('id')->get() as $item) {
-            $this->provisionItem($item);
+            $batch->refresh();
+            if ($batch->status === PbnSeedBatch::STATUS_CANCELLED) {
+                break;
+            }
+
+            $freshItem = $item->fresh(['sourceClient.platform', 'batch.pbnSite']);
+            if (!$freshItem || !in_array($freshItem->status, [
+                PbnSeedItem::STATUS_QUEUED,
+                PbnSeedItem::STATUS_SELECTED,
+                PbnSeedItem::STATUS_FAILED,
+            ], true)) {
+                continue;
+            }
+
+            $this->provisionItem($freshItem);
         }
 
         $this->previewService->refreshBatchCounts($batch->fresh(['targets']));
         $fresh = $batch->fresh();
+        if ($fresh->status === PbnSeedBatch::STATUS_CANCELLED) {
+            $this->recordEvent($fresh, null, 'batch_stopped', 'warning', 'PBN seed batch stopped before all queued items completed.', [
+                'selected_count' => (int) $fresh->selected_count,
+                'created_count' => (int) $fresh->created_count,
+                'failed_count' => (int) $fresh->failed_count,
+            ]);
+
+            return;
+        }
+
         $this->recordEvent($fresh, null, 'batch_finished', $fresh->failed_count > 0 ? 'warning' : 'info', 'PBN seed batch finished.', [
             'status' => (string) $fresh->status,
             'created_count' => (int) $fresh->created_count,

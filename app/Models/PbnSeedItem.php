@@ -13,6 +13,7 @@ class PbnSeedItem extends Model
     public const STATUS_MEDIA_PENDING = 'media_pending';
     public const STATUS_FAILED = 'failed';
     public const STATUS_SKIPPED_DUPLICATE = 'skipped_duplicate';
+    public const STATUS_CANCELLED = 'cancelled';
     public const STATUS_REVERTED = 'reverted';
 
     protected $fillable = [

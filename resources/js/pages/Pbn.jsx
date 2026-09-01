@@ -19,7 +19,7 @@ const tabDefs = [
 ];
 
 const batchStatuses = ['all', 'queued', 'running', 'completed', 'partial', 'failed', 'reverted', 'cancelled'];
-const itemStatuses = ['all', 'queued', 'provisioning', 'created', 'media_pending', 'failed', 'reverted', 'skipped_duplicate'];
+const itemStatuses = ['all', 'queued', 'provisioning', 'created', 'media_pending', 'failed', 'cancelled', 'reverted', 'skipped_duplicate'];
 
 function formatNumber(value) {
     return Number(value || 0).toLocaleString();
@@ -40,6 +40,13 @@ function eventTone(level) {
     if (level === 'error') return 'failed';
     if (level === 'warning') return 'partial';
     return 'completed';
+}
+
+function apiErrorMessage(error, fallback) {
+    const errors = error?.response?.data?.errors;
+    const firstValidationMessage = errors ? Object.values(errors).flat().find(Boolean) : null;
+
+    return firstValidationMessage || error?.response?.data?.message || fallback;
 }
 
 function readyTone(site) {
@@ -144,6 +151,8 @@ export default function Pbn() {
     const [selectedBatch, setSelectedBatch] = useState(null);
     const [revertOpen, setRevertOpen] = useState(false);
     const [revertReason, setRevertReason] = useState('');
+    const [cancelOpen, setCancelOpen] = useState(false);
+    const [cancelReason, setCancelReason] = useState('');
     const [batchFilters, setBatchFilters] = useState({ page: 1, per_page: 50, status: 'all', q: '' });
     const [itemFilters, setItemFilters] = useState({ page: 1, per_page: 50, status: 'all', q: '' });
     const [eventFilters, setEventFilters] = useState({ page: 1, per_page: 25, level: 'all' });
@@ -211,12 +220,21 @@ export default function Pbn() {
         enabled: Boolean(selectedBatch?.id),
         refetchInterval: selectedBatch && ['queued', 'running'].includes(selectedBatch.status) ? 8000 : false,
     });
+    const batchEventsQuery = useQuery({
+        queryKey: ['pbn-batch-events', selectedBatch?.id],
+        queryFn: () => api.get('/crm/pbn/events', { params: { batch_id: selectedBatch.id, per_page: 25 } }).then((response) => response.data),
+        enabled: Boolean(selectedBatch?.id),
+        refetchInterval: selectedBatch && ['queued', 'running'].includes(selectedBatch.status) ? 8000 : false,
+    });
 
     const invalidateOperations = () => {
         queryClient.invalidateQueries({ queryKey: ['pbn-overview'] });
         queryClient.invalidateQueries({ queryKey: ['pbn-batches'] });
         queryClient.invalidateQueries({ queryKey: ['pbn-items'] });
         queryClient.invalidateQueries({ queryKey: ['pbn-events'] });
+        queryClient.invalidateQueries({ queryKey: ['pbn-batch-detail'] });
+        queryClient.invalidateQueries({ queryKey: ['pbn-batch-items'] });
+        queryClient.invalidateQueries({ queryKey: ['pbn-batch-events'] });
         queryClient.invalidateQueries({ queryKey: ['settings-pbn-sites'] });
     };
 
@@ -226,7 +244,18 @@ export default function Pbn() {
             toast.success(response?.message || 'PBN retry queued.');
             invalidateOperations();
         },
-        onError: (error) => toast.error(error?.response?.data?.message || 'Could not retry PBN batch.'),
+        onError: (error) => toast.error(apiErrorMessage(error, 'Could not retry PBN batch.')),
+    });
+    const cancelMutation = useMutation({
+        mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/cancel`, { reason: cancelReason }).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'PBN seed batch stopped.');
+            setCancelOpen(false);
+            setCancelReason('');
+            setSelectedBatch(response?.batch || selectedBatch);
+            invalidateOperations();
+        },
+        onError: (error) => toast.error(apiErrorMessage(error, 'Could not stop PBN batch.')),
     });
     const revertMutation = useMutation({
         mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/revert`, { reason: revertReason }).then((response) => response.data),
@@ -237,7 +266,7 @@ export default function Pbn() {
             setSelectedBatch(response?.batch || selectedBatch);
             invalidateOperations();
         },
-        onError: (error) => toast.error(error?.response?.data?.message || 'Could not revert PBN batch.'),
+        onError: (error) => toast.error(apiErrorMessage(error, 'Could not revert PBN batch.')),
     });
 
     const overview = overviewQuery.data || {};
@@ -246,7 +275,9 @@ export default function Pbn() {
     const eventRows = eventsQuery.data?.data || [];
     const batchDetail = batchDetailQuery.data?.batch || selectedBatch;
     const batchItems = batchItemsQuery.data?.data || [];
+    const batchEvents = batchEventsQuery.data?.data || [];
     const revertPreview = batchDetailQuery.data?.revert_preview || {};
+    const isBatchActive = ['queued', 'running'].includes(batchDetail?.status);
 
     const batchColumns = [
         {
@@ -274,6 +305,11 @@ export default function Pbn() {
                     {row.failed_count > 0 ? (
                         <button type="button" className="crm-btn-secondary px-2 py-1 text-xs" onClick={(event) => { event.stopPropagation(); retryMutation.mutate(row.id); }}>
                             Retry
+                        </button>
+                    ) : null}
+                    {['queued', 'running'].includes(row.status) ? (
+                        <button type="button" className="crm-btn-danger px-2 py-1 text-xs" onClick={(event) => { event.stopPropagation(); setSelectedBatch(row); setCancelOpen(true); }}>
+                            Stop
                         </button>
                     ) : null}
                     {canRevert && row.created_count > 0 ? (
@@ -595,6 +631,16 @@ export default function Pbn() {
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <StatusBadge status={batchDetail?.status} label={statusLabel(batchDetail?.status)} />
                                 <div className="flex flex-wrap gap-2">
+                                    {isBatchActive ? (
+                                        <button
+                                            type="button"
+                                            className="crm-btn-danger px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                                            onClick={() => setCancelOpen(true)}
+                                            disabled={cancelMutation.isPending}
+                                        >
+                                            Stop batch
+                                        </button>
+                                    ) : null}
                                     {batchDetail?.failed_count > 0 ? (
                                         <button type="button" className="crm-btn-secondary px-3 py-2 text-sm" onClick={() => retryMutation.mutate(batchDetail.id)} disabled={retryMutation.isPending}>
                                             Retry failed
@@ -613,10 +659,35 @@ export default function Pbn() {
                                     ) : null}
                                 </div>
                             </div>
+                            {batchDetailQuery.isError ? (
+                                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <p>{apiErrorMessage(batchDetailQuery.error, 'Could not load batch details.')}</p>
+                                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchDetailQuery.refetch()}>
+                                            Retry
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null}
                             <section className="rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-100 px-4 py-3">
-                                    <p className="text-sm font-semibold text-slate-900">Seed Items</p>
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <p className="text-sm font-semibold text-slate-900">Seed Items</p>
+                                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchItemsQuery.refetch()} disabled={batchItemsQuery.isFetching}>
+                                            {batchItemsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
+                                        </button>
+                                    </div>
                                 </div>
+                                {batchItemsQuery.isError ? (
+                                    <div className="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <p>{apiErrorMessage(batchItemsQuery.error, 'Could not load seed items for this batch.')}</p>
+                                            <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchItemsQuery.refetch()}>
+                                                Retry
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : null}
                                 <div className="max-h-[48vh] overflow-auto">
                                     <table className="min-w-full divide-y divide-slate-100">
                                         <thead className="bg-slate-50">
@@ -628,29 +699,98 @@ export default function Pbn() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
+                                            {batchItemsQuery.isLoading ? (
+                                                <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
+                                            ) : null}
                                             {batchItems.map((item) => (
                                                 <tr key={item.id}>
                                                     <td className="px-3 py-2 text-sm">
                                                         <p className="font-semibold text-slate-900">{item.source_client?.name || `Client #${item.source_client_id}`}</p>
                                                         <p className="text-xs text-slate-500">{item.source_platform_name} · Source WP {item.source_wp_post_id}</p>
-                                                        {item.failure_reason || item.revert_failure_reason ? <p className="mt-1 text-xs text-rose-700">{item.failure_reason || item.revert_failure_reason}</p> : null}
+                                                        {item.failure_reason || item.revert_failure_reason ? (
+                                                            <p className={`mt-1 text-xs ${item.status === 'cancelled' ? 'text-slate-500' : 'text-rose-700'}`}>
+                                                                {item.failure_reason || item.revert_failure_reason}
+                                                            </p>
+                                                        ) : null}
                                                     </td>
                                                     <td className="px-3 py-2"><StatusBadge status={item.status} label={statusLabel(item.status)} /></td>
                                                     <td className="px-3 py-2 text-sm text-slate-700">{item.target_wp_post_id || '-'}</td>
                                                     <td className="px-3 py-2 text-sm text-slate-500">{formatDateTime(item.updated_at)}</td>
                                                 </tr>
                                             ))}
-                                            {!batchItemsQuery.isLoading && batchItems.length === 0 ? (
+                                            {!batchItemsQuery.isLoading && !batchItemsQuery.isError && batchItems.length === 0 ? (
                                                 <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-slate-500">No items for this batch.</td></tr>
                                             ) : null}
                                         </tbody>
                                     </table>
                                 </div>
                             </section>
+                            <section className="rounded-lg border border-slate-200 bg-white">
+                                <div className="border-b border-slate-100 px-4 py-3">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <p className="text-sm font-semibold text-slate-900">Event Timeline</p>
+                                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchEventsQuery.refetch()} disabled={batchEventsQuery.isFetching}>
+                                            {batchEventsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
+                                        </button>
+                                    </div>
+                                </div>
+                                {batchEventsQuery.isError ? (
+                                    <div className="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <p>{apiErrorMessage(batchEventsQuery.error, 'Could not load event timeline for this batch.')}</p>
+                                            <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchEventsQuery.refetch()}>
+                                                Retry
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : null}
+                                <div className="divide-y divide-slate-100">
+                                    {batchEvents.map((event) => (
+                                        <div key={event.id} className="grid gap-2 px-4 py-3 sm:grid-cols-[130px_1fr] sm:items-start">
+                                            <div>
+                                                <StatusBadge status={eventTone(event.level)} label={event.level} />
+                                                <p className="mt-1 text-xs text-slate-500">{formatDateTime(event.created_at)}</p>
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-semibold text-slate-900">{event.message}</p>
+                                                <p className="mt-1 text-xs text-slate-500">{event.type} · Item #{event.item_id || '-'}</p>
+                                                {event.context?.failure_reason ? <p className="mt-1 line-clamp-2 text-xs text-rose-700">{event.context.failure_reason}</p> : null}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {batchEventsQuery.isLoading ? <p className="px-4 py-8 text-center text-sm text-slate-500">Loading event timeline...</p> : null}
+                                    {!batchEventsQuery.isLoading && !batchEventsQuery.isError && batchEvents.length === 0 ? <p className="px-4 py-8 text-center text-sm text-slate-500">No events for this batch.</p> : null}
+                                </div>
+                            </section>
                         </div>
                     </aside>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={cancelOpen && Boolean(selectedBatch)}
+                title="Stop PBN batch"
+                message="Queued destination profiles will be cancelled. A profile already provisioning may finish first."
+                confirmLabel="Stop batch"
+                tone="danger"
+                onCancel={() => {
+                    setCancelOpen(false);
+                    setCancelReason('');
+                }}
+                onConfirm={() => cancelMutation.mutate()}
+                isPending={cancelMutation.isPending}
+            >
+                <label className="block text-sm font-semibold text-slate-700">
+                    Reason
+                    <textarea
+                        value={cancelReason}
+                        onChange={(event) => setCancelReason(event.target.value)}
+                        rows={3}
+                        className="crm-input mt-2"
+                        placeholder="Optional note for the audit timeline"
+                    />
+                </label>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={revertOpen && Boolean(selectedBatch)}

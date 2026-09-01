@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class PbnOperationsService
 {
@@ -125,7 +126,8 @@ class PbnOperationsService
                 'batch:id,status,created_by,created_at',
                 'pbnSite:id,name,domain',
                 'sourcePlatform:id,name,country,domain',
-                'sourceClient:id,name,city,phone_normalized,display_image_url,main_image_url,wp_profile_permalink,wp_profile_url',
+                'sourceClient:id,platform_id,wp_post_id,name,city,phone_normalized,display_image_url,main_image_url,wp_profile_permalink',
+                'sourceClient.platform:id,wp_api_url',
             ])
             ->whereIn('pbn_site_id', $this->visibleSiteIds($actor))
             ->latest('id');
@@ -227,6 +229,52 @@ class PbnOperationsService
             'message' => $eligible > 0
                 ? "{$eligible} destination profiles can be moved private."
                 : 'No created destination profiles are available to revert.',
+        ];
+    }
+
+    public function cancelBatch(User $actor, PbnSeedBatch $batch, ?string $reason = null): array
+    {
+        $this->ensureBatchVisible($actor, $batch);
+
+        $batch = DB::transaction(function () use ($actor, $batch, $reason) {
+            /** @var PbnSeedBatch $lockedBatch */
+            $lockedBatch = PbnSeedBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
+
+            if (!in_array($lockedBatch->status, [PbnSeedBatch::STATUS_QUEUED, PbnSeedBatch::STATUS_RUNNING], true)) {
+                throw new ConflictHttpException('Only queued or running PBN seed batches can be stopped.');
+            }
+
+            $cancelled = $lockedBatch->items()
+                ->whereIn('status', [
+                    PbnSeedItem::STATUS_SELECTED,
+                    PbnSeedItem::STATUS_QUEUED,
+                    PbnSeedItem::STATUS_PROVISIONING,
+                ])
+                ->update([
+                    'status' => PbnSeedItem::STATUS_CANCELLED,
+                    'failure_reason' => Str::limit($reason ?: 'Stopped by CRM operator.', 1000, ''),
+                    'provision_finished_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+            $lockedBatch->forceFill([
+                'status' => PbnSeedBatch::STATUS_CANCELLED,
+                'completed_at' => now(),
+            ])->save();
+
+            $this->recordEvent($lockedBatch, null, $actor, 'batch_cancelled', 'warning', 'PBN seed batch stopped by CRM operator.', [
+                'cancelled_item_count' => (int) $cancelled,
+                'reason' => Str::limit((string) $reason, 500, ''),
+            ]);
+
+            return $lockedBatch->fresh();
+        });
+
+        $this->previewService->refreshBatchCounts($batch->fresh(['targets']));
+
+        return [
+            'message' => 'PBN seed batch stopped. Queued destination profiles were cancelled.',
+            ...$this->batch($actor, $batch->fresh()),
         ];
     }
 
@@ -365,7 +413,12 @@ class PbnOperationsService
     private function recentFailures(array $siteIds): array
     {
         return PbnSeedItem::query()
-            ->with(['pbnSite:id,name,domain', 'sourceClient:id,name', 'sourcePlatform:id,name'])
+            ->with([
+                'pbnSite:id,name,domain',
+                'sourceClient:id,platform_id,wp_post_id,name,city,phone_normalized,display_image_url,main_image_url,wp_profile_permalink',
+                'sourceClient.platform:id,wp_api_url',
+                'sourcePlatform:id,name',
+            ])
             ->whereIn('pbn_site_id', $siteIds)
             ->where('status', PbnSeedItem::STATUS_FAILED)
             ->latest('updated_at')

@@ -131,6 +131,21 @@ class PbnSiteController extends Controller
         ]);
     }
 
+    public function cancelBatch(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate([
+            'reason' => 'sometimes|nullable|string|max:1000',
+        ]);
+
+        return response()->json($this->operationsService->cancelBatch(
+            $request->user(),
+            $batch,
+            $validated['reason'] ?? null
+        ));
+    }
+
     public function overview(Request $request): JsonResponse
     {
         $this->ensurePbnUser($request);

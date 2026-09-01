@@ -263,18 +263,21 @@ class PbnSeedPreviewService
         $created = $items->whereIn('status', [PbnSeedItem::STATUS_CREATED, PbnSeedItem::STATUS_MEDIA_PENDING])->count();
         $failed = $items->where('status', PbnSeedItem::STATUS_FAILED)->count();
         $reverted = $items->where('status', PbnSeedItem::STATUS_REVERTED)->count();
+        $cancelled = $items->where('status', PbnSeedItem::STATUS_CANCELLED)->count();
         $selected = $items->count();
-        $terminal = $selected > 0 && ($created + $failed + $reverted) >= $selected;
+        $terminal = $selected > 0 && ($created + $failed + $reverted + $cancelled) >= $selected;
 
         $status = $batch->status;
-        if ($selected > 0 && $reverted >= $selected) {
+        if ($batch->status === PbnSeedBatch::STATUS_CANCELLED) {
+            $status = PbnSeedBatch::STATUS_CANCELLED;
+        } elseif ($selected > 0 && $reverted >= $selected) {
             $status = PbnSeedBatch::STATUS_REVERTED;
         }
-        if ($terminal) {
+        if ($status !== PbnSeedBatch::STATUS_CANCELLED && $terminal) {
             $status = $status === PbnSeedBatch::STATUS_REVERTED
                 ? $status
                 : ($failed > 0 ? PbnSeedBatch::STATUS_PARTIAL : PbnSeedBatch::STATUS_COMPLETED);
-        } elseif ($failed > 0 || $created > 0) {
+        } elseif ($status !== PbnSeedBatch::STATUS_CANCELLED && ($failed > 0 || $created > 0)) {
             $status = PbnSeedBatch::STATUS_RUNNING;
         }
 
