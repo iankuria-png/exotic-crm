@@ -140,6 +140,72 @@ function FilterSelect({ value, onChange, options, label }) {
     );
 }
 
+function SeedItemActionDialog({ item, onClose }) {
+    if (!item) {
+        return null;
+    }
+
+    const sourceUrl = item.source_client?.profile_url || null;
+    const targetUrl = item.target_profile_url || null;
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true">
+            <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-2xl">
+                <div className="border-b border-slate-100 px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="truncate text-base font-semibold text-slate-900">{item.source_client?.name || `Client #${item.source_client_id}`}</p>
+                            <p className="mt-1 text-sm text-slate-500">{item.source_platform_name || 'Source market'} · Source WP {item.source_wp_post_id}</p>
+                        </div>
+                        <button type="button" className="crm-btn-secondary px-3 py-2 text-sm" onClick={onClose}>Close</button>
+                    </div>
+                </div>
+                <div className="space-y-3 p-4">
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                        <span className="text-sm text-slate-600">Current status</span>
+                        <StatusBadge status={item.status} label={statusLabel(item.status)} />
+                    </div>
+
+                    {targetUrl ? (
+                        <a href={targetUrl} target="_blank" rel="noreferrer" className="flex min-h-11 items-center justify-between rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 transition hover:border-teal-300 hover:bg-teal-100">
+                            <span>Open PBN profile</span>
+                            <span aria-hidden="true">-&gt;</span>
+                        </a>
+                    ) : (
+                        <button type="button" disabled className="flex min-h-11 w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-400">
+                            <span>PBN profile not created yet</span>
+                            <span aria-hidden="true">-&gt;</span>
+                        </button>
+                    )}
+
+                    {sourceUrl ? (
+                        <a href={sourceUrl} target="_blank" rel="noreferrer" className="flex min-h-11 items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 transition hover:border-slate-300 hover:bg-slate-50">
+                            <span>Open Exotic profile</span>
+                            <span aria-hidden="true">-&gt;</span>
+                        </a>
+                    ) : (
+                        <button type="button" disabled className="flex min-h-11 w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-400">
+                            <span>Source profile URL unavailable</span>
+                            <span aria-hidden="true">-&gt;</span>
+                        </button>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
+                        <div className="rounded-lg border border-slate-200 px-3 py-2">
+                            <p className="font-semibold uppercase tracking-[0.1em]">PBN WP</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">{item.target_wp_post_id || 'Pending'}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 px-3 py-2">
+                            <p className="font-semibold uppercase tracking-[0.1em]">Source WP</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">{item.source_wp_post_id || '-'}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function Pbn() {
     const { user } = useAuth();
     const role = user?.role || '';
@@ -149,6 +215,7 @@ export default function Pbn() {
     const [selectedSiteId, setSelectedSiteId] = useState('');
     const [seedOpen, setSeedOpen] = useState(false);
     const [selectedBatch, setSelectedBatch] = useState(null);
+    const [selectedItem, setSelectedItem] = useState(null);
     const [revertOpen, setRevertOpen] = useState(false);
     const [revertReason, setRevertReason] = useState('');
     const [cancelOpen, setCancelOpen] = useState(false);
@@ -556,6 +623,7 @@ export default function Pbn() {
                                         pagination={itemsQuery.data?.meta}
                                         isLoading={itemsQuery.isLoading}
                                         emptyMessage="No PBN seed items match these filters."
+                                        onRowClick={(row) => setSelectedItem(row)}
                                         onPageChange={(page) => setItemFilters((current) => ({ ...current, page }))}
                                         perPage={itemFilters.per_page}
                                         onPerPageChange={(perPage) => setItemFilters((current) => ({ ...current, per_page: perPage, page: 1 }))}
@@ -758,7 +826,7 @@ export default function Pbn() {
                                                 <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
                                             ) : null}
                                             {batchItems.map((item) => (
-                                                <tr key={item.id}>
+                                                <tr key={item.id} onClick={() => setSelectedItem(item)} className="cursor-pointer transition-colors hover:bg-slate-50" title="Open profile actions">
                                                     <td className="px-3 py-2 text-sm">
                                                         <p className="font-semibold text-slate-900">{item.source_client?.name || `Client #${item.source_client_id}`}</p>
                                                         <p className="text-xs text-slate-500">{item.source_platform_name} · Source WP {item.source_wp_post_id}</p>
@@ -826,6 +894,8 @@ export default function Pbn() {
                     </aside>
                 </div>
             ) : null}
+
+            <SeedItemActionDialog item={selectedItem} onClose={() => setSelectedItem(null)} />
 
             <ConfirmDialog
                 open={cancelOpen && Boolean(selectedBatch)}

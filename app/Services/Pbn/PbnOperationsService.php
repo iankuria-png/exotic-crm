@@ -516,6 +516,7 @@ class PbnOperationsService
             'source_wp_post_id' => (int) $item->source_wp_post_id,
             'target_wp_post_id' => $item->target_wp_post_id ? (int) $item->target_wp_post_id : null,
             'target_wp_user_id' => $item->target_wp_user_id ? (int) $item->target_wp_user_id : null,
+            'target_profile_url' => $this->targetProfileUrl($item),
             'target_region_id' => $item->target_region_id ? (int) $item->target_region_id : null,
             'target_city_id' => $item->target_city_id ? (int) $item->target_city_id : null,
             'status' => (string) $item->status,
@@ -540,6 +541,20 @@ class PbnOperationsService
             'created_at' => optional($item->created_at)->toDateTimeString(),
             'updated_at' => optional($item->updated_at)->toDateTimeString(),
         ];
+    }
+
+    private function targetProfileUrl(PbnSeedItem $item): ?string
+    {
+        $targetPostId = (int) ($item->target_wp_post_id ?? 0);
+        $domain = trim((string) ($item->pbnSite?->domain ?? ''));
+        if ($targetPostId < 1 || $domain === '') {
+            return null;
+        }
+
+        $baseUrl = preg_match('#^https?://#i', $domain) ? $domain : 'https://' . $domain;
+        $baseUrl = rtrim($baseUrl, '/');
+
+        return "{$baseUrl}/?p={$targetPostId}";
     }
 
     private function paginationMeta(LengthAwarePaginator $paginator): array

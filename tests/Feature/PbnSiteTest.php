@@ -374,6 +374,7 @@ class PbnSiteTest extends TestCase
             ->assertOk()
             ->assertJsonPath('meta.total', 1)
             ->assertJsonPath('data.0.source_client.name', 'Amina Prime')
+            ->assertJsonPath('data.0.target_profile_url', 'https://ugandahotgirls.com/?p=91001')
             ->assertJsonPath('data.0.source_client.profile_url', "https://uganda.example/?p={$firstClient->wp_post_id}");
 
         $this->getJson('/api/crm/pbn/events?level=error')
