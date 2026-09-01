@@ -146,6 +146,21 @@ class PbnSiteController extends Controller
         ));
     }
 
+    public function processBatchMedia(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate([
+            'limit' => 'sometimes|integer|min:1|max:20',
+        ]);
+
+        return response()->json($this->operationsService->processBatchMedia(
+            $request->user(),
+            $batch,
+            (int) ($validated['limit'] ?? 5)
+        ));
+    }
+
     public function overview(Request $request): JsonResponse
     {
         $this->ensurePbnUser($request);

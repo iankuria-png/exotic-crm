@@ -257,6 +257,15 @@ export default function Pbn() {
         },
         onError: (error) => toast.error(apiErrorMessage(error, 'Could not stop PBN batch.')),
     });
+    const mediaMutation = useMutation({
+        mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/media/retry`, { limit: 5 }).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'PBN media processing finished.');
+            setSelectedBatch(response?.batch || selectedBatch);
+            invalidateOperations();
+        },
+        onError: (error) => toast.error(apiErrorMessage(error, 'Could not process pending PBN media.')),
+    });
     const revertMutation = useMutation({
         mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/revert`, { reason: revertReason }).then((response) => response.data),
         onSuccess: (response) => {
@@ -278,6 +287,9 @@ export default function Pbn() {
     const batchEvents = batchEventsQuery.data?.data || [];
     const revertPreview = batchDetailQuery.data?.revert_preview || {};
     const isBatchActive = ['queued', 'running'].includes(batchDetail?.status);
+    const mediaSummary = batchDetailQuery.data?.media_summary || {};
+    const pendingMediaCount = Number(mediaSummary.pending_count || batchItems.filter((item) => item.status === 'media_pending').length || 0);
+    const mediaAttentionCount = Number(mediaSummary.attention_count || batchItems.filter((item) => item.status === 'media_pending' && item.failure_reason).length || 0);
 
     const batchColumns = [
         {
@@ -400,7 +412,7 @@ export default function Pbn() {
                                         <StatTile label="Ready Sites" value={overview.sites?.ready} accent="emerald" detail={`${formatNumber(overview.sites?.blocked)} blocked`} />
                                         <StatTile label="Active Batches" value={overview.batches?.active} accent="teal" detail={`${formatNumber(overview.batches?.partial)} partial`} />
                                         <StatTile label="Created Profiles" value={overview.items?.created} accent="sky" detail={`${formatNumber(overview.items?.created_last_7_days)} in 7 days`} />
-                                        <StatTile label="Needs Attention" value={(overview.items?.failed || 0) + (overview.items?.media_pending || 0)} accent="amber" detail={`${formatNumber(overview.items?.failed)} failed`} />
+                                        <StatTile label="Needs Attention" value={(overview.items?.failed || 0) + (overview.items?.media_pending || 0)} accent="amber" detail={`${formatNumber(overview.items?.failed)} failed · ${formatNumber(overview.items?.media_pending)} media pending`} />
                                     </div>
 
                                     <div className="grid gap-4 xl:grid-cols-2">
@@ -646,6 +658,16 @@ export default function Pbn() {
                                             Retry failed
                                         </button>
                                     ) : null}
+                                    {pendingMediaCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            className="crm-btn-secondary px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                                            onClick={() => mediaMutation.mutate()}
+                                            disabled={mediaMutation.isPending}
+                                        >
+                                            {mediaMutation.isPending ? 'Processing media...' : `Process media (${Math.min(5, pendingMediaCount)})`}
+                                        </button>
+                                    ) : null}
                                     {canRevert ? (
                                         <button
                                             type="button"
@@ -668,6 +690,39 @@ export default function Pbn() {
                                         </button>
                                     </div>
                                 </div>
+                            ) : null}
+                            {pendingMediaCount > 0 ? (
+                                <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                        <div className="min-w-0">
+                                            <p className="font-semibold text-amber-950">Media copy pending</p>
+                                            <p className="mt-1 text-amber-800">{mediaSummary.reason || 'Profiles were created; media is waiting for the copy pass.'}</p>
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                                <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">Pending</p>
+                                                    <p className="mt-1 text-lg font-semibold text-amber-950">{formatNumber(pendingMediaCount)}</p>
+                                                </div>
+                                                <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">Needs Check</p>
+                                                    <p className="mt-1 text-lg font-semibold text-amber-950">{formatNumber(mediaAttentionCount)}</p>
+                                                </div>
+                                                <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">Estimate</p>
+                                                    <p className="mt-1 text-lg font-semibold text-amber-950">{mediaSummary.eta_label || 'About a few minutes'}</p>
+                                                </div>
+                                            </div>
+                                            <p className="mt-3 text-xs text-amber-800">{mediaSummary.next_action || 'Process pending media, then inspect any rows that remain flagged.'}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="crm-btn-primary min-h-11 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={() => mediaMutation.mutate()}
+                                            disabled={mediaMutation.isPending}
+                                        >
+                                            {mediaMutation.isPending ? 'Processing...' : `Process next ${Math.min(5, pendingMediaCount)}`}
+                                        </button>
+                                    </div>
+                                </section>
                             ) : null}
                             <section className="rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-100 px-4 py-3">
@@ -707,9 +762,14 @@ export default function Pbn() {
                                                     <td className="px-3 py-2 text-sm">
                                                         <p className="font-semibold text-slate-900">{item.source_client?.name || `Client #${item.source_client_id}`}</p>
                                                         <p className="text-xs text-slate-500">{item.source_platform_name} · Source WP {item.source_wp_post_id}</p>
-                                                        {item.failure_reason || item.revert_failure_reason ? (
+                                                        {(item.failure_reason || item.revert_failure_reason) && item.status !== 'media_pending' ? (
                                                             <p className={`mt-1 text-xs ${item.status === 'cancelled' ? 'text-slate-500' : 'text-rose-700'}`}>
                                                                 {item.failure_reason || item.revert_failure_reason}
+                                                            </p>
+                                                        ) : null}
+                                                        {item.media_status ? (
+                                                            <p className="mt-1 text-xs text-amber-700">
+                                                                {item.media_status.elapsed_label ? `${item.media_status.elapsed_label} pending · ` : ''}{item.media_status.reason}
                                                             </p>
                                                         ) : null}
                                                     </td>

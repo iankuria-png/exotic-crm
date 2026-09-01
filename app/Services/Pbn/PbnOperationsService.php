@@ -21,7 +21,8 @@ class PbnOperationsService
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly PbnSeedPreviewService $previewService
+        private readonly PbnSeedPreviewService $previewService,
+        private readonly PbnSeedMediaService $mediaService
     ) {
     }
 
@@ -56,6 +57,7 @@ class PbnOperationsService
                 'created' => (clone $itemQuery)->whereIn('status', $createdStatuses)->count(),
                 'created_last_7_days' => (clone $itemQuery)->whereIn('status', $createdStatuses)->where('updated_at', '>=', $lastSevenDays)->count(),
                 'media_pending' => (clone $itemQuery)->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)->count(),
+                'media_attention' => (clone $itemQuery)->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)->whereNotNull('failure_reason')->count(),
                 'failed' => (clone $itemQuery)->where('status', PbnSeedItem::STATUS_FAILED)->count(),
                 'reverted' => (clone $itemQuery)->where('status', PbnSeedItem::STATUS_REVERTED)->count(),
                 'skipped_duplicates' => (clone $itemQuery)->where('status', PbnSeedItem::STATUS_SKIPPED_DUPLICATE)->count(),
@@ -115,6 +117,7 @@ class PbnOperationsService
                 'selected_count' => (int) $target->selected_count,
                 'created_count' => (int) $target->created_count,
             ])->values(),
+            'media_summary' => $this->mediaService->batchMediaSummary($batch),
             'revert_preview' => $this->revertPreview($actor, $batch),
         ];
     }
@@ -274,6 +277,18 @@ class PbnOperationsService
 
         return [
             'message' => 'PBN seed batch stopped. Queued destination profiles were cancelled.',
+            ...$this->batch($actor, $batch->fresh()),
+        ];
+    }
+
+    public function processBatchMedia(User $actor, PbnSeedBatch $batch, int $limit = 5): array
+    {
+        $this->ensureBatchVisible($actor, $batch);
+
+        $result = $this->mediaService->processBatch($batch, $limit, (int) $actor->id);
+
+        return [
+            ...$result,
             ...$this->batch($actor, $batch->fresh()),
         ];
     }
@@ -517,6 +532,7 @@ class PbnOperationsService
                 'profile_url' => $item->sourceClient->wp_profile_permalink ?: $item->sourceClient->wp_profile_url,
                 'display_image_url' => $item->sourceClient->display_image_url ?: $item->sourceClient->main_image_url,
             ] : null,
+            'media_status' => $this->mediaService->itemMediaState($item),
             'batch_status' => $item->batch?->status,
             'provision_started_at' => optional($item->provision_started_at)->toDateTimeString(),
             'provision_finished_at' => optional($item->provision_finished_at)->toDateTimeString(),

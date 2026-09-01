@@ -469,6 +469,101 @@ class PbnSiteTest extends TestCase
             ->assertJsonPath('data.0.status', PbnSeedItem::STATUS_CANCELLED);
     }
 
+    public function test_sales_can_process_pending_pbn_media_for_batch(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Exotic Uganda',
+            'wp_api_url' => 'https://source.example/wp-json/exotic-crm-sync/v1',
+        ]);
+        $site = $this->pbnSite($platform, [$platform->id], [
+            'name' => 'Manuel Escorts',
+            'wp_api_url' => 'https://pbn.example/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'pbn-user',
+            'wp_api_password' => 'pbn-secret',
+        ]);
+        $client = $this->publishedClient($platform, ['name' => 'Media Candidate', 'wp_post_id' => 34773]);
+        $sales = $this->userFor($platform, 'sales');
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => $sales->id,
+            'status' => PbnSeedBatch::STATUS_COMPLETED,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+            'failed_count' => 0,
+            'copy_policy' => ['media' => 'two_stage'],
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => 776,
+            'target_wp_user_id' => 44,
+            'status' => PbnSeedItem::STATUS_MEDIA_PENDING,
+            'payload_hash' => str_repeat('9', 64),
+            'provision_finished_at' => now()->subMinutes(12),
+        ]);
+
+        Http::fake(function ($request) use ($platform) {
+            if ($request->method() === 'GET' && $request->url() === rtrim($platform->wp_api_url, '/') . '/clients/34773/media') {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 501,
+                            'url' => 'https://source-cdn.example/media/media-candidate.jpg',
+                            'filename' => 'media-candidate.jpg',
+                            'is_main' => true,
+                            'mime_type' => 'image/jpeg',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->method() === 'GET' && $request->url() === 'https://source-cdn.example/media/media-candidate.jpg') {
+                return Http::response('fake-jpeg-binary', 200, ['Content-Type' => 'image/jpeg']);
+            }
+
+            if ($request->method() === 'POST' && $request->url() === 'https://pbn.example/wp-json/exotic-crm-sync/v1/clients/776/media') {
+                return Http::response([
+                    'attachment' => [
+                        'id' => 8801,
+                        'url' => 'https://pbn.example/wp-content/uploads/media-candidate.jpg',
+                    ],
+                ], 200);
+            }
+
+            return Http::response([], 404);
+        });
+
+        Sanctum::actingAs($sales);
+
+        $this->getJson("/api/crm/pbn/batches/{$batch->id}")
+            ->assertOk()
+            ->assertJsonPath('media_summary.pending_count', 1)
+            ->assertJsonPath('media_summary.can_process', true);
+
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/media/retry", ['limit' => 5])
+            ->assertOk()
+            ->assertJsonPath('copied', 1)
+            ->assertJsonPath('media.pending_count', 0)
+            ->assertJsonPath('batch.status', PbnSeedBatch::STATUS_COMPLETED);
+
+        $this->assertDatabaseHas('pbn_seed_items', [
+            'batch_id' => $batch->id,
+            'source_client_id' => $client->id,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'failure_reason' => null,
+        ]);
+        $this->assertDatabaseHas('pbn_seed_events', [
+            'batch_id' => $batch->id,
+            'type' => 'item_media_copied',
+            'actor_id' => $sales->id,
+        ]);
+    }
+
     public function test_admin_can_preview_and_revert_created_pbn_batch(): void
     {
         $platform = Platform::factory()->create();
