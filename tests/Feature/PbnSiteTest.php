@@ -17,6 +17,7 @@ use App\Support\WordPressSiteConnection;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -260,6 +261,35 @@ class PbnSiteTest extends TestCase
         $this->assertSame($first['wp_post_id'], $second['wp_post_id']);
         $this->assertSame(1, DB::connection($connectionName)->table('posts')->count());
         $this->assertSame(1, DB::connection($connectionName)->table('exotic_crm_provisions')->count());
+    }
+
+    public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        $user = $this->userFor($platform, 'sales');
+        Sanctum::actingAs($user);
+
+        Http::fake([
+            'ugandahotgirls.test/*' => Http::response([
+                'locations' => [
+                    [
+                        'id' => 10,
+                        'name' => 'Central',
+                        'slug' => 'central',
+                        'cities' => [
+                            ['id' => 20, 'name' => 'Kampala', 'slug' => 'kampala'],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->getJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/locations")
+            ->assertOk()
+            ->assertJsonPath('locations.0.id', 10)
+            ->assertJsonPath('locations.0.cities.0.id', 20)
+            ->assertJsonMissingPath('locations.locations');
     }
 
     public function test_pbn_operations_dashboard_lists_searches_and_paginates(): void

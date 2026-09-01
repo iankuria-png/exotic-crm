@@ -173,12 +173,12 @@ class PbnSiteService
                 ]);
             }
 
-            $locations = (new WpSyncService(WordPressSiteConnection::fromPbnSite($site)))->getLocations();
+            $locations = $this->locations($site);
             $checks['rest'] = ['status' => 'ready', 'message' => 'REST credentials accepted.'];
             $checks['locations'] = [
                 'status' => !empty($locations) ? 'ready' : 'warning',
                 'message' => !empty($locations) ? 'Destination locations loaded.' : 'REST responded but no locations were returned.',
-                'count' => is_countable($locations) ? count($locations) : 0,
+                'count' => count($locations),
             ];
         } catch (\Throwable $exception) {
             $checks['rest'] = ['status' => 'failed', 'message' => Str::limit($exception->getMessage(), 500, '')];
@@ -232,7 +232,11 @@ class PbnSiteService
 
     public function locations(PbnSite $site): array
     {
-        return (new WpSyncService(WordPressSiteConnection::fromPbnSite($site)))->getLocations();
+        $payload = (new WpSyncService(WordPressSiteConnection::fromPbnSite($site)))->getLocations();
+
+        return is_array($payload['locations'] ?? null)
+            ? $payload['locations']
+            : $payload;
     }
 
     public function configuredSourceIdsFor(PbnSite $site, User $actor): array

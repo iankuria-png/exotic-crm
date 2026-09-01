@@ -4,7 +4,9 @@ import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 
 function flattenLocations(payload) {
-    const raw = payload?.locations || payload || [];
+    const raw = Array.isArray(payload?.locations?.locations)
+        ? payload.locations.locations
+        : (payload?.locations || payload || []);
     if (Array.isArray(raw)) {
         return raw.flatMap((entry) => {
             const children = entry.children || entry.cities || entry.locations || [];
