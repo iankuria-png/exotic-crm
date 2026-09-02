@@ -6,6 +6,8 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\TimelineEvent;
 use App\Support\ClientLifecycleState;
+use App\Support\MarketTimezone;
+use App\Support\SubscriptionExpiry;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -100,7 +102,7 @@ class ActiveSubscriptionProfileRepairService
             return $row;
         }
 
-        $columns = $this->repairColumnsForDeal($deal);
+        $columns = $this->repairColumnsForDeal($deal, $client);
         $changes = [];
         foreach ($columns as $key => $value) {
             if ($client->{$key} != $value) {
@@ -163,12 +165,36 @@ class ActiveSubscriptionProfileRepairService
     }
 
     /**
+     * The expiry this repair should publish, as a Unix timestamp.
+     *
+     * deals.expires_at is a plain datetime; writing it straight into escort_expire
+     * would replace WordPress's market-local end-of-day cutoff with a raw stamp
+     * whose time-of-day is neither local midnight nor local 23:59:59. Both
+     * SubscriptionExpiry::isDayBased() and the theme's equivalent then withhold
+     * end-of-day grace, so the profile dies partway through its final paid day.
+     *
+     * Rounding here keeps the repair from ever shortening a subscription: the
+     * cutoff can only move later, never earlier.
+     */
+    private function repairExpiryTimestamp(Deal $deal, Client $client): int
+    {
+        $timestamp = Carbon::parse($deal->expires_at)->timestamp;
+        $timezone = MarketTimezone::resolve(
+            $client->platform?->timezone,
+            config('app.timezone', 'UTC')
+        );
+
+        return SubscriptionExpiry::endOfDay($timestamp, $timezone);
+    }
+
+    /**
      * @return array<string, mixed>
      */
-    public function repairColumnsForDeal(Deal $deal): array
+    public function repairColumnsForDeal(Deal $deal, ?Client $client = null): array
     {
         $planType = strtolower((string) $deal->plan_type);
-        $expiryTimestamp = Carbon::parse($deal->expires_at)->timestamp;
+        $client ??= $deal->client ?? $deal->client()->first();
+        $expiryTimestamp = $this->repairExpiryTimestamp($deal, $client ?? new Client());
         $isPremium = in_array($planType, ['premium', 'vip', 'vvip'], true);
         $isFeatured = in_array($planType, ['vip', 'vvip'], true);
 
@@ -194,18 +220,33 @@ class ActiveSubscriptionProfileRepairService
         return $this->applyFutureActiveDealScope($client->deals()->getQuery());
     }
 
+    /**
+     * What counts as a deal that entitles a profile to be live.
+     *
+     * Must stay identical to ExpiredSubscriptionReconciler's protective scope,
+     * including the seo_boost exclusion. An SEO-boost deal is an internal campaign,
+     * not purchased access: the reconciler refuses to let one hold a lapsed profile
+     * open, so this service must not treat one as grounds to republish a profile
+     * either. Without the exclusion a recovery run would restore genuinely expired
+     * profiles that merely happen to carry an active boost.
+     */
     private function applyFutureActiveDealScope($query)
     {
         return $query
             ->where('status', 'active')
             ->whereNotNull('expires_at')
-            ->where('expires_at', '>', now());
+            ->where('expires_at', '>', now())
+            ->where(function ($deal): void {
+                $deal->whereNull('origin')
+                    ->orWhere('origin', '!=', 'seo_boost');
+            });
     }
 
     private function isFutureActiveDeal(Deal $deal): bool
     {
         return (string) $deal->status === 'active'
             && $deal->expires_at !== null
-            && Carbon::parse($deal->expires_at)->isFuture();
+            && Carbon::parse($deal->expires_at)->isFuture()
+            && (string) ($deal->origin ?? '') !== 'seo_boost';
     }
 }

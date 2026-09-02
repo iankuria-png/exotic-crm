@@ -8,6 +8,7 @@ use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Support\WpSubscriptionExpiry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -414,10 +415,17 @@ class WalletCheckoutService
             $baseExpiry = $previousExpiry && $previousExpiry->isFuture()
                 ? $previousExpiry->copy()
                 : now();
-            $newExpiry = $baseExpiry->copy()->addDays((int) $pricing['duration_days']);
 
             $wpSync = WpSyncService::forPlatform((int) $lockedDeal->platform_id);
-            $wpSync->extendClient($wpPostId, (int) $pricing['duration_days']);
+            $wpExtension = $wpSync->extendClient($wpPostId, (int) $pricing['duration_days']);
+
+            // WordPress owns the expiry — record what it reports rather than the
+            // local sum, so the deal, the payment and the WP profile stay identical.
+            $newExpiry = WpSubscriptionExpiry::resolve(
+                $wpExtension,
+                $baseExpiry->copy()->addDays((int) $pricing['duration_days']),
+                ['deal_id' => (int) $lockedDeal->id, 'wp_post_id' => $wpPostId, 'source' => 'wallet_extend']
+            );
 
             $lockedDeal->forceFill([
                 'expires_at' => $newExpiry,

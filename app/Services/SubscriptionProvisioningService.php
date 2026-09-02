@@ -10,6 +10,7 @@ use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\TimelineEvent;
+use App\Support\WpSubscriptionExpiry;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
@@ -64,12 +65,23 @@ class SubscriptionProvisioningService
         }
 
         $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-        $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
+        $wpActivation = $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
 
         $activatedAt = isset($options['activated_at'])
             ? Carbon::parse($options['activated_at'])
             : now();
-        $expiresAt = $activatedAt->copy()->addDays($durationDays);
+
+        // WordPress owns the expiry: it rounds to market-local end-of-day and
+        // stacks onto any time the advertiser had left. Record what it reports
+        // rather than recomputing, so the deal, the payment and the WP profile
+        // cannot drift apart. Falls back to the local sum when a market still
+        // runs a plugin build that does not report it.
+        $expiresAt = WpSubscriptionExpiry::resolve(
+            $wpActivation,
+            $activatedAt->copy()->addDays($durationDays),
+            ['deal_id' => (int) $deal->id, 'wp_post_id' => $wpPostId, 'source' => 'activate']
+        );
+        $expirySource = WpSubscriptionExpiry::reportedBy($wpActivation) ? 'wordpress' : 'crm_fallback';
         $paymentReference = $options['payment_reference']
             ?? $payment?->transaction_reference
             ?? $payment?->reference_number;
@@ -152,6 +164,7 @@ class SubscriptionProvisioningService
                     'plan_type' => (string) $deal->plan_type,
                     'duration_days' => $durationDays,
                     'expires_at' => $expiresAt->toDateTimeString(),
+                    'expiry_source' => $expirySource,
                     'payment_method' => $paymentMethod,
                 ], $timelineContext),
                 'created_at' => now(),
@@ -170,6 +183,7 @@ class SubscriptionProvisioningService
                     'duration_days' => $durationDays,
                     'activated_at' => $activatedAt->toDateTimeString(),
                     'expires_at' => $expiresAt->toDateTimeString(),
+                    'expiry_source' => $expirySource,
                     'payment_method' => $paymentMethod,
                 ], $timelineContext),
                 'created_at' => now(),

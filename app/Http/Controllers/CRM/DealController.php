@@ -28,6 +28,7 @@ use App\Support\DeactivationRequest;
 use App\Support\CrmAuditAction;
 use App\Support\DealDeactivationReason;
 use App\Support\LinkedPaymentAction;
+use App\Support\WpSubscriptionExpiry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -949,7 +950,7 @@ class DealController extends Controller
         try {
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $wpSync = WpSyncService::forPlatform($client->platform_id);
-            $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
+            $wpExtension = $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
             $discountAudit = null;
             $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
                 $client,
@@ -995,7 +996,18 @@ class DealController extends Controller
                 $payment = $initiation['payment'] ?? null;
             }
 
-            $newExpiry = ($deal->expires_at ?? now())->copy()->addDays((int) $validated['additional_days']);
+            // WordPress stacks the extension onto max(existing cutoff, now) and rounds
+            // to market-local end-of-day, so record the value it reports back rather
+            // than recomputing. The fallback mirrors that base for markets still on a
+            // plugin build that does not report the new expiry.
+            $extensionBase = $deal->expires_at && $deal->expires_at->isFuture()
+                ? $deal->expires_at->copy()
+                : now();
+            $newExpiry = WpSubscriptionExpiry::resolve(
+                $wpExtension,
+                $extensionBase->addDays((int) $validated['additional_days']),
+                ['deal_id' => (int) $deal->id, 'wp_post_id' => (int) $client->wp_post_id, 'source' => 'extend']
+            );
             $deal->update([
                 'expires_at' => $newExpiry,
                 'payment_id' => $paymentMethod === 'manual'

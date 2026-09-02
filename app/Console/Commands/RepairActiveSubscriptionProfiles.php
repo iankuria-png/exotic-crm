@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Services\ActiveSubscriptionProfileRepairService;
 use Illuminate\Console\Command;
+use Throwable;
 
 class RepairActiveSubscriptionProfiles extends Command
 {
@@ -36,10 +37,27 @@ class RepairActiveSubscriptionProfiles extends Command
         ));
         $this->info("Found {$clients->count()} affected profile(s).");
 
-        $summary = ['repaired' => 0, 'would_repair' => 0, 'already_ok' => 0, 'skipped' => 0];
+        $summary = ['repaired' => 0, 'would_repair' => 0, 'already_ok' => 0, 'skipped' => 0, 'failed' => 0];
 
         foreach ($clients as $client) {
-            $row = $repair->repairClient($client, null, ! $apply, 'artisan_repair_active_subscription_profiles');
+            // Per-client isolation: a recovery run spans every market, and one
+            // unreachable site or one profile whose WordPress post has since been
+            // deleted must not abort the batch and discard the progress report.
+            try {
+                $row = $repair->repairClient($client, null, ! $apply, 'artisan_repair_active_subscription_profiles');
+            } catch (Throwable $e) {
+                $summary['failed']++;
+                $this->error(sprintf(
+                    '  [%s] client #%d WP #%d FAILED: %s',
+                    $client->platform?->name ?? $client->platform_id,
+                    $client->id,
+                    $client->wp_post_id,
+                    $e->getMessage()
+                ));
+
+                continue;
+            }
+
             $action = (string) ($row['action'] ?? 'skipped');
             $summary[$action] = ($summary[$action] ?? 0) + 1;
 
@@ -57,12 +75,17 @@ class RepairActiveSubscriptionProfiles extends Command
         }
 
         $this->info(sprintf(
-            'Done. repaired=%d would_repair=%d already_ok=%d skipped=%d.',
+            'Done. repaired=%d would_repair=%d already_ok=%d skipped=%d failed=%d.',
             (int) ($summary['repaired'] ?? 0),
             (int) ($summary['would_repair'] ?? 0),
             (int) ($summary['already_ok'] ?? 0),
             (int) ($summary['skipped'] ?? 0),
+            (int) ($summary['failed'] ?? 0),
         ));
+
+        if ((int) ($summary['failed'] ?? 0) > 0) {
+            $this->warn('Some profiles failed. They are safe to retry: the repair is idempotent.');
+        }
 
         if (! $apply && $clients->isNotEmpty()) {
             $this->warn('Dry-run only. Re-run with --apply to write these repairs.');

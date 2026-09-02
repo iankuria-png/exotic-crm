@@ -2,295 +2,88 @@
 
 namespace App\Console\Commands;
 
-use Illuminate\Console\Command;
 use App\Models\Payment;
-use App\Models\Platform;
-use App\Models\Product;
-use App\Services\DynamicDatabaseService;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Bookkeeping only: closes out completed payments whose paid window has passed.
+ *
+ * This command USED TO own subscription expiry. It decided expiry from a single
+ * payments row (status=completed AND end_date <= now) and never read the
+ * profile's actual escort_expire, then privatised every escort post belonging to
+ * that author with a direct write into the market's WordPress database and sent
+ * an "expired" SMS.
+ *
+ * That was wrong in two compounding ways:
+ *
+ *   1. A renewal advances deals.expires_at and the WordPress escort_expire but
+ *      leaves the ORIGINAL payment row behind, still `completed`, still carrying
+ *      the pre-renewal end_date. On that date this command privatised a profile
+ *      that had weeks of paid access left. Production data for 1-2 Sep 2026 shows
+ *      70 and 86 profiles destroyed on consecutive nights, owed up to 31 days.
+ *   2. Posts were resolved by `post_author`, so one lapsed payment took down every
+ *      profile that author owned, including fully paid ones.
+ *
+ * Profile expiry now belongs solely to crm:reconcile-expired-subscriptions, which
+ * reads escort_expire under a market-timezone end-of-day cutoff and refuses to act
+ * on any client holding a future active deal. Expiry messaging belongs to
+ * LifecycleSmsService's reactivation flow, which triggers off the same escort_expire.
+ *
+ * What remains here is the harmless part: marking a payment's window closed. Both
+ * `completed` and `expired` count as successful (Payment::SUCCESSFUL_STATUSES), so
+ * this transition carries no revenue meaning and no side effects. The command is no
+ * longer scheduled; it is kept, and kept safe, because a stale cPanel cron calling
+ * it directly must not be able to take profiles offline again.
+ */
 class CheckExpiredSubscriptions extends Command
 {
-    protected $signature = 'subscriptions:check';
-    protected $description = 'Check and deactivate expired subscriptions';
+    protected $signature = 'subscriptions:check {--dry-run : Report what would be closed out without writing}';
 
-    public function handle()
+    protected $description = 'Close out completed payments whose paid window has passed (bookkeeping only — does NOT expire profiles).';
+
+    public function handle(): int
     {
-        Log::info('Starting subscription expiration check');
+        $dryRun = (bool) $this->option('dry-run');
         $now = Carbon::now();
-        
-        try {
-            $this->info("Checking at: {$now->toDateTimeString()}");
-            
-            // Active payments that have expired. Stream in batches (chunkById) to
-            // keep memory flat as the payments table grows — loading the whole set
-            // at once risks overrunning the CLI memory_limit. Safe with the status
-            // mutation below: the id-forward cursor never revisits processed rows.
-            $expiredPaymentsQuery = Payment::where('status', 'completed')
-                ->where('end_date', '<=', $now)
-                ->with(['platform', 'product']);
 
-            $this->info("Found {$expiredPaymentsQuery->clone()->count()} potentially expired payments");
+        $this->warn('subscriptions:check no longer expires profiles.');
+        $this->line('Profile expiry is owned by crm:reconcile-expired-subscriptions.');
+        $this->newLine();
 
-            $processedCount = 0;
-            $failedCount = 0;
+        $query = Payment::query()
+            ->where('status', 'completed')
+            ->whereNotNull('end_date')
+            ->where('end_date', '<=', $now);
 
-            $expiredPaymentsQuery->chunkById(200, function ($expiredPayments) use (&$processedCount, &$failedCount) {
-                foreach ($expiredPayments as $payment) {
-                    try {
-                    $this->info("Processing payment ID: {$payment->id} for user {$payment->user_id}");
-                    
-                    $result = $this->deactivateUserServices($payment->user_id, $payment);
-                    
-                    $payment->update(['status' => 'expired']);
-                    $processedCount++;
-                    
-                    $this->info("Successfully processed payment ID: {$payment->id}. Deactivated {$result} posts");
-                    
-                    // Send expiration SMS
-                    $this->sendExpirationSMS($payment);
-                    
-                    Log::info('Successfully deactivated subscription', [
-                        'payment_id' => $payment->id,
-                        'user_id' => $payment->user_id,
-                        'end_date' => $payment->end_date
-                    ]);
-                } catch (\Exception $e) {
-                    $failedCount++;
-                    $this->error("Failed processing payment {$payment->id}: " . $e->getMessage());
-                    
-                    Log::error('Failed to deactivate subscription', [
-                        'payment_id' => $payment->id,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                }
-                }
-            });
+        $total = (int) $query->clone()->count();
+        $this->info(sprintf(
+            '%s %d payment(s) with a closed window at %s.',
+            $dryRun ? 'Would close out' : 'Closing out',
+            $total,
+            $now->toDateTimeString()
+        ));
 
-            $this->info("Processed {$processedCount} expired subscriptions");
-            if ($failedCount > 0) {
-                $this->error("Failed to process {$failedCount} subscriptions");
-            }
-
-            return $failedCount > 0 ? self::FAILURE : self::SUCCESS;
-            
-        } catch (\Exception $e) {
-            $this->error('Command failed completely: ' . $e->getMessage());
-            Log::error('Subscription check command failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            return 1;
-        }
-    }
-
-    protected function deactivateUserServices($userId, Payment $payment)
-    {
-        if (!$payment->platform) {
-            Log::error('Platform not found for payment', ['payment_id' => $payment->id]);
-            return 0;
+        if ($dryRun || $total === 0) {
+            return self::SUCCESS;
         }
 
-        // SEO lifecycle markets: expiry must NOT privatise profiles. The payment is
-        // still marked expired (and the renewal SMS sent) by the caller, but the
-        // profile transition (Expired: published, contacts hidden) is owned by
-        // crm:reconcile-expired-subscriptions, which this command must not race.
-        if ($payment->platform->lifecycleEnabled()) {
-            Log::info('Skipping WP deactivation: lifecycle policy owns expiry on this market', [
-                'payment_id' => $payment->id,
-                'platform_id' => $payment->platform_id,
-            ]);
+        $closed = 0;
 
-            return 0;
-        }
+        // chunkById keeps memory flat as payments grows. Safe with the status
+        // mutation below: the id-forward cursor never revisits processed rows.
+        $query->select(['id'])->chunkById(200, function ($payments) use (&$closed): void {
+            $ids = $payments->pluck('id')->all();
+            $closed += Payment::query()->whereIn('id', $ids)->update(['status' => 'expired']);
+        });
 
-        // Use dynamic connection
-        $connectionName = 'platform_' . $payment->platform->id;
-        
-        try {
-            // Switch to platform's database connection
-            app(DynamicDatabaseService::class)->switchConnection(
-                $connectionName, 
-                $payment->platform->getConnectionConfig()
-            );
+        $this->info("Closed out {$closed} payment(s).");
 
-            // Get all escort posts for this user
-            $posts = DB::connection($connectionName)
-                ->table('posts')
-                ->where('post_author', $userId)
-                ->where('post_type', 'escort')
-                ->get(['ID']);
-            
-            if ($posts->isEmpty()) {
-                Log::warning('No posts found for user during deactivation', [
-                    'user_id' => $userId,
-                    'payment_id' => $payment->id,
-                    'platform_id' => $payment->platform_id
-                ]);
-                return 0;
-            }
+        Log::info('Payment windows closed out (bookkeeping only, no profile changes)', [
+            'closed' => $closed,
+        ]);
 
-            $postIds = $posts->pluck('ID')->toArray();
-
-            // Start transaction
-            DB::connection($connectionName)->beginTransaction();
-            
-            try {
-                // Update post status to private
-                $updatedPosts = DB::connection($connectionName)
-                    ->table('posts')
-                    ->whereIn('ID', $postIds)
-                    ->update(['post_status' => 'private']);
-
-                // Update notactive flag
-                DB::connection($connectionName)
-                    ->table('postmeta')
-                    ->whereIn('post_id', $postIds)
-                    ->where('meta_key', 'notactive')
-                    ->update(['meta_value' => '1']);
-
-                // Remove premium/featured status
-                DB::connection($connectionName)
-                    ->table('postmeta')
-                    ->whereIn('post_id', $postIds)
-                    ->whereIn('meta_key', ['premium', 'featured'])
-                    ->update(['meta_value' => '0']);
-
-                DB::connection($connectionName)->commit();
-
-                return $updatedPosts;
-                
-            } catch (\Exception $e) {
-                DB::connection($connectionName)->rollBack();
-                throw $e;
-            }
-            
-        } catch (\Exception $e) {
-            Log::error('Failed to deactivate user services', [
-                'user_id' => $userId,
-                'payment_id' => $payment->id,
-                'platform_id' => $payment->platform_id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            throw $e;
-        }
-    }
-
-    protected function sendExpirationSMS(Payment $payment)
-    {
-        try {
-            $platform = $payment->platform;
-            $product = $payment->product;
-            
-            $message = "Your {$product->name} subscription on {$platform->name} has expired. " .
-                      "To continue enjoying our services, please renew your subscription.";
-            
-            // Send SMS
-            $smsResponse = $this->sendSMS($payment->phone, $message, $payment);
-            
-            // Save to SMS log
-            DB::table('sms_logs')->insert([
-                'payment_id' => $payment->id,
-                'phone' => $payment->phone,
-                'message' => $message,
-                'status' => $smsResponse['success'] ? 'sent' : 'failed',
-                'response' => $smsResponse['message'] ?? null,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-            
-            Log::info('Expiration SMS sent', [
-                'payment_id' => $payment->id,
-                'phone' => $payment->phone,
-                'success' => $smsResponse['success']
-            ]);
-            
-        } catch (\Exception $e) {
-            Log::error('Failed to send expiration SMS', [
-                'payment_id' => $payment->id,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-    protected function sendSMS($phone, $message, $payment = null)
-    {
-        try {
-            $phoneNumberToUse = $phone;
-            
-            if ($payment && $payment->platform_id) {
-                $platform = Platform::find($payment->platform_id);
-                if ($platform) {
-                    $connectionName = 'platform_' . $platform->id;
-                    DynamicDatabaseService::switchConnection($connectionName, $platform->getConnectionConfig());
-                    
-                    // Try to get escort phone number
-                    $escortPost = DB::connection($connectionName)
-                        ->table('posts')
-                        ->where('post_author', $payment->user_id)
-                        ->where('post_type', 'escort')
-                        ->first();
-                    
-                    if ($escortPost) {
-                        $phoneMeta = DB::connection($connectionName)
-                            ->table('postmeta')
-                            ->where('post_id', $escortPost->ID)
-                            ->where('meta_key', 'phone')
-                            ->first();
-                        
-                        if ($phoneMeta && $phoneMeta->meta_value) {
-                            $escortPhone = $this->normalizePhone($phoneMeta->meta_value);
-                            if (preg_match('/^254[0-9]{9}$/', $escortPhone)) {
-                                $phoneNumberToUse = $escortPhone;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Send SMS using your gateway
-            $smsResponse = Http::timeout(15)
-                ->retry(2, 500)
-                ->post('http://138.201.58.10:8093/SendMessageFON', [
-                    'Phonenumber' => $phoneNumberToUse,
-                    'OrgCode' => '58',
-                    'Message' => $message
-                ]);
-            
-            return [
-                'success' => $smsResponse->successful(),
-                'message' => $smsResponse->successful() ? 'SMS sent successfully' : 'SMS gateway error',
-                'response' => $smsResponse->body()
-            ];
-            
-        } catch (\Exception $e) {
-            Log::error('SMS sending failed in command', [
-                'payment_id' => $payment->id ?? null,
-                'error' => $e->getMessage()
-            ]);
-            
-            return [
-                'success' => false,
-                'message' => $e->getMessage()
-            ];
-        }
-    }
-
-    protected function normalizePhone($phone)
-    {
-        $phone = preg_replace('/[^0-9]/', '', $phone);
-        
-        if (str_starts_with($phone, '0')) {
-            $phone = '254' . substr($phone, 1);
-        } elseif (!str_starts_with($phone, '254')) {
-            $phone = '254' . ltrim($phone, '254');
-        }
-        
-        return $phone;
+        return self::SUCCESS;
     }
 }

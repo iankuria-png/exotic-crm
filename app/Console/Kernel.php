@@ -28,20 +28,21 @@ class Kernel extends ConsoleKernel
             ]);
         }
 
-        // Subscription check command - RUNS DAILY AT 12:05 AM
-        $schedule->command('subscriptions:check')
-            ->name('check_subscriptions')
-            ->dailyAt('00:05')
-            ->withoutOverlapping(60)
-            ->onOneServer()
-            ->sendOutputTo(storage_path('logs/subscription_check.log'));
+        // NOTE: `subscriptions:check` used to run here daily at 00:05 and has been
+        // removed deliberately. It decided expiry from a single payments row
+        // (status=completed AND end_date <= now) and never read the profile's
+        // actual escort_expire, so any renewal — which advances the deal and the
+        // WordPress expiry but leaves the original payment row behind — caused it
+        // to privatise a fully paid profile on its pre-renewal date. Expiry is now
+        // owned solely by crm:reconcile-expired-subscriptions below, which reads
+        // escort_expire with a market-timezone end-of-day cutoff and refuses to
+        // act on any client holding a future active deal.
 
-        // CRM safety net: force-expire profiles past their WP expiry but still
-        // publicly active. Hourly: on SEO-lifecycle markets the WordPress
-        // check_expired() sweep and subscriptions:check both stand down, so this
-        // reconciler is the ONLY actor that transitions lapsed profiles to the
-        // Expired (published, contacts hidden) state — an hourly cadence caps the
-        // window in which a lapsed profile still shows its contact details.
+        // CRM: force-expire profiles past their WP expiry but still publicly
+        // active. This is the ONLY actor that transitions a lapsed profile — on
+        // lifecycle markets to Expired (published, contacts hidden), elsewhere to
+        // the legacy offline state. Hourly, so the window in which a lapsed
+        // profile still shows its contact details stays capped.
         $schedule->command('crm:reconcile-expired-subscriptions')
             ->name('crm_reconcile_expired_subscriptions')
             ->hourlyAt(25)

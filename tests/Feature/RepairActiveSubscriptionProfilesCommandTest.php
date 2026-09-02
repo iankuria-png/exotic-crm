@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
 use App\Support\ClientLifecycleState;
+use App\Support\SubscriptionExpiry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
@@ -69,7 +70,12 @@ class RepairActiveSubscriptionProfilesCommandTest extends TestCase
         $this->assertNull($fresh->lifecycle_restored_at);
         $this->assertFalse((bool) $fresh->needs_payment);
         $this->assertFalse((bool) $fresh->notactive);
-        $this->assertSame($deal->expires_at->timestamp, (int) $fresh->escort_expire);
+        // The repair publishes the deal's expiry rounded UP to market-local end of
+        // day. Writing the raw stamp would strip end-of-day grace in both the CRM
+        // and the theme, killing the profile partway through its final paid day.
+        $expectedExpiry = SubscriptionExpiry::endOfDay($deal->expires_at->timestamp, 'Africa/Kampala');
+        $this->assertSame($expectedExpiry, (int) $fresh->escort_expire);
+        $this->assertGreaterThanOrEqual($deal->expires_at->timestamp, (int) $fresh->escort_expire);
         $this->assertTrue((bool) $fresh->premium);
         $this->assertTrue((bool) $fresh->featured);
         $this->assertNull($fresh->churned_at);
@@ -77,7 +83,7 @@ class RepairActiveSubscriptionProfilesCommandTest extends TestCase
             return $request->url() === "{$baseUrl}/clients/{$client->wp_post_id}/lifecycle"
                 && $request->method() === 'POST'
                 && (string) $request['state'] === ClientLifecycleState::ACTIVE
-                && (int) $request['escort_expire'] === $deal->expires_at->timestamp
+                && (int) $request['escort_expire'] === SubscriptionExpiry::endOfDay($deal->expires_at->timestamp, 'Africa/Kampala')
                 && (string) $request['product_type'] === 'vip'
                 && (int) $request['crm_deal_id'] === (int) $deal->id;
         });
