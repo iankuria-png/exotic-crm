@@ -3,32 +3,57 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 
-function flattenLocations(payload) {
+const MAX_TARGETS = 40;
+
+function normalizeLocationTree(payload) {
     const raw = Array.isArray(payload?.locations?.locations)
         ? payload.locations.locations
         : (payload?.locations || payload || []);
-    if (Array.isArray(raw)) {
-        return raw.flatMap((entry) => {
-            const children = entry.children || entry.cities || entry.locations || [];
-            if (Array.isArray(children) && children.length) {
-                return children.map((child) => ({
-                    region_id: Number(entry.id || entry.term_id || entry.region_id || 0) || null,
+    if (!Array.isArray(raw)) return [];
+
+    return raw.map((entry) => {
+        const regionId = Number(entry.id || entry.term_id || entry.region_id || 0) || null;
+        const regionName = entry.name || entry.label || entry.region_name || entry.region || '';
+        const children = entry.children || entry.cities || entry.locations || [];
+
+        if (Array.isArray(children) && children.length) {
+            return {
+                region_id: regionId,
+                region_name: regionName,
+                cities: children.map((child) => ({
+                    region_id: regionId,
+                    region_name: regionName,
                     city_id: Number(child.id || child.term_id || child.city_id || 0) || null,
-                    region_name: entry.name || entry.label || entry.region_name || '',
                     city_name: child.name || child.label || child.city_name || '',
-                }));
-            }
+                })),
+            };
+        }
 
-            return [{
-                region_id: Number(entry.region_id || entry.parent_id || 0) || null,
-                city_id: Number(entry.city_id || entry.id || entry.term_id || 0) || null,
+        // Flat payloads (no nesting): the entry is itself a leaf destination.
+        const flatRegionId = Number(entry.region_id || entry.parent_id || 0) || null;
+        if (flatRegionId) {
+            return {
+                region_id: flatRegionId,
                 region_name: entry.region_name || entry.region || '',
-                city_name: entry.city_name || entry.name || entry.label || '',
-            }];
-        }).filter((entry) => entry.region_id || entry.city_id || entry.region_name || entry.city_name);
-    }
+                cities: [{
+                    region_id: flatRegionId,
+                    region_name: entry.region_name || entry.region || '',
+                    city_id: Number(entry.city_id || entry.id || entry.term_id || 0) || null,
+                    city_name: entry.city_name || entry.name || entry.label || '',
+                }],
+            };
+        }
 
-    return [];
+        return { region_id: regionId, region_name: regionName, cities: [] };
+    }).filter((group) => group.region_id || group.region_name || group.cities.length);
+}
+
+function targetKey(location) {
+    return `${location?.region_id || location?.region_name || ''}::${location?.city_id || location?.city_name || ''}`;
+}
+
+function matchesQuery(haystack, needle) {
+    return String(haystack || '').toLowerCase().includes(needle);
 }
 
 function defaultTarget(location, count = 10) {
@@ -42,6 +67,10 @@ function defaultTarget(location, count = 10) {
 }
 
 function locationLabel(location) {
+    if (!location?.city_name && location?.region_name) {
+        return `All of ${location.region_name}`;
+    }
+
     return [location?.city_name, location?.region_name].filter(Boolean).join(', ') || 'Destination location';
 }
 
@@ -59,13 +88,40 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
     const [selectedClientIds, setSelectedClientIds] = useState([]);
     const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
     const [notes, setNotes] = useState(defaultNotes);
+    const [locationQuery, setLocationQuery] = useState('');
 
     const locationsQuery = useQuery({
         queryKey: ['settings-pbn-site-locations', site?.id],
         queryFn: () => api.get(`/crm/settings/integrations/pbn-sites/${site.id}/locations`).then((response) => response.data),
         enabled: open && Boolean(site?.id),
     });
-    const locations = useMemo(() => flattenLocations(locationsQuery.data), [locationsQuery.data]);
+    const locationGroups = useMemo(() => normalizeLocationTree(locationsQuery.data), [locationsQuery.data]);
+    const locations = useMemo(
+        () => locationGroups.flatMap((group) => (group.cities.length
+            ? group.cities
+            : [{ region_id: group.region_id, region_name: group.region_name, city_id: null, city_name: '' }])),
+        [locationGroups],
+    );
+    const totalDestinations = useMemo(
+        () => locationGroups.reduce((sum, group) => sum + Math.max(1, group.cities.length), 0),
+        [locationGroups],
+    );
+    const filteredGroups = useMemo(() => {
+        const needle = locationQuery.trim().toLowerCase();
+        if (!needle) return locationGroups;
+
+        return locationGroups
+            .map((group) => {
+                if (matchesQuery(group.region_name, needle)) return group;
+                const cities = group.cities.filter((city) => matchesQuery(city.city_name, needle));
+                return cities.length ? { ...group, cities } : null;
+            })
+            .filter(Boolean);
+    }, [locationGroups, locationQuery]);
+    const filteredCount = useMemo(
+        () => filteredGroups.reduce((sum, group) => sum + Math.max(1, group.cities.length), 0),
+        [filteredGroups],
+    );
 
     useEffect(() => {
         if (!open || !site) return;
@@ -76,6 +132,7 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         setSelectedClientIds([]);
         setDuplicateAcknowledged(false);
         setNotes(defaultNotes);
+        setLocationQuery('');
         setStep('setup');
     }, [defaultNotes, open, site]);
 
@@ -143,6 +200,12 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         && (!hasDuplicateWarnings || duplicateAcknowledged)
         && !queueMutation.isPending;
 
+    const selectedTargetKeys = useMemo(() => new Set(targets.map((target) => targetKey(target))), [targets]);
+    const allocatedTotal = useMemo(
+        () => targets.reduce((sum, target) => sum + Math.max(0, Number(target.target_count) || 0), 0),
+        [targets],
+    );
+
     const resetPreview = () => {
         previewMutation.reset();
         setSelectedClientIds([]);
@@ -163,9 +226,20 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
     const addTarget = (location) => {
         resetPreview();
         setTargets((current) => {
-            const exists = current.some((target) => String(target.city_id || target.city_name) === String(location.city_id || location.city_name));
-            return exists || current.length >= 40 ? current : [...current, defaultTarget(location, Math.max(1, Math.ceil(Number(targetCount || 1) / Math.max(1, current.length + 1))))];
+            const exists = current.some((target) => targetKey(target) === targetKey(location));
+            if (exists) {
+                return current.filter((target) => targetKey(target) !== targetKey(location));
+            }
+            if (current.length >= MAX_TARGETS) {
+                toast.error(`Destination targets are capped at ${MAX_TARGETS}.`);
+                return current;
+            }
+            return [...current, defaultTarget(location, Math.max(1, Math.ceil(Number(targetCount || 1) / Math.max(1, current.length + 1))))];
         });
+    };
+    const clearTargets = () => {
+        resetPreview();
+        setTargets([]);
     };
     const removeTarget = (index) => {
         resetPreview();
@@ -244,24 +318,126 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
                     {step === 'locations' ? (
                         <div className="grid gap-4 xl:grid-cols-12">
                             <section className="rounded-lg border border-slate-200 bg-white p-3 xl:col-span-5">
-                                <p className="text-sm font-semibold text-slate-900">Destination Locations</p>
-                                <div className="mt-3 max-h-80 space-y-2 overflow-y-auto">
-                                    {locationsQuery.isLoading ? <p className="text-sm text-slate-500">Loading locations...</p> : null}
-                                    {!locationsQuery.isLoading && locations.length === 0 ? <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">No destination locations returned.</p> : null}
-                                    {locations.slice(0, 80).map((location, index) => (
-                                        <button key={`${location.city_id}-${location.city_name}-${index}`} type="button" onClick={() => addTarget(location)} className="min-h-11 w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700 hover:border-slate-300">
-                                            {locationLabel(location)}
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Destination Locations</p>
+                                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                                        {locationQuery.trim() ? `${filteredCount} of ${totalDestinations}` : `${totalDestinations} available`}
+                                    </span>
+                                </div>
+                                <div className="relative mt-3">
+                                    <input
+                                        type="search"
+                                        value={locationQuery}
+                                        onChange={(event) => setLocationQuery(event.target.value)}
+                                        className="crm-input pr-16"
+                                        placeholder="Search city or region..."
+                                        aria-label="Search destination locations"
+                                    />
+                                    {locationQuery ? (
+                                        <button type="button" onClick={() => setLocationQuery('')} className="absolute inset-y-0 right-2 my-auto h-7 rounded-md px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700">
+                                            Clear
                                         </button>
-                                    ))}
+                                    ) : null}
+                                </div>
+
+                                <div className="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
+                                    {locationsQuery.isLoading ? (
+                                        <div className="space-y-2" aria-busy="true">
+                                            {[0, 1, 2, 3, 4].map((row) => (
+                                                <div key={row} className="h-11 animate-pulse rounded-md bg-slate-100" />
+                                            ))}
+                                        </div>
+                                    ) : null}
+
+                                    {!locationsQuery.isLoading && locationsQuery.isError ? (
+                                        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-800">
+                                            <p className="font-semibold">Could not load destination locations.</p>
+                                            <p className="mt-1 text-xs">{locationsQuery.error?.response?.data?.message || 'The PBN site REST endpoint did not respond.'}</p>
+                                            <button type="button" onClick={() => locationsQuery.refetch()} className="crm-btn-secondary mt-3 min-h-11 px-3 py-2">Retry</button>
+                                        </div>
+                                    ) : null}
+
+                                    {!locationsQuery.isLoading && !locationsQuery.isError && totalDestinations === 0 ? (
+                                        <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
+                                            <p className="font-semibold text-slate-800">No destination locations returned.</p>
+                                            <p className="mt-1 text-xs">{site.domain} answered but its <code>escorts-from</code> taxonomy came back empty. Run Network Check on the site and confirm the exotic-crm-sync plugin version is current.</p>
+                                        </div>
+                                    ) : null}
+
+                                    {!locationsQuery.isLoading && !locationsQuery.isError && totalDestinations > 0 && filteredCount === 0 ? (
+                                        <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
+                                            <p>No location matches &ldquo;{locationQuery.trim()}&rdquo;.</p>
+                                            <button type="button" onClick={() => setLocationQuery('')} className="crm-btn-secondary mt-3 min-h-11 px-3 py-2">Clear search</button>
+                                        </div>
+                                    ) : null}
+
+                                    {filteredGroups.map((group) => {
+                                        const regionTarget = { region_id: group.region_id, region_name: group.region_name, city_id: null, city_name: null };
+                                        const regionSelected = selectedTargetKeys.has(targetKey(regionTarget));
+
+                                        return (
+                                            <div key={`${group.region_id}-${group.region_name}`} className="rounded-md border border-slate-200">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => addTarget(regionTarget)}
+                                                    aria-pressed={regionSelected}
+                                                    className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-t-md px-3 py-2 text-left transition ${regionSelected ? 'bg-teal-50 text-teal-900' : 'bg-slate-50 text-slate-800 hover:bg-slate-100'}`}
+                                                >
+                                                    <span className="text-sm font-semibold">{group.region_name || 'Unnamed region'}</span>
+                                                    <span className="text-[11px] font-semibold uppercase text-slate-500">
+                                                        {regionSelected ? 'Region added' : `${group.cities.length} ${group.cities.length === 1 ? 'city' : 'cities'}`}
+                                                    </span>
+                                                </button>
+                                                {group.cities.length ? (
+                                                    <div className="space-y-1 border-t border-slate-100 p-2">
+                                                        {group.cities.map((city) => {
+                                                            const selected = selectedTargetKeys.has(targetKey(city));
+
+                                                            return (
+                                                                <button
+                                                                    key={`${city.city_id}-${city.city_name}`}
+                                                                    type="button"
+                                                                    onClick={() => addTarget(city)}
+                                                                    aria-pressed={selected}
+                                                                    className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm font-medium transition ${selected ? 'border-teal-300 bg-teal-50 text-teal-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
+                                                                >
+                                                                    <span>{city.city_name || 'Unnamed city'}</span>
+                                                                    {selected ? <span className="text-[11px] font-semibold uppercase text-teal-700">Added</span> : null}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </section>
                             <section className="rounded-lg border border-slate-200 bg-white p-3 xl:col-span-7">
-                                <p className="text-sm font-semibold text-slate-900">Target Split</p>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Target Split</p>
+                                    <div className="flex items-center gap-2">
+                                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{targets.length}/{MAX_TARGETS} targets</span>
+                                        {targets.length ? (
+                                            <button type="button" onClick={clearTargets} className="rounded-md px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700">Clear all</button>
+                                        ) : null}
+                                    </div>
+                                </div>
+                                {targets.length ? (
+                                    <p className={`mt-2 text-xs ${allocatedTotal > 200 ? 'text-rose-700' : 'text-slate-500'}`}>
+                                        {allocatedTotal} profiles allocated across {targets.length} {targets.length === 1 ? 'destination' : 'destinations'} (batch cap 200).
+                                    </p>
+                                ) : null}
                                 <div className="mt-3 space-y-2">
+                                    {targets.length === 0 ? (
+                                        <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                                            Pick destinations on the left. Choose a region to spread across the whole district, or a city for a precise placement.
+                                        </p>
+                                    ) : null}
                                     {targets.map((target, index) => (
-                                        <div key={`${target.city_id}-${index}`} className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 sm:grid-cols-[1fr_110px_auto]">
+                                        <div key={`${targetKey(target)}-${index}`} className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 sm:grid-cols-[1fr_110px_auto]">
                                             <p className="self-center text-sm font-medium text-slate-800">{locationLabel(target)}</p>
-                                            <input type="number" min="1" max="200" value={target.target_count} onChange={(event) => updateTarget(index, event.target.value)} className="crm-input" />
+                                            <input type="number" min="1" max="200" value={target.target_count} onChange={(event) => updateTarget(index, event.target.value)} className="crm-input" aria-label={`Profiles for ${locationLabel(target)}`} />
                                             <button type="button" onClick={() => removeTarget(index)} className="crm-btn-secondary min-h-11 px-3 py-2">Remove</button>
                                         </div>
                                     ))}
