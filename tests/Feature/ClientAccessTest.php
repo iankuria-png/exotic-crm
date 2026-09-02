@@ -775,6 +775,127 @@ class ClientAccessTest extends TestCase
         );
     }
 
+    public function test_client_session_debug_proves_set_cookie_is_stripped_in_transit(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor') {
+                return Http::response([
+                    'send_auth_cookies_filters' => [],
+                    'pluggable' => [
+                        'wp_set_auth_cookie' => ['defined' => true, 'is_core' => true],
+                        'wp_clear_auth_cookie' => ['defined' => true, 'is_core' => true],
+                    ],
+                    'headers_list_available' => true,
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor/cookie-echo') {
+                // PHP queued the cookie; the response carries no Set-Cookie.
+                return Http::response([
+                    'probe_cookie' => 'exotic_crm_cookie_probe',
+                    'headers_list_available' => true,
+                    'php_set_cookie_header_count' => 1,
+                    'php_wrote_probe' => true,
+                ], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, [
+                    'Location' => 'https://kenya.example.test/escort/tracy/',
+                    'X-Exotic-CRM-Session-Cookie' => 'issued',
+                    'CF-Cache-Status' => 'DYNAMIC',
+                ]);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+        $this->assertStringContainsString('Proven in transit', $hint);
+        $this->assertStringContainsString('Transform Rules', $hint);
+
+        $facts = json_encode($response->json('diagnostics.stages.7.facts'), JSON_UNESCAPED_SLASHES);
+        $this->assertStringContainsString('WordPress self-report', $facts);
+        $this->assertStringContainsString('issued', $facts);
+        $this->assertStringContainsString('Set-Cookie is being removed after PHP writes it', $facts);
+    }
+
+    public function test_client_session_debug_does_not_blame_transit_when_the_probe_cookie_arrives(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor') {
+                return Http::response(['send_auth_cookies_filters' => [], 'pluggable' => []], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor/cookie-echo') {
+                // The probe cookie survives, so the transport is clean and the
+                // fault has to be specific to the auth cookies.
+                return Http::response(
+                    ['php_wrote_probe' => true, 'headers_list_available' => true],
+                    200,
+                    ['Set-Cookie' => 'exotic_crm_cookie_probe=probe; path=/; secure; HttpOnly']
+                );
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk();
+
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+        $this->assertStringNotContainsString('Proven in transit', $hint);
+        $this->assertStringContainsString(
+            'Cookie echo — headers received',
+            json_encode(
+                $response->json('diagnostics.stages.7.facts'),
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            )
+        );
+    }
+
     public function test_client_session_debug_acquits_the_cdn_when_it_did_not_cache_the_response(): void
     {
         [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();

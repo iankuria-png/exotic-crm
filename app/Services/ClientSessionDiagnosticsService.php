@@ -517,6 +517,7 @@ class ClientSessionDiagnosticsService
         // tell "WordPress sent nothing" from "WordPress sent an unusable one".
         $context['consumer_set_cookie'] = $this->rawSetCookieHeaders($response->headers());
         $context['consumer_cache_status'] = $this->header($response->headers(), 'CF-Cache-Status');
+        $context['consumer_cookie_selfreport'] = $this->header($response->headers(), 'X-Exotic-CRM-Session-Cookie');
         $context['consumer_cache_control'] = $this->header($response->headers(), 'Cache-Control');
 
         $facts = [
@@ -603,6 +604,11 @@ class ClientSessionDiagnosticsService
             $this->fact('Request host', $requestHost ?: 'unknown'),
             $this->fact('Set-Cookie headers sent', (string) count($sent)),
         ];
+
+        $selfReport = (string) ($context['consumer_cookie_selfreport'] ?? '');
+        if ($selfReport !== '') {
+            $facts[] = $this->fact('WordPress self-report', $selfReport);
+        }
 
         foreach ($sent as $cookie) {
             $facts[] = $this->fact(
@@ -1031,6 +1037,17 @@ class ClientSessionDiagnosticsService
             }
         }
 
+        if (array_key_exists('headers_list_available', $body) && ! $body['headers_list_available']) {
+            $facts[] = $this->fact('headers_list()', 'unavailable — WordPress cannot self-verify its own cookies here');
+        }
+
+        $echo = $this->probeCookieEcho($connection, $platform);
+        $facts = array_merge($facts, $echo['facts']);
+        if ($echo['hint']) {
+            $culprits = [];
+            $facts[] = $this->fact('Verdict', 'Set-Cookie is being removed after PHP writes it');
+        }
+
         $cookieDomain = (string) ($body['cookies']['cookie_domain'] ?? '');
         if ($cookieDomain !== '') {
             $facts[] = $this->fact('COOKIE_DOMAIN', $cookieDomain);
@@ -1041,12 +1058,87 @@ class ClientSessionDiagnosticsService
 
         $culprits = array_values(array_unique(array_filter($culprits)));
 
+        if ($echo['hint']) {
+            return ['facts' => $facts, 'hint' => $echo['hint']];
+        }
+
         return [
             'facts' => $facts,
             'hint' => $culprits
                 ? 'The market reports '.implode(' and ', $culprits).' interfering with auth cookies — start there.'
                 : null,
         ];
+    }
+
+    /**
+     * Ask the market to set one throwaway cookie, then count the Set-Cookie
+     * headers that actually arrive. PHP writing a cookie the caller never
+     * receives is proof the header is stripped in transit — by the web server,
+     * a reverse proxy, or a CDN response-header rule — and clears WordPress.
+     */
+    private function probeCookieEcho(WordPressSiteConnection $connection, Platform $platform): array
+    {
+        $url = rtrim((string) $connection->wpApiUrl, '/').'/session-doctor/cookie-echo';
+
+        try {
+            $response = Http::withHeaders($this->authHeaders($connection, $platform))
+                ->withOptions(['allow_redirects' => false])
+                ->timeout(self::REQUEST_TIMEOUT)
+                ->get($url);
+        } catch (\Throwable $exception) {
+            return ['facts' => [$this->fact('Cookie echo probe', 'unavailable')], 'hint' => null];
+        }
+
+        if ($response->status() === 404) {
+            return [
+                'facts' => [$this->fact('Cookie echo probe', 'not installed on this market')],
+                'hint' => null,
+            ];
+        }
+
+        if (! $response->successful()) {
+            return [
+                'facts' => [$this->fact('Cookie echo probe', 'returned HTTP '.$response->status())],
+                'hint' => null,
+            ];
+        }
+
+        $body = (array) $response->json();
+        if (! array_key_exists('php_wrote_probe', $body)) {
+            return [
+                'facts' => [$this->fact('Cookie echo probe', 'no usable response')],
+                'hint' => null,
+            ];
+        }
+
+        $phpWrote = (bool) $body['php_wrote_probe'];
+        $received = $this->rawSetCookieHeaders($response->headers());
+
+        $facts = [
+            $this->fact('Cookie echo — PHP wrote it', $phpWrote ? 'yes' : 'no'),
+            $this->fact('Cookie echo — headers received', (string) count($received)),
+        ];
+
+        if ($phpWrote && count($received) === 0) {
+            return [
+                'facts' => $facts,
+                'hint' => 'Proven in transit: on a plain test endpoint PHP wrote a Set-Cookie header and zero arrived here, '
+                    .'so WordPress is not the problem and neither is the auth code — every Set-Cookie from this market is being '
+                    .'removed after PHP writes it. Look at the web server and any proxy in front of it (LiteSpeed/nginx header '
+                    .'rules, a cPanel or host-level cache) and at Cloudflare Transform Rules, which can delete a response header '
+                    .'even on responses it does not cache.',
+            ];
+        }
+
+        if (! $phpWrote && ($body['headers_list_available'] ?? true)) {
+            return [
+                'facts' => $facts,
+                'hint' => 'PHP could not queue even a plain test cookie on this market, so setcookie() itself is being '
+                    .'neutralised site-wide rather than anything specific to authentication.',
+            ];
+        }
+
+        return ['facts' => $facts, 'hint' => null];
     }
 
     private function cdnCachingRuledOut(string $cacheStatus, string $cacheControl): ?string
