@@ -643,6 +643,12 @@ class ClientSessionDiagnosticsService
                 ? ' The CDN is not the cause here ('.$cdnRuled.').'
                 : ' Also check whether a CDN or origin cache is stripping Set-Cookie from this response.';
 
+            $doctor = $this->consultSessionDoctor($context);
+            $facts = array_merge($facts, $doctor['facts']);
+            if ($doctor['hint']) {
+                $hint = $doctor['hint'].' '.$hint;
+            }
+
             return $this->stage('auth_cookie', 'Login cookie issued', 'fail',
                 'WordPress issued the redirect but sent no Set-Cookie header at all.', $facts,
                 $hint,
@@ -955,6 +961,94 @@ class ClientSessionDiagnosticsService
      * Cloudflare only strips cookies from responses it treats as cacheable, so
      * a DYNAMIC/BYPASS status or a no-store response acquits it outright.
      */
+    /**
+     * Ask the market's plugin which code is suppressing auth cookies. This is
+     * the difference between "a plugin is probably doing this" and a file, a
+     * line and a plugin slug to go and disable.
+     */
+    private function consultSessionDoctor(array $context): array
+    {
+        $platform = $context['platform'] ?? null;
+        if (! $platform) {
+            return ['facts' => [], 'hint' => null];
+        }
+
+        $connection = WordPressSiteConnection::fromPlatform($platform);
+        $url = rtrim((string) $connection->wpApiUrl, '/').'/session-doctor';
+
+        try {
+            $response = Http::withHeaders($this->authHeaders($connection, $platform))
+                ->timeout(self::REQUEST_TIMEOUT)
+                ->get($url);
+        } catch (\Throwable $exception) {
+            return [
+                'facts' => [$this->fact('Session doctor', 'unavailable: '.$this->scrub($exception->getMessage(), $url))],
+                'hint' => null,
+            ];
+        }
+
+        if ($response->status() === 404) {
+            return [
+                'facts' => [$this->fact('Session doctor', 'not installed on this market')],
+                'hint' => 'Upload the current exotic-crm-sync build to this market to have the diagnostic name the responsible plugin outright.',
+            ];
+        }
+
+        if (! $response->successful()) {
+            return [
+                'facts' => [$this->fact('Session doctor', 'returned HTTP '.$response->status())],
+                'hint' => null,
+            ];
+        }
+
+        $body = (array) $response->json();
+        $facts = [];
+        $culprits = [];
+
+        foreach ((array) ($body['send_auth_cookies_filters'] ?? []) as $filter) {
+            $label = trim((string) ($filter['plugin'] ?? '')) ?: 'unknown source';
+            $where = (string) ($filter['file'] ?? '');
+            $line = (int) ($filter['line'] ?? 0);
+            $facts[] = $this->fact(
+                'send_auth_cookies filter',
+                (string) ($filter['callback'] ?? 'unknown')
+                .' — '.$label
+                .($where !== '' ? ' ('.$where.($line > 0 ? ':'.$line : '').')' : '')
+            );
+            $culprits[] = $label;
+        }
+
+        if (! $facts) {
+            $facts[] = $this->fact('send_auth_cookies filter', 'none registered');
+        }
+
+        foreach (['wp_set_auth_cookie', 'wp_clear_auth_cookie'] as $function) {
+            $source = (array) ($body['pluggable'][$function] ?? []);
+            if (($source['defined'] ?? false) && ! ($source['is_core'] ?? true)) {
+                $owner = trim((string) ($source['plugin'] ?? '')) ?: (string) ($source['file'] ?? 'unknown file');
+                $facts[] = $this->fact($function.'()', 'REPLACED by '.$owner);
+                $culprits[] = $owner;
+            }
+        }
+
+        $cookieDomain = (string) ($body['cookies']['cookie_domain'] ?? '');
+        if ($cookieDomain !== '') {
+            $facts[] = $this->fact('COOKIE_DOMAIN', $cookieDomain);
+        }
+        if (isset($body['site']['is_ssl'])) {
+            $facts[] = $this->fact('is_ssl() at origin', $body['site']['is_ssl'] ? 'true' : 'false');
+        }
+
+        $culprits = array_values(array_unique(array_filter($culprits)));
+
+        return [
+            'facts' => $facts,
+            'hint' => $culprits
+                ? 'The market reports '.implode(' and ', $culprits).' interfering with auth cookies — start there.'
+                : null,
+        ];
+    }
+
     private function cdnCachingRuledOut(string $cacheStatus, string $cacheControl): ?string
     {
         $status = strtoupper(trim($cacheStatus));

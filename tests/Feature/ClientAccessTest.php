@@ -620,6 +620,161 @@ class ClientAccessTest extends TestCase
         $this->assertStringContainsString('check whether a CDN', $hint);
     }
 
+    public function test_client_session_debug_names_the_plugin_suppressing_auth_cookies(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'resolved_target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor') {
+                return Http::response([
+                    'send_auth_cookies_filters' => [[
+                        'priority' => 10,
+                        'callback' => '__return_false',
+                        'file' => 'wp-content/plugins/simple-jwt-login/src/Login.php',
+                        'line' => 88,
+                        'plugin' => 'simple-jwt-login',
+                    ]],
+                    'pluggable' => [
+                        'wp_set_auth_cookie' => ['defined' => true, 'is_core' => true, 'plugin' => ''],
+                        'wp_clear_auth_cookie' => ['defined' => true, 'is_core' => true, 'plugin' => ''],
+                    ],
+                    'cookies' => ['cookie_domain' => 'www.kenya.example.test'],
+                    'site' => ['is_ssl' => true],
+                ], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, [
+                    'Location' => 'https://kenya.example.test/escort/tracy/',
+                    'CF-Cache-Status' => 'DYNAMIC',
+                ]);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+        $this->assertStringContainsString('simple-jwt-login', $hint);
+
+        $facts = json_encode($response->json('diagnostics.stages.7.facts'), JSON_UNESCAPED_SLASHES);
+        $this->assertStringContainsString('simple-jwt-login/src/Login.php:88', $facts);
+        $this->assertStringContainsString('__return_false', $facts);
+    }
+
+    public function test_client_session_debug_flags_a_pluggable_override_of_the_cookie_functions(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor') {
+                return Http::response([
+                    'send_auth_cookies_filters' => [],
+                    'pluggable' => [
+                        // Forcing the filter cannot help when core's function
+                        // never loaded in the first place.
+                        'wp_set_auth_cookie' => [
+                            'defined' => true,
+                            'is_core' => false,
+                            'file' => 'wp-content/mu-plugins/headless-auth.php',
+                            'plugin' => 'mu-plugin',
+                        ],
+                        'wp_clear_auth_cookie' => ['defined' => true, 'is_core' => true, 'plugin' => ''],
+                    ],
+                ], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $facts = json_encode($response->json('diagnostics.stages.7.facts'));
+        $this->assertStringContainsString('REPLACED by mu-plugin', $facts);
+        $this->assertStringContainsString('mu-plugin', (string) $response->json('diagnostics.stages.7.hint'));
+    }
+
+    public function test_client_session_debug_tells_you_to_upload_the_plugin_when_the_doctor_is_missing(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $baseUrl.'/session-doctor') {
+                return Http::response(['code' => 'rest_no_route'], 404);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $this->assertStringContainsString(
+            'not installed on this market',
+            json_encode($response->json('diagnostics.stages.7.facts'))
+        );
+    }
+
     public function test_client_session_debug_acquits_the_cdn_when_it_did_not_cache_the_response(): void
     {
         [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
