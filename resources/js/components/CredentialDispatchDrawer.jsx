@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { useToast } from './ToastProvider';
 import { normalizePhone } from '../utils/phone';
+import { useAuth } from '../hooks/useAuth';
+import ClientSessionDiagnosticsPanel from './ClientSessionDiagnosticsPanel';
 
 const METHOD_OPTIONS = [
     {
@@ -94,6 +96,9 @@ export default function CredentialDispatchDrawer({
     const [dispatchFeedback, setDispatchFeedback] = useState(null);
     const [credentialReveal, setCredentialReveal] = useState(null);
     const [sessionFallback, setSessionFallback] = useState(null);
+    const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+    const { user } = useAuth();
+    const canRunSessionDiagnostics = user?.role === 'admin';
 
     useEffect(() => {
         if (!open || !client) {
@@ -104,6 +109,7 @@ export default function CredentialDispatchDrawer({
         setDispatchFeedback(null);
         setCredentialReveal(null);
         setSessionFallback(null);
+        setDiagnosticsOpen(false);
         setForm({
             method: 'setup_link',
             channel: 'both',
@@ -404,6 +410,16 @@ export default function CredentialDispatchDrawer({
                             >
                                 {resetCredentialsMutation.isPending ? 'Resetting credentials...' : 'Reset & copy credentials'}
                             </button>
+                            {canRunSessionDiagnostics ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setDiagnosticsOpen(true)}
+                                    className="rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-800 transition hover:bg-indigo-100"
+                                    title="Admin only: trace every hop between the CRM and WordPress"
+                                >
+                                    Diagnose session
+                                </button>
+                            ) : null}
                         </div>
                         <div className="mt-2 flex flex-wrap gap-1 rounded-md border border-slate-200 bg-white p-1">
                             {LOGIN_TARGET_OPTIONS.map((option) => (
@@ -444,16 +460,27 @@ export default function CredentialDispatchDrawer({
                                         The client session was unavailable, so CRM opened the best available access link.
                                     </p>
                                 </div>
-                                {sessionFallback.open_url ? (
-                                    <a
-                                        href={sessionFallback.open_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100"
-                                    >
-                                        Reopen
-                                    </a>
-                                ) : null}
+                                <div className="flex flex-wrap gap-2">
+                                    {canRunSessionDiagnostics ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setDiagnosticsOpen(true)}
+                                            className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100"
+                                        >
+                                            Diagnose why
+                                        </button>
+                                    ) : null}
+                                    {sessionFallback.open_url ? (
+                                        <a
+                                            href={sessionFallback.open_url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 transition hover:bg-amber-100"
+                                        >
+                                            Reopen
+                                        </a>
+                                    ) : null}
+                                </div>
                             </div>
                             <div className="mt-3 flex flex-wrap gap-2">
                                 {sessionFallback.profile_url ? (
@@ -836,6 +863,15 @@ export default function CredentialDispatchDrawer({
                     </section>
                 </div>
             </aside>
+
+            {canRunSessionDiagnostics ? (
+                <ClientSessionDiagnosticsPanel
+                    open={diagnosticsOpen}
+                    onClose={() => setDiagnosticsOpen(false)}
+                    client={client}
+                    initialTarget={loginTarget}
+                />
+            ) : null}
         </div>
     );
 }

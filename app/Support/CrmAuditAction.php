@@ -230,6 +230,8 @@ final class CrmAuditAction
 
     public const CLIENT_LOGIN_AS_CLIENT_LINK = 'client_login_as_client_link';
 
+    public const CLIENT_SESSION_DIAGNOSTIC = 'client_session_diagnostic';
+
     public const FIELD_SALES_CLIENT_LOGIN_AS_CLIENT = 'field_sales_client_login_as_client';
 
     public const FIELD_SALES_TRIAL_ACTIVATE = 'field_sales_trial_activate';

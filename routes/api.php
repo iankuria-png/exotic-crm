@@ -477,7 +477,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/credentials/reset', [ClientController::class, 'resetCredentials'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/login-as-client', [ClientController::class, 'loginAsClient'])->middleware('role:admin,sub_admin,sales,field_sales');
-    Route::post('/clients/{client}/login-as-client/debug', [ClientController::class, 'debugLoginAsClient'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/login-as-client/debug', [ClientController::class, 'debugLoginAsClient'])->middleware('role:admin');
     Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales,field_sales');

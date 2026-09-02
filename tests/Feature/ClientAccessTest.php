@@ -264,7 +264,53 @@ class ClientAccessTest extends TestCase
         $this->assertSame(['profile', 'edit_profile', 'change_password', 'home'], $targets);
     }
 
-    public function test_client_session_debug_reports_admin_post_redirect_without_exposing_token(): void
+    private function fakeHealthySessionMarket(string $consumerUrl, string $landingUrl, string $baseUrl, array $overrides = []): void
+    {
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl, $landingUrl, $overrides) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response(array_merge([
+                    'url' => $consumerUrl,
+                    'expires_at' => '2026-04-03T08:45:00+00:00',
+                    'target' => 'profile',
+                    'resolved_target' => 'profile',
+                    'target_url' => $landingUrl,
+                    'profile_url' => $landingUrl,
+                    'edit_profile_url' => 'https://kenya.example.test/edit-profile/',
+                    'change_password_url' => 'https://kenya.example.test/change-password/',
+                    'target_fallback_used' => false,
+                ], $overrides), 200);
+            }
+
+            if ($url === $baseUrl) {
+                return Http::response(['namespace' => 'exotic-crm-sync/v1'], 200);
+            }
+
+            if ($url === $baseUrl.'/clients/8517') {
+                return Http::response(['post_author' => 9001, 'post_status' => 'publish'], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, [
+                    'Location' => $landingUrl,
+                    'Set-Cookie' => 'wordpress_logged_in_9f2=secret-cookie; path=/; domain=kenya.example.test; secure',
+                    'Content-Type' => 'text/html; charset=UTF-8',
+                ]);
+            }
+
+            if ($url === $landingUrl) {
+                return Http::response('<html><body class="logged-in"><div id="wpadminbar"></div></body></html>', 200, [
+                    'Content-Type' => 'text/html; charset=UTF-8',
+                ]);
+            }
+
+            // admin-post.php reachability probe and anything else.
+            return Http::response('', 200);
+        });
+    }
+
+    public function test_client_session_debug_traces_a_healthy_pipeline_without_exposing_secrets(): void
     {
         $platform = Platform::factory()->create([
             'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
@@ -280,33 +326,9 @@ class ClientAccessTest extends TestCase
         $baseUrl = rtrim((string) $platform->wp_api_url, '/');
         $consumerUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=super-secret-token';
 
-        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
-            if ($request->url() === $baseUrl.'/clients/8517/session-link') {
-                return Http::response([
-                    'url' => $consumerUrl,
-                    'expires_at' => '2026-04-03T08:45:00+00:00',
-                    'target' => 'profile',
-                    'resolved_target' => 'profile',
-                    'target_url' => 'https://kenya.example.test/escort/tracy/',
-                    'profile_url' => 'https://kenya.example.test/escort/tracy/',
-                    'edit_profile_url' => 'https://kenya.example.test/edit-profile/',
-                    'change_password_url' => 'https://kenya.example.test/change-password/',
-                    'target_fallback_used' => false,
-                ], 200);
-            }
+        $this->fakeHealthySessionMarket($consumerUrl, 'https://kenya.example.test/escort/tracy/', $baseUrl);
 
-            if ($request->url() === $consumerUrl) {
-                return Http::response('', 302, [
-                    'Location' => 'https://kenya.example.test/escort/tracy/',
-                    'Set-Cookie' => 'wordpress_logged_in_test=secret-cookie; path=/; secure',
-                    'Content-Type' => 'text/html; charset=UTF-8',
-                ]);
-            }
-
-            return Http::response('Unexpected request', 404);
-        });
-
-        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
 
         $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
             'target' => 'profile',
@@ -314,17 +336,21 @@ class ClientAccessTest extends TestCase
         ]);
 
         $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.status', 'pass')
+            ->assertJsonPath('diagnostics.overall.failing_stage', null)
+            ->assertJsonPath('diagnostics.stages.0.key', 'client_record')
+            ->assertJsonPath('diagnostics.stages.0.status', 'pass')
+            ->assertJsonPath('diagnostics.stages.4.key', 'session_link_mint')
+            ->assertJsonPath('diagnostics.stages.4.status', 'pass')
+            ->assertJsonPath('diagnostics.stages.6.key', 'token_consumed')
+            ->assertJsonPath('diagnostics.stages.6.status', 'pass')
+            ->assertJsonPath('diagnostics.stages.9.key', 'landing_session')
+            ->assertJsonPath('diagnostics.stages.9.status', 'pass')
+            // Legacy flat block stays readable for existing consumers.
             ->assertJsonPath('diagnostics.wordpress.response.url_shape', 'admin_post_consumer')
             ->assertJsonPath('diagnostics.wordpress.response.query_keys.0', 'action')
             ->assertJsonPath('diagnostics.wordpress.response.query_keys.1', 'token')
-            ->assertJsonPath('diagnostics.wordpress.response.target', 'profile')
-            ->assertJsonPath('diagnostics.wordpress.response.resolved_target', 'profile')
-            ->assertJsonPath('diagnostics.wordpress.response.target_url', 'https://kenya.example.test/escort/tracy/')
-            ->assertJsonPath('diagnostics.probe.attempted', true)
-            ->assertJsonPath('diagnostics.probe.consumes_generated_session', true)
             ->assertJsonPath('diagnostics.probe.status', 302)
-            ->assertJsonPath('diagnostics.probe.redirect_location', 'https://kenya.example.test/escort/tracy/')
-            ->assertJsonPath('diagnostics.probe.redirect_location_shape', 'ordinary_url')
             ->assertJsonPath('diagnostics.probe.has_set_cookie', true);
 
         $payload = json_encode($response->json());
@@ -332,7 +358,27 @@ class ClientAccessTest extends TestCase
         $this->assertStringNotContainsString('secret-cookie', $payload);
     }
 
-    public function test_client_session_debug_identifies_legacy_homepage_query_redirects(): void
+    public function test_client_session_debug_is_restricted_to_admins(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ])->assertForbidden();
+    }
+
+    public function test_client_session_debug_names_the_stage_that_breaks_the_login(): void
     {
         $platform = Platform::factory()->create([
             'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
@@ -345,46 +391,137 @@ class ClientAccessTest extends TestCase
             'wp_user_id' => 9001,
         ]);
         $baseUrl = rtrim((string) $platform->wp_api_url, '/');
-        $consumerUrl = 'https://kenya.example.test/?crm_client_session=legacy-secret-token';
+        $consumerUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=expired-token';
 
         Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
-            if ($request->url() === $baseUrl.'/clients/8517/session-link') {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
                 return Http::response([
                     'url' => $consumerUrl,
                     'expires_at' => '2026-04-03T08:45:00+00:00',
                     'target' => 'profile',
-                    'resolved_target' => 'home',
-                    'target_url' => 'https://kenya.example.test/',
-                    'profile_url' => null,
-                    'target_fallback_used' => true,
+                    'resolved_target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
                 ], 200);
             }
 
-            if ($request->url() === $consumerUrl) {
-                return Http::response('', 302, [
-                    'Location' => 'https://kenya.example.test/',
-                ]);
+            if ($url === $baseUrl.'/clients/8517') {
+                return Http::response(['post_author' => 9001], 200);
             }
 
-            return Http::response('Unexpected request', 404);
+            if ($url === $consumerUrl) {
+                return Http::response(
+                    '<html><body>This client session link is invalid or has expired.</body></html>',
+                    403,
+                    ['Content-Type' => 'text/html; charset=UTF-8']
+                );
+            }
+
+            return Http::response('', 200);
         });
 
-        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
 
         $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
             'target' => 'profile',
         ]);
 
         $response->assertOk()
-            ->assertJsonPath('diagnostics.wordpress.response.url_shape', 'legacy_home_query_consumer')
-            ->assertJsonPath('diagnostics.wordpress.response.resolved_target', 'home')
-            ->assertJsonPath('diagnostics.wordpress.response.target_url', 'https://kenya.example.test/')
-            ->assertJsonPath('diagnostics.wordpress.response.target_fallback_used', true)
-            ->assertJsonPath('diagnostics.probe.status', 302)
-            ->assertJsonPath('diagnostics.probe.redirect_location', 'https://kenya.example.test/')
-            ->assertJsonPath('diagnostics.probe.redirect_location_shape', 'homepage');
+            ->assertJsonPath('diagnostics.overall.status', 'fail')
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'token_consumed')
+            ->assertJsonPath('diagnostics.stages.6.status', 'fail')
+            // Everything downstream of the break is reported as unreached, not failed.
+            ->assertJsonPath('diagnostics.stages.7.status', 'skipped')
+            ->assertJsonPath('diagnostics.stages.9.status', 'skipped');
 
-        $this->assertStringNotContainsString('legacy-secret-token', json_encode($response->json()));
+        $this->assertStringContainsString('expired', strtolower((string) $response->json('diagnostics.overall.root_cause')));
+        $this->assertStringNotContainsString('expired-token', json_encode($response->json()));
+    }
+
+    public function test_client_session_debug_flags_a_cdn_challenge_in_front_of_wordpress(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        Http::fake(fn () => Http::response(
+            '<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>',
+            403,
+            ['Server' => 'cloudflare', 'Content-Type' => 'text/html']
+        ));
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.status', 'fail')
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'rest_reachable');
+
+        $this->assertStringContainsString(
+            'Cloudflare',
+            (string) $response->json('diagnostics.stages.2.facts.4.value')
+        );
+    }
+
+    public function test_client_session_debug_detects_a_www_apex_cookie_split(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://www.kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+        $consumerUrl = 'https://www.kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=split-token';
+        // The cookie is issued on www, but WordPress sends the browser to the apex.
+        $landingUrl = 'https://kenya.example.test/escort/tracy/';
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl, $landingUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'resolved_target' => 'profile',
+                    'target_url' => $landingUrl,
+                ], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, [
+                    'Location' => $landingUrl,
+                    'Set-Cookie' => 'wordpress_logged_in_9f2=cookie-value; path=/; domain=www.kenya.example.test; secure',
+                ]);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.status', 'fail')
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'host_alignment');
     }
 
     public function test_session_link_request_failure_returns_profile_fallback_and_logs_without_session_url(): void

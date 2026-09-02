@@ -34,6 +34,7 @@ use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientSyncService;
 use App\Services\ClientWpLinkRepairService;
+use App\Services\ClientSessionDiagnosticsService;
 use App\Services\CredentialDeliveryService;
 use App\Services\DealPaymentService;
 use App\Services\ExpiredSubscriptionReconciler;
@@ -87,6 +88,7 @@ class ClientController extends Controller
         private readonly LeadAssignmentService $leadAssignmentService,
         private readonly AuditService $auditService,
         private readonly CredentialDeliveryService $credentialDeliveryService,
+        private readonly ClientSessionDiagnosticsService $clientSessionDiagnosticsService,
         private readonly ClientWpLinkRepairService $clientWpLinkRepairService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ClientSeoPlaceholderService $clientSeoPlaceholderService,
@@ -4069,7 +4071,7 @@ class ClientController extends Controller
         $target = (string) ($validated['target'] ?? 'profile');
 
         try {
-            $diagnostics = $this->credentialDeliveryService->debugClientSessionLink($client, [
+            $diagnostics = $this->clientSessionDiagnosticsService->run($client, [
                 'target' => $target,
                 'reason' => $validated['reason'] ?? 'Client session debug from CRM',
                 'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#'.(int) $request->user()?->id))),
@@ -4078,18 +4080,6 @@ class ClientController extends Controller
             return response()->json([
                 'message' => $exception->getMessage(),
             ], 422);
-        } catch (RequestException $exception) {
-            Log::error('Client session debug request failed', [
-                'client_id' => (int) $client->id,
-                'platform_id' => (int) $client->platform_id,
-                'status' => $exception->response?->status(),
-                'error' => $exception->getMessage(),
-            ]);
-
-            return response()->json([
-                'message' => 'Client session debug could not create a WordPress session link.',
-                'status' => $exception->response?->status(),
-            ], 502);
         } catch (\Throwable $exception) {
             Log::error('Client session debug failed', [
                 'client_id' => (int) $client->id,
@@ -4102,8 +4092,29 @@ class ClientController extends Controller
             ], 500);
         }
 
+        // The probe mints and burns its own one-time token, so it is a real
+        // login-as-client event against the market and belongs in the audit
+        // trail even though no staff browser ever held the session.
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_SESSION_DIAGNOSTIC,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'target' => $target,
+                'verdict' => (string) data_get($diagnostics, 'overall.status', 'unknown'),
+                'failing_stage' => data_get($diagnostics, 'overall.failing_stage'),
+                'source' => $validated['source'] ?? 'crm.session_diagnostics',
+                'request_ip' => $request->ip(),
+            ],
+            (string) ($validated['reason'] ?? 'Client session diagnostics run')
+        );
+
         return response()->json([
-            'message' => 'Client session debug completed. The generated debug session link was consumed by the probe.',
+            'message' => 'Client session diagnostics completed. The probe minted and consumed its own one-time link.',
             'diagnostics' => $diagnostics,
         ]);
     }
