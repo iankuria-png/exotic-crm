@@ -478,6 +478,24 @@ class WpSyncService
         return $this->post('/lifecycle-policy', ['enabled' => $enabled ? 1 : 0]);
     }
 
+    /**
+     * Read back the lifecycle policy flag a market's WordPress site is actually
+     * running on.
+     *
+     * The CRM's `platforms.lifecycle_policy_enabled` is only a statement of intent.
+     * What decides whether the theme's legacy 5-minute sweep stands down is the
+     * `exotic_crm_lifecycle_policy_enabled` wp_option, and that is pushed from one
+     * place only — the market's lifecycle toggle in CRM settings. A market whose
+     * flag was set any other way (SQL, tinker, a seeder) still has a live
+     * destructive sweep, and nothing surfaced that until this reader existed.
+     *
+     * Read-only. Used by crm:check-lifecycle-policy-sync.
+     */
+    public function getLifecyclePolicy(): array
+    {
+        return $this->get('/lifecycle-policy');
+    }
+
     public function deleteClient(int $postId): array
     {
         return $this->delete("/clients/{$postId}/delete");
