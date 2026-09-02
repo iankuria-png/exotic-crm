@@ -371,8 +371,9 @@ class ClientSessionDiagnosticsService
         }
 
         $context['wp_result'] = is_array($result) ? $result : [];
-        $url = trim((string) ($context['wp_result']['url'] ?? ''));
+        $url = trim((string) ($context['wp_result']['admin_post_url'] ?? $context['wp_result']['url'] ?? ''));
         $context['session_url'] = $url;
+        $context['front_end_url'] = trim((string) ($context['wp_result']['front_end_url'] ?? ''));
 
         $facts = [
             $this->fact('Endpoint', $endpoint),
@@ -382,6 +383,7 @@ class ClientSessionDiagnosticsService
             $this->fact('Requested target', $context['target']),
             $this->fact('Resolved target', (string) ($context['wp_result']['resolved_target'] ?? $context['wp_result']['target'] ?? 'unknown')),
             $this->fact('Target URL', $this->sanitizeUrl($context['wp_result']['target_url'] ?? null) ?? 'none'),
+            $this->fact('Front-end transport', $context['front_end_url'] !== '' ? 'offered' : 'not offered by this plugin build'),
         ];
 
         if ($url === '') {
@@ -427,7 +429,7 @@ class ClientSessionDiagnosticsService
                 'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
         }
 
-        $probeUrl = $this->invalidTokenProbeUrl((string) $context['session_url']);
+        $probeUrl = self::invalidTokenProbeUrl((string) $context['session_url']);
         if ($probeUrl === null) {
             return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
                 'WordPress returned a malformed session URL.',
@@ -492,6 +494,23 @@ class ClientSessionDiagnosticsService
         if ($status >= 300 && $status < 400) {
             $byWordPress = $redirectBy !== null && stripos($redirectBy, 'wordpress') !== false;
 
+            $frontEnd = (string) ($context['front_end_url'] ?? '');
+            if ($frontEnd !== '' && $this->frontEndHandlerRuns($frontEnd)) {
+                // The live path makes this same switch, so the remaining
+                // stages must follow the transport that will really be used.
+                $context['session_url'] = $frontEnd;
+                $facts[] = $this->fact('Front-end transport', 'works — the rest of this trace uses it');
+
+                return $this->stage('consumer_reachable', 'Session handler executes', 'warn',
+                    'admin-post.php is intercepted on this market, so the front-end transport is being used instead.', $facts,
+                    ($byWordPress
+                        ? 'X-Redirect-By names WordPress, so an admin_init guard is sending logged-out visitors away from /wp-admin/. Those guards usually exempt admin-ajax.php and forget admin-post.php. '
+                        : 'Something ahead of the plugin answers /wp-admin/admin-post.php. ')
+                    .'Login as client still works because the CRM falls back to the front-end consumer automatically. Exempt admin-post.php from that guard if you want the cache-safe transport back.',
+                    $this->elapsed($started)
+                );
+            }
+
             return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
                 'The request was redirected away before the session handler ran.', $facts,
                 ($byWordPress
@@ -526,10 +545,37 @@ class ClientSessionDiagnosticsService
     }
 
     /**
+     * Does the front-end consumer actually execute? Probed the same way: only
+     * the plugin answers a deliberately invalid token with its own 403.
+     */
+    private function frontEndHandlerRuns(string $frontEndUrl): bool
+    {
+        $probeUrl = self::invalidTokenProbeUrl($frontEndUrl);
+        if ($probeUrl === null) {
+            return false;
+        }
+
+        try {
+            $response = Http::withOptions(['allow_redirects' => false])
+                ->timeout(self::REQUEST_TIMEOUT)
+                ->get($probeUrl);
+        } catch (\Throwable $exception) {
+            return false;
+        }
+
+        return $response->status() === 403
+            && (stripos((string) $response->body(), 'invalid or has expired') !== false
+                || stripos((string) $response->body(), 'Client session unavailable') !== false);
+    }
+
+    /** The throwaway token both the diagnostic and the live path probe with. */
+    public const INVALID_PROBE_TOKEN = 'exotic-crm-diagnostic-invalid-token';
+
+    /**
      * Rebuild the minted link with a token that cannot possibly be valid, so
      * the probe never burns the real one.
      */
-    private function invalidTokenProbeUrl(string $sessionUrl): ?string
+    public static function invalidTokenProbeUrl(string $sessionUrl): ?string
     {
         $parts = parse_url($sessionUrl);
         if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
@@ -537,7 +583,7 @@ class ClientSessionDiagnosticsService
         }
 
         parse_str((string) ($parts['query'] ?? ''), $query);
-        $invalid = 'exotic-crm-diagnostic-invalid-token';
+        $invalid = self::INVALID_PROBE_TOKEN;
 
         if (array_key_exists('token', $query)) {
             $query['token'] = $invalid;

@@ -11,8 +11,10 @@ use App\Services\Messaging\MessageRecipient;
 use App\Services\Messaging\MessagingDispatcher;
 use App\Support\ClientProfileUrl;
 use App\Support\PhoneNormalizer;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
@@ -176,16 +178,68 @@ class CredentialDeliveryService
             ]
         );
 
-        $url = trim((string) ($result['url'] ?? ''));
+        $adminPostUrl = trim((string) ($result['admin_post_url'] ?? $result['url'] ?? ''));
+        $frontEndUrl = trim((string) ($result['front_end_url'] ?? ''));
+
+        $url = $adminPostUrl !== '' ? $adminPostUrl : $frontEndUrl;
         if ($url === '') {
             throw new \RuntimeException('WordPress did not return a usable client session link.');
+        }
+
+        // Sites that harden /wp-admin/ redirect admin-post.php away before the
+        // plugin runs, and the resulting 302 looks exactly like a successful
+        // login. Check once per market and use the front-end consumer there.
+        $transport = 'admin_post';
+        if ($frontEndUrl !== '' && $adminPostUrl !== '' && ! $this->adminPostTransportWorks($platform, $adminPostUrl)) {
+            $url = $frontEndUrl;
+            $transport = 'front_end';
         }
 
         return [
             'url' => $url,
             'expires_at' => $result['expires_at'] ?? null,
             'target' => (string) ($result['target'] ?? $target),
+            'transport' => $transport,
         ];
+    }
+
+    /**
+     * True when the admin-post consumer actually executes on this market.
+     *
+     * Presenting a token that cannot be valid is what makes this reliable: only
+     * the plugin's own handler answers a bad token with a 403, so anything else
+     * — a redirect above all — means the handler never ran. The real one-time
+     * token is never spent here.
+     *
+     * Cached per market so an interactive login pays for this at most once an
+     * hour, and so the result heals itself once the site is fixed.
+     */
+    private function adminPostTransportWorks(Platform $platform, string $adminPostUrl): bool
+    {
+        return Cache::remember(
+            'crm.client_session_transport.'.(int) $platform->id,
+            now()->addHour(),
+            function () use ($adminPostUrl): bool {
+                $probeUrl = ClientSessionDiagnosticsService::invalidTokenProbeUrl($adminPostUrl);
+                if ($probeUrl === null) {
+                    return true;
+                }
+
+                try {
+                    $response = Http::withOptions(['allow_redirects' => false])
+                        ->timeout(10)
+                        ->get($probeUrl);
+                } catch (\Throwable $exception) {
+                    // Inconclusive: keep the established default rather than
+                    // switching transport on a transient network blip.
+                    return true;
+                }
+
+                return $response->status() === 403
+                    && (stripos((string) $response->body(), 'invalid or has expired') !== false
+                        || stripos((string) $response->body(), 'Client session unavailable') !== false);
+            }
+        );
     }
 
     private function normalizePayload(Client $client, array $payload): array

@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\CredentialDeliveryService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use App\Services\ClientSessionDiagnosticsService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
@@ -935,6 +936,118 @@ class ClientAccessTest extends TestCase
         );
     }
 
+    public function test_login_as_client_falls_back_to_the_front_end_transport_when_wp_admin_is_blocked(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+        $frontEndUrl = 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token';
+        $realTokenRequests = 0;
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl, $frontEndUrl, &$realTokenRequests) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => $frontEndUrl,
+                    'target' => 'profile',
+                ], 200);
+            }
+
+            if (str_contains($url, 'admin-post.php')) {
+                if (! str_contains($url, ClientSessionDiagnosticsService::INVALID_PROBE_TOKEN)) {
+                    $realTokenRequests++;
+                }
+
+                // An admin_init guard bounces it before the plugin runs.
+                return Http::response('', 302, [
+                    'Location' => 'https://kenya.example.test/',
+                    'X-Redirect-By' => 'WordPress',
+                ]);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'target' => 'profile',
+            'reason' => 'Opening the client profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('transport', 'front_end')
+            ->assertJsonPath('url', $frontEndUrl)
+            ->assertJsonPath('session_link_generated', true);
+
+        $this->assertSame(0, $realTokenRequests, 'The probe must never spend the real one-time token.');
+    }
+
+    public function test_login_as_client_keeps_admin_post_when_the_handler_runs(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+        $frontEndUrl = 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token';
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl, $frontEndUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => $frontEndUrl,
+                    'target' => 'profile',
+                ], 200);
+            }
+
+            if (str_contains($url, ClientSessionDiagnosticsService::INVALID_PROBE_TOKEN)) {
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'target' => 'profile',
+            'reason' => 'Opening the client profile',
+        ])->assertOk()
+            ->assertJsonPath('transport', 'admin_post')
+            ->assertJsonPath('url', $adminPostUrl);
+    }
+
+    public function test_login_as_client_keeps_admin_post_when_the_probe_cannot_conclude(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl) {
+            if ($request->url() === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token',
+                    'target' => 'profile',
+                ], 200);
+            }
+
+            // A blip during the probe must not silently switch transport.
+            throw new ConnectionException('cURL error 28: Operation timed out');
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'target' => 'profile',
+            'reason' => 'Opening the client profile',
+        ])->assertOk()
+            ->assertJsonPath('transport', 'admin_post');
+    }
+
     public function test_client_session_debug_catches_wp_admin_hardening_intercepting_the_handler(): void
     {
         [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
@@ -990,6 +1103,72 @@ class ClientAccessTest extends TestCase
         $facts = json_encode($response->json('diagnostics.stages.5.facts'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $this->assertStringContainsString('X-Redirect-By', $facts);
         $this->assertStringContainsString('Handler answered', $facts);
+    }
+
+    public function test_trace_continues_on_the_front_end_transport_when_admin_post_is_blocked(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+        $frontEndUrl = 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token';
+        $landingUrl = 'https://kenya.example.test/escort/tracy/';
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl, $frontEndUrl, $landingUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => $frontEndUrl,
+                    'target' => 'profile',
+                    'target_url' => $landingUrl,
+                ], 200);
+            }
+
+            if (str_contains($url, 'admin-post.php')) {
+                return Http::response('', 302, [
+                    'Location' => 'https://kenya.example.test/',
+                    'X-Redirect-By' => 'WordPress',
+                ]);
+            }
+
+            if (str_contains($url, ClientSessionDiagnosticsService::INVALID_PROBE_TOKEN)) {
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
+            if ($url === $frontEndUrl) {
+                return Http::response('', 302, [
+                    'Location' => $landingUrl,
+                    'Set-Cookie' => 'wordpress_logged_in_9f2=live; path=/; domain=kenya.example.test; secure',
+                ]);
+            }
+
+            if ($url === $landingUrl) {
+                return Http::response('<html><body class="logged-in"><div id="wpadminbar"></div></body></html>', 200);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        // A blocked admin-post is a warning, not a failure, once the fallback
+        // carries the login through to a logged-in page.
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.status', 'warn')
+            ->assertJsonPath('diagnostics.stages.5.status', 'warn')
+            ->assertJsonPath('diagnostics.stages.6.status', 'pass')
+            ->assertJsonPath('diagnostics.stages.7.status', 'pass')
+            ->assertJsonPath('diagnostics.stages.9.status', 'pass');
+
+        $this->assertStringContainsString(
+            'front-end transport',
+            (string) $response->json('diagnostics.stages.5.summary')
+        );
     }
 
     public function test_invalid_token_probe_never_burns_the_real_session_token(): void

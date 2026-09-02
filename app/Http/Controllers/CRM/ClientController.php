@@ -3992,6 +3992,7 @@ class ClientController extends Controller
 
         $expiresAt = $result['expires_at'] ?? null;
         $target = (string) ($result['target'] ?? $requestedTarget);
+        $transport = (string) ($result['transport'] ?? 'admin_post');
 
         TimelineEvent::create([
             'platform_id' => (int) $client->platform_id,
@@ -4004,6 +4005,7 @@ class ClientController extends Controller
                 'target' => $target,
                 'expires_at' => $expiresAt,
                 'session_link_generated' => true,
+                'transport' => $transport,
                 'source' => $validated['source'] ?? null,
             ],
             'created_at' => now(),
@@ -4055,6 +4057,7 @@ class ClientController extends Controller
             'url' => $result['url'],
             'expires_at' => $expiresAt,
             'target' => $target,
+            'transport' => $transport,
         ]);
     }
 
