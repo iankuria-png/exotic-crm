@@ -25,6 +25,13 @@ function formatNumber(value) {
     return new Intl.NumberFormat().format(Number.isFinite(number) ? number : 0);
 }
 
+function formatMonthYear(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
 function extractProfileCount(latestResult, platform) {
     const candidates = [
         latestResult?.stats?.total_profiles,
@@ -142,6 +149,15 @@ export default function SystemHealthWorkspace({
     const scheduler = diagnosticsQuery.data?.scheduler || null;
     const updates = updatesQuery.data || null;
     const updatesLog = updatesLogQuery.data || null;
+    const commitTotals = updates?.commit_totals || null;
+    const commitSince = formatMonthYear(commitTotals?.first_commit_at);
+    const commitsPerWeek = useMemo(() => {
+        const recent = Number(commitTotals?.last_30_days);
+        if (!Number.isFinite(recent) || recent <= 0) return null;
+        // 30 days is a shade over four weeks; one decimal keeps a low count honest
+        // instead of rounding "3 a week" up to "4".
+        return (Math.round((recent / (30 / 7)) * 10) / 10).toLocaleString();
+    }, [commitTotals?.last_30_days]);
 
     const platformTestMutation = useMutation({
         mutationFn: (platformId) => api.post(`/crm/settings/integrations/platforms/${platformId}/test-connection`, {
@@ -1112,6 +1128,53 @@ export default function SystemHealthWorkspace({
                                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Last deploy</p>
                                     <p className="mt-2 text-lg font-semibold text-slate-900">{updates?.last_deploy?.short_sha || 'Unknown'}</p>
                                     <p className="mt-1 text-xs text-slate-500">{formatDateTime(updates?.last_deploy?.deployed_at)}</p>
+                                </div>
+
+                                {/*
+                                    The four tiles above describe this deployment. This one describes
+                                    the repository, so it spans the row rather than sitting among them
+                                    as a fifth peer.
+                                */}
+                                <div className="rounded-lg border border-slate-200 bg-white p-3 sm:col-span-2">
+                                    <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+                                        <div>
+                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                                Total commits
+                                            </p>
+                                            {updatesQuery.isLoading ? (
+                                                <div className="mt-2 h-8 w-24 animate-pulse rounded bg-slate-200" aria-hidden="true" />
+                                            ) : (
+                                                <p className="mt-1 text-3xl font-semibold tabular-nums leading-tight text-slate-900">
+                                                    {commitTotals?.available
+                                                        ? formatNumber(commitTotals.total)
+                                                        : <span className="text-slate-400">&mdash;</span>}
+                                                </p>
+                                            )}
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {updatesQuery.isLoading
+                                                    ? 'Reading commit history…'
+                                                    : commitTotals?.available
+                                                        ? `on ${commitTotals.branch || 'the tracked branch'}${commitSince ? ` · since ${commitSince}` : ''}`
+                                                        : commitTotals?.message || 'Commit history is unavailable.'}
+                                            </p>
+                                        </div>
+
+                                        {!updatesQuery.isLoading && commitTotals?.available && commitTotals?.last_30_days !== null ? (
+                                            <div className="text-right">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                                    Last 30 days
+                                                </p>
+                                                <p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">
+                                                    {formatNumber(commitTotals.last_30_days)}
+                                                </p>
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    {commitTotals.last_30_days === 0
+                                                        ? 'No commits this month'
+                                                        : `${commitsPerWeek} per week on average`}
+                                                </p>
+                                            </div>
+                                        ) : null}
+                                    </div>
                                 </div>
                             </div>
 

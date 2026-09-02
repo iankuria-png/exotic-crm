@@ -15,6 +15,7 @@ use App\Support\CrmAuditAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
@@ -423,6 +424,59 @@ class SystemHealthUpdatesTest extends TestCase
             'status' => 'active',
             'assigned_market_ids' => $assignedMarketIds,
         ]);
+    }
+
+    public function test_updates_status_always_reports_repository_commit_totals(): void
+    {
+        // The Settings deploy panel renders this unconditionally, so the key and its
+        // shape must be present whether or not git history can actually be read.
+        Cache::flush();
+        $user = $this->createUser('sub_admin');
+        $this->configureDeploymentFixtures();
+        Http::fake(['https://api.github.com/*' => Http::response(['ahead_by' => 0, 'commits' => []], 200)]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/system-health/updates')
+            ->assertOk()
+            ->assertJsonStructure([
+                'commit_totals' => [
+                    'available',
+                    'total',
+                    'last_30_days',
+                    'first_commit_at',
+                    'branch',
+                    'message',
+                ],
+            ]);
+    }
+
+    public function test_commit_totals_degrade_when_the_checkout_has_no_git_history(): void
+    {
+        // Production is cPanel shared hosting; a checkout can be a tarball with no
+        // real .git, and exec may be disabled outright. The card must report that
+        // rather than take the whole deploy panel down with it.
+        //
+        // The fixture's git_dir holds a hand-written HEAD and refs but is not a real
+        // repository, so this also proves the count is pinned to the configured git
+        // dir: were it resolved from a path, git would walk up and silently report
+        // the surrounding project's history instead.
+        Cache::flush();
+        $user = $this->createUser('sub_admin');
+        $this->configureDeploymentFixtures();
+
+        Http::fake(['https://api.github.com/*' => Http::response(['ahead_by' => 0, 'commits' => []], 200)]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/settings/system-health/updates')->assertOk();
+
+        $this->assertFalse($response->json('commit_totals.available'));
+        $this->assertNull($response->json('commit_totals.total'));
+        $this->assertNotEmpty(
+            $response->json('commit_totals.message'),
+            'An unavailable state must explain itself; the card renders this message.'
+        );
     }
 
     private function configureDeploymentFixtures(array $overrides = []): array

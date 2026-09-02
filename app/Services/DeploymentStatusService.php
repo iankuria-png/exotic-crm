@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -30,7 +31,137 @@ class DeploymentStatusService
             'deploy_available' => $deployAvailability,
             'manual_deploy' => $manualDeploy,
             'last_deploy' => $this->lastDeploy($status, $deployedVersion),
+            'commit_totals' => $this->commitTotals($currentCheckout['sha'] ?? null),
         ];
+    }
+
+    /**
+     * How much has been built in this repository, as opposed to what is deployed
+     * right now — total commits on the checked-out branch, recent activity, and
+     * when the history starts.
+     *
+     * Read from the local checkout rather than the GitHub API: no token, no rate
+     * limit, no network round trip on a settings page load, and it describes the
+     * code actually on this server. Cached against the current HEAD sha, so a
+     * deploy invalidates it for free and a quiet week costs one git call.
+     *
+     * Everything here is best-effort. `exec` is disabled on some shared hosts and
+     * a checkout can be a tarball with no .git at all; the card degrades to an
+     * unavailable state rather than breaking the deploy panel around it.
+     *
+     * @return array{available:bool, total:int|null, last_30_days:int|null, first_commit_at:string|null, branch:string, message:string|null}
+     */
+    public function commitTotals(?string $headSha = null): array
+    {
+        $cacheKey = 'deployment:commit_totals:' . ($headSha ?: 'unknown');
+
+        return Cache::remember($cacheKey, now()->addHour(), function (): array {
+            $unavailable = fn (string $message): array => [
+                'available' => false,
+                'total' => null,
+                'last_30_days' => null,
+                'first_commit_at' => null,
+                'branch' => $this->trackedBranch(),
+                'message' => $message,
+            ];
+
+            if (! $this->canRunGit()) {
+                return $unavailable('Commit history needs shell access, which is disabled here.');
+            }
+
+            $total = $this->gitCount(['rev-list', '--count', 'HEAD']);
+            if ($total === null) {
+                return $unavailable('No git history is available in this checkout.');
+            }
+
+            return [
+                'available' => true,
+                'total' => $total,
+                'last_30_days' => $this->gitCount(['rev-list', '--count', '--since=30.days.ago', 'HEAD']),
+                'first_commit_at' => $this->firstCommitAt(),
+                'branch' => $this->trackedBranch(),
+                'message' => null,
+            ];
+        });
+    }
+
+    private function canRunGit(): bool
+    {
+        if (! function_exists('exec')) {
+            return false;
+        }
+
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+
+        return ! in_array('exec', $disabled, true);
+    }
+
+    /**
+     * Run a git command that yields a single integer, or null if it cannot.
+     *
+     * @param  array<int, string>  $args
+     */
+    private function gitCount(array $args): ?int
+    {
+        $output = $this->runGit($args);
+
+        if ($output === null || $output === '' || ! ctype_digit($output)) {
+            return null;
+        }
+
+        return (int) $output;
+    }
+
+    private function firstCommitAt(): ?string
+    {
+        // A repository can have more than one root (a merged history); the earliest
+        // is the one that answers "since when".
+        $output = $this->runGit(['log', '--max-parents=0', '--format=%cI', 'HEAD']);
+
+        if ($output === null || $output === '') {
+            return null;
+        }
+
+        $dates = array_filter(preg_split('/\R/', $output) ?: []);
+        sort($dates);
+
+        return $dates[0] ?? null;
+    }
+
+    /**
+     * @param  array<int, string>  $args
+     */
+    private function runGit(array $args): ?string
+    {
+        // Pinned to this deployment's git dir, never `git -C <path>`. Given a path,
+        // git walks UP until it finds a repository, so a misconfigured
+        // repository_path would silently report an ancestor repo's history as this
+        // project's. --git-dir is also how the rest of this service locates git
+        // metadata, so both paths agree on what "this checkout" means.
+        $gitDir = $this->resolvedGitDir();
+
+        if ($gitDir === '' || ! is_dir($gitDir)) {
+            return null;
+        }
+
+        $command = 'git --git-dir=' . escapeshellarg($gitDir) . ' '
+            . implode(' ', array_map('escapeshellarg', $args))
+            . ' 2>/dev/null';
+
+        $output = [];
+        $exitCode = 1;
+
+        try {
+            exec($command, $output, $exitCode);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($exitCode !== 0) {
+            return null;
+        }
+
+        return trim(implode("\n", $output));
     }
 
     public function logSnapshot(int $lines = 80): array
