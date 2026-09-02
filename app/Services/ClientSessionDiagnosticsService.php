@@ -23,7 +23,21 @@ use Illuminate\Support\Facades\Http;
  */
 class ClientSessionDiagnosticsService
 {
-    private const REQUEST_TIMEOUT = 8;
+    /**
+     * Per-hop ceiling. Markets routinely take 3-10s just to answer a REST
+     * namespace index, so a tight timeout reports a working-but-slow site as
+     * unreachable. This must stay comfortably above the slowest healthy market.
+     */
+    private const REQUEST_TIMEOUT = 30;
+
+    /** A hop slower than this is correct but not healthy — worth reporting. */
+    private const SLOW_MS = 3000;
+
+    /**
+     * Ceiling for the whole run, so a market that is slow on every hop cannot
+     * outlive the browser request that is waiting on it.
+     */
+    private const TOTAL_BUDGET = 120;
 
     private const SENSITIVE_QUERY_KEYS = ['token', 'crm_client_session', '_wpnonce', 'password', 'pass', 'key'];
 
@@ -47,6 +61,7 @@ class ClientSessionDiagnosticsService
             'issued_by' => trim((string) ($payload['issued_by'] ?? 'crm-debug')),
             'reason' => trim((string) ($payload['reason'] ?? 'Client session debug from CRM')),
             'jar' => new CookieJar(),
+            'deadline' => microtime(true) + self::TOTAL_BUDGET,
             'wp_result' => [],
             'session_url' => '',
         ];
@@ -62,6 +77,8 @@ class ClientSessionDiagnosticsService
         $stages[] = $this->stageAuthCookie($context, $stages);
         $stages[] = $this->stageHostAlignment($context, $stages);
         $stages[] = $this->stageLandingSession($context, $stages);
+
+        $stages = $this->flagSlowStages($stages);
 
         return [
             'generated_at' => now()->toIso8601String(),
@@ -166,6 +183,12 @@ class ClientSessionDiagnosticsService
             return $this->stage('rest_reachable', 'WordPress REST endpoint reachable', 'skipped', 'Skipped — an earlier stage failed.', []);
         }
 
+        if ($this->outOfBudget($context)) {
+            return $this->stage('rest_reachable', 'WordPress REST endpoint reachable', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
+        }
+
         $url = rtrim((string) $context['platform']->wp_api_url, '/');
         $started = microtime(true);
 
@@ -174,14 +197,13 @@ class ClientSessionDiagnosticsService
                 ->timeout(self::REQUEST_TIMEOUT)
                 ->get($url);
         } catch (\Throwable $exception) {
-            return $this->stage('rest_reachable', 'WordPress REST endpoint reachable', 'fail',
-                'Could not connect to the market REST endpoint.',
-                [
-                    $this->fact('URL', $url),
-                    $this->fact('Error', $this->scrub($exception->getMessage())),
-                ],
-                'The CRM cannot reach the site at all. Check DNS, the market REST base URL, and whether the origin is up.',
-                $this->elapsed($started)
+            return $this->connectionFailureStage(
+                'rest_reachable',
+                'WordPress REST endpoint reachable',
+                $url,
+                $exception,
+                $started,
+                'the market REST endpoint'
             );
         }
 
@@ -229,6 +251,12 @@ class ClientSessionDiagnosticsService
             return $this->stage('rest_authenticated', 'CRM authenticates to WordPress', 'skipped', 'Skipped — an earlier stage failed.', []);
         }
 
+        if ($this->outOfBudget($context)) {
+            return $this->stage('rest_authenticated', 'CRM authenticates to WordPress', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
+        }
+
         /** @var Client $client */
         $client = $context['client'];
         $connection = WordPressSiteConnection::fromPlatform($context['platform']);
@@ -241,11 +269,13 @@ class ClientSessionDiagnosticsService
                 ->timeout(self::REQUEST_TIMEOUT)
                 ->get($url);
         } catch (\Throwable $exception) {
-            return $this->stage('rest_authenticated', 'CRM authenticates to WordPress', 'fail',
-                'The authenticated profile lookup could not connect.',
-                [$this->fact('URL', $url), $this->fact('Error', $this->scrub($exception->getMessage()))],
-                'Transient network failure or a blocked origin. Retry, then check the market host firewall.',
-                $this->elapsed($started)
+            return $this->connectionFailureStage(
+                'rest_authenticated',
+                'CRM authenticates to WordPress',
+                $url,
+                $exception,
+                $started,
+                'the authenticated profile lookup'
             );
         }
 
@@ -308,6 +338,12 @@ class ClientSessionDiagnosticsService
     {
         if ($this->blocked($stages)) {
             return $this->stage('session_link_mint', 'WordPress mints a session link', 'skipped', 'Skipped — an earlier stage failed.', []);
+        }
+
+        if ($this->outOfBudget($context)) {
+            return $this->stage('session_link_mint', 'WordPress mints a session link', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
         }
 
         /** @var Client $client */
@@ -374,6 +410,12 @@ class ClientSessionDiagnosticsService
             return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'skipped', 'Skipped — no session link to test.', []);
         }
 
+        if ($this->outOfBudget($context)) {
+            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
+        }
+
         $origin = $this->origin($context['session_url']);
         $path = (string) (parse_url($context['session_url'], PHP_URL_PATH) ?: '/');
         if ($origin === null) {
@@ -390,11 +432,13 @@ class ClientSessionDiagnosticsService
                 ->timeout(self::REQUEST_TIMEOUT)
                 ->get($probeUrl);
         } catch (\Throwable $exception) {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'fail',
-                'The session consumer endpoint could not be reached.',
-                [$this->fact('URL', $probeUrl), $this->fact('Error', $this->scrub($exception->getMessage()))],
-                'The token-consuming endpoint is unreachable, so no session link can ever complete.',
-                $this->elapsed($started)
+            return $this->connectionFailureStage(
+                'consumer_reachable',
+                'Session consumer endpoint reachable',
+                $probeUrl,
+                $exception,
+                $started,
+                'the session consumer endpoint'
             );
         }
 
@@ -439,6 +483,12 @@ class ClientSessionDiagnosticsService
     {
         if ($this->blocked($stages) || $context['session_url'] === '') {
             return $this->stage('token_consumed', 'One-time token is accepted', 'skipped', 'Skipped — no session link to test.', []);
+        }
+
+        if ($this->outOfBudget($context)) {
+            return $this->stage('token_consumed', 'One-time token is accepted', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
         }
 
         $started = microtime(true);
@@ -560,7 +610,6 @@ class ClientSessionDiagnosticsService
         if ($this->blocked($stages)) {
             return $this->stage('host_alignment', 'Cookie and destination hosts match', 'skipped', 'Skipped — no login cookie to align.', []);
         }
-
         $cookieDomain = ltrim((string) ($context['cookie_domain'] ?? ''), '.');
         $consumerHost = (string) (parse_url((string) $context['session_url'], PHP_URL_HOST) ?: '');
         $redirectHost = (string) (parse_url((string) ($context['consumer_location'] ?? ''), PHP_URL_HOST) ?: '');
@@ -602,6 +651,12 @@ class ClientSessionDiagnosticsService
         $location = (string) ($context['consumer_location'] ?? '');
         if ($this->blocked($stages) || $location === '') {
             return $this->stage('landing_session', 'Client lands logged in', 'skipped', 'Skipped — there is no destination to open.', []);
+        }
+
+        if ($this->outOfBudget($context)) {
+            return $this->stage('landing_session', 'Client lands logged in', 'skipped',
+                'Skipped — the run exceeded its time budget.', [],
+                'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
         }
 
         $started = microtime(true);
@@ -776,6 +831,85 @@ class ClientSessionDiagnosticsService
     private function fact(string $label, string $value): array
     {
         return ['label' => $label, 'value' => $value];
+    }
+
+    /**
+     * A request that times out with zero bytes is NOT the same as an origin
+     * that is down: markets here routinely need 3-10s to answer, and calling
+     * that "cannot reach the site" sends people chasing DNS for a slow query.
+     */
+    private function connectionFailureStage(
+        string $key,
+        string $label,
+        string $url,
+        \Throwable $exception,
+        float $started,
+        string $subject
+    ): array {
+        $message = $this->scrub($exception->getMessage(), $url);
+        $timedOut = $this->looksLikeTimeout($message);
+
+        $facts = [
+            $this->fact('URL', $url),
+            $this->fact('Timeout ceiling', self::REQUEST_TIMEOUT.'s'),
+            $this->fact('Waited', $this->elapsed($started).' ms'),
+            $this->fact('Error', $message),
+        ];
+
+        if ($timedOut) {
+            return $this->stage($key, $label, 'fail',
+                ucfirst($subject).' did not answer within '.self::REQUEST_TIMEOUT.'s.',
+                $facts,
+                'The connection opened but WordPress never sent a response, so this is slowness rather than an unreachable host — DNS and TLS are fine. Look for a slow plugin or database query on the market site, and re-run to see whether it is intermittent.',
+                $this->elapsed($started)
+            );
+        }
+
+        return $this->stage($key, $label, 'fail',
+            'Could not connect to '.$subject.'.',
+            $facts,
+            'The connection itself failed. Check DNS, the market REST base URL, TLS, and whether the origin is up.',
+            $this->elapsed($started)
+        );
+    }
+
+    private function looksLikeTimeout(string $message): bool
+    {
+        $haystack = strtolower($message);
+
+        foreach (['timed out', 'timeout', 'curl error 28', 'operation too slow'] as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * A hop that answers correctly but takes seconds is still a defect worth
+     * naming — it is what makes the popup sit on a blank page long enough for
+     * staff to give up and call the feature broken.
+     */
+    private function flagSlowStages(array $stages): array
+    {
+        foreach ($stages as $index => $stage) {
+            if ($stage['status'] !== 'pass' || ! is_int($stage['duration_ms']) || $stage['duration_ms'] < self::SLOW_MS) {
+                continue;
+            }
+
+            $seconds = round($stage['duration_ms'] / 1000, 1);
+            $stages[$index]['status'] = 'warn';
+            $stages[$index]['summary'] = rtrim($stage['summary'], '.').', but took '.$seconds.'s to answer.';
+            $stages[$index]['hint'] = 'This hop is correct but slow ('.$seconds.'s). Staff experience that as a tab sitting blank, and it leaves less headroom before any timeout. Profile the market site for slow plugins or queries.';
+        }
+
+        return $stages;
+    }
+
+    private function outOfBudget(array $context): bool
+    {
+        return microtime(true) >= (float) ($context['deadline'] ?? 0);
     }
 
     private function blocked(array $stages): bool

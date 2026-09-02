@@ -137,7 +137,9 @@ export default function ClientSessionDiagnosticsPanel({ open, onClose, client, i
 
     const runMutation = useMutation({
         mutationFn: (payload) => api
-            .post(`/crm/clients/${client.id}/login-as-client/debug`, payload)
+            // Markets can take 3-10s per hop, so the whole trace legitimately
+            // outlives the shared 60s ceiling. The server caps its own run.
+            .post(`/crm/clients/${client.id}/login-as-client/debug`, payload, { timeout: 180_000 })
             .then((response) => response.data),
         onSuccess: (data) => {
             const diagnostics = data?.diagnostics || null;
@@ -311,7 +313,7 @@ export default function ClientSessionDiagnosticsPanel({ open, onClose, client, i
                     <p className="mt-2 text-[11px] text-slate-500">
                         Runs the real flow server-side against this market: mints a one-time link, consumes it, and follows the
                         redirect with a cookie jar. It burns its own token, so it never invalidates a link staff are using.
-                        Secrets are redacted from the report.
+                        Secrets are redacted from the report. A slow market can take a minute or two to trace.
                     </p>
                 </header>
 

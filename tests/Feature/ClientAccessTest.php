@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\CredentialDeliveryService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Mockery\MockInterface;
@@ -474,6 +475,74 @@ class ClientAccessTest extends TestCase
         );
     }
 
+    public function test_client_session_debug_separates_a_slow_endpoint_from_an_unreachable_one(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        // cURL 28 means the connection opened and WordPress simply never
+        // answered. Reporting that as "cannot reach the site" sent people
+        // chasing DNS for what was actually a slow market.
+        Http::fake(fn () => throw new ConnectionException(
+            'cURL error 28: Operation timed out after 30001 milliseconds with 0 bytes received'
+        ));
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'rest_reachable');
+
+        $summary = (string) $response->json('diagnostics.stages.2.summary');
+        $hint = (string) $response->json('diagnostics.stages.2.hint');
+
+        $this->assertStringContainsString('did not answer within', $summary);
+        $this->assertStringContainsString('slowness rather than an unreachable host', $hint);
+        $this->assertStringNotContainsString('Check DNS', $hint);
+    }
+
+    public function test_client_session_debug_reports_a_genuine_connection_failure_as_such(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        Http::fake(fn () => throw new ConnectionException(
+            'cURL error 6: Could not resolve host: kenya.example.test'
+        ));
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'rest_reachable');
+
+        $this->assertStringContainsString(
+            'Check DNS',
+            (string) $response->json('diagnostics.stages.2.hint')
+        );
+    }
     public function test_client_session_debug_detects_a_www_apex_cookie_split(): void
     {
         $platform = Platform::factory()->create([
