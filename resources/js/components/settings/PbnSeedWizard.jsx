@@ -186,6 +186,12 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         },
     });
 
+    const selectedTargetKeys = useMemo(() => new Set(targets.map((target) => targetKey(target))), [targets]);
+    const allocatedTotal = useMemo(
+        () => targets.reduce((sum, target) => sum + Math.max(0, Number(target.target_count) || 0), 0),
+        [targets],
+    );
+
     if (!open || !site) return null;
 
     const preview = previewMutation.data;
@@ -199,12 +205,6 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         && selectedClientIds.length > 0
         && (!hasDuplicateWarnings || duplicateAcknowledged)
         && !queueMutation.isPending;
-
-    const selectedTargetKeys = useMemo(() => new Set(targets.map((target) => targetKey(target))), [targets]);
-    const allocatedTotal = useMemo(
-        () => targets.reduce((sum, target) => sum + Math.max(0, Number(target.target_count) || 0), 0),
-        [targets],
-    );
 
     const resetPreview = () => {
         previewMutation.reset();
