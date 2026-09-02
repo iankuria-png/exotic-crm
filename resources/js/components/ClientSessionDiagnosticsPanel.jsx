@@ -18,7 +18,7 @@ const STAGE_BLUEPRINT = [
     { key: 'rest_reachable', label: 'WordPress REST endpoint reachable' },
     { key: 'rest_authenticated', label: 'CRM authenticates to WordPress' },
     { key: 'session_link_mint', label: 'WordPress mints a session link' },
-    { key: 'consumer_reachable', label: 'Session consumer endpoint reachable' },
+    { key: 'consumer_reachable', label: 'Session handler executes' },
     { key: 'token_consumed', label: 'One-time token is accepted' },
     { key: 'auth_cookie', label: 'Login cookie issued' },
     { key: 'host_alignment', label: 'Cookie and destination hosts match' },

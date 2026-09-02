@@ -306,7 +306,15 @@ class ClientAccessTest extends TestCase
                 ]);
             }
 
-            // admin-post.php reachability probe and anything else.
+            // The invalid-token probe: only the plugin's own handler answers
+            // a bad token with a 403 carrying this text.
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response(
+                    '<html><body>This client session link is invalid or has expired.</body></html>',
+                    403
+                );
+            }
+
             return Http::response('', 200);
         });
     }
@@ -409,6 +417,10 @@ class ClientAccessTest extends TestCase
 
             if ($url === $baseUrl.'/clients/8517') {
                 return Http::response(['post_author' => 9001], 200);
+            }
+
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
             }
 
             if ($url === $consumerUrl) {
@@ -581,6 +593,13 @@ class ClientAccessTest extends TestCase
                 ], 200);
             }
 
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response(
+                    '<html><body>This client session link is invalid or has expired.</body></html>',
+                    403
+                );
+            }
+
             if ($url === $consumerUrl) {
                 return Http::response('', 302, $consumerHeaders);
             }
@@ -654,6 +673,10 @@ class ClientAccessTest extends TestCase
                 ], 200);
             }
 
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
             if ($url === $consumerUrl) {
                 return Http::response('', 302, [
                     'Location' => 'https://kenya.example.test/escort/tracy/',
@@ -713,6 +736,10 @@ class ClientAccessTest extends TestCase
                 ], 200);
             }
 
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
             if ($url === $consumerUrl) {
                 return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
             }
@@ -751,6 +778,10 @@ class ClientAccessTest extends TestCase
 
             if ($url === $baseUrl.'/session-doctor') {
                 return Http::response(['code' => 'rest_no_route'], 404);
+            }
+
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
             }
 
             if ($url === $consumerUrl) {
@@ -809,6 +840,10 @@ class ClientAccessTest extends TestCase
                     'php_set_cookie_header_count' => 1,
                     'php_wrote_probe' => true,
                 ], 200);
+            }
+
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
             }
 
             if ($url === $consumerUrl) {
@@ -870,6 +905,10 @@ class ClientAccessTest extends TestCase
                 );
             }
 
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
             if ($url === $consumerUrl) {
                 return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
             }
@@ -893,6 +932,109 @@ class ClientAccessTest extends TestCase
                 $response->json('diagnostics.stages.7.facts'),
                 JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
             )
+        );
+    }
+
+    public function test_client_session_debug_catches_wp_admin_hardening_intercepting_the_handler(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            // An admin_init guard bounces every /wp-admin/ hit for logged-out
+            // visitors, so the plugin's handler never runs. Both the invalid
+            // token and a real one get the same content-free 302, which is
+            // indistinguishable from a successful login redirect.
+            if (str_contains($url, 'admin-post.php')) {
+                return Http::response('', 302, [
+                    'Location' => 'https://kenya.example.test/',
+                    'X-Redirect-By' => 'WordPress',
+                ]);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            // The fault is the handler never running, NOT a missing cookie —
+            // blaming the cookie stage sent us chasing WordPress auth internals
+            // for a request that never reached WordPress auth at all.
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'consumer_reachable')
+            ->assertJsonPath('diagnostics.stages.5.status', 'fail')
+            ->assertJsonPath('diagnostics.stages.6.status', 'skipped')
+            ->assertJsonPath('diagnostics.stages.7.status', 'skipped');
+
+        $summary = (string) $response->json('diagnostics.stages.5.summary');
+        $hint = (string) $response->json('diagnostics.stages.5.hint');
+
+        $this->assertStringContainsString('redirected away before the session handler ran', $summary);
+        $this->assertStringContainsString('admin_init', $hint);
+        $this->assertStringContainsString('admin-post.php', $hint);
+        $this->assertStringContainsString('front-end transport', $hint);
+
+        $facts = json_encode($response->json('diagnostics.stages.5.facts'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $this->assertStringContainsString('X-Redirect-By', $facts);
+        $this->assertStringContainsString('Handler answered', $facts);
+    }
+
+    public function test_invalid_token_probe_never_burns_the_real_session_token(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+        $seenTokens = [];
+
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl, &$seenTokens) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if (str_contains($url, 'admin-post.php')) {
+                parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+                $seenTokens[] = (string) ($query['token'] ?? '');
+
+                if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                    return Http::response('This client session link is invalid or has expired.', 403);
+                }
+
+                return Http::response('', 302, ['Location' => 'https://kenya.example.test/escort/tracy/']);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ])->assertOk();
+
+        // The probe must present its own throwaway token; the real one is
+        // single-use and is spent by the consume stage alone.
+        $this->assertContains('exotic-crm-diagnostic-invalid-token', $seenTokens);
+        $this->assertSame(
+            1,
+            count(array_filter($seenTokens, fn (string $token) => $token === 'probe-token')),
+            'The real one-time token must be presented exactly once.'
         );
     }
 
@@ -1002,6 +1144,10 @@ class ClientAccessTest extends TestCase
                     'resolved_target' => 'profile',
                     'target_url' => $landingUrl,
                 ], 200);
+            }
+
+            if (str_contains($url, 'exotic-crm-diagnostic-invalid-token')) {
+                return Http::response('This client session link is invalid or has expired.', 403);
             }
 
             if ($url === $consumerUrl) {

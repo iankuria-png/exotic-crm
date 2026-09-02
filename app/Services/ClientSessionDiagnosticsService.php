@@ -404,27 +404,37 @@ class ClientSessionDiagnosticsService
             'A one-time session link was minted for the requested target.', $facts, null, $this->elapsed($started));
     }
 
+    /**
+     * Prove the session handler actually EXECUTES, rather than merely proving
+     * the URL answers. Those are different questions, and conflating them hid a
+     * real fault: wp-admin hardening can redirect the request away before the
+     * plugin ever runs, and the resulting 302 looks indistinguishable from a
+     * successful login redirect.
+     *
+     * The test is to present a deliberately invalid token. Only the plugin's
+     * own handler produces a 403 for that, so a 403 is positive proof it ran —
+     * and anything else means something answered in its place.
+     */
     private function stageConsumerReachable(array &$context, array $stages): array
     {
         if ($this->blocked($stages) || $context['session_url'] === '') {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'skipped', 'Skipped — no session link to test.', []);
+            return $this->stage('consumer_reachable', 'Session handler executes', 'skipped', 'Skipped — no session link to test.', []);
         }
 
         if ($this->outOfBudget($context)) {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'skipped',
+            return $this->stage('consumer_reachable', 'Session handler executes', 'skipped',
                 'Skipped — the run exceeded its time budget.', [],
                 'Earlier hops on this market were slow enough to use up the run budget. Fix the slow hops flagged above, then re-run to trace the rest of the pipeline.');
         }
 
-        $origin = $this->origin($context['session_url']);
-        $path = (string) (parse_url($context['session_url'], PHP_URL_PATH) ?: '/');
-        if ($origin === null) {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'fail',
-                'WordPress returned a malformed session URL.', [$this->fact('Link', $this->sanitizeUrl($context['session_url']) ?? '')],
+        $probeUrl = $this->invalidTokenProbeUrl((string) $context['session_url']);
+        if ($probeUrl === null) {
+            return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
+                'WordPress returned a malformed session URL.',
+                [$this->fact('Link', $this->sanitizeUrl($context['session_url']) ?? '')],
                 'The plugin built an invalid URL. Confirm the market\'s WordPress Address (siteurl) option is a full absolute URL.');
         }
 
-        $probeUrl = $origin.$path;
         $started = microtime(true);
 
         try {
@@ -434,7 +444,7 @@ class ClientSessionDiagnosticsService
         } catch (\Throwable $exception) {
             return $this->connectionFailureStage(
                 'consumer_reachable',
-                'Session consumer endpoint reachable',
+                'Session handler executes',
                 $probeUrl,
                 $exception,
                 $started,
@@ -442,41 +452,106 @@ class ClientSessionDiagnosticsService
             );
         }
 
-        $challenge = $this->detectEdgeChallenge($response->status(), $response->headers(), (string) $response->body());
+        $status = $response->status();
+        $body = (string) $response->body();
+        $location = $response->header('Location');
+        $redirectBy = $this->header($response->headers(), 'X-Redirect-By');
+        $handlerAnswered = $status === 403
+            && (stripos($body, 'invalid or has expired') !== false || stripos($body, 'Client session unavailable') !== false);
+
         $facts = [
-            $this->fact('URL (no token)', $probeUrl),
-            $this->fact('HTTP status', (string) $response->status()),
-            $this->fact('Server', $this->header($response->headers(), 'Server') ?: 'unknown'),
+            $this->fact('Probe', 'deliberately invalid token'),
+            $this->fact('URL', $this->sanitizeUrl($probeUrl) ?? ''),
+            $this->fact('HTTP status', (string) $status),
+            $this->fact('Handler answered', $handlerAnswered ? 'yes — rejected the bad token' : 'no'),
         ];
 
+        if ($location) {
+            $facts[] = $this->fact('Redirected to', $this->sanitizeUrl($location) ?? '');
+        }
+        if ($redirectBy) {
+            $facts[] = $this->fact('X-Redirect-By', $redirectBy);
+        }
+
+        $challenge = $this->detectEdgeChallenge($status, $response->headers(), $body);
         if ($challenge) {
             $facts[] = $this->fact('Edge challenge', $challenge);
 
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'fail',
+            return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
                 'A CDN/WAF challenge protects the session consumer endpoint.', $facts,
-                'The edge is challenging '.$path.'. Staff browsers get the challenge instead of the login redirect, which is exactly the "opens logged out" symptom. Exclude this path from the managed challenge.',
+                'The edge is challenging this path, so staff browsers get the challenge instead of a login. Exclude it from the managed challenge.',
                 $this->elapsed($started)
             );
         }
 
-        if (in_array($response->status(), [401, 403], true)) {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'fail',
-                'The session consumer endpoint is blocked ('.$response->status().').', $facts,
-                'Something in front of WordPress (a security plugin, a host rule, or an .htaccess deny on /wp-admin/) is blocking '.$path.' for logged-out visitors. The session link must be reachable while logged out — that is the entire point of it.',
+        if ($handlerAnswered) {
+            return $this->stage('consumer_reachable', 'Session handler executes', 'pass',
+                'The session handler ran and correctly rejected an invalid token.', $facts, null, $this->elapsed($started));
+        }
+
+        if ($status >= 300 && $status < 400) {
+            $byWordPress = $redirectBy !== null && stripos($redirectBy, 'wordpress') !== false;
+
+            return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
+                'The request was redirected away before the session handler ran.', $facts,
+                ($byWordPress
+                    ? 'X-Redirect-By names WordPress, so PHP booted and something inside WordPress redirected the request — typically an admin_init guard that sends non-administrators away from /wp-admin/. Those guards usually exempt admin-ajax.php but forget admin-post.php, which is exactly the URL this session link uses. '
+                    : 'Something ahead of the plugin answered instead of it. ')
+                .'An invalid token must produce a 403 from the plugin; a redirect means the handler never executed, and every login-as-client target will fail identically. Either exempt admin-post.php from that guard, or move the session link onto the plugin\'s front-end transport, which is not affected by wp-admin hardening.',
                 $this->elapsed($started)
             );
         }
 
-        if ($response->status() >= 500) {
-            return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'fail',
+        if (in_array($status, [401, 403], true)) {
+            return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
+                'The session consumer endpoint is blocked ('.$status.').', $facts,
+                'The 403 did not come from the plugin, so something in front of WordPress is refusing this path for logged-out visitors. The session link must be reachable while logged out — that is the entire point of it.',
+                $this->elapsed($started)
+            );
+        }
+
+        if ($status >= 500) {
+            return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
                 'The session consumer endpoint returned a server error.', $facts,
-                'Check the market site PHP error log for a fatal on '.$path.'.',
+                'Check the market site PHP error log for a fatal on this path.',
                 $this->elapsed($started)
             );
         }
 
-        return $this->stage('consumer_reachable', 'Session consumer endpoint reachable', 'pass',
-            'The endpoint that consumes the token answers for logged-out visitors.', $facts, null, $this->elapsed($started));
+        return $this->stage('consumer_reachable', 'Session handler executes', 'fail',
+            'An invalid token was not rejected, so the session handler is not running.', $facts,
+            'Something other than the plugin served this request. Confirm exotic-crm-sync is active on this market and that nothing intercepts this path for logged-out visitors.',
+            $this->elapsed($started)
+        );
+    }
+
+    /**
+     * Rebuild the minted link with a token that cannot possibly be valid, so
+     * the probe never burns the real one.
+     */
+    private function invalidTokenProbeUrl(string $sessionUrl): ?string
+    {
+        $parts = parse_url($sessionUrl);
+        if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return null;
+        }
+
+        parse_str((string) ($parts['query'] ?? ''), $query);
+        $invalid = 'exotic-crm-diagnostic-invalid-token';
+
+        if (array_key_exists('token', $query)) {
+            $query['token'] = $invalid;
+        } elseif (array_key_exists('crm_client_session', $query)) {
+            $query['crm_client_session'] = $invalid;
+        } else {
+            $query['token'] = $invalid;
+        }
+
+        $rebuilt = $parts['scheme'].'://'.$parts['host']
+            .(isset($parts['port']) ? ':'.$parts['port'] : '')
+            .($parts['path'] ?? '');
+
+        return $rebuilt.'?'.http_build_query($query);
     }
 
     private function stageConsumeToken(array &$context, array $stages): array
