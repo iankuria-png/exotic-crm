@@ -14,16 +14,133 @@ use App\Services\WalletPayloadService;
 use App\Services\BillingModeService;
 use App\Models\BillingSubscriptionRule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
+/**
+ * Locks the shape of the billing payloads WordPress and the CRM UI depend on.
+ *
+ * These used to be recorders: each test hit an endpoint and wrote the response
+ * straight over its baseline, so a genuine regression in these payloads could
+ * never fail the suite, and every run left the working tree dirty because the
+ * payloads carry a wall-clock timestamp and a faker-generated provider reference.
+ *
+ * They now assert. The clock is frozen and the volatile references are pinned, so
+ * a diff means the payload actually changed. When a change is intended, re-record
+ * with:
+ *
+ *     UPDATE_BILLING_SNAPSHOTS=1 php artisan test --filter=BaselineDiagnosticsSnapshotTest
+ *
+ * and commit the updated baselines alongside the change that caused them.
+ */
 class BaselineDiagnosticsSnapshotTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_capture_diagnostics_baseline_snapshot(): void
+    /**
+     * Frozen so every now()-derived field in these payloads is reproducible.
+     * Matches the hardcoded instants the WordPress sync fixtures already use.
+     */
+    private const SNAPSHOT_NOW = '2026-04-03T12:00:00+00:00';
+
+    /** Pinned so the faker-generated TXN-####?? reference stops churning the baselines. */
+    private const SNAPSHOT_TRANSACTION_REFERENCE = 'TXN-BASELINE-0001';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->travelTo(Carbon::parse(self::SNAPSHOT_NOW));
+    }
+
+    protected function tearDown(): void
+    {
+        $this->travelBack();
+
+        parent::tearDown();
+    }
+
+    /**
+     * Keys whose value is unreproducible by design and must not be pinned.
+     *
+     * A link-proxy token hash is derived from a freshly minted single-use secret;
+     * making it reproducible would defeat its purpose. Only its presence and shape
+     * matter here, so it is redacted before comparison.
+     */
+    private const REDACTED_KEYS = ['token_hash'];
+
+    /**
+     * Normalise a payload so only its shape and its meaningful values are compared.
+     *
+     * Anything keyed `*_ms` is a measured wall-clock latency — it varies run to run
+     * and on CI hardware, and pinning it would make the suite flaky rather than
+     * strict. Nulls are preserved, because "no measurement" is itself meaningful.
+     *
+     * @param  array<mixed>  $payload
+     * @return array<mixed>
+     */
+    private function normaliseVolatile(array $payload): array
+    {
+        foreach ($payload as $key => $value) {
+            if (is_array($value)) {
+                $payload[$key] = $this->normaliseVolatile($value);
+
+                continue;
+            }
+
+            if ($value === null) {
+                continue;
+            }
+
+            if (in_array($key, self::REDACTED_KEYS, true)) {
+                $payload[$key] = '[redacted]';
+            } elseif (is_string($key) && str_ends_with($key, '_ms')) {
+                $payload[$key] = 0;
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Compare a payload against its committed baseline.
+     *
+     * Encoding must stay byte-identical to how the baselines were written
+     * (JSON_PRETTY_PRINT, escaped slashes, no trailing newline) so a re-record
+     * produces no incidental diff.
+     *
+     * @param  array<mixed>  $payload
+     */
+    private function assertMatchesBaseline(string $name, array $payload): void
+    {
+        $path = base_path("tests/Feature/Billing/snapshots/{$name}.json");
+        $encoded = json_encode($this->normaliseVolatile($payload), JSON_PRETTY_PRINT);
+
+        if (filter_var(env('UPDATE_BILLING_SNAPSHOTS', false), FILTER_VALIDATE_BOOLEAN)) {
+            file_put_contents($path, $encoded);
+            $this->assertTrue(true, "Re-recorded {$name}.");
+
+            return;
+        }
+
+        $this->assertFileExists(
+            $path,
+            "Missing baseline {$name}.json. Create it with UPDATE_BILLING_SNAPSHOTS=1."
+        );
+
+        $this->assertSame(
+            file_get_contents($path),
+            $encoded,
+            "The {$name} payload no longer matches its baseline. WordPress and the CRM UI "
+            ."read this shape, so treat a diff as a breaking change until proven otherwise. "
+            ."If the change is intended, re-record with UPDATE_BILLING_SNAPSHOTS=1 and commit "
+            ."the new baseline with it."
+        );
+    }
+
+    public function test_payment_diagnostics_payload_matches_baseline(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
 
@@ -63,13 +180,10 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
         $data = $response->json();
         unset($data['payment']['id'], $data['payment']['client_id'], $data['payment']['platform_id'], $data['payment']['user_id']);
         
-        file_put_contents(
-            base_path('tests/Feature/Billing/snapshots/diagnostics_baseline.json'),
-            json_encode($data, JSON_PRETTY_PRINT)
-        );
+        $this->assertMatchesBaseline('diagnostics_baseline', $data);
     }
 
-    public function test_capture_provider_status_check_baseline_snapshot(): void
+    public function test_provider_status_check_payload_matches_baseline(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
 
@@ -113,13 +227,10 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
         $data = $response->json();
         unset($data['payment_id']);
 
-        file_put_contents(
-            base_path('tests/Feature/Billing/snapshots/provider_status_check_baseline.json'),
-            json_encode($data, JSON_PRETTY_PRINT)
-        );
+        $this->assertMatchesBaseline('provider_status_check_baseline', $data);
     }
 
-    public function test_capture_wordpress_sync_payload_baselines(): void
+    public function test_wordpress_sync_payloads_match_baselines(): void
     {
         ['platform' => $platform, 'client' => $client] = $this->seedProxyPayment('paystack');
 
@@ -171,17 +282,11 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
 
         unset($configPayload['platform_id'], $balancePayload['platform_id'], $balancePayload['wp_user_id'], $balancePayload['wp_post_id']);
 
-        file_put_contents(
-            base_path('tests/Feature/Billing/snapshots/wp_config_sync_payload_baseline.json'),
-            json_encode($configPayload, JSON_PRETTY_PRINT)
-        );
-        file_put_contents(
-            base_path('tests/Feature/Billing/snapshots/wp_balance_sync_payload_baseline.json'),
-            json_encode($balancePayload, JSON_PRETTY_PRINT)
-        );
+        $this->assertMatchesBaseline('wp_config_sync_payload_baseline', $configPayload);
+        $this->assertMatchesBaseline('wp_balance_sync_payload_baseline', $balancePayload);
     }
 
-    public function test_capture_wallet_api_baseline_snapshot(): void
+    public function test_wallet_balance_api_payload_matches_baseline(): void
     {
         ['platform' => $platform, 'client' => $client] = $this->seedProxyPayment('paystack');
         ['bearer_key' => $bearerKey] = $this->enableWalletForBaseline($platform);
@@ -227,10 +332,7 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
         $data = $response->json();
         unset($data['client']['id'], $data['client']['wp_user_id'], $data['client']['wp_post_id'], $data['config']['platform_id']);
 
-        file_put_contents(
-            base_path('tests/Feature/Billing/snapshots/wallet_balance_api_baseline.json'),
-            json_encode($data, JSON_PRETTY_PRINT)
-        );
+        $this->assertMatchesBaseline('wallet_balance_api_baseline', $data);
     }
 
     private function enableWalletForBaseline(Platform $platform): array
@@ -344,6 +446,7 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
             'domain' => 'baseline-market.example.test',
             'phone_prefix' => '254',
             'currency_code' => 'KES',
+            'db_name' => 'wp_baseline_market',
             'wp_api_url' => 'https://baseline-market.example.test/wp-json/exotic-crm-sync/v1',
             'payment_link_providers' => [
                 'active_provider' => $provider . '_checkout',
@@ -366,30 +469,51 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
             'name' => 'Baseline Client',
             'phone_normalized' => '254700000222',
             'email' => 'baseline-client@example.test',
+            'city' => 'Baseline City',
+            'main_image_url' => 'https://cdn.example.test/baseline-client.png',
             'profile_status' => 'publish',
         ]);
 
         $user = User::query()->create([
             'name' => 'Sales Baseline',
-            'email' => Str::random(8) . '@example.test',
+            'email' => 'sales-baseline@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'status' => 'active',
             'assigned_market_ids' => [$platform->id],
         ]);
 
+        // The diagnostics payload embeds the whole product, so it cannot be left to
+        // the factory's faker name and prices.
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Baseline Basic',
+            'display_name' => 'Baseline Basic',
+            'slug' => 'baseline-basic',
+            'tier' => 'basic',
+            'currency' => 'KES',
+            'weekly_price' => 500.00,
+            'biweekly_price' => 900.00,
+            'monthly_price' => 1500.00,
+            'is_active' => true,
+        ]);
+
         $payment = Payment::factory()->create([
             'platform_id' => $platform->id,
+            'product_id' => $product->id,
             'client_id' => $client->id,
             'user_id' => $client->wp_user_id,
             'phone' => $client->phone_normalized,
             'amount' => 1500,
             'currency' => 'KES',
+            'duration' => 'monthly',
+            'transaction_uuid' => '00000000-0000-4000-8000-000000000001',
             'purpose' => $purpose,
             'status' => 'initiated',
             'provider_key' => $provider,
             'provider_environment' => 'sandbox',
-            'reference_number' => 'CRM-' . Str::upper(Str::random(10)),
+            'transaction_reference' => self::SNAPSHOT_TRANSACTION_REFERENCE,
+            'reference_number' => 'CRM-BASELINE-SEED-001',
             'payment_data' => null,
             'raw_payload' => [],
         ]);

@@ -1,10 +1,10 @@
 {
     "provider": "paystack",
     "provider_environment": "sandbox",
-    "provider_reference": "TXN-1896CA",
+    "provider_reference": "TXN-BASELINE-0001",
     "status": "completed",
     "message": "Approved",
-    "checked_at": "2026-07-13 08:44:00",
+    "checked_at": "2026-04-03 12:00:00",
     "data": {
         "status": "success",
         "gateway_response": "Approved",
