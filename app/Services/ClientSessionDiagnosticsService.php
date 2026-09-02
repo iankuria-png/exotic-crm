@@ -512,14 +512,25 @@ class ClientSessionDiagnosticsService
         $body = (string) $response->body();
         $context['consumer_status'] = $status;
         $context['consumer_location'] = $location;
+        // Raw headers, not just the jar: the jar drops cookies a browser would
+        // also reject (wrong Domain, already expired), so on its own it cannot
+        // tell "WordPress sent nothing" from "WordPress sent an unusable one".
+        $context['consumer_set_cookie'] = $this->rawSetCookieHeaders($response->headers());
+        $context['consumer_cache_status'] = $this->header($response->headers(), 'CF-Cache-Status');
+        $context['consumer_cache_control'] = $this->header($response->headers(), 'Cache-Control');
 
         $facts = [
             $this->fact('Link shape', $this->classifyUrl($context['session_url']) ?? 'unknown'),
             $this->fact('HTTP status', (string) $status),
             $this->fact('Redirects to', $this->sanitizeUrl($location) ?? 'no redirect'),
             $this->fact('Redirect shape', $this->classifyUrl($location) ?? 'n/a'),
-            $this->fact('Set-Cookie names', implode(', ', $this->cookieNames($context['jar'])) ?: 'none'),
+            $this->fact('Set-Cookie headers', (string) count($context['consumer_set_cookie'])),
+            $this->fact('Accepted by cookie jar', implode(', ', $this->cookieNames($context['jar'])) ?: 'none'),
         ];
+
+        if ($context['consumer_cache_status']) {
+            $facts[] = $this->fact('CF-Cache-Status', $context['consumer_cache_status']);
+        }
 
         $challenge = $this->detectEdgeChallenge($status, $response->headers(), $body);
         if ($challenge) {
@@ -574,35 +585,81 @@ class ClientSessionDiagnosticsService
             return $this->stage('auth_cookie', 'Login cookie issued', 'skipped', 'Skipped — the token was never consumed.', []);
         }
 
-        $cookies = $this->cookieSummary($context['jar']);
-        $loggedIn = array_values(array_filter(
-            $cookies,
-            fn (array $cookie) => str_starts_with($cookie['name'], 'wordpress_logged_in_')
+        $sent = (array) ($context['consumer_set_cookie'] ?? []);
+        $accepted = $this->cookieSummary($context['jar']);
+        $requestHost = (string) (parse_url((string) $context['session_url'], PHP_URL_HOST) ?: '');
+
+        $sentLoggedIn = array_values(array_filter(
+            $sent,
+            fn (array $cookie) => str_starts_with($cookie['name'], 'wordpress_logged_in_') && ! $cookie['expired']
+        ));
+        $liveNames = array_map(fn (array $cookie) => $cookie['name'], $sentLoggedIn);
+        $acceptedLoggedIn = array_values(array_filter(
+            $accepted,
+            fn (array $cookie) => in_array($cookie['name'], $liveNames, true)
         ));
 
-        $facts = [];
-        foreach ($cookies as $cookie) {
+        $facts = [
+            $this->fact('Request host', $requestHost ?: 'unknown'),
+            $this->fact('Set-Cookie headers sent', (string) count($sent)),
+        ];
+
+        foreach ($sent as $cookie) {
             $facts[] = $this->fact(
                 $cookie['name'],
-                'domain '.$cookie['domain'].' · path '.$cookie['path'].' · '.($cookie['secure'] ? 'secure' : 'not secure')
+                'domain '.($cookie['domain'] ?: 'not set')
+                .' · path '.$cookie['path']
+                .($cookie['secure'] ? ' · secure' : '')
+                .($cookie['expired'] ? ' · EXPIRED (a clear, not a login)' : '')
             );
         }
-        if (! $facts) {
-            $facts[] = $this->fact('Cookies received', 'none');
-        }
 
-        if (! $loggedIn) {
+        if (! $sent) {
+            $facts[] = $this->fact('Cache-Control', (string) ($context['consumer_cache_control'] ?? 'not sent'));
+            if ($context['consumer_cache_status'] ?? null) {
+                $facts[] = $this->fact('CF-Cache-Status', (string) $context['consumer_cache_status']);
+            }
+
+            // The redirect proves headers were NOT already sent — header() and
+            // setcookie() fail together, so "output before the redirect" cannot
+            // explain a 302 that carries no cookies.
             return $this->stage('auth_cookie', 'Login cookie issued', 'fail',
-                'WordPress redirected without setting a login cookie.', $facts,
-                'wp_set_auth_cookie() ran but no wordpress_logged_in_* cookie came back. Either headers were already sent (output before the redirect), or a plugin is filtering the auth cookie away. This is why the tab lands logged out.',
+                'WordPress issued the redirect but sent no Set-Cookie header at all.', $facts,
+                'The redirect header got through, so headers were not already sent and PHP was not blocked from writing headers. That leaves two causes: a plugin returning false from the send_auth_cookies filter, or the CDN stripping Set-Cookie from this response — Cloudflare removes Set-Cookie on anything it treats as cacheable, so check for a "Cache Everything" page rule covering this path and check CF-Cache-Status above.',
             );
         }
 
-        $context['cookie_domain'] = $loggedIn[0]['domain'];
-        $facts[] = $this->fact('Login cookie', $loggedIn[0]['name']);
+        if (! $sentLoggedIn) {
+            $onlyExpired = count(array_filter($sent, fn (array $cookie) => $cookie['expired'])) === count($sent);
+
+            return $this->stage('auth_cookie', 'Login cookie issued', 'fail',
+                $onlyExpired
+                    ? 'WordPress only cleared cookies — it never issued a login cookie.'
+                    : 'WordPress sent cookies, but no wordpress_logged_in_* login cookie.',
+                $facts,
+                $onlyExpired
+                    ? 'wp_clear_auth_cookie() ran and wp_set_auth_cookie() did not follow through. The usual cause is a security plugin returning false from the send_auth_cookies filter, which suppresses the login cookie while leaving the clear untouched. Grep the market\'s plugins for send_auth_cookies.'
+                    : 'The session cookie is missing from an otherwise normal response. Check for a plugin filtering auth cookies on this market.',
+            );
+        }
+
+        if (! $acceptedLoggedIn) {
+            $domains = implode(', ', array_unique(array_map(
+                fn (array $cookie) => $cookie['domain'] ?: '(host-only)',
+                $sentLoggedIn
+            )));
+
+            return $this->stage('auth_cookie', 'Login cookie issued', 'fail',
+                'WordPress sent a login cookie, but it is scoped to a host the browser will reject.', $facts,
+                'The cookie was issued for '.$domains.' while the session link points at '.$requestHost.'. This probe rejected it exactly the way a browser does, which is why the tab lands logged out. Align COOKIE_DOMAIN and the WordPress/Site Address options on one canonical host, and point the market\'s REST base URL at that same host.',
+            );
+        }
+
+        $context['cookie_domain'] = $acceptedLoggedIn[0]['domain'];
+        $facts[] = $this->fact('Login cookie', $acceptedLoggedIn[0]['name']);
 
         return $this->stage('auth_cookie', 'Login cookie issued', 'pass',
-            'WordPress issued a wordpress_logged_in_* session cookie.', $facts);
+            'WordPress issued a wordpress_logged_in_* session cookie the browser will keep.', $facts);
     }
 
     private function stageHostAlignment(array &$context, array $stages): array
@@ -799,7 +856,7 @@ class ClientSessionDiagnosticsService
             'status' => is_numeric($facts->get('HTTP status')) ? (int) $facts->get('HTTP status') : null,
             'redirect_location' => $facts->get('Redirects to') === 'no redirect' ? null : $facts->get('Redirects to'),
             'redirect_location_shape' => $facts->get('Redirect shape') === 'n/a' ? null : $facts->get('Redirect shape'),
-            'has_set_cookie' => ($facts->get('Set-Cookie names') ?? 'none') !== 'none',
+            'has_set_cookie' => ((int) ($facts->get('Set-Cookie headers') ?? 0)) > 0,
             'error' => ($stage['status'] ?? null) === 'fail' ? ($stage['summary'] ?? null) : null,
         ];
     }
@@ -1027,6 +1084,70 @@ class ClientSessionDiagnosticsService
         return str_contains($haystack, 'id="user_login"')
             || str_contains($haystack, 'name="log"')
             || str_contains($haystack, 'wp-login.php');
+    }
+
+    /**
+     * Parse Set-Cookie response headers into attributes only — never values.
+     * This is what separates "WordPress sent nothing" from "WordPress sent a
+     * cookie the browser threw away", which the cookie jar alone cannot show.
+     */
+    private function rawSetCookieHeaders(array $headers): array
+    {
+        $raw = [];
+        foreach ($headers as $key => $values) {
+            if (strcasecmp($key, 'Set-Cookie') !== 0) {
+                continue;
+            }
+            $raw = array_merge($raw, is_array($values) ? $values : [$values]);
+        }
+
+        $parsed = [];
+        foreach ($raw as $line) {
+            $parts = array_map('trim', explode(';', (string) $line));
+            $nameValue = array_shift($parts);
+            $name = trim((string) strtok((string) $nameValue, '='));
+            if ($name === '') {
+                continue;
+            }
+
+            $cookie = [
+                'name' => $name,
+                'domain' => '',
+                'path' => '/',
+                'secure' => false,
+                'expired' => false,
+            ];
+
+            foreach ($parts as $attribute) {
+                [$attributeName, $attributeValue] = array_pad(explode('=', $attribute, 2), 2, '');
+                switch (strtolower(trim($attributeName))) {
+                    case 'domain':
+                        $cookie['domain'] = ltrim(trim($attributeValue), '.');
+                        break;
+                    case 'path':
+                        $cookie['path'] = trim($attributeValue) ?: '/';
+                        break;
+                    case 'secure':
+                        $cookie['secure'] = true;
+                        break;
+                    case 'max-age':
+                        if (is_numeric($attributeValue) && (int) $attributeValue <= 0) {
+                            $cookie['expired'] = true;
+                        }
+                        break;
+                    case 'expires':
+                        $timestamp = strtotime(trim($attributeValue));
+                        if ($timestamp !== false && $timestamp <= time()) {
+                            $cookie['expired'] = true;
+                        }
+                        break;
+                }
+            }
+
+            $parsed[] = $cookie;
+        }
+
+        return $parsed;
     }
 
     private function cookieNames(CookieJar $jar): array

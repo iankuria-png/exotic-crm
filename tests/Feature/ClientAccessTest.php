@@ -543,6 +543,134 @@ class ClientAccessTest extends TestCase
             (string) $response->json('diagnostics.stages.2.hint')
         );
     }
+    /**
+     * @return array{0: \App\Models\Platform, 1: \App\Models\Client, 2: string, 3: string}
+     */
+    private function sessionDebugFixture(string $host = 'kenya.example.test'): array
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => "https://{$host}/wp-json/exotic-crm-sync/v1",
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        return [
+            $platform,
+            $client,
+            rtrim((string) $platform->wp_api_url, '/'),
+            "https://{$host}/wp-admin/admin-post.php?action=exotic_crm_client_session&token=probe-token",
+        ];
+    }
+
+    private function fakeConsumerResponse(string $baseUrl, string $consumerUrl, array $consumerHeaders): void
+    {
+        Http::fake(function ($request) use ($baseUrl, $consumerUrl, $consumerHeaders) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $consumerUrl,
+                    'target' => 'profile',
+                    'resolved_target' => 'profile',
+                    'target_url' => 'https://kenya.example.test/escort/tracy/',
+                ], 200);
+            }
+
+            if ($url === $consumerUrl) {
+                return Http::response('', 302, $consumerHeaders);
+            }
+
+            return Http::response('', 200);
+        });
+    }
+
+    public function test_client_session_debug_separates_a_stripped_cookie_from_a_rejected_one(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        // A 302 with no Set-Cookie at all: headers were clearly not already
+        // sent, so the cause is suppression or CDN stripping — not output.
+        $this->fakeConsumerResponse($baseUrl, $consumerUrl, [
+            'Location' => 'https://kenya.example.test/escort/tracy/',
+            'CF-Cache-Status' => 'HIT',
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie')
+            ->assertJsonPath('diagnostics.stages.7.summary', 'WordPress issued the redirect but sent no Set-Cookie header at all.');
+
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+        $this->assertStringContainsString('send_auth_cookies', $hint);
+        $this->assertStringContainsString('Cache Everything', $hint);
+        $this->assertStringNotContainsString('output before the redirect', $hint);
+    }
+
+    public function test_client_session_debug_reports_a_login_cookie_scoped_to_the_wrong_host(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        // WordPress sends a perfectly good cookie — for the wrong host. A
+        // browser discards it silently, which is what "lands logged out" is.
+        $this->fakeConsumerResponse($baseUrl, $consumerUrl, [
+            'Location' => 'https://kenya.example.test/escort/tracy/',
+            'Set-Cookie' => 'wordpress_logged_in_9f2=value; path=/; domain=www.other-host.test; secure; HttpOnly',
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $summary = (string) $response->json('diagnostics.stages.7.summary');
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+
+        $this->assertStringContainsString('scoped to a host the browser will reject', $summary);
+        $this->assertStringContainsString('www.other-host.test', $hint);
+        $this->assertStringContainsString('kenya.example.test', $hint);
+        $this->assertStringNotContainsString('=value', json_encode($response->json()));
+    }
+
+    public function test_client_session_debug_reports_a_cleared_but_never_issued_login_cookie(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        // wp_clear_auth_cookie() ran; wp_set_auth_cookie() was suppressed. The
+        // jar drops expired cookies, so only the raw headers reveal this.
+        $this->fakeConsumerResponse($baseUrl, $consumerUrl, [
+            'Location' => 'https://kenya.example.test/escort/tracy/',
+            'Set-Cookie' => 'wordpress_logged_in_9f2=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; path=/',
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie')
+            ->assertJsonPath('diagnostics.stages.7.summary', 'WordPress only cleared cookies — it never issued a login cookie.');
+
+        $this->assertStringContainsString(
+            'send_auth_cookies',
+            (string) $response->json('diagnostics.stages.7.hint')
+        );
+    }
     public function test_client_session_debug_detects_a_www_apex_cookie_split(): void
     {
         $platform = Platform::factory()->create([
