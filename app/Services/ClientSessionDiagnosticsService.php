@@ -623,9 +623,29 @@ class ClientSessionDiagnosticsService
             // The redirect proves headers were NOT already sent — header() and
             // setcookie() fail together, so "output before the redirect" cannot
             // explain a 302 that carries no cookies.
+            $cdnRuled = $this->cdnCachingRuledOut(
+                (string) ($context['consumer_cache_status'] ?? ''),
+                (string) ($context['consumer_cache_control'] ?? '')
+            );
+
+            if ($cdnRuled) {
+                $facts[] = $this->fact('CDN stripping', 'ruled out — '.$cdnRuled);
+            }
+
+            // Zero headers (not merely "no login cookie") is the signature of
+            // send_auth_cookies: that one filter guards wp_clear_auth_cookie()
+            // as well, so a false return silences the clear AND the login.
+            $hint = 'The redirect header got through, so headers were not already sent and PHP was not blocked from writing headers. '
+                .'Not one Set-Cookie came back — not even the expired ones wp_clear_auth_cookie() normally emits — and the same send_auth_cookies filter guards both, so a plugin returning false from it is the prime suspect. '
+                .'Next most likely: wp_set_auth_cookie() is pluggable and may have been redefined outright (JWT/headless plugins do this), or something calls header_remove(\'Set-Cookie\') late in the request.';
+
+            $hint .= $cdnRuled
+                ? ' The CDN is not the cause here ('.$cdnRuled.').'
+                : ' Also check whether a CDN or origin cache is stripping Set-Cookie from this response.';
+
             return $this->stage('auth_cookie', 'Login cookie issued', 'fail',
                 'WordPress issued the redirect but sent no Set-Cookie header at all.', $facts,
-                'The redirect header got through, so headers were not already sent and PHP was not blocked from writing headers. That leaves two causes: a plugin returning false from the send_auth_cookies filter, or the CDN stripping Set-Cookie from this response — Cloudflare removes Set-Cookie on anything it treats as cacheable, so check for a "Cache Everything" page rule covering this path and check CF-Cache-Status above.',
+                $hint,
             );
         }
 
@@ -928,6 +948,25 @@ class ClientSessionDiagnosticsService
             'The connection itself failed. Check DNS, the market REST base URL, TLS, and whether the origin is up.',
             $this->elapsed($started)
         );
+    }
+
+    /**
+     * Says why the CDN cannot be the one eating Set-Cookie, when it cannot.
+     * Cloudflare only strips cookies from responses it treats as cacheable, so
+     * a DYNAMIC/BYPASS status or a no-store response acquits it outright.
+     */
+    private function cdnCachingRuledOut(string $cacheStatus, string $cacheControl): ?string
+    {
+        $status = strtoupper(trim($cacheStatus));
+        if (in_array($status, ['DYNAMIC', 'BYPASS'], true)) {
+            return 'CF-Cache-Status is '.$status.', so Cloudflare did not cache this response';
+        }
+
+        if (str_contains(strtolower($cacheControl), 'no-store')) {
+            return 'the response is marked no-store, so it was never cacheable';
+        }
+
+        return null;
     }
 
     private function looksLikeTimeout(string $message): bool

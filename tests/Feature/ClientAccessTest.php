@@ -612,8 +612,36 @@ class ClientAccessTest extends TestCase
 
         $hint = (string) $response->json('diagnostics.stages.7.hint');
         $this->assertStringContainsString('send_auth_cookies', $hint);
-        $this->assertStringContainsString('Cache Everything', $hint);
+        $this->assertStringContainsString('pluggable', $hint);
         $this->assertStringNotContainsString('output before the redirect', $hint);
+
+        // CF-Cache-Status HIT means the response WAS cached, so the CDN stays
+        // a live suspect and must not be acquitted.
+        $this->assertStringContainsString('check whether a CDN', $hint);
+    }
+
+    public function test_client_session_debug_acquits_the_cdn_when_it_did_not_cache_the_response(): void
+    {
+        [$platform, $client, $baseUrl, $consumerUrl] = $this->sessionDebugFixture();
+
+        $this->fakeConsumerResponse($baseUrl, $consumerUrl, [
+            'Location' => 'https://kenya.example.test/escort/tracy/',
+            'CF-Cache-Status' => 'DYNAMIC',
+            'Cache-Control' => 'no-cache, must-revalidate, max-age=0, no-store, private',
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client/debug", [
+            'target' => 'profile',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('diagnostics.overall.failing_stage', 'auth_cookie');
+
+        $hint = (string) $response->json('diagnostics.stages.7.hint');
+        $this->assertStringContainsString('CDN is not the cause here', $hint);
+        $this->assertStringContainsString('DYNAMIC', $hint);
     }
 
     public function test_client_session_debug_reports_a_login_cookie_scoped_to_the_wrong_host(): void
