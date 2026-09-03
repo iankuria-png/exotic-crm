@@ -57,6 +57,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 0,
             'skipped' => 1,
             'total' => 1,
+            'complete' => true,
         ], $result);
         $this->assertDatabaseCount('clients', 0);
     }
@@ -100,6 +101,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 0,
             'skipped' => 0,
             'total' => 0,
+            'complete' => true,
         ], $result);
 
         Http::assertSent(function (ClientRequest $request) {
@@ -145,6 +147,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 0,
             'skipped' => 0,
             'total' => 1,
+            'complete' => true,
         ], $result);
 
         $this->assertDatabaseHas('clients', [
@@ -191,6 +194,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 0,
             'skipped' => 0,
             'total' => 1,
+            'complete' => true,
         ], $result);
 
         $this->assertDatabaseHas('clients', [
@@ -241,6 +245,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 0,
             'skipped' => 0,
             'total' => 1,
+            'complete' => true,
         ], $result);
 
         $this->assertDatabaseHas('clients', [
@@ -295,6 +300,7 @@ class ClientSyncExclusionTest extends TestCase
             'updated' => 1,
             'skipped' => 0,
             'total' => 1,
+            'complete' => true,
         ], $result);
 
         $this->assertDatabaseHas('clients', [

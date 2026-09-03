@@ -12,6 +12,30 @@ class Kernel extends ConsoleKernel
 {
     /**
      * Define the application's command schedule.
+     *
+     * Three invariants hold this file together. Breaking any of them has taken
+     * production down before:
+     *
+     * 1. EVERY task that can block must call `runInBackground()`.
+     *    `schedule:run` executes foreground events SEQUENTIALLY inside a single
+     *    process with no timeout. Nineteen foreground tasks were due at the top
+     *    of every hour, two of them 55-second queue workers, so a single tick
+     *    took minutes while cron started a fresh one every 60 seconds. The
+     *    resulting pile-up exhausted the cPanel account's entry processes:
+     *    dynamic requests 504'd while static files kept serving normally.
+     *
+     * 2. `withoutOverlapping()` takes MINUTES and is a cache TTL, not a held
+     *    lock. It must exceed the task's realistic worst-case runtime, or it
+     *    expires mid-run and the next tick starts a duplicate.
+     *
+     * 3. Cadences are spread across the hour on purpose. `everyMinute`,
+     *    `everyFiveMinutes`, `everyFifteenMinutes`, `hourly` and `daily` all
+     *    fire on minute 0, which is exactly the pile-up above. Prefer explicit
+     *    `cron()` / `hourlyAt()` / `dailyAt()` offsets when adding a task, and
+     *    check the minute you pick is not already crowded.
+     *
+     * The production cron itself is wrapped in `flock` as a backstop; see
+     * docs/DEPLOYMENT.md. That is a safety net, not a substitute for the above.
      */
     protected function schedule(Schedule $schedule)
     {
@@ -48,6 +72,7 @@ class Kernel extends ConsoleKernel
             ->hourlyAt(25)
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));
 
         $schedule->command('crm:compute-daily-stats')
@@ -55,6 +80,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('00:07')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_compute_daily_stats.log'));
 
         // Weekly AI briefings. Poll every minute so Settings can own the actual
@@ -81,6 +107,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('00:15')
             ->withoutOverlapping(20)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_snapshot_active_clients.log'));
 
         $schedule->command('crm:purge-closed-clients')
@@ -88,6 +115,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('03:00')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_purge_closed_clients.log'));
 
         // Signed customer-data retention: activity events expire at 180 days.
@@ -96,6 +124,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('03:10')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_purge_customer_data.log'));
 
         // Archive long-term Expired profiles (keeps them indexed, removes from listings).
@@ -104,6 +133,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('03:20')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_archive_expired.log'));
 
         // SEO Recovery: markets on `daily_trickle` pacing work through their
@@ -114,6 +144,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('04:10')
             ->withoutOverlapping(120)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_restore_offline_profiles.log'));
 
         $schedule->command('crm:close-stale-sessions')
@@ -125,9 +156,10 @@ class Kernel extends ConsoleKernel
 
         $schedule->command('crm:sweep-stuck-bundles')
             ->name('crm_sweep_stuck_bundles')
-            ->everyFiveMinutes()
+            ->cron('2,7,12,17,22,27,32,37,42,47,52,57 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sweep_stuck_bundles.log'));
 
         // Payment timeout handler - RUNS EVERY 5 MINUTES
@@ -144,7 +176,7 @@ class Kernel extends ConsoleKernel
             }
         })
             ->name('handle_payment_timeouts')
-            ->everyFiveMinutes()
+            ->cron('4,9,14,19,24,29,34,39,44,49,54,59 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
@@ -164,9 +196,10 @@ class Kernel extends ConsoleKernel
             $clientSyncDeltaStaggerSeconds
         ))
             ->name('crm_sync_clients_delta')
-            ->everyThirtyMinutes()
+            ->cron('11,41 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
 
         $schedule->command(sprintf(
@@ -178,19 +211,24 @@ class Kernel extends ConsoleKernel
             ->dailyAt('02:05')
             ->withoutOverlapping(120)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sync_clients_reconcile.log'));
 
-        $schedule->command('crm:check-market-health')
+        // Budgeted so a handful of slow markets cannot stretch one pass across
+        // several ticks; least-recently-checked markets are probed first, so
+        // coverage rotates rather than starving the tail of the list.
+        $schedule->command('crm:check-market-health --max-seconds=120')
             ->name('crm_check_market_health')
-            ->everyFiveMinutes()
+            ->cron('3,8,13,18,23,28,33,38,43,48,53,58 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_market_health.log'));
 
         // Backfill Support Board user links shortly after the WordPress client sync completes.
         $schedule->command('crm:sync-sb-users')
             ->name('crm_sync_support_board_users')
-            ->cron('2,17,32,47 * * * *')
+            ->cron('26,56 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
             ->skip(fn () => ! Platform::query()
@@ -198,6 +236,7 @@ class Kernel extends ConsoleKernel
                 ->where('support_board_api_url', '!=', '')
                 ->whereNotNull('support_board_token')
                 ->exists())
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sync_support_board_users.log'));
 
         // Lead intake (crm:import-leads) is intentionally NOT scheduled. It is a
@@ -209,9 +248,10 @@ class Kernel extends ConsoleKernel
         // Sprint 3: execute renewal campaigns for day -7/-3/0/+3 SMS reminders
         $schedule->command('crm:run-renewals')
             ->name('crm_run_renewals')
-            ->hourly()
+            ->hourlyAt(17)
             ->withoutOverlapping(55)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_run_renewals.log'));
 
         // Lifecycle SMS sweeps (onboarding welcomes, recovery reconcile,
@@ -223,6 +263,7 @@ class Kernel extends ConsoleKernel
             ->hourlyAt(35)
             ->withoutOverlapping(55)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_lifecycle_sms.log'));
 
         // Per-client analytics snapshot powering dynamic lifecycle copy
@@ -232,35 +273,40 @@ class Kernel extends ConsoleKernel
             ->dailyAt('06:10')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_lifecycle_metrics.log'));
 
         // Push campaign phased dispatcher: activates scheduled campaigns and queues next 24h items.
         $schedule->command('crm:dispatch-scheduled-pushes')
             ->name('crm_dispatch_scheduled_pushes')
-            ->everyFifteenMinutes()
+            ->cron('5,20,35,50 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_dispatch_scheduled_pushes.log'));
 
         $schedule->command('crm:run-auto-push')
             ->name('crm_run_auto_push')
-            ->hourly()
+            ->hourlyAt(47)
             ->withoutOverlapping(55)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_run_auto_push.log'));
 
         $schedule->command('crm:maintain-auto-push')
             ->name('crm_maintain_auto_push')
-            ->everyFifteenMinutes()
+            ->cron('10,25,40,55 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_maintain_auto_push.log'));
 
         $schedule->command('crm:run-auto-optimize')
             ->name('crm_run_auto_optimize')
-            ->hourly()
+            ->hourlyAt(52)
             ->withoutOverlapping(55)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_run_auto_optimize.log'));
 
         $schedule->command(sprintf(
@@ -269,42 +315,50 @@ class Kernel extends ConsoleKernel
             (int) config('services.nominatim.batch_limit', 50)
         ))
             ->name('crm_geocode_cities')
-            ->daily()
+            ->dailyAt('01:10')
             ->withoutOverlapping(1440)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_geocode_cities.log'));
 
         $schedule->command('crm:maintain-auto-optimize')
             ->name('crm_maintain_auto_optimize')
-            ->everySixHours()
+            ->cron('9 */6 * * *')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_maintain_auto_optimize.log'));
 
         $schedule->command('queue:prune-batches --hours=48')
             ->name('crm_prune_job_batches')
-            ->daily();
+            ->dailyAt('01:40')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->runInBackground();
 
         $schedule->command('crm:reconcile-pending-payments')
             ->name('crm_reconcile_pending_payments')
             ->everyFifteenMinutes()
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_reconcile_pending_payments.log'));
 
         $schedule->command('crm:reconcile-payment-failure-alerts')
             ->name('crm_reconcile_payment_failure_alerts')
-            ->everyFiveMinutes()
+            ->cron('1,6,11,16,21,26,31,36,41,46,51,56 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_reconcile_payment_failure_alerts.log'));
 
         // Daily subscriber snapshot sync across configured push providers.
         $schedule->command('crm:sync-push-subscribers')
             ->name('crm_sync_push_subscribers')
-            ->daily()
+            ->dailyAt('01:25')
             ->withoutOverlapping(120)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sync_push_subscribers.log'));
 
         $schedule->command('crm:refresh-retention-insights')
@@ -312,13 +366,15 @@ class Kernel extends ConsoleKernel
             ->dailyAt('02:20')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
         $schedule->command('crm:reset-whatsapp-sender-limits')
             ->name('crm_reset_whatsapp_sender_limits')
-            ->hourly()
+            ->hourlyAt(57)
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_reset_whatsapp_sender_limits.log'));
 
         $schedule->command('crm:kyc-reverify-sweep')
@@ -326,6 +382,7 @@ class Kernel extends ConsoleKernel
             ->dailyAt('02:25')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_kyc_reverify_sweep.log'));
 
         $schedule->command('crm:kyc-escalate-overdue')
@@ -333,13 +390,15 @@ class Kernel extends ConsoleKernel
             ->dailyAt('02:30')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_kyc_escalate_overdue.log'));
 
         $schedule->command('crm:kyc-recompute-exemptions')
             ->name('crm_kyc_recompute_exemptions')
-            ->hourly()
+            ->hourlyAt(22)
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_kyc_recompute_exemptions.log'));
 
         $schedule->command('crm:prune-error-logs')
@@ -347,42 +406,82 @@ class Kernel extends ConsoleKernel
             ->dailyAt('02:40')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_prune_error_logs.log'));
 
-        // Queue worker: processes push queue first (time-sensitive), then client sync queues, alert jobs, then default queue.
-        // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
-        // --queue=push,sync-clients,sync-clients-reconcile,alerts,default,kyc-fanout ensures market syncs are handled in the background without blocking alerts.
-        // kyc-fanout is last (lowest priority) so KYC status pushes to WordPress only
-        // drain when higher queues are idle. Previously NO worker listened on it, so
-        // PushKycStatusJob never ran and KYC status never synced to the WP sites.
-        // --max-jobs=100 prevents memory leaks during long-running batches.
+        // Queue workers.
+        //
+        // Three rules govern this block, all of them learned the hard way:
+        //
+        // 1. `runInBackground()` is mandatory. `schedule:run` executes events
+        //    in the FOREGROUND and SEQUENTIALLY. Two foreground `--max-time=55`
+        //    workers put a 110-second floor under every scheduler tick, so the
+        //    once-a-minute cron could never keep up and `schedule:run`
+        //    processes stacked up until the account ran out of entry processes.
+        //
+        // 2. The overlap window must exceed the longest job a worker can pick
+        //    up. `withoutOverlapping()` takes MINUTES and the mutex is only a
+        //    TTL — it is not held for the life of the process. Set to 2, it
+        //    expired while a long job was still running and the next tick
+        //    happily started a second worker on the same queue, then a third.
+        //
+        // 3. Lanes are separated by job duration, not by feature. A slow job on
+        //    a shared queue starves everything behind it.
+        //
+        // Lane 1 (fast): short jobs only — nothing here should exceed ~5 min.
+        // kyc-fanout is last so KYC status pushes to WordPress only drain when
+        // the higher queues are idle.
         $queueConnection = (string) config('queue.default', 'sync');
 
         if ($queueConnection !== 'sync') {
             $schedule->command(sprintf(
-                'queue:work %s --queue=push,sync-clients,sync-clients-reconcile,alerts,default,kyc-fanout --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
+                'queue:work %s --queue=push,alerts,default,kyc-fanout --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
                 $queueConnection
             ))
                 ->name('queue_worker')
                 ->everyMinute()
-                ->withoutOverlapping(2)
+                ->withoutOverlapping(5)
                 ->onOneServer()
+                ->runInBackground()
                 ->sendOutputTo(storage_path('logs/queue_worker.log'));
 
-            // Dedicated worker for the heavy SEO auto-optimize queue, kept separate
-            // so long LLM/WP jobs never block the time-sensitive push/alerts queue.
-            // Routed through schedule:run (withoutOverlapping + onOneServer) instead
-            // of a hand-added cron — a duplicate direct `queue:work` cron for this
-            // queue exhausted the account's entry-process limit and 504'd the site.
+            // Lane 2 (sync): client sync slices. Separated from the fast lane so
+            // a market with a large backlog can never delay a push or an alert.
+            $schedule->command(sprintf(
+                'queue:work %s --queue=sync-clients,sync-clients-reconcile --max-time=55 --max-jobs=50 --tries=3 --sleep=3',
+                $queueConnection
+            ))
+                ->name('queue_worker_sync')
+                ->everyMinute()
+                ->withoutOverlapping(10)
+                ->onOneServer()
+                ->runInBackground()
+                ->sendOutputTo(storage_path('logs/queue_worker_sync.log'));
+
+            // Lane 3 (heavy): long LLM/WordPress work — auto-optimize items plus
+            // the `heavy` queue on the `database_long` connection, whose wider
+            // `retry_after` matches these jobs' timeouts. Two workers because the
+            // two queues live on different connections.
             $schedule->command(sprintf(
                 'queue:work %s --queue=auto_optimize --max-time=55 --max-jobs=30 --tries=3 --sleep=3',
                 $queueConnection
             ))
                 ->name('queue_worker_auto_optimize')
                 ->everyMinute()
-                ->withoutOverlapping(2)
+                ->withoutOverlapping(10)
                 ->onOneServer()
+                ->runInBackground()
                 ->sendOutputTo(storage_path('logs/queue_worker_optimize.log'));
+
+            $schedule->command(
+                'queue:work database_long --queue=heavy --max-time=55 --max-jobs=10 --tries=2 --sleep=3'
+            )
+                ->name('queue_worker_heavy')
+                ->everyMinute()
+                ->withoutOverlapping(75)
+                ->onOneServer()
+                ->runInBackground()
+                ->sendOutputTo(storage_path('logs/queue_worker_heavy.log'));
         }
     }
 

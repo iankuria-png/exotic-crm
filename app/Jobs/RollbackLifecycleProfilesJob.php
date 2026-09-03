@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\RunsOnHeavyQueue;
 use App\Services\FeatureSettingsService;
 use App\Services\ProfileLifecycleRestoreService;
 use Illuminate\Bus\Queueable;
@@ -13,7 +14,7 @@ use Illuminate\Support\Facades\Log;
 
 class RollbackLifecycleProfilesJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
 
     public int $tries = 1;
 
@@ -23,7 +24,9 @@ class RollbackLifecycleProfilesJob implements ShouldQueue
         public readonly int $platformId,
         public readonly ?int $actorId = null,
         public readonly string $reason = 'lifecycle_disabled',
-    ) {}
+    ) {
+        $this->routeToHeavyQueue();
+    }
 
     public static function settingsKey(int $platformId): string
     {

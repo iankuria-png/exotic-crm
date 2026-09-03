@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\RunsOnHeavyQueue;
 use App\Models\PbnSeedBatch;
 use App\Services\Pbn\PbnSeedProvisioningService;
 use Illuminate\Bus\Queueable;
@@ -13,7 +14,7 @@ use Illuminate\Support\Facades\Log;
 
 class RunPbnSeedBatchJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
 
     public int $tries = 2;
     public int $timeout = 3600;
@@ -22,6 +23,7 @@ class RunPbnSeedBatchJob implements ShouldQueue
     public function __construct(
         public readonly int $batchId,
     ) {
+        $this->routeToHeavyQueue();
     }
 
     public function handle(PbnSeedProvisioningService $provisioningService): void

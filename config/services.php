@@ -130,9 +130,22 @@ return [
 
     'client_sync' => [
         'per_page' => (int) env('CRM_CLIENT_SYNC_PER_PAGE', 100),
-        'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 3),
-        'delta_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_DELTA_STAGGER_SECONDS', 120),
-        'reconcile_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_RECONCILE_STAGGER_SECONDS', 180),
+
+        // A sync run is executed as a series of bounded slices. Each slice
+        // stops at whichever limit it hits first, persists its cursor, and
+        // re-queues itself, so no single market can occupy a queue worker for
+        // longer than one slice. Keep `slice_seconds` well under the queue
+        // connection's `retry_after`.
+        'slice_seconds' => (int) env('CRM_CLIENT_SYNC_SLICE_SECONDS', 90),
+        'slice_max_pages' => (int) env('CRM_CLIENT_SYNC_SLICE_MAX_PAGES', 25),
+
+        // With slicing in place a delta pass over a quiet market is a single
+        // short page, so the per-run market window can be much wider than the
+        // 3 it had to be when one market could block the worker for 20 minutes.
+        // 12 markets per half hour covers ~55 markets in a little over two hours.
+        'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 12),
+        'delta_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_DELTA_STAGGER_SECONDS', 20),
+        'reconcile_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_RECONCILE_STAGGER_SECONDS', 60),
     ],
 
     'africastalking' => [

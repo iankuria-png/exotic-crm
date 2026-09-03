@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\RunsOnHeavyQueue;
 use App\Services\FeatureSettingsService;
 use App\Services\ProfileBioScrubService;
 use Illuminate\Bus\Queueable;
@@ -18,7 +19,7 @@ use Illuminate\Support\Facades\Log;
  */
 class ScrubProfileBiosJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
 
     public int $tries = 1;
     public int $timeout = 1800;
@@ -29,6 +30,7 @@ class ScrubProfileBiosJob implements ShouldQueue
         public readonly int $limit = 500,
         public readonly ?int $actorId = null,
     ) {
+        $this->routeToHeavyQueue();
     }
 
     public static function settingsKey(int $platformId): string

@@ -16,6 +16,15 @@ class ClientSyncRun extends Model
     public const STATUS_PARTIAL = 'partial';
     public const STATUS_STALE = 'stale';
 
+    /**
+     * A run is executed as a series of bounded slices so that no single queue
+     * worker is ever occupied for longer than one slice budget. The phase says
+     * which stage the next slice should resume in.
+     */
+    public const PHASE_CLIENTS = 'clients';
+    public const PHASE_TOMBSTONES = 'tombstones';
+    public const PHASE_FINALISE = 'finalise';
+
     protected $fillable = [
         'platform_id',
         'initiated_by',
@@ -23,6 +32,8 @@ class ClientSyncRun extends Model
         'mode',
         'protocol',
         'status',
+        'phase',
+        'slices',
         'processed',
         'created',
         'updated',
@@ -47,6 +58,7 @@ class ClientSyncRun extends Model
     ];
 
     protected $casts = [
+        'slices' => 'integer',
         'processed' => 'integer',
         'created' => 'integer',
         'updated' => 'integer',

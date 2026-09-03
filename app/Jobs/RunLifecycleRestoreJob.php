@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\RunsOnHeavyQueue;
 use App\Models\LifecycleRestoreRun;
 use App\Services\ProfileLifecycleRestoreService;
 use Illuminate\Bus\Queueable;
@@ -18,7 +19,7 @@ use Illuminate\Support\Facades\Log;
  */
 class RunLifecycleRestoreJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
 
     public int $tries = 1;
     public int $timeout = 3600;
@@ -26,6 +27,7 @@ class RunLifecycleRestoreJob implements ShouldQueue
     public function __construct(
         public readonly int $runId,
     ) {
+        $this->routeToHeavyQueue();
     }
 
     public function handle(ProfileLifecycleRestoreService $restorer): void

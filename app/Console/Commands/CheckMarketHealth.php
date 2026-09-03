@@ -11,13 +11,26 @@ use Throwable;
 
 class CheckMarketHealth extends Command
 {
-    protected $signature = 'crm:check-market-health {--platform= : Restrict to a single platform ID}';
+    protected $signature = 'crm:check-market-health
+        {--platform= : Restrict to a single platform ID}
+        {--max-seconds= : Wall-clock budget for this pass; 0 means no budget}';
 
     protected $description = 'Probe market domain and WordPress sync health, then alert on new outages.';
 
+    /**
+     * Probing is two sequential HTTP calls per market with a 5s timeout each.
+     * Across ~55 markets a pass in which several sites are slow can run for
+     * minutes, so the pass is budgeted: markets are probed least-recently-
+     * checked first and the pass stops when the budget is spent. Every market
+     * still gets covered, just across consecutive passes instead of one.
+     */
     public function handle(MarketHealthService $marketHealthService): int
     {
         $platformId = $this->option('platform');
+        $maxSeconds = $this->option('max-seconds') === null
+            ? 0
+            : max(0, (int) $this->option('max-seconds'));
+        $startedAt = microtime(true);
         $logger = Log::build([
             'driver' => 'single',
             'path' => storage_path('logs/crm_market_health.log'),
@@ -26,6 +39,7 @@ class CheckMarketHealth extends Command
         $platforms = Platform::query()
             ->when($platformId, fn ($query, $id) => $query->where('id', (int) $id))
             ->when(! $platformId, fn ($query) => $query->where('is_active', true))
+            ->orderByRaw('health_checked_at IS NOT NULL, health_checked_at ASC')
             ->orderBy('name')
             ->get();
 
@@ -38,8 +52,14 @@ class CheckMarketHealth extends Command
         $checked = 0;
         $failed = 0;
         $alertsQueued = 0;
+        $skipped = 0;
 
         foreach ($platforms as $platform) {
+            if ($maxSeconds > 0 && (microtime(true) - $startedAt) >= $maxSeconds) {
+                $skipped++;
+                continue;
+            }
+
             try {
                 $result = $marketHealthService->checkAndStore($platform);
                 /** @var Platform $fresh */
@@ -97,11 +117,22 @@ class CheckMarketHealth extends Command
         }
 
         $this->info(sprintf(
-            'Market health complete: %d checked, %d failed, %d alerts queued.',
+            'Market health complete: %d checked, %d failed, %d alerts queued%s.',
             $checked,
             $failed,
-            $alertsQueued
+            $alertsQueued,
+            $skipped > 0
+                ? sprintf(', %d deferred to the next pass (%ds budget spent)', $skipped, $maxSeconds)
+                : ''
         ));
+
+        if ($skipped > 0) {
+            $logger->info('Market health pass hit its budget.', [
+                'checked' => $checked,
+                'deferred' => $skipped,
+                'max_seconds' => $maxSeconds,
+            ]);
+        }
 
         return $failed > 0 ? self::FAILURE : self::SUCCESS;
     }

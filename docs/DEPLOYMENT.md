@@ -126,15 +126,51 @@ Then run migrations:
 Go to **cPanel > Cron Jobs**, use **Common Settings → "Once Per Minute"** or type `*` in each time field. Command:
 
 ```
-* * * * * cd /home/d9410/crm.exotic-online.com && /opt/cpanel/ea-php82/root/usr/bin/php artisan schedule:run >> /dev/null 2>&1
+* * * * * /usr/bin/flock -n /home/d9410/crm.exotic-online.com/storage/scheduler.lock -c 'cd /home/d9410/crm.exotic-online.com && /opt/cpanel/ea-php82/root/usr/bin/php artisan schedule:run' >> /dev/null 2>&1
 ```
+
+**The `flock` wrapper is required, not optional.** Without it, any tick that
+outlives its minute leaves a `schedule:run` running while cron starts the next
+one. Those processes accumulate, exhaust the cPanel account's entry-process
+limit, and PHP-FPM can no longer fork a worker for an HTTP request — the site
+returns Cloudflare 504s for dynamic routes while static files keep serving
+normally and the database looks perfectly idle. That is the 3 September 2026
+outage. `flock -n` makes a slow tick skip rather than stack.
+
+`flock` is a backstop. The scheduler is also designed so a tick finishes in
+about a second: every blocking task calls `runInBackground()`, and cadences are
+spread across the hour instead of all landing on minute 0. See the header
+comment in `app/Console/Kernel.php` — those invariants are enforced by
+`tests/Feature/SchedulerConcurrencyTest.php`.
 
 **Notes:**
 
 - Do NOT paste cron syntax directly into the terminal — it must go through cPanel Cron Jobs UI or `crontab -e`.
 - Keep exactly one scheduler cron on the server.
 - Do **not** add direct `php artisan crm:*` cron entries; all CRM automation must flow through `schedule:run`.
-- Keep exactly one queue worker process path for the app. If you use a direct `queue:work` cron or Supervisor entry, do not add a second competing queue worker cron path elsewhere.
+- Do **not** add a direct `queue:work` cron or Supervisor entry. All four queue
+  workers are defined in `app/Console/Kernel.php` and started by the scheduler
+  with `withoutOverlapping()` + `onOneServer()`. A hand-added worker cron has
+  taken the site down before by exhausting the entry-process limit.
+
+### 10.0 Queue lanes
+
+Four workers run, split by job duration so a slow job cannot starve a fast one:
+
+| Lane | Queues | Connection | For |
+|---|---|---|---|
+| fast | `push,alerts,default,kyc-fanout` | `database` | jobs under ~10 min |
+| sync | `sync-clients,sync-clients-reconcile` | `database` | client sync slices |
+| optimize | `auto_optimize` | `database` | SEO/LLM item jobs |
+| heavy | `heavy` | `database_long` | jobs up to 60 min |
+
+The connection split exists because of `retry_after`: a job whose timeout
+exceeds its connection's `retry_after` is redelivered to a second worker while
+the first is still running, and every redelivery costs another PHP process.
+`database` is 900s and `database_long` is 4200s. **When adding a job, its
+timeout must be less than its connection's `retry_after`** — route long jobs
+through the `App\Jobs\Concerns\RunsOnHeavyQueue` trait. This is asserted in
+`tests/Feature/SchedulerConcurrencyTest.php`.
 
 ### 10.1 Set up Laravel Pulse server monitoring
 

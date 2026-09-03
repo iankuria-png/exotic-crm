@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\RunsOnHeavyQueue;
 use App\Models\Client;
 use App\Services\ClientRetentionInsightService;
 use Illuminate\Bus\Queueable;
@@ -12,7 +13,7 @@ use Illuminate\Queue\SerializesModels;
 
 class RefreshClientRetentionInsightsJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
 
     public int $tries = 2;
     public int $timeout = 900;
@@ -21,6 +22,7 @@ class RefreshClientRetentionInsightsJob implements ShouldQueue
         public readonly int $platformId,
         public readonly string $syncedAfter,
     ) {
+        $this->routeToHeavyQueue();
     }
 
     public function handle(ClientRetentionInsightService $clientRetentionInsightService): void

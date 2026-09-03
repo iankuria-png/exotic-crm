@@ -9,6 +9,7 @@ use App\Models\ClientSyncRun;
 use App\Models\KycSubject;
 use App\Models\Platform;
 use App\Support\CityNormalizer;
+use App\Support\SyncSliceBudget;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -33,7 +34,7 @@ class ClientSyncService
      * Full sync: import all profiles from WordPress to CRM clients table
      * Returns count of created, updated, and total records
      */
-    public function fullSync(int $perPage = 100, string $syncMode = 'legacy_full'): array
+    public function fullSync(int $perPage = 100, string $syncMode = 'legacy_full', ?SyncSliceBudget $budget = null): array
     {
         $page = 1;
         $created = 0;
@@ -58,20 +59,21 @@ class ClientSyncService
             ]);
 
             $page++;
-        } while ($page <= $totalPages);
+        } while ($page <= $totalPages && ! ($budget && $budget->isExhausted($page - 1)));
 
         return [
             'created' => $created,
             'updated' => $updated,
             'skipped' => $skipped,
             'total' => $total,
+            'complete' => $page > $totalPages,
         ];
     }
 
     /**
      * Delta sync: only import profiles modified after the last sync
      */
-    public function deltaSync(int $perPage = 100): array
+    public function deltaSync(int $perPage = 100, ?SyncSliceBudget $budget = null): array
     {
         $modifiedAfter = $this->resolveDeltaModifiedAfter();
 
@@ -92,13 +94,14 @@ class ClientSyncService
             $total += (int) ($chunk['processed'] ?? 0);
 
             $page++;
-        } while ($page <= $totalPages);
+        } while ($page <= $totalPages && ! ($budget && $budget->isExhausted($page - 1)));
 
         return [
             'created' => $created,
             'updated' => $updated,
             'skipped' => $skipped,
             'total' => $total,
+            'complete' => $page > $totalPages,
         ];
     }
 
@@ -115,13 +118,25 @@ class ClientSyncService
             ->firstOrFail();
     }
 
-    public function runBulkSync(ClientSyncRun $run, int $perPage = 100): array
-    {
+    /**
+     * Run one bounded slice of a sync run.
+     *
+     * The returned array carries a `complete` flag: when it is false the run
+     * still has work left and the caller is expected to re-queue it. Callers
+     * that must run to completion in a single call (console one-offs, tests)
+     * pass an unlimited budget.
+     */
+    public function runBulkSync(
+        ClientSyncRun $run,
+        int $perPage = 100,
+        ?SyncSliceBudget $budget = null
+    ): array {
+        $budget = $budget ?: SyncSliceBudget::unlimited();
         $capability = $this->resolveCapabilityState($run);
 
         return match ($capability['protocol']) {
-            'v2' => $this->runV2BulkSync($run, $perPage, $capability),
-            'v1' => $this->runLegacyBulkSync($run, $perPage, $capability),
+            'v2' => $this->runV2BulkSync($run, $perPage, $capability, $budget),
+            'v1' => $this->runLegacyBulkSync($run, $perPage, $capability, $budget),
             default => throw new \RuntimeException('Unsupported client sync protocol negotiation result.'),
         };
     }
@@ -317,8 +332,19 @@ class ClientSyncService
         return null;
     }
 
-    private function runLegacyBulkSync(ClientSyncRun $run, int $perPage, array $capability): array
-    {
+    /**
+     * The v1 feed is page-number based with no cursor, so a partial pass cannot
+     * be resumed the way v2 can. It therefore gets a hard page ceiling rather
+     * than a resumable budget: better to sync a bounded prefix each cycle than
+     * to let a slow legacy market pin a worker indefinitely. Markets still on
+     * v1 should be moved to the v2 sync contract.
+     */
+    private function runLegacyBulkSync(
+        ClientSyncRun $run,
+        int $perPage,
+        array $capability,
+        SyncSliceBudget $budget
+    ): array {
         $isReconcile = $run->mode === 'reconcile';
 
         $run->forceFill([
@@ -329,12 +355,12 @@ class ClientSyncService
         ])->save();
 
         $result = $isReconcile
-            ? $this->fullSync($perPage, 'reconcile')
-            : $this->deltaSync($perPage);
+            ? $this->fullSync($perPage, 'reconcile', $budget)
+            : $this->deltaSync($perPage, $budget);
 
         $pruned = 0;
         if ($isReconcile) {
-            $pruned = $this->pruneClientsNotSeenInReconcile($run);
+            $pruned = (int) $this->pruneClientsNotSeenInReconcile($run)['deleted'];
         }
 
         $run->forceFill([
@@ -364,27 +390,25 @@ class ClientSyncService
             'tombstones_processed' => 0,
             'pruned' => $pruned,
             'checkpoint_after_run' => null,
+            'complete' => (bool) ($result['complete'] ?? true),
         ];
     }
 
-    private function runV2BulkSync(ClientSyncRun $run, int $perPage, array $capability): array
-    {
+    private function runV2BulkSync(
+        ClientSyncRun $run,
+        int $perPage,
+        array $capability,
+        SyncSliceBudget $budget
+    ): array {
         $run->forceFill([
             'protocol' => 'v2',
             'fallback_reason' => null,
             'capability_snapshot' => $capability,
+            'phase' => $run->phase ?: ClientSyncRun::PHASE_CLIENTS,
+            'slices' => (int) $run->slices + 1,
         ])->save();
 
-        $runService = app(ClientSyncRunService::class);
         $mode = $run->mode === 'reconcile' ? 'reconcile' : 'delta';
-        $checkpoint = $this->platform->client_sync_checkpoint_at;
-        $modifiedAfter = $mode === 'delta' && $checkpoint
-            ? $checkpoint->copy()->subMinutes(self::DELTA_OVERLAP_MINUTES)->toIso8601String()
-            : null;
-
-        $cursorModifiedAt = null;
-        $cursorPostId = null;
-        $runUpperBound = null;
         $summary = [
             'created' => 0,
             'updated' => 0,
@@ -392,7 +416,68 @@ class ClientSyncService
             'processed' => 0,
             'tombstones_processed' => 0,
             'pruned' => 0,
+            'complete' => false,
         ];
+
+        if ($run->phase === ClientSyncRun::PHASE_CLIENTS) {
+            $phase = $this->syncV2ClientPages($run, $perPage, $mode, $budget);
+
+            foreach (['created', 'updated', 'skipped', 'processed'] as $key) {
+                $summary[$key] += (int) ($phase[$key] ?? 0);
+            }
+
+            if (! $phase['complete']) {
+                return $summary;
+            }
+
+            $run->forceFill([
+                'phase' => $mode === 'reconcile'
+                    ? ClientSyncRun::PHASE_TOMBSTONES
+                    : ClientSyncRun::PHASE_FINALISE,
+            ])->save();
+        }
+
+        if ($run->phase === ClientSyncRun::PHASE_TOMBSTONES) {
+            $phase = $this->processV2Tombstones($run, $perPage, $budget);
+            $summary['tombstones_processed'] += (int) $phase['processed'];
+
+            if (! $phase['complete']) {
+                return $summary;
+            }
+
+            $run->forceFill(['phase' => ClientSyncRun::PHASE_FINALISE])->save();
+        }
+
+        return array_merge($summary, $this->finaliseV2Run($run, $mode, $capability, $budget));
+    }
+
+    /**
+     * Page through the v2 client feed until the feed is exhausted or the slice
+     * budget runs out. Resumes from the cursor persisted on the run, so a
+     * partially completed run picks up exactly where the last slice stopped.
+     *
+     * @return array{created:int,updated:int,skipped:int,processed:int,complete:bool}
+     */
+    private function syncV2ClientPages(
+        ClientSyncRun $run,
+        int $perPage,
+        string $mode,
+        SyncSliceBudget $budget
+    ): array {
+        $runService = app(ClientSyncRunService::class);
+        $checkpoint = $this->platform->client_sync_checkpoint_at;
+        $modifiedAfter = $mode === 'delta' && $checkpoint
+            ? $checkpoint->copy()->subMinutes(self::DELTA_OVERLAP_MINUTES)->toIso8601String()
+            : null;
+
+        // Resume state. The upper bound is fixed for the whole run so that
+        // profiles modified mid-run cannot slip in behind the cursor.
+        $cursorModifiedAt = $run->cursor_modified_at?->toIso8601String();
+        $cursorPostId = $run->cursor_post_id ? (int) $run->cursor_post_id : null;
+        $runUpperBound = $run->run_upper_bound_modified_at?->toIso8601String();
+
+        $summary = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'processed' => 0, 'complete' => false];
+        $pages = 0;
 
         do {
             $response = $this->wpSync->getCursorClients(array_filter([
@@ -404,24 +489,28 @@ class ClientSyncService
                 'mode' => $mode,
             ], static fn ($value) => $value !== null && $value !== ''));
 
-            $runUpperBound = $runUpperBound ?: (string) ($response['run_upper_bound_modified_at'] ?? null);
-            if (! $runUpperBound) {
-                throw new \RuntimeException('WordPress v2 sync feed did not return a run upper bound.');
-            }
+            $pages++;
 
-            $run->forceFill([
-                'run_upper_bound_modified_at' => Carbon::parse($runUpperBound, 'UTC')->utc(),
-            ])->save();
+            if (! $runUpperBound) {
+                $runUpperBound = (string) ($response['run_upper_bound_modified_at'] ?? '');
+
+                if ($runUpperBound === '') {
+                    throw new \RuntimeException('WordPress v2 sync feed did not return a run upper bound.');
+                }
+
+                $run->forceFill([
+                    'run_upper_bound_modified_at' => Carbon::parse($runUpperBound, 'UTC')->utc(),
+                ])->save();
+            }
 
             $chunk = $this->applyBulkClients(
                 is_array($response['data'] ?? null) ? $response['data'] : [],
                 $mode
             );
 
-            $summary['created'] += (int) ($chunk['created'] ?? 0);
-            $summary['updated'] += (int) ($chunk['updated'] ?? 0);
-            $summary['skipped'] += (int) ($chunk['skipped'] ?? 0);
-            $summary['processed'] += (int) ($chunk['processed'] ?? 0);
+            foreach (['created', 'updated', 'skipped', 'processed'] as $key) {
+                $summary[$key] += (int) ($chunk[$key] ?? 0);
+            }
 
             $cursorModifiedAt = $response['next_cursor_modified_at'] ?? $cursorModifiedAt;
             $cursorPostId = isset($response['next_cursor_post_id']) ? (int) $response['next_cursor_post_id'] : $cursorPostId;
@@ -434,14 +523,138 @@ class ClientSyncService
                 'cursor_modified_at' => $cursorModifiedAt ? Carbon::parse((string) $cursorModifiedAt, 'UTC')->utc() : null,
                 'cursor_post_id' => $cursorPostId,
             ]);
-        } while (! empty($response['has_more']));
 
-        if ($mode === 'reconcile') {
-            $summary['tombstones_processed'] = $this->processV2Tombstones($run, $perPage);
-            $summary['pruned'] = $this->pruneClientsNotSeenInReconcile($run);
+            $hasMore = ! empty($response['has_more']);
+
+            if ($hasMore && $budget->isExhausted($pages)) {
+                Log::info('Client sync slice paused on budget; run will resume from its cursor.', [
+                    'run_id' => (int) $run->id,
+                    'platform_id' => (int) $this->platform->id,
+                    'phase' => ClientSyncRun::PHASE_CLIENTS,
+                    'pages' => $pages,
+                    'elapsed_seconds' => round($budget->elapsedSeconds(), 1),
+                ]);
+
+                return $summary;
+            }
+        } while ($hasMore);
+
+        $summary['complete'] = true;
+
+        return $summary;
+    }
+
+    /**
+     * @return array{processed:int,complete:bool}
+     */
+    private function processV2Tombstones(ClientSyncRun $run, int $perPage, SyncSliceBudget $budget): array
+    {
+        $runService = app(ClientSyncRunService::class);
+        $removedAfter = $this->platform->client_sync_tombstone_checkpoint_at
+            ? $this->platform->client_sync_tombstone_checkpoint_at->toIso8601String()
+            : null;
+
+        $cursorRemovedAt = $run->tombstone_cursor_removed_at?->toIso8601String();
+        $cursorPostId = $run->tombstone_cursor_post_id ? (int) $run->tombstone_cursor_post_id : null;
+        $removedUpperBound = $run->tombstone_upper_bound_removed_at?->toIso8601String();
+
+        $processed = 0;
+        $pages = 0;
+
+        do {
+            $response = $this->wpSync->getClientTombstones(array_filter([
+                'limit' => $perPage,
+                'removed_after' => $removedAfter,
+                'removed_before' => $removedUpperBound,
+                'cursor_removed_at' => $cursorRemovedAt,
+                'cursor_post_id' => $cursorPostId,
+            ], static fn ($value) => $value !== null && $value !== ''));
+
+            $pages++;
+
+            if (! $removedUpperBound) {
+                $removedUpperBound = (string) ($response['removed_upper_bound'] ?? '');
+
+                if ($removedUpperBound !== '') {
+                    $run->forceFill([
+                        'tombstone_upper_bound_removed_at' => Carbon::parse($removedUpperBound, 'UTC')->utc(),
+                    ])->save();
+                }
+            }
+
+            $rows = is_array($response['data'] ?? null) ? $response['data'] : [];
+            $applied = $this->applyTombstones($rows);
+            $processed += $applied;
+
+            $cursorRemovedAt = $response['next_cursor_removed_at'] ?? $cursorRemovedAt;
+            $cursorPostId = isset($response['next_cursor_post_id']) ? (int) $response['next_cursor_post_id'] : $cursorPostId;
+
+            $run = $runService->recordProgress($run, [
+                'tombstones_processed' => $applied,
+                'tombstone_cursor_removed_at' => $cursorRemovedAt ? Carbon::parse((string) $cursorRemovedAt, 'UTC')->utc() : null,
+                'tombstone_cursor_post_id' => $cursorPostId,
+            ]);
+
+            $hasMore = ! empty($response['has_more']);
+
+            if ($hasMore && $budget->isExhausted($pages)) {
+                Log::info('Client sync slice paused on budget; run will resume from its cursor.', [
+                    'run_id' => (int) $run->id,
+                    'platform_id' => (int) $this->platform->id,
+                    'phase' => ClientSyncRun::PHASE_TOMBSTONES,
+                    'pages' => $pages,
+                    'elapsed_seconds' => round($budget->elapsedSeconds(), 1),
+                ]);
+
+                return ['processed' => $processed, 'complete' => false];
+            }
+        } while ($hasMore);
+
+        if ($removedUpperBound) {
+            $this->platform->forceFill([
+                'client_sync_tombstone_checkpoint_at' => Carbon::parse($removedUpperBound, 'UTC')->utc(),
+                'client_sync_tombstone_checkpoint_post_id' => null,
+            ])->save();
         }
 
-        $checkpointAfterRun = Carbon::parse($runUpperBound, 'UTC')
+        return ['processed' => $processed, 'complete' => true];
+    }
+
+    /**
+     * Prune removed profiles and advance the platform checkpoint. Only reached
+     * once every page of every earlier phase has been applied, so the
+     * checkpoint can never move past work that was not actually done.
+     *
+     * @return array{pruned:int,complete:bool,checkpoint_after_run:?Carbon}
+     */
+    private function finaliseV2Run(
+        ClientSyncRun $run,
+        string $mode,
+        array $capability,
+        SyncSliceBudget $budget
+    ): array {
+        $runUpperBound = $run->run_upper_bound_modified_at;
+
+        if (! $runUpperBound) {
+            throw new \RuntimeException('Client sync run reached finalisation without a run upper bound.');
+        }
+
+        $prune = $mode === 'reconcile'
+            ? $this->pruneClientsNotSeenInReconcile($run, $budget)
+            : ['deleted' => 0, 'complete' => true];
+
+        // The checkpoint must not advance while profiles are still awaiting
+        // pruning: the "not seen since this run started" query is scoped to
+        // this run, so abandoning it mid-way would strand those rows.
+        if (! $prune['complete']) {
+            return [
+                'pruned' => (int) $prune['deleted'],
+                'complete' => false,
+                'checkpoint_after_run' => null,
+            ];
+        }
+
+        $checkpointAfterRun = $runUpperBound->copy()
             ->subMinutes(self::SAFETY_LAG_MINUTES)
             ->utc();
 
@@ -458,54 +671,11 @@ class ClientSyncService
 
         $this->platform->forceFill($platformUpdate)->save();
 
-        return array_merge($summary, [
+        return [
+            'pruned' => (int) $prune['deleted'],
+            'complete' => true,
             'checkpoint_after_run' => $checkpointAfterRun,
-        ]);
-    }
-
-    private function processV2Tombstones(ClientSyncRun $run, int $perPage): int
-    {
-        $runService = app(ClientSyncRunService::class);
-        $removedAfter = $this->platform->client_sync_tombstone_checkpoint_at
-            ? $this->platform->client_sync_tombstone_checkpoint_at->toIso8601String()
-            : null;
-        $cursorRemovedAt = null;
-        $cursorPostId = null;
-        $removedUpperBound = null;
-        $processed = 0;
-
-        do {
-            $response = $this->wpSync->getClientTombstones(array_filter([
-                'limit' => $perPage,
-                'removed_after' => $removedAfter,
-                'removed_before' => $removedUpperBound,
-                'cursor_removed_at' => $cursorRemovedAt,
-                'cursor_post_id' => $cursorPostId,
-            ], static fn ($value) => $value !== null && $value !== ''));
-
-            $removedUpperBound = $removedUpperBound ?: (string) ($response['removed_upper_bound'] ?? null);
-            $rows = is_array($response['data'] ?? null) ? $response['data'] : [];
-            $applied = $this->applyTombstones($rows);
-            $processed += $applied;
-
-            $cursorRemovedAt = $response['next_cursor_removed_at'] ?? $cursorRemovedAt;
-            $cursorPostId = isset($response['next_cursor_post_id']) ? (int) $response['next_cursor_post_id'] : $cursorPostId;
-
-            $run = $runService->recordProgress($run, [
-                'tombstones_processed' => $applied,
-                'tombstone_cursor_removed_at' => $cursorRemovedAt ? Carbon::parse((string) $cursorRemovedAt, 'UTC')->utc() : null,
-                'tombstone_cursor_post_id' => $cursorPostId,
-            ]);
-        } while (! empty($response['has_more']));
-
-        if ($removedUpperBound) {
-            $this->platform->forceFill([
-                'client_sync_tombstone_checkpoint_at' => Carbon::parse($removedUpperBound, 'UTC')->utc(),
-                'client_sync_tombstone_checkpoint_post_id' => null,
-            ])->save();
-        }
-
-        return $processed;
+        ];
     }
 
     private function applyBulkClients(array $wpClients, string $mode): array
@@ -801,7 +971,15 @@ class ClientSyncService
             ]);
     }
 
-    private function pruneClientsNotSeenInReconcile(ClientSyncRun $run): int
+    /**
+     * @param  SyncSliceBudget|null  $budget  when supplied, pruning stops once
+     *         the slice budget is spent. The query is inherently resumable —
+     *         it selects clients not seen since the run started — so the next
+     *         slice simply picks up the remainder.
+     *
+     * @return array{deleted:int,complete:bool}
+     */
+    private function pruneClientsNotSeenInReconcile(ClientSyncRun $run, ?SyncSliceBudget $budget = null): array
     {
         $runStartedAt = $run->started_at ?: now();
         $reason = sprintf(
@@ -809,6 +987,8 @@ class ClientSyncService
             (int) $run->id
         );
         $deleted = 0;
+        $chunks = 0;
+        $complete = true;
 
         Client::query()
             ->where('platform_id', (int) $this->platform->id)
@@ -819,7 +999,7 @@ class ClientSyncService
                     ->orWhere('last_seen_in_reconcile_at', '<', $runStartedAt);
             })
             ->orderBy('id')
-            ->chunkById(100, function ($clients) use (&$deleted, $run, $reason): void {
+            ->chunkById(100, function ($clients) use (&$deleted, &$chunks, &$complete, $run, $reason, $budget): bool {
                 /** @var Client $client */
                 foreach ($clients as $client) {
                     app(ClientDeletionService::class)->deleteClientFromSourcePrune(
@@ -829,9 +1009,19 @@ class ClientSyncService
                     );
                     $deleted++;
                 }
+
+                $chunks++;
+
+                if ($budget && $budget->isExhausted($chunks)) {
+                    $complete = false;
+
+                    return false;
+                }
+
+                return true;
             });
 
-        return $deleted;
+        return ['deleted' => $deleted, 'complete' => $complete];
     }
 
     private function resolveCapabilityState(ClientSyncRun $run): array

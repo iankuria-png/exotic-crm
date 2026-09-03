@@ -34,11 +34,29 @@ return [
             'driver' => 'sync',
         ],
 
+        // Fast + sync lanes. `retry_after` MUST stay above the longest job
+        // timeout that can land on these queues, or the worker redelivers a
+        // still-running job to a second worker and the process count climbs
+        // until the account's entry-process limit 504s the site. The longest
+        // job here is RunClientSyncJob, capped at one bounded slice.
         'database' => [
             'driver' => 'database',
             'table' => 'jobs',
             'queue' => 'default',
-            'retry_after' => 330,
+            'retry_after' => 900,
+            'after_commit' => false,
+        ],
+
+        // Heavy lane: same `jobs` table, separate connection purely so slow
+        // jobs (lifecycle rollback/restore, PBN seeding, bio scrubs, push
+        // uploads, retention insight refreshes) get a redelivery window wide
+        // enough for their timeouts without forcing the fast lane to wait an
+        // hour before retrying a genuinely crashed job.
+        'database_long' => [
+            'driver' => 'database',
+            'table' => 'jobs',
+            'queue' => 'heavy',
+            'retry_after' => 4200,
             'after_commit' => false,
         ],
 
