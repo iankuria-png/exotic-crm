@@ -174,7 +174,9 @@ class CeoDashboardDataService
                             'payments_count' => (int) $channelRows->sum('payments_count'),
                         ];
                     })
-                    ->sortByDesc(fn (array $channel) => (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'])))
+                    ->sortByDesc(fn (array $channel) => $channel['normalized_total'] !== null
+                        ? (float) $channel['normalized_total']
+                        : (float) array_sum($channel['source_breakdown'] ?? []))
                     ->values();
 
                 $market = [
@@ -193,17 +195,40 @@ class CeoDashboardDataService
 
                 return $market;
             })
-            ->sortByDesc(fn (array $market) => (float) ($market['normalized_total'] ?? array_sum($market['source_breakdown'])))
+            ->sortByDesc(fn (array $market) => $market['normalized_total'] !== null
+                ? (float) $market['normalized_total']
+                : (float) array_sum($market['source_breakdown'] ?? []))
             ->values();
 
-        $total = (float) $markets->sum(fn (array $market) => (float) ($market['normalized_total'] ?? array_sum($market['source_breakdown'])));
-        $withShares = $markets->map(function (array $market) use ($total) {
-            $value = (float) ($market['normalized_total'] ?? array_sum($market['source_breakdown']));
-            $market['share_percent'] = $total > 0 ? round(($value / $total) * 100, 1) : 0.0;
+        // Native amounts are only comparable with each other when every market is in the
+        // same currency — that is the single-market/no-FX case, where reporting natively
+        // is right. The moment currencies are mixed, an unconverted native amount must be
+        // excluded rather than substituted: the old `?? array_sum(source_breakdown)`
+        // fallback counted CFA 10,000 as USD 10,000 and gave that market 89.7% of revenue.
+        $nativeBasis = $this->nativeReportingBasis($markets);
+
+        $valueFor = function (array $row) use ($nativeBasis): ?float {
+            if ($row['normalized_total'] !== null) {
+                return (float) $row['normalized_total'];
+            }
+
+            return $nativeBasis === null ? null : (float) array_sum($row['source_breakdown'] ?? []);
+        };
+
+        $total = (float) $markets->sum(fn (array $market) => $valueFor($market) ?? 0.0);
+        $withShares = $markets->map(function (array $market) use ($total, $valueFor) {
+            $value = $valueFor($market);
+            $market['value'] = $value ?? 0.0;
+            $market['fx_unresolved'] = $value === null;
+            $market['share_percent'] = ($value !== null && $total > 0) ? round(($value / $total) * 100, 1) : 0.0;
             $market['channels'] = collect($market['channels'] ?? [])
-                ->map(function (array $channel) use ($value) {
-                    $channelValue = (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'] ?? []));
-                    $channel['share_percent'] = $value > 0 ? round(($channelValue / $value) * 100, 1) : 0.0;
+                ->map(function (array $channel) use ($value, $valueFor) {
+                    $channelValue = $valueFor($channel);
+                    $channel['value'] = $channelValue ?? 0.0;
+                    $channel['fx_unresolved'] = $channelValue === null;
+                    $channel['share_percent'] = ($channelValue !== null && $value !== null && $value > 0)
+                        ? round(($channelValue / $value) * 100, 1)
+                        : 0.0;
 
                     return $channel;
                 })
@@ -1555,6 +1580,33 @@ class CeoDashboardDataService
             'label' => 'Avg daily',
             'message' => $message,
         ];
+    }
+
+    /**
+     * The currency the window can legitimately be reported in natively, or null.
+     *
+     * Native sums are comparable only when nothing converted and every market shares one
+     * currency — a single-market or FX-off deployment, where reporting in that currency is
+     * correct. If any market did convert, or currencies are mixed, there is no common
+     * native unit and unconverted markets must be excluded from the arithmetic instead.
+     *
+     * @param  \Illuminate\Support\Collection<int, array<string, mixed>>  $markets
+     */
+    private function nativeReportingBasis(Collection $markets): ?string
+    {
+        if ($markets->isEmpty() || $markets->contains(fn (array $market) => $market['normalized_total'] !== null)) {
+            return null;
+        }
+
+        $currencies = [];
+
+        foreach ($markets as $market) {
+            foreach (array_keys($market['source_breakdown'] ?? []) as $currency) {
+                $currencies[$currency] = true;
+            }
+        }
+
+        return count($currencies) === 1 ? (string) array_key_first($currencies) : null;
     }
 
     private function summarizeChannels(Collection $rows, string $targetCurrency, float $total): array

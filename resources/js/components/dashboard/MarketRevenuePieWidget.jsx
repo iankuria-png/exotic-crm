@@ -31,7 +31,11 @@ function PieTooltip({ active, payload, reporting, viewMode }) {
     return (
         <div className="min-w-[190px] rounded-lg border border-slate-800 bg-slate-950 p-3 text-white shadow-2xl">
             <p className="text-sm font-semibold">{title}</p>
-            <p className="mt-1 text-xs text-slate-300">{Number(item.share_percent || 0).toFixed(1)}% of collected revenue</p>
+            <p className="mt-1 text-xs text-slate-300">
+                {item.fx_unresolved
+                    ? 'No FX rate — excluded from the total'
+                    : `${Number(item.share_percent || 0).toFixed(1)}% of collected revenue`}
+            </p>
             <p className="mt-2 text-base font-semibold text-teal-200">
                 {moneyFromBreakdown(item.source_breakdown, item.normalized_total, item.normalized_currency || reporting?.targetCurrency, reporting?.displayMode)}
             </p>
@@ -50,7 +54,7 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
             return (data?.channels || []).map((channel) => ({
                 ...channel,
                 name: channel.label,
-                value: Number(channel.normalized_total ?? Object.values(channel.source_breakdown || {}).reduce((sum, amount) => sum + Number(amount || 0), 0)),
+                value: Number(channel.value || 0),
                 color: CHANNEL_COLORS[channel.key] || '#64748b',
             }));
         }
@@ -58,13 +62,16 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
         const top = [];
         const other = [];
         markets.forEach((market) => {
-            if (Number(market.share_percent || 0) <= 2) other.push(market);
+            // An unconvertible market has no share to rank on, so it would be swept into
+            // "Other" and disappear — exactly the market the reader needs to see and fix.
+            if (market.fx_unresolved) top.push(market);
+            else if (Number(market.share_percent || 0) <= 2) other.push(market);
             else top.push(market);
         });
 
         const rows = top.map((market, index) => ({
             ...market,
-            value: Number(market.normalized_total ?? Object.values(market.source_breakdown || {}).reduce((sum, amount) => sum + Number(amount || 0), 0)),
+            value: Number(market.value || 0),
             color: COLORS[index % COLORS.length],
         }));
 
@@ -83,11 +90,12 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                 normalized_total: other.some((item) => item.normalized_total === null || item.normalized_total === undefined)
                     ? null
                     : other.reduce((sum, item) => sum + Number(item.normalized_total || 0), 0),
+                fx_unresolved: false,
                 normalized_currency: reporting?.targetCurrency || 'USD',
                 payments_count: other.reduce((sum, item) => sum + Number(item.payments_count || 0), 0),
                 color: '#94a3b8',
                 other_markets: other,
-                value: other.reduce((sum, item) => sum + Number(item.normalized_total ?? Object.values(item.source_breakdown || {}).reduce((sourceSum, amount) => sourceSum + Number(amount || 0), 0)), 0),
+                value: other.reduce((sum, item) => sum + Number(item.value || 0), 0),
             });
         }
 
@@ -188,7 +196,9 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                                     type="button"
                                     onClick={() => viewMode === 'market' && market.platform_id ? onSelectMarket(market.platform_id) : setShowOther((current) => !current)}
                                     className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                                    aria-label={`${market.name} ${Number(market.share_percent || 0).toFixed(1)} percent of revenue`}
+                                    aria-label={market.fx_unresolved
+                                        ? `${market.name}, revenue could not be converted and is excluded from the total`
+                                        : `${market.name} ${Number(market.share_percent || 0).toFixed(1)} percent of revenue`}
                                 >
                                     <span className="min-w-0 flex-1">
                                         <span className="flex items-center gap-2">
@@ -215,7 +225,11 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                                         )}
                                     </span>
                                     <span className="shrink-0 text-right">
-                                        <span className="block text-sm font-semibold text-slate-900">{Number(market.share_percent || 0).toFixed(1)}%</span>
+                                        {market.fx_unresolved ? (
+                                            <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">FX unresolved</span>
+                                        ) : (
+                                            <span className="block text-sm font-semibold text-slate-900">{Number(market.share_percent || 0).toFixed(1)}%</span>
+                                        )}
                                         <span className="block text-[11px] text-slate-500">
                                             {moneyFromBreakdown(market.source_breakdown, market.normalized_total, market.normalized_currency || reporting?.targetCurrency, reporting?.displayMode)}
                                         </span>
