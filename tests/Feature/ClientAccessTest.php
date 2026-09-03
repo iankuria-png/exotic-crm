@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use App\Services\ClientSessionDiagnosticsService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\Sanctum;
 use Mockery\MockInterface;
 use Tests\TestCase;
@@ -1018,6 +1019,88 @@ class ClientAccessTest extends TestCase
         ])->assertOk()
             ->assertJsonPath('transport', 'admin_post')
             ->assertJsonPath('url', $adminPostUrl);
+    }
+
+    public function test_login_as_client_warns_when_neither_transport_is_confirmed(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+        $frontEndUrl = 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token';
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl, $frontEndUrl) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => $frontEndUrl,
+                    'target' => 'profile',
+                ], 200);
+            }
+
+            // admin-post is bounced, and the front-end URL is served from a
+            // page cache so PHP never runs and the bad token is not rejected.
+            if (str_contains($url, 'admin-post.php')) {
+                return Http::response('', 302, ['Location' => 'https://kenya.example.test/']);
+            }
+
+            return Http::response('<html><body>cached profile page</body></html>', 200);
+        });
+
+        Log::spy();
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+            'target' => 'profile',
+            'reason' => 'Opening the client profile',
+        ])->assertOk();
+
+        // A silently logged-out tab is the exact failure this whole exercise
+        // started from; it must never happen again without a log line.
+        Log::shouldHaveReceived('warning')
+            ->withArgs(fn (string $message) => $message === 'No confirmed client session transport on this market');
+    }
+
+    public function test_transport_probe_result_is_cached_per_market(): void
+    {
+        [$platform, $client, $baseUrl] = $this->sessionDebugFixture();
+        $adminPostUrl = 'https://kenya.example.test/wp-admin/admin-post.php?action=exotic_crm_client_session&token=real-token';
+        $probes = 0;
+
+        Http::fake(function ($request) use ($baseUrl, $adminPostUrl, &$probes) {
+            $url = $request->url();
+
+            if ($url === $baseUrl.'/clients/8517/session-link') {
+                return Http::response([
+                    'url' => $adminPostUrl,
+                    'admin_post_url' => $adminPostUrl,
+                    'front_end_url' => 'https://kenya.example.test/escort/tracy/?crm_client_session=real-token',
+                    'target' => 'profile',
+                ], 200);
+            }
+
+            if (str_contains($url, ClientSessionDiagnosticsService::INVALID_PROBE_TOKEN)) {
+                $probes++;
+
+                return Http::response('This client session link is invalid or has expired.', 403);
+            }
+
+            return Http::response('', 200);
+        });
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        foreach (range(1, 3) as $ignored) {
+            $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+                'target' => 'profile',
+                'reason' => 'Opening the client profile',
+            ])->assertOk()->assertJsonPath('transport', 'admin_post');
+        }
+
+        // Interactive logins must not pay for the probe every time.
+        $this->assertSame(1, $probes, 'The transport probe should run once per market per cache window.');
     }
 
     public function test_login_as_client_keeps_admin_post_when_the_probe_cannot_conclude(): void

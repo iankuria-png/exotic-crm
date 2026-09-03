@@ -190,9 +190,9 @@ class CredentialDeliveryService
         // plugin runs, and the resulting 302 looks exactly like a successful
         // login. Check once per market and use the front-end consumer there.
         $transport = 'admin_post';
-        if ($frontEndUrl !== '' && $adminPostUrl !== '' && ! $this->adminPostTransportWorks($platform, $adminPostUrl)) {
-            $url = $frontEndUrl;
-            $transport = 'front_end';
+        if ($frontEndUrl !== '' && $adminPostUrl !== '') {
+            $transport = $this->resolveSessionTransport($client, $platform, $adminPostUrl, $frontEndUrl);
+            $url = $transport === 'front_end' ? $frontEndUrl : $adminPostUrl;
         }
 
         return [
@@ -204,42 +204,94 @@ class CredentialDeliveryService
     }
 
     /**
-     * True when the admin-post consumer actually executes on this market.
+     * Pick the consumer that actually executes on this market.
      *
      * Presenting a token that cannot be valid is what makes this reliable: only
      * the plugin's own handler answers a bad token with a 403, so anything else
      * — a redirect above all — means the handler never ran. The real one-time
      * token is never spent here.
      *
+     * Both transports are checked, never just the one being left behind. A
+     * front-end consumer can stop running too (a page-cache rule serving the
+     * URL without PHP is the obvious way), and switching to a transport nobody
+     * verified would fail silently for as long as this decision is cached.
+     *
      * Cached per market so an interactive login pays for this at most once an
      * hour, and so the result heals itself once the site is fixed.
      */
-    private function adminPostTransportWorks(Platform $platform, string $adminPostUrl): bool
+    private function resolveSessionTransport(
+        Client $client,
+        Platform $platform,
+        string $adminPostUrl,
+        string $frontEndUrl
+    ): string {
+        $cacheKey = 'crm.client_session_transport.'.(int) $platform->id;
+        $cached = Cache::get($cacheKey);
+        if (is_string($cached) && $cached !== '') {
+            return $cached;
+        }
+
+        $adminPostRuns = $this->sessionHandlerRuns($adminPostUrl);
+
+        // Inconclusive (a timeout, a malformed URL) is not evidence of a block.
+        // Keep the cache-safe default and do not cache a guess for an hour.
+        if ($adminPostRuns === null) {
+            return 'admin_post';
+        }
+
+        if ($adminPostRuns === true) {
+            Cache::put($cacheKey, 'admin_post', now()->addHour());
+
+            return 'admin_post';
+        }
+
+        $frontEndRuns = $this->sessionHandlerRuns($frontEndUrl);
+
+        if ($frontEndRuns === true) {
+            Cache::put($cacheKey, 'front_end', now()->addHour());
+
+            return 'front_end';
+        }
+
+        // admin-post is definitively blocked and the front end did not confirm
+        // either. Say so where it will be seen rather than handing staff a link
+        // that quietly lands them logged out, and do not cache the failure.
+        Log::warning('No confirmed client session transport on this market', [
+            'client_id' => (int) $client->id,
+            'platform_id' => (int) $platform->id,
+            'admin_post_blocked' => true,
+            'front_end_confirmed' => $frontEndRuns === true,
+            'front_end_inconclusive' => $frontEndRuns === null,
+        ]);
+
+        return 'front_end';
+    }
+
+    /**
+     * True when the plugin's handler answered, false when something else did,
+     * null when the probe could not reach a conclusion — a network blip must
+     * never be read as a blocked handler.
+     */
+    private function sessionHandlerRuns(string $consumerUrl): ?bool
     {
-        return Cache::remember(
-            'crm.client_session_transport.'.(int) $platform->id,
-            now()->addHour(),
-            function () use ($adminPostUrl): bool {
-                $probeUrl = ClientSessionDiagnosticsService::invalidTokenProbeUrl($adminPostUrl);
-                if ($probeUrl === null) {
-                    return true;
-                }
+        $probeUrl = ClientSessionDiagnosticsService::invalidTokenProbeUrl($consumerUrl);
+        if ($probeUrl === null) {
+            return null;
+        }
 
-                try {
-                    $response = Http::withOptions(['allow_redirects' => false])
-                        ->timeout(10)
-                        ->get($probeUrl);
-                } catch (\Throwable $exception) {
-                    // Inconclusive: keep the established default rather than
-                    // switching transport on a transient network blip.
-                    return true;
-                }
+        try {
+            $response = Http::withOptions(['allow_redirects' => false])
+                ->timeout(10)
+                ->get($probeUrl);
+        } catch (\Throwable $exception) {
+            return null;
+        }
 
-                return $response->status() === 403
-                    && (stripos((string) $response->body(), 'invalid or has expired') !== false
-                        || stripos((string) $response->body(), 'Client session unavailable') !== false);
-            }
-        );
+        $body = (string) $response->body();
+
+        return $response->status() === 403
+            && (stripos($body, 'invalid or has expired') !== false
+                || stripos($body, 'Client session unavailable') !== false);
     }
 
     private function normalizePayload(Client $client, array $payload): array
