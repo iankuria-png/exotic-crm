@@ -11,6 +11,8 @@ use App\Services\ClientSyncRunService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\WpSyncService;
+use App\Support\OpsCronReference;
+use App\Support\SchedulerHeartbeat;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -23,7 +25,9 @@ class SetupController extends Controller
 {
     private const SETUP_COMPLETED_KEY = 'setup_completed';
     private const DATA_BASELINE_KEY = 'data_baseline_mode';
-    private const HEARTBEAT_FILE = 'app/scheduler-heartbeat.json';
+
+    /** A tick this slow is the early form of the pile-up, not yet the outage. */
+    private const SCHEDULER_SLOW_TICK_MS = 10000;
 
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
@@ -499,14 +503,36 @@ class SetupController extends Controller
 
         try {
             $response = Http::timeout(10)->get($baseUrl);
+            $code = $response->status();
+
+            // A reachable host is not a working proxy. The previous version
+            // only treated 5xx as a failure, so a 404 — the exact thing
+            // production is serving today — badged as `healthy`. Anything
+            // outside 2xx/3xx is now an error, and a 401/403 is called out
+            // separately because it means the URL is right and the
+            // credentials are not.
+            if ($code >= 200 && $code < 400) {
+                $status = 'healthy';
+                $message = 'Payment proxy is reachable.';
+            } elseif ($code === 401 || $code === 403) {
+                $status = 'error';
+                $message = sprintf('Payment proxy rejected the request (HTTP %d). Check the proxy credentials.', $code);
+            } elseif ($code === 404) {
+                $status = 'error';
+                $message = 'Payment proxy returned HTTP 404. The base URL does not point at the proxy.';
+            } elseif ($code >= 500) {
+                $status = 'error';
+                $message = sprintf('Payment proxy responded with a server error (HTTP %d).', $code);
+            } else {
+                $status = 'error';
+                $message = sprintf('Payment proxy responded with HTTP %d.', $code);
+            }
 
             return [
-                'status' => $response->serverError() ? 'error' : 'healthy',
+                'status' => $status,
                 'base_url' => $baseUrl,
-                'http_status' => $response->status(),
-                'message' => $response->serverError()
-                    ? 'Payment proxy responded with a server error.'
-                    : 'Payment proxy is reachable.',
+                'http_status' => $code,
+                'message' => $message,
             ];
         } catch (\Throwable $exception) {
             return [
@@ -517,31 +543,88 @@ class SetupController extends Controller
         }
     }
 
+    /**
+     * Scheduler health, measured as pressure rather than presence.
+     *
+     * `age_seconds <= 300` was the whole of the previous test, and it answered
+     * `healthy` throughout the 3 September outage: ticks were running, there
+     * were simply too many of them at once. Overlap and tick duration are now
+     * reported alongside recency, and the cron string offered on screen is the
+     * flock-wrapped form from docs/DEPLOYMENT.md, reconciled against whatever
+     * is actually installed on the host.
+     */
     private function schedulerHeartbeat(): array
     {
-        $path = storage_path(self::HEARTBEAT_FILE);
-        if (!is_file($path)) {
-            return [
+        $expectedCron = OpsCronReference::schedulerCron();
+        $installedCron = OpsCronReference::detectInstalledSchedulerCron();
+
+        $base = [
+            'cron_command' => $expectedCron,
+            'php_binary' => OpsCronReference::phpBinary(),
+            'installed_cron' => $installedCron,
+        ];
+
+        $payload = SchedulerHeartbeat::read();
+
+        if ($payload === []) {
+            return $base + [
                 'status' => 'missing',
                 'last_ran_at' => null,
+                'age_seconds' => null,
+                'duration_ms' => null,
+                'due_count' => null,
+                'concurrent_ticks' => null,
+                'ticks' => [],
                 'message' => 'No scheduler heartbeat has been recorded yet.',
-                'cron_command' => '* * * * * cd /home/d9410/crm.exotic-online.com && /usr/local/bin/php artisan schedule:run >> /dev/null 2>&1',
             ];
         }
 
-        $payload = json_decode((string) file_get_contents($path), true);
-        $lastRanAt = is_array($payload) ? ($payload['ran_at'] ?? null) : null;
-        $timestamp = $lastRanAt ? strtotime((string) $lastRanAt) : @filemtime($path);
+        $lastRanAt = $payload['ran_at'] ?? null;
+        $timestamp = $lastRanAt ? strtotime((string) $lastRanAt) : @filemtime(SchedulerHeartbeat::path());
         $ageSeconds = $timestamp ? max(0, time() - $timestamp) : null;
 
-        return [
-            'status' => $ageSeconds !== null && $ageSeconds <= 300 ? 'healthy' : 'stale',
+        $openTicks = SchedulerHeartbeat::openTicks($payload);
+        $concurrent = count($openTicks);
+        $lastCompleted = SchedulerHeartbeat::lastCompletedTick($payload);
+        $durationMs = $lastCompleted['duration_ms'] ?? null;
+
+        $stale = $ageSeconds === null || $ageSeconds > 300;
+        $overlapping = $concurrent > 1;
+        $slow = $durationMs !== null && $durationMs >= self::SCHEDULER_SLOW_TICK_MS;
+
+        if ($stale) {
+            $status = 'stale';
+            $message = 'Scheduler heartbeat is stale. Check the cron job.';
+        } elseif ($overlapping) {
+            $status = 'error';
+            $message = sprintf(
+                '%d scheduler ticks are running at once. This is the process pile-up that took the site down on 3 September — check that the cron is wrapped in flock.',
+                $concurrent
+            );
+        } elseif ($slow) {
+            $status = 'degraded';
+            $message = sprintf('The last tick took %.1fs. Ticks approaching a minute stack up.', $durationMs / 1000);
+        } elseif ($installedCron['available'] && $installedCron['has_flock'] === false) {
+            $status = 'degraded';
+            $message = 'Ticks are running, but the installed cron has no flock wrapper.';
+        } else {
+            $status = 'healthy';
+            $message = 'Scheduler heartbeat is recent and ticks are not overlapping.';
+        }
+
+        return $base + [
+            'status' => $status,
             'last_ran_at' => $lastRanAt,
             'age_seconds' => $ageSeconds,
-            'message' => $ageSeconds !== null && $ageSeconds <= 300
-                ? 'Scheduler heartbeat is recent.'
-                : 'Scheduler heartbeat is stale. Check the cron job.',
-            'cron_command' => '* * * * * cd /home/d9410/crm.exotic-online.com && /usr/local/bin/php artisan schedule:run >> /dev/null 2>&1',
+            'duration_ms' => $durationMs,
+            'due_count' => $lastCompleted['due_count'] ?? ($payload['due_count'] ?? null),
+            'concurrent_ticks' => $concurrent,
+            'open_tick_pids' => array_values(array_filter(array_map(
+                fn (array $tick): ?int => $tick['pid'] ?? null,
+                $openTicks
+            ))),
+            'ticks' => array_slice($payload['ticks'] ?? [], -20),
+            'message' => $message,
         ];
     }
 

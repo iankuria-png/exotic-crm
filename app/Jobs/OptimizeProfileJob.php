@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\AutoOptimizeItem;
 use App\Models\AutoOptimizeRun;
 use App\Services\AutoOptimize\AutoOptimizeAlertService;
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 
 class OptimizeProfileJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $tries = 3;
     public int $timeout = 120; // 2 min max per LLM generation
@@ -39,8 +40,20 @@ class OptimizeProfileJob implements ShouldQueue
     // already serializes jobs, and WP-write rate is bounded by the write ledger,
     // so the lock buys nothing here. Removed to stop the stall.
 
+    public function shedCapability(): string
+    {
+        return 'auto_optimize';
+    }
+
     public function handle(AutoOptimizeBuilder $builder, AutoOptimizeAlertService $alertService): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         // If batch was cancelled, skip
         if ($this->batch()?->cancelled()) {
             return;

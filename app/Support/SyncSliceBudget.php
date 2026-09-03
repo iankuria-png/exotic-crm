@@ -2,6 +2,8 @@
 
 namespace App\Support;
 
+use App\Services\Ops\OperationsSettingsService;
+
 /**
  * Wall-clock and page budget for one slice of a client sync run.
  *
@@ -26,12 +28,29 @@ class SyncSliceBudget
         $this->startedAt = microtime(true);
     }
 
+    /**
+     * The live budget.
+     *
+     * Reads Settings → Operations first and falls back to config, so changing
+     * the slice budget takes effect on the next queued slice with no deploy and
+     * no `config:cache`. A settings failure — a missing table during a
+     * migration, a cache outage — falls straight through to the config value
+     * rather than taking client sync down with it.
+     */
     public static function fromConfig(): self
     {
-        return new self(
-            max(15, (int) config('services.client_sync.slice_seconds', 90)),
-            max(1, (int) config('services.client_sync.slice_max_pages', 25)),
-        );
+        $seconds = max(15, (int) config('services.client_sync.slice_seconds', 90));
+        $pages = max(1, (int) config('services.client_sync.slice_max_pages', 25));
+
+        try {
+            $settings = app(OperationsSettingsService::class);
+            $seconds = max(15, $settings->integer('ops.sync.slice_seconds'));
+            $pages = max(1, $settings->integer('ops.sync.slice_max_pages'));
+        } catch (\Throwable) {
+            // Keep the config-derived values.
+        }
+
+        return new self($seconds, $pages);
     }
 
     /**

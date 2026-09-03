@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Exceptions\SupportBoardUnavailableException;
+use App\Jobs\Concerns\Sheddable;
 use App\Models\SupportBoardSyncRun;
 use App\Services\SupportBoardLinkSyncService;
 use App\Services\SupportBoardSyncRunService;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 
 class RunSupportBoardSyncJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $tries = 3;
     public int $timeout = 300;
@@ -26,10 +27,22 @@ class RunSupportBoardSyncJob implements ShouldQueue
     ) {
     }
 
+    public function shedCapability(): string
+    {
+        return 'support_board_sync';
+    }
+
     public function handle(
         SupportBoardSyncRunService $supportBoardSyncRunService,
         SupportBoardLinkSyncService $supportBoardLinkSyncService
     ): void {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         $run = SupportBoardSyncRun::query()
             ->with('platform:id,name,support_board_api_url,support_board_token,phone_prefix')
             ->find($this->runId);

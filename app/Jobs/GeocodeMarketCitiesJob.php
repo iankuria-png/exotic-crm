@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\CityGeocode;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -25,7 +26,7 @@ use Illuminate\Support\Facades\Log;
  */
 class GeocodeMarketCitiesJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $tries = 1;       // self-chained; do not auto-retry a long batch
     public int $timeout = 300;   // 5 min ceiling per batch
@@ -47,8 +48,20 @@ class GeocodeMarketCitiesJob implements ShouldQueue, ShouldBeUnique
         return 'geocode-market-' . $this->platformId;
     }
 
+    public function shedCapability(): string
+    {
+        return 'geocoding';
+    }
+
     public function handle(): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         Artisan::call('crm:geocode-cities', [
             '--platform' => $this->platformId,
             '--limit' => max(1, $this->batch),

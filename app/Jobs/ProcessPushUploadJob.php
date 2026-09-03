@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\PushCampaignItem;
 use App\Services\PushCampaign\ProfileExtractionService;
 use App\Services\PushCampaign\PushCampaignService;
@@ -17,7 +18,7 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class ProcessPushUploadJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     private const ROW_CHUNK_SIZE = 500;
     private const DRY_RUN_ROW_CHUNK_SIZE = 2000;
@@ -34,12 +35,24 @@ class ProcessPushUploadJob implements ShouldQueue
     ) {
     }
 
+    public function shedCapability(): string
+    {
+        return 'push_campaigns';
+    }
+
     public function handle(
         ProfileExtractionService $profileExtractionService,
         PushCampaignService $pushCampaignService,
         UploadBatchStatusService $uploadBatchStatusService
     ): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         $uploadBatchStatusService->put($this->batchId, [
             'batch_id' => $this->batchId,
             'status' => 'processing',

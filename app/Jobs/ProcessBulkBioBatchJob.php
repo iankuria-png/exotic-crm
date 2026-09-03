@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\SeoBioBatch;
 use App\Models\SeoBioBatchRow;
 use App\Services\Seo\BioGenerationService;
@@ -26,7 +27,7 @@ use Illuminate\Support\Facades\Log;
  */
 class ProcessBulkBioBatchJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $tries = 1;
     public int $timeout = 0; // disable — generation can take hours for large batches
@@ -37,8 +38,20 @@ class ProcessBulkBioBatchJob implements ShouldQueue
         $this->onQueue('bulk_bio');
     }
 
+    public function shedCapability(): string
+    {
+        return 'bulk_bio';
+    }
+
     public function handle(BioGenerationService $generator): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         $batch = SeoBioBatch::find($this->batchId);
         if (!$batch) {
             Log::warning('seo.bulk.batch_missing', ['batch_id' => $this->batchId]);

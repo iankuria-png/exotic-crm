@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\Platform;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 
 class ExtractPushProfilesJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $timeout = 600;
 
@@ -27,8 +28,20 @@ class ExtractPushProfilesJob implements ShouldQueue
     ) {
     }
 
+    public function shedCapability(): string
+    {
+        return 'push_campaigns';
+    }
+
     public function handle(ProfileExtractionService $profileExtractionService): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         $campaign = PushCampaign::query()->find($this->campaignId);
         $platform = Platform::query()->find($this->platformId);
 

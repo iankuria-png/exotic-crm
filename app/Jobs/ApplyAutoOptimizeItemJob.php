@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\Sheddable;
 use App\Models\AutoOptimizeItem;
 use App\Models\AutoOptimizeRun;
 use App\Models\User;
@@ -23,7 +24,7 @@ use Illuminate\Support\Facades\Log;
  */
 class ApplyAutoOptimizeItemJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Sheddable;
 
     public int $tries = 3;
     public int $timeout = 90;
@@ -44,8 +45,20 @@ class ApplyAutoOptimizeItemJob implements ShouldQueue
     // (file-cache lock lingered on cPanel and release-looped, stalling the worker).
     // WP-write rate stays bounded by AutoOptimizeWriteLedger::max_writes_per_hour.
 
+    public function shedCapability(): string
+    {
+        return 'auto_optimize';
+    }
+
     public function handle(AutoOptimizeApplyService $applyService): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         if ($this->batch()?->cancelled()) {
             return;
         }

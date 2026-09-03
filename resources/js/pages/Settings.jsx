@@ -27,6 +27,7 @@ import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
+import OperationsWorkspace from '../components/OperationsWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
 import KycSetupWizard from '../components/kyc/KycSetupWizard';
 import { useAuth } from '../hooks/useAuth';
@@ -51,6 +52,7 @@ const baseTabs = [
     { id: 'security', label: 'Security' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'health', label: 'System Health' },
+    { id: 'operations', label: 'Operations' },
 ];
 const defaultDurationOptions = [
     { key: '1_week', label: '1 Week', days: 7 },
@@ -9397,6 +9399,10 @@ export default function Settings() {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
+            if (tab.id === 'operations') {
+                return ['admin', 'sub_admin'].includes(user?.role || '');
+            }
+
             return true;
         });
     }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles, isSales, user?.role]);
@@ -9493,6 +9499,9 @@ export default function Settings() {
                         setActiveTab('integrations');
                     }}
                 />
+            ) : null}
+            {activeTab === 'operations' && ['admin', 'sub_admin'].includes(user?.role || '') ? (
+                <OperationsWorkspace canOverride={(user?.role || '') === 'admin'} />
             ) : null}
         </div>
     );

@@ -409,7 +409,6 @@ export default function SystemHealthWorkspace({
         },
     });
 
-    const [copiedQueueCron, setCopiedQueueCron] = useState(false);
     const pulseUrl = queueStatusQuery.data?.pulse_url || '/pulse';
     const pulseCheckCommand = queueStatusQuery.data?.pulse_check_command || null;
     const clientSync = clientSyncQuery.data || null;
@@ -480,10 +479,48 @@ export default function SystemHealthWorkspace({
             content: (
                 <div className="space-y-3 text-sm text-slate-600">
                     <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(scheduler?.last_ran_at)}</span></p>
+                    <div className="grid grid-cols-3 gap-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Concurrent ticks</p>
+                            <p className={`mt-0.5 text-base font-semibold ${(scheduler?.concurrent_ticks ?? 0) > 1 ? 'text-rose-600' : 'text-slate-900'}`}>
+                                {scheduler?.concurrent_ticks ?? '—'}
+                            </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Last tick</p>
+                            <p className="mt-0.5 text-base font-semibold text-slate-900">
+                                {typeof scheduler?.duration_ms === 'number' ? `${(scheduler.duration_ms / 1000).toFixed(1)}s` : '—'}
+                            </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Tasks due</p>
+                            <p className="mt-0.5 text-base font-semibold text-slate-900">{scheduler?.due_count ?? '—'}</p>
+                        </div>
+                    </div>
                     <p>{scheduler?.message || 'No scheduler heartbeat recorded yet.'}</p>
+                    {scheduler?.installed_cron?.available === false ? (
+                        <p className="text-xs text-slate-500">{scheduler.installed_cron.message}</p>
+                    ) : null}
+                    {scheduler?.installed_cron?.available && scheduler.installed_cron.has_flock === false ? (
+                        <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+                            {scheduler.installed_cron.message}
+                        </p>
+                    ) : null}
+                    {scheduler?.installed_cron?.available && scheduler.installed_cron.matches_expected === false && scheduler.installed_cron.line ? (
+                        <div>
+                            <p className="mb-1 text-xs font-semibold text-slate-700">Installed on this host</p>
+                            <div className="rounded-lg bg-slate-900 p-3">
+                                <p className="break-all font-mono text-xs text-amber-200">{scheduler.installed_cron.line}</p>
+                            </div>
+                        </div>
+                    ) : null}
+                    <p className="text-xs font-semibold text-slate-700">Correct cron (flock-wrapped)</p>
                     <div className="rounded-lg bg-slate-950 p-3">
                         <p className="break-all font-mono text-xs text-emerald-200">{scheduler?.cron_command}</p>
                     </div>
+                    <p className="text-xs text-slate-500">
+                        The <span className="font-mono">flock</span> wrapper is required, not optional. Without it a slow tick stacks on the next one until the account runs out of entry processes.
+                    </p>
                     <button
                         type="button"
                         onClick={async () => {
@@ -1022,29 +1059,33 @@ export default function SystemHealthWorkspace({
                             </div>
                         ) : null}
 
-                        {queueStatusQuery.data?.queue_cron_command ? (
-                            <div>
-                                <p className="mb-2 text-xs font-semibold text-slate-700">Queue worker cron command</p>
-                                <div className="rounded-lg bg-slate-950 p-3">
-                                    <p className="break-all font-mono text-xs text-emerald-200">{queueStatusQuery.data.queue_cron_command}</p>
+                        {(queueStatusQuery.data?.queue_worker_lanes || []).length > 0 ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-900">Queue worker lanes</p>
+                                        <p className="mt-1 text-xs text-slate-600">
+                                            Started automatically by the Laravel scheduler every minute. Shown here for reference so you can see what is running.
+                                        </p>
+                                    </div>
+                                    <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-300">
+                                        Reference only
+                                    </span>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={async () => {
-                                        try {
-                                            await navigator.clipboard.writeText(queueStatusQuery.data.queue_cron_command);
-                                            setCopiedQueueCron(true);
-                                            toast.success('Queue cron command copied.');
-                                            window.setTimeout(() => setCopiedQueueCron(false), 1800);
-                                        } catch {
-                                            toast.error('Unable to copy the cron command.');
-                                        }
-                                    }}
-                                    className="mt-2 crm-btn-secondary px-3 py-2"
-                                >
-                                    {copiedQueueCron ? 'Copied' : 'Copy cron command'}
-                                </button>
-                                <p className="mt-2 text-xs text-slate-500">Queue worker runs automatically via the Laravel scheduler — no separate cron job needed. Fallback: add this command to cPanel cron jobs if the scheduler cron is not set up.</p>
+                                <div className="mt-3 space-y-2">
+                                    {queueStatusQuery.data.queue_worker_lanes.map((lane) => (
+                                        <div key={lane.lane} className="rounded-lg bg-slate-950 p-3">
+                                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                                {lane.lane} lane · {lane.connection}
+                                            </p>
+                                            <p className="mt-1 break-all font-mono text-xs text-emerald-200">{lane.command}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="mt-3 text-xs font-medium text-amber-900">
+                                    {queueStatusQuery.data.queue_worker_warning
+                                        || 'Do not add these to cPanel cron. A duplicate standalone queue:work cron has previously exhausted the account entry-process limit and taken the site down.'}
+                                </p>
                             </div>
                         ) : null}
 

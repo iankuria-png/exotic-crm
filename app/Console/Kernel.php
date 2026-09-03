@@ -4,6 +4,9 @@ namespace App\Console;
 
 use App\Http\Controllers\API\PaymentController;
 use App\Models\Platform;
+use App\Services\Ops\LoadShedder;
+use App\Services\Ops\OperationsSettingsService;
+use App\Support\SchedulerHeartbeat;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Support\Facades\Log;
@@ -39,18 +42,35 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
+        $tickStartedAt = microtime(true);
+
+        // Live operations settings, resolved once per tick. Every option below
+        // reads these first and falls back to config, which is what makes a
+        // tuning change take effect on the next tick with no deploy and no
+        // `config:cache`. A settings failure — a missing table mid-migration,
+        // a cache outage — must never stop the scheduler from defining tasks,
+        // so this is deliberately best-effort.
+        $ops = null;
         try {
-            file_put_contents(
-                storage_path('app/scheduler-heartbeat.json'),
-                json_encode([
-                    'ran_at' => now()->toIso8601String(),
-                ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
-            );
+            $ops = $this->app->make(OperationsSettingsService::class);
         } catch (\Throwable $exception) {
-            Log::warning('Unable to update scheduler heartbeat file.', [
+            Log::warning('Scheduler could not resolve operations settings; using config defaults.', [
                 'error' => $exception->getMessage(),
             ]);
         }
+
+        $opsInt = function (string $key, int $fallback) use ($ops): int {
+            try {
+                return $ops?->integer($key) ?? $fallback;
+            } catch (\Throwable) {
+                return $fallback;
+            }
+        };
+
+        // The shed gate. Resolved once so a skip closure is a cache read, never
+        // a container resolution, on every tick.
+        $shedder = $this->app->make(LoadShedder::class);
+        $allows = fn (string $capability): bool => $shedder->allows($capability);
 
         // NOTE: `subscriptions:check` used to run here daily at 00:05 and has been
         // removed deliberately. It decided expiry from a single payments row
@@ -61,6 +81,18 @@ class Kernel extends ConsoleKernel
         // owned solely by crm:reconcile-expired-subscriptions below, which reads
         // escort_expire with a market-timezone end-of-day cutoff and refuses to
         // act on any client holding a future active deal.
+
+        // Platform vitals. Never shed and never skipped — the sampler is what
+        // notices that everything else should be. Backgrounded and cheap: one
+        // process-list read, a handful of aggregate queries and a Pulse write,
+        // which is the entire per-minute cost of the observability stack.
+        $schedule->command('crm:sample-vitals')
+            ->name('crm_sample_vitals')
+            ->everyMinute()
+            ->withoutOverlapping(5)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_sample_vitals.log'));
 
         // CRM: force-expire profiles past their WP expiry but still publicly
         // active. This is the ONLY actor that transitions a lapsed profile — on
@@ -92,6 +124,7 @@ class Kernel extends ConsoleKernel
             ->timezone('Africa/Nairobi')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->skip(fn () => ! $allows('ai_briefings'))
             ->sendOutputTo(storage_path('logs/crm_ai_briefing.log'), true);
 
         $schedule->command('crm:ai-briefing --audience=sales --period=weekly --scheduled')
@@ -100,6 +133,7 @@ class Kernel extends ConsoleKernel
             ->timezone('Africa/Nairobi')
             ->withoutOverlapping(30)
             ->onOneServer()
+            ->skip(fn () => ! $allows('ai_briefings'))
             ->sendOutputTo(storage_path('logs/crm_ai_briefing.log'), true);
 
         $schedule->command('crm:snapshot-active-clients')
@@ -182,9 +216,9 @@ class Kernel extends ConsoleKernel
             ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
 
         $clientSyncPerPage = max(1, min(100, (int) config('services.client_sync.per_page', 100)));
-        $clientSyncDeltaMaxPlatforms = max(0, (int) config('services.client_sync.delta_max_platforms_per_run', 3));
-        $clientSyncDeltaStaggerSeconds = max(0, (int) config('services.client_sync.delta_stagger_seconds', 120));
-        $clientSyncReconcileStaggerSeconds = max(0, (int) config('services.client_sync.reconcile_stagger_seconds', 180));
+        $clientSyncDeltaMaxPlatforms = max(0, $opsInt('ops.sync.delta_max_platforms', (int) config('services.client_sync.delta_max_platforms_per_run', 3)));
+        $clientSyncDeltaStaggerSeconds = max(0, $opsInt('ops.sync.delta_stagger_seconds', (int) config('services.client_sync.delta_stagger_seconds', 120)));
+        $clientSyncReconcileStaggerSeconds = max(0, $opsInt('ops.sync.reconcile_stagger_seconds', (int) config('services.client_sync.reconcile_stagger_seconds', 180)));
 
         // Keep CRM clients in sync with WordPress profile changes across active markets.
         // Delta syncs are intentionally paced to avoid synchronized bursts against
@@ -217,7 +251,10 @@ class Kernel extends ConsoleKernel
         // Budgeted so a handful of slow markets cannot stretch one pass across
         // several ticks; least-recently-checked markets are probed first, so
         // coverage rotates rather than starving the tail of the list.
-        $schedule->command('crm:check-market-health --max-seconds=120')
+        $schedule->command(sprintf(
+            'crm:check-market-health --max-seconds=%d',
+            $opsInt('ops.sync.market_health_max_seconds', 120)
+        ))
             ->name('crm_check_market_health')
             ->cron('3,8,13,18,23,28,33,38,43,48,53,58 * * * *')
             ->withoutOverlapping(10)
@@ -231,11 +268,12 @@ class Kernel extends ConsoleKernel
             ->cron('26,56 * * * *')
             ->withoutOverlapping(10)
             ->onOneServer()
-            ->skip(fn () => ! Platform::query()
-                ->whereNotNull('support_board_api_url')
-                ->where('support_board_api_url', '!=', '')
-                ->whereNotNull('support_board_token')
-                ->exists())
+            ->skip(fn () => ! $allows('support_board_sync')
+                || ! Platform::query()
+                    ->whereNotNull('support_board_api_url')
+                    ->where('support_board_api_url', '!=', '')
+                    ->whereNotNull('support_board_token')
+                    ->exists())
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_sync_support_board_users.log'));
 
@@ -283,6 +321,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(10)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('push_campaigns'))
             ->sendOutputTo(storage_path('logs/crm_dispatch_scheduled_pushes.log'));
 
         $schedule->command('crm:run-auto-push')
@@ -291,6 +330,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(55)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('push_campaigns'))
             ->sendOutputTo(storage_path('logs/crm_run_auto_push.log'));
 
         $schedule->command('crm:maintain-auto-push')
@@ -299,6 +339,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(10)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('push_campaigns'))
             ->sendOutputTo(storage_path('logs/crm_maintain_auto_push.log'));
 
         $schedule->command('crm:run-auto-optimize')
@@ -307,6 +348,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(55)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('auto_optimize'))
             ->sendOutputTo(storage_path('logs/crm_run_auto_optimize.log'));
 
         $schedule->command(sprintf(
@@ -319,6 +361,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(1440)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('geocoding'))
             ->sendOutputTo(storage_path('logs/crm_geocode_cities.log'));
 
         $schedule->command('crm:maintain-auto-optimize')
@@ -327,6 +370,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(30)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('auto_optimize'))
             ->sendOutputTo(storage_path('logs/crm_maintain_auto_optimize.log'));
 
         $schedule->command('queue:prune-batches --hours=48')
@@ -359,6 +403,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(120)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('push_campaigns'))
             ->sendOutputTo(storage_path('logs/crm_sync_push_subscribers.log'));
 
         $schedule->command('crm:refresh-retention-insights')
@@ -367,6 +412,7 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(30)
             ->onOneServer()
             ->runInBackground()
+            ->skip(fn () => ! $allows('retention_insights'))
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
         $schedule->command('crm:reset-whatsapp-sender-limits')
@@ -434,9 +480,16 @@ class Kernel extends ConsoleKernel
         $queueConnection = (string) config('queue.default', 'sync');
 
         if ($queueConnection !== 'sync') {
+            // Lane sizing is live-editable, but `max-time` is bounded to 55 by
+            // the registry: a worker that outlives the minute that started it
+            // is the pile-up all over again.
+            $workerMaxTime = min(55, max(15, $opsInt('ops.lanes.worker_max_time', 55)));
+
             $schedule->command(sprintf(
-                'queue:work %s --queue=push,alerts,default,kyc-fanout --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
-                $queueConnection
+                'queue:work %s --queue=push,alerts,default,kyc-fanout --max-time=%d --max-jobs=%d --tries=3 --sleep=3',
+                $queueConnection,
+                $workerMaxTime,
+                $opsInt('ops.lanes.fast.max_jobs', 100)
             ))
                 ->name('queue_worker')
                 ->everyMinute()
@@ -448,8 +501,10 @@ class Kernel extends ConsoleKernel
             // Lane 2 (sync): client sync slices. Separated from the fast lane so
             // a market with a large backlog can never delay a push or an alert.
             $schedule->command(sprintf(
-                'queue:work %s --queue=sync-clients,sync-clients-reconcile --max-time=55 --max-jobs=50 --tries=3 --sleep=3',
-                $queueConnection
+                'queue:work %s --queue=sync-clients,sync-clients-reconcile --max-time=%d --max-jobs=%d --tries=3 --sleep=3',
+                $queueConnection,
+                $workerMaxTime,
+                $opsInt('ops.lanes.sync.max_jobs', 50)
             ))
                 ->name('queue_worker_sync')
                 ->everyMinute()
@@ -462,27 +517,83 @@ class Kernel extends ConsoleKernel
             // the `heavy` queue on the `database_long` connection, whose wider
             // `retry_after` matches these jobs' timeouts. Two workers because the
             // two queues live on different connections.
+            // At Critical these two workers are not started at all. Every other
+            // lane keeps running: payments, alerts, market health and client
+            // sync are never gated, and the fast lane is what carries them.
             $schedule->command(sprintf(
-                'queue:work %s --queue=auto_optimize --max-time=55 --max-jobs=30 --tries=3 --sleep=3',
-                $queueConnection
+                'queue:work %s --queue=auto_optimize --max-time=%d --max-jobs=%d --tries=3 --sleep=3',
+                $queueConnection,
+                $workerMaxTime,
+                $opsInt('ops.lanes.optimize.max_jobs', 30)
             ))
                 ->name('queue_worker_auto_optimize')
                 ->everyMinute()
                 ->withoutOverlapping(10)
                 ->onOneServer()
                 ->runInBackground()
+                ->skip(fn () => ! $allows('optimize_queue_worker'))
                 ->sendOutputTo(storage_path('logs/queue_worker_optimize.log'));
 
-            $schedule->command(
-                'queue:work database_long --queue=heavy --max-time=55 --max-jobs=10 --tries=2 --sleep=3'
-            )
+            $schedule->command(sprintf(
+                'queue:work database_long --queue=heavy --max-time=%d --max-jobs=%d --tries=2 --sleep=3',
+                $workerMaxTime,
+                $opsInt('ops.lanes.heavy.max_jobs', 10)
+            ))
                 ->name('queue_worker_heavy')
                 ->everyMinute()
                 ->withoutOverlapping(75)
                 ->onOneServer()
                 ->runInBackground()
+                ->skip(fn () => ! $allows('heavy_queue_worker'))
                 ->sendOutputTo(storage_path('logs/queue_worker_heavy.log'));
         }
+
+        $this->recordHeartbeat($schedule, $tickStartedAt);
+    }
+
+    /**
+     * Open a heartbeat entry for this tick and close it when the process ends.
+     *
+     * The count of due events is only knowable once every task above has been
+     * defined, and the tick's duration only once it has finished, so this runs
+     * last and finishes its own work in a terminating callback. Overlapping
+     * ticks leave two open entries with different pids — the signature of the
+     * 3 September outage, which the previous `ran_at`-only payload could not
+     * distinguish from healthy operation.
+     */
+    private function recordHeartbeat(Schedule $schedule, float $tickStartedAt): void
+    {
+        // Only a real tick counts. Laravel resolves the Schedule singleton for
+        // `schedule:list`, `schedule:test` and anything else that inspects the
+        // schedule, and the test suite builds it directly — none of those are
+        // a tick, and recording them would inflate the concurrency signal into
+        // reporting the outage signature during ordinary work.
+        if (! $this->isSchedulerTick()) {
+            return;
+        }
+
+        try {
+            $dueCount = count($schedule->dueEvents($this->app));
+        } catch (\Throwable) {
+            $dueCount = 0;
+        }
+
+        $tickId = SchedulerHeartbeat::open($dueCount);
+
+        $this->app->terminating(function () use ($tickId, $tickStartedAt): void {
+            SchedulerHeartbeat::close($tickId, $tickStartedAt);
+        });
+    }
+
+    private function isSchedulerTick(): bool
+    {
+        if (! $this->app->runningInConsole()) {
+            return false;
+        }
+
+        $argv = $_SERVER['argv'] ?? [];
+
+        return is_array($argv) && in_array('schedule:run', $argv, true);
     }
 
     /**

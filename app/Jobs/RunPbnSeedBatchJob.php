@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Jobs\Concerns\RunsOnHeavyQueue;
+use App\Jobs\Concerns\Sheddable;
 use App\Models\PbnSeedBatch;
 use App\Services\Pbn\PbnSeedProvisioningService;
 use Illuminate\Bus\Queueable;
@@ -14,7 +15,7 @@ use Illuminate\Support\Facades\Log;
 
 class RunPbnSeedBatchJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, RunsOnHeavyQueue, Sheddable;
 
     public int $tries = 2;
     public int $timeout = 3600;
@@ -26,8 +27,20 @@ class RunPbnSeedBatchJob implements ShouldQueue
         $this->routeToHeavyQueue();
     }
 
+    public function shedCapability(): string
+    {
+        return 'pbn_seed';
+    }
+
     public function handle(PbnSeedProvisioningService $provisioningService): void
     {
+        // Stand down while the platform is shedding load. The job is
+        // released with a delay rather than failed, so the work is
+        // deferred and the worker process is freed immediately.
+        if ($this->shedIfDegraded()) {
+            return;
+        }
+
         $batch = PbnSeedBatch::query()->with('pbnSite')->find($this->batchId);
         if (!$batch || in_array($batch->status, [PbnSeedBatch::STATUS_COMPLETED, PbnSeedBatch::STATUS_CANCELLED], true)) {
             return;

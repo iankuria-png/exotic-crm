@@ -13,6 +13,7 @@ use App\Http\Controllers\API\PlatformController;
 use App\Http\Controllers\API\ProductController;
 use App\Http\Controllers\API\SmsLogController;
 use App\Http\Controllers\API\WalletController;
+use App\Http\Controllers\CRM\OperationsController;
 use App\Http\Controllers\CRM\AgentTodoController;
 use App\Http\Controllers\CRM\AiBriefingSettingsController;
 use App\Http\Controllers\CRM\AiBriefingShareController;
@@ -796,6 +797,18 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/system-health/queue-clear-pending', [SystemHealthUpdateController::class, 'clearPendingJobs'])->middleware('role:admin');
     Route::post('/settings/system-health/queue-clear-all', [SystemHealthUpdateController::class, 'clearAllJobs'])->middleware('role:admin');
     Route::post('/settings/system-health/queue-nudge', [SystemHealthUpdateController::class, 'nudgeWorker'])->middleware('role:admin');
+
+    // Settings → Operations. Sibling to the system-health block above: that one
+    // reports whether each dependency is reachable, these report whether the
+    // platform is under pressure. Reads are open to sub_admins; overriding the
+    // shed and tuning the thresholds that govern it are admin-only.
+    Route::get('/settings/system-health/vitals', [OperationsController::class, 'vitals'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/system-health/incidents', [OperationsController::class, 'incidents'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/system-health/degradation', [OperationsController::class, 'forceDegradation'])->middleware('role:admin');
+    Route::delete('/settings/system-health/degradation', [OperationsController::class, 'releaseDegradation'])->middleware('role:admin');
+    Route::get('/settings/system-health/operations-settings', [OperationsController::class, 'settings'])->middleware('role:admin,sub_admin');
+    Route::put('/settings/system-health/operations-settings', [OperationsController::class, 'updateSettings'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/system-health/operations-settings/reset', [OperationsController::class, 'resetSetting'])->middleware('role:admin,sub_admin');
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
     Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');

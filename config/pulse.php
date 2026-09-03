@@ -136,10 +136,25 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Sample rates on shared hosting
+    |--------------------------------------------------------------------------
+    |
+    | NOTE (2026-09-03): `ingest.driver` is `storage`, which means every
+    | recorded entry is an INLINE DATABASE WRITE. On shared hosting, a recorder
+    | left at `sample_rate = 1` therefore adds a write to every single HTTP
+    | request — precisely the load the Operations tab exists to detect. The
+    | three per-request recorders below are sampled right down; the once-a-
+    | minute `crm:sample-vitals` command is the primary source of CRM vitals.
+    | Measure `pulse_*` table growth for 48 hours before raising any of these.
+    |
+    */
+
     'recorders' => [
         Recorders\CacheInteractions::class => [
             'enabled' => env('PULSE_CACHE_INTERACTIONS_ENABLED', true),
-            'sample_rate' => env('PULSE_CACHE_INTERACTIONS_SAMPLE_RATE', 1),
+            'sample_rate' => env('PULSE_CACHE_INTERACTIONS_SAMPLE_RATE', 0.01),
             'ignore' => [
                 ...Pulse::defaultVendorCacheKeys(),
             ],
@@ -213,7 +228,7 @@ return [
 
         Recorders\SlowQueries::class => [
             'enabled' => env('PULSE_SLOW_QUERIES_ENABLED', true),
-            'sample_rate' => env('PULSE_SLOW_QUERIES_SAMPLE_RATE', 1),
+            'sample_rate' => env('PULSE_SLOW_QUERIES_SAMPLE_RATE', 0.1),
             'threshold' => env('PULSE_SLOW_QUERIES_THRESHOLD', 1000),
             'location' => env('PULSE_SLOW_QUERIES_LOCATION', true),
             'max_query_length' => env('PULSE_SLOW_QUERIES_MAX_QUERY_LENGTH'),
@@ -225,7 +240,7 @@ return [
 
         Recorders\SlowRequests::class => [
             'enabled' => env('PULSE_SLOW_REQUESTS_ENABLED', true),
-            'sample_rate' => env('PULSE_SLOW_REQUESTS_SAMPLE_RATE', 1),
+            'sample_rate' => env('PULSE_SLOW_REQUESTS_SAMPLE_RATE', 0.1),
             'threshold' => env('PULSE_SLOW_REQUESTS_THRESHOLD', 1000),
             'ignore' => [
                 '#^/'.env('PULSE_PATH', 'pulse').'$#', // Pulse dashboard...
@@ -235,7 +250,7 @@ return [
 
         Recorders\UserJobs::class => [
             'enabled' => env('PULSE_USER_JOBS_ENABLED', true),
-            'sample_rate' => env('PULSE_USER_JOBS_SAMPLE_RATE', 1),
+            'sample_rate' => env('PULSE_USER_JOBS_SAMPLE_RATE', 0.1),
             'ignore' => [
                 // '/^Package\\\\Jobs\\\\/',
             ],
@@ -243,7 +258,7 @@ return [
 
         Recorders\UserRequests::class => [
             'enabled' => env('PULSE_USER_REQUESTS_ENABLED', true),
-            'sample_rate' => env('PULSE_USER_REQUESTS_SAMPLE_RATE', 1),
+            'sample_rate' => env('PULSE_USER_REQUESTS_SAMPLE_RATE', 0.01),
             'ignore' => [
                 '#^/'.env('PULSE_PATH', 'pulse').'$#', // Pulse dashboard...
                 '#^/telescope#', // Telescope dashboard...

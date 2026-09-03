@@ -11,6 +11,7 @@ use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\DeploymentStatusService;
 use App\Support\CrmAuditAction;
+use App\Support\OpsCronReference;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -19,6 +20,16 @@ use Illuminate\Support\Str;
 
 class SystemHealthUpdateController extends Controller
 {
+    /**
+     * Newest failed jobs scanned for the queue panel. See queueStatus().
+     */
+    private const FAILED_JOB_SCAN_LIMIT = 200;
+
+    /**
+     * Pending jobs sampled for the per-class breakdown. See queueStatus().
+     */
+    private const PENDING_JOB_SCAN_LIMIT = 500;
+
     public function __construct(
         private readonly DeploymentStatusService $deploymentStatusService,
         private readonly AuditService $auditService,
@@ -163,8 +174,16 @@ class SystemHealthUpdateController extends Controller
         $processingAlerts = DB::table('jobs')->where('queue', 'alerts')->whereNotNull('reserved_at')->count();
 
         $failedCount = DB::table('failed_jobs')->count();
+
+        // Bounded deliberately. This used to fetch and map every failed_jobs
+        // row, which is the same unbounded-fetch signature that produced 512M
+        // fatals in the scheduler — on the endpoint whose entire job is to
+        // report that the system is unhealthy, i.e. exactly when that table is
+        // at its largest. The panel only ever shows the newest failure and the
+        // newest payment-alert failure, so a recent window is sufficient.
         $failedJobs = DB::table('failed_jobs')
             ->orderByDesc('failed_at')
+            ->limit(self::FAILED_JOB_SCAN_LIMIT)
             ->get(['payload', 'exception', 'failed_at']);
         $latestFailed = $failedJobs->first();
 
@@ -189,7 +208,13 @@ class SystemHealthUpdateController extends Controller
             }
         }
 
+        // Same reasoning as the failed_jobs scan above: the queue is longest
+        // precisely when this endpoint is being read, so the breakdown samples
+        // the head of the queue rather than materialising all of it.
+        $jobBreakdownSampled = $pending + $processing > self::PENDING_JOB_SCAN_LIMIT;
         $jobBreakdown = DB::table('jobs')
+            ->orderBy('id')
+            ->limit(self::PENDING_JOB_SCAN_LIMIT)
             ->get(['payload'])
             ->map(function ($job): ?string {
                 return $this->extractJobDisplayName((string) ($job->payload ?? ''));
@@ -281,18 +306,23 @@ class SystemHealthUpdateController extends Controller
                 ? class_basename((string) $latestFailedAlertJob['display_name'])
                 : null,
             'job_breakdown' => $jobBreakdown,
+            'job_breakdown_sampled' => $jobBreakdownSampled,
+            'job_breakdown_sample_size' => self::PENDING_JOB_SCAN_LIMIT,
             'recent_alert_attempts' => $recentAlertAttempts,
-            'queue_cron_command' => ($queueConnection = (string) config('queue.default', 'sync')) !== 'sync'
-                ? sprintf(
-                    // auto_optimize is LAST (lowest priority) so it never delays payment/push/alert
-                    // jobs — but it MUST be listed or the optimize queue is never consumed (jobs
-                    // pile up unreserved → "stalled"). This was the root cause of the optimizer stall.
-                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,alerts,default,auto_optimize --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
-                    base_path(),
-                    config('deployment.php_binary', '/usr/local/bin/php'),
-                    $queueConnection
-                )
-                : null,
+            // Reference only — deliberately NOT a cron line, and no longer
+            // offered with a copy button.
+            //
+            // The string this replaces was `--queue=push,alerts,default,auto_optimize`,
+            // the pre-391954e single-worker lane list. It omitted sync-clients,
+            // sync-clients-reconcile, kyc-fanout and heavy, and it duplicated
+            // three lanes that the scheduler already runs a dedicated worker
+            // for. Installing it alongside the scheduler doubles those workers,
+            // and a duplicate standalone `queue:work` cron is what exhausted
+            // the account's entry-process limit and 504'd the site before (see
+            // the queue-worker block in App\Console\Kernel).
+            'queue_worker_lanes' => OpsCronReference::queueWorkerReference(),
+            'queue_worker_managed_by' => 'scheduler',
+            'queue_worker_warning' => 'These four workers are started by the Laravel scheduler every minute. Do NOT add them to cPanel cron — a duplicate standalone queue:work cron has previously exhausted the account entry-process limit and taken the site down.',
             'pulse_url' => url('/' . ltrim((string) config('pulse.path', 'pulse'), '/')),
             'pulse_check_command' => sprintf(
                 'cd %s && %s artisan pulse:check',
