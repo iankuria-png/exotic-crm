@@ -11,6 +11,7 @@ use App\Models\PbnSite;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\MarketAuthorizationService;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -197,6 +198,7 @@ class PbnSeedPreviewService
                 ->get()
                 ->keyBy('id');
             $duplicateIds = array_flip($duplicateSelected);
+            $createdItems = [];
 
             foreach ($selectedIds as $index => $clientId) {
                 if (isset($duplicateIds[$clientId])) {
@@ -212,7 +214,7 @@ class PbnSeedPreviewService
                 $targetModel = $targetModels[$this->targetKey($assignedTarget)] ?? null;
                 $itemPayloadHash = $this->itemPayloadHash($site, $client, $assignedTarget, $copyPolicy);
 
-                PbnSeedItem::create([
+                $createdItems[] = PbnSeedItem::create([
                     'batch_id' => (int) $batch->id,
                     'target_id' => $targetModel?->id,
                     'pbn_site_id' => (int) $site->id,
@@ -228,6 +230,8 @@ class PbnSeedPreviewService
                     'eligibility_snapshot' => $this->eligibilitySnapshot($client),
                 ]);
             }
+
+            $this->stampAppliedPolicy($batch, $createdItems, $copyPolicy);
 
             $preview->forceFill(['status' => PbnSeedPreview::STATUS_CONSUMED])->save();
             $this->refreshBatchCounts($batch);
@@ -255,6 +259,43 @@ class PbnSeedPreviewService
             'batch' => $batch,
             'summary' => $this->batchSummary($batch),
         ];
+    }
+
+    /**
+     * Resolve the batch's content policy into one decision per item and record
+     * it, so provisioning and the media stage read a decision instead of making
+     * one. Retries then cannot hand an item a different badge than the preview
+     * promised, and a finished batch can be audited long afterwards.
+     *
+     * @param  array<int, PbnSeedItem>  $items
+     */
+    private function stampAppliedPolicy(PbnSeedBatch $batch, array $items, array $copyPolicy): void
+    {
+        if ($items === []) {
+            return;
+        }
+
+        $resolved = (new PbnSeedPolicyResolver())->resolve(
+            array_map(static fn (PbnSeedItem $item): int => (int) $item->id, $items),
+            $copyPolicy,
+            CarbonImmutable::now(),
+            (int) $batch->id
+        );
+
+        foreach ($items as $item) {
+            $decision = $resolved[(int) $item->id] ?? null;
+            if ($decision === null) {
+                continue;
+            }
+
+            $releaseAt = $decision['release_at'] ?? null;
+            unset($decision['release_at']);
+
+            $item->forceFill([
+                'applied_policy' => $decision,
+                'release_at' => $releaseAt,
+            ])->save();
+        }
     }
 
     public function refreshBatchCounts(PbnSeedBatch $batch): void
@@ -587,6 +628,65 @@ class PbnSeedPreviewService
             'failed' => (int) $batch->failed_count,
             'reverted' => (int) $batch->reverted_count,
             'status' => (string) $batch->status,
+            'policy' => $this->appliedPolicySummary($batch),
         ];
+    }
+
+    /**
+     * What the batch actually applied, counted from the per-item decisions
+     * rather than from the requested percentages — so a batch that was queued
+     * at 10% VIP and then partly reverted reports what is really out there.
+     *
+     * @return array<string, mixed>
+     */
+    private function appliedPolicySummary(PbnSeedBatch $batch): array
+    {
+        $items = $batch->relationLoaded('items')
+            ? $batch->items
+            : $batch->items()->get(['applied_policy', 'release_at']);
+
+        $summary = [
+            'featured' => 0,
+            'premium' => 0,
+            'verified' => 0,
+            'bio_rewritten' => 0,
+            'bio_fallback' => 0,
+            'bio_cost_usd' => 0.0,
+            'awaiting_release' => 0,
+            'next_release_at' => null,
+        ];
+
+        foreach ($items as $item) {
+            $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
+
+            if (($policy['badge'] ?? '') === PbnSeedPolicyResolver::BADGE_FEATURED) {
+                $summary['featured']++;
+            }
+            if (($policy['badge'] ?? '') === PbnSeedPolicyResolver::BADGE_PREMIUM) {
+                $summary['premium']++;
+            }
+            if (!empty($policy['verified'])) {
+                $summary['verified']++;
+            }
+            if (($policy['bio_result'] ?? null) === PbnSeedBioService::RESULT_REWRITTEN) {
+                $summary['bio_rewritten']++;
+            }
+            if (($policy['bio_result'] ?? null) === PbnSeedBioService::RESULT_FALLBACK) {
+                $summary['bio_fallback']++;
+            }
+            $summary['bio_cost_usd'] += (float) ($policy['bio_cost_usd'] ?? 0);
+
+            if ($item->release_at && $item->release_at->isFuture()) {
+                $summary['awaiting_release']++;
+                if ($summary['next_release_at'] === null || $item->release_at->lt($summary['next_release_at'])) {
+                    $summary['next_release_at'] = $item->release_at;
+                }
+            }
+        }
+
+        $summary['bio_cost_usd'] = round($summary['bio_cost_usd'], 4);
+        $summary['next_release_at'] = optional($summary['next_release_at'])->toDateTimeString();
+
+        return $summary;
     }
 }

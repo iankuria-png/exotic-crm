@@ -289,15 +289,7 @@ class PbnSiteController extends Controller
             'db_user' => 'sometimes|nullable|string|max:255',
             'db_pass' => 'sometimes|nullable|string|max:255',
             'db_prefix' => 'sometimes|nullable|string|max:32',
-            'copy_policy' => 'sometimes|nullable|array',
-            'copy_policy.post_status' => 'sometimes|nullable|in:publish,private,draft,pending',
-            'copy_policy.phone' => 'sometimes|nullable|in:copy,strip',
-            'copy_policy.media' => 'sometimes|nullable|in:two_stage,none',
-            'copy_policy.vip_flags' => 'sometimes|nullable|in:copy,strip',
-            'copy_policy.verification' => 'sometimes|nullable|in:copy,strip',
-            'copy_policy.seo_fields' => 'sometimes|nullable|in:copy,strip',
-            'copy_policy.duplicate_policy' => 'sometimes|nullable|in:skip',
-            'copy_policy.update_policy' => 'sometimes|nullable|in:snapshot',
+            ...$this->copyPolicyRules(),
             'reason' => 'nullable|string|max:500',
         ];
     }
@@ -315,11 +307,43 @@ class PbnSiteController extends Controller
             'targets.*.region_name' => 'nullable|string|max:160',
             'targets.*.city_name' => 'nullable|string|max:160',
             'targets.*.target_count' => 'required|integer|min:1|max:200',
-            'copy_policy' => 'sometimes|nullable|array',
+            ...$this->copyPolicyRules(),
             'selected_client_ids' => 'sometimes|array|max:200',
             'selected_client_ids.*' => 'integer|exists:clients,id',
             'duplicate_acknowledged' => 'sometimes|boolean',
             'notes' => 'nullable|string|max:1000',
+        ];
+    }
+
+    /**
+     * Shared copy-policy rules, used by both the site defaults and the per-batch
+     * override. Typed per key rather than a bare `array`, so a bad percentage or
+     * an unknown mode is a 422 naming the field instead of a value that silently
+     * falls back to the default at resolve time.
+     *
+     * @return array<string, string>
+     */
+    private function copyPolicyRules(): array
+    {
+        return [
+            'copy_policy' => 'sometimes|nullable|array',
+            'copy_policy.post_status' => 'sometimes|nullable|in:publish,private,draft,pending',
+            'copy_policy.phone' => 'sometimes|nullable|in:copy,strip',
+            'copy_policy.media' => 'sometimes|nullable|in:two_stage,none',
+            'copy_policy.seo_fields' => 'sometimes|nullable|in:copy,strip',
+            'copy_policy.duplicate_policy' => 'sometimes|nullable|in:skip',
+            'copy_policy.update_policy' => 'sometimes|nullable|in:snapshot',
+            'copy_policy.badges.featured_pct' => 'sometimes|integer|min:0|max:100',
+            'copy_policy.badges.premium_pct' => 'sometimes|integer|min:0|max:100',
+            'copy_policy.badges.verified_pct' => 'sometimes|integer|min:0|max:100',
+            'copy_policy.bio.mode' => 'sometimes|in:rewrite,verbatim',
+            'copy_policy.bio.on_failure' => 'sometimes|in:verbatim,attention',
+            'copy_policy.main_image.mode' => 'sometimes|in:rotate,source',
+            'copy_policy.expiry.mode' => 'sometimes|in:window,fixed,none',
+            'copy_policy.expiry.min_days' => 'sometimes|integer|min:1|max:3650',
+            'copy_policy.expiry.max_days' => 'sometimes|integer|min:1|max:3650|gte:copy_policy.expiry.min_days',
+            'copy_policy.release.mode' => 'sometimes|in:immediate,hourly,daily',
+            'copy_policy.release.per_period' => 'sometimes|integer|min:1|max:200',
         ];
     }
 

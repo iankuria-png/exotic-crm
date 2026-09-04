@@ -1,0 +1,256 @@
+---
+title: PBN seed batches get a real content policy
+objective: Give each PBN seed batch an explicit, auditable policy for badges, bio text, main image and expiry, so a seeded batch stops looking like 90 identical clones of the source market.
+status: awaiting review
+owner: Ian K
+date: 2026-09-04
+scope: PBN seed policy schema, provisioning meta writes, a bio-rewrite stage, main-image rotation, expiry stamping, and the Seed wizard Setup step
+non_goals:
+  - Changing the destination theme's homepage query (newest-100 pool, shuffle, card limit) — that is a manual theme upload on each PBN site, tracked separately
+  - Reverting the existing Manuel batch — the existing revert flow already covers it
+  - Rewriting media storage or the two-stage media pipeline itself
+---
+
+Today every profile a seed batch creates is the same shape: basic tier, no expiry,
+the source's bio verbatim, and the source's lead photo. `storeProfileMeta` writes
+`premium=0`, `featured=0`, `verified=0` unconditionally, so the `vip_flags` and
+`verification` copy-policy options that already exist are dead — they cannot
+change the outcome. Nothing writes `escort_expire` at all.
+
+Two things follow. The obvious one is that the destination site reads as
+generated. The less obvious one is a visibility problem: the destination
+homepage's VIP and Premium sections query `featured=1` and `premium=1`, which are
+separate pools from the capped basic pool. A batch where every profile is basic
+can only ever compete in the one pool that is capped and shuffled.
+
+This plan makes the four content decisions explicit, per batch, and records what
+each profile actually received.
+
+<Wireframe
+  title="Seed wizard — Setup step with the policy panel"
+  surface="desktop"
+  caption="The policy panel sits below the existing Source Markets and Target count controls, in the same Setup step. Percentages are of the batch, not of each profile."
+  html={"<div style='background:var(--wf-paper);padding:16px;border-radius:var(--wf-radius)'>\n  <div style='display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--wf-line);padding-bottom:12px;margin-bottom:14px'>\n    <div><div style='font-weight:600;color:var(--wf-ink)'>Seed Manuel Escorts</div><div style='font-size:12px;color:var(--wf-muted)'>manuelescorts.com &middot; 0 selected</div></div>\n    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-ink)'>Close</div>\n  </div>\n  <div style='display:flex;gap:8px;margin-bottom:16px'>\n    <div style='border:1px solid var(--wf-accent);background:var(--wf-accent-soft);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;font-weight:600;color:var(--wf-ink)'>1 Setup</div>\n    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>2 Locations</div>\n    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>3 Preview</div>\n    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>4 Queue</div>\n  </div>\n  <div style='display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:12px'>\n    <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n      <div style='font-size:13px;font-weight:600;color:var(--wf-ink);margin-bottom:10px'>Source Markets</div>\n      <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px'>\n        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink)'>☑ Exotic Uganda</div>\n        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-muted)'>☐ Exotic Kenya</div>\n      </div>\n    </div>\n    <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n      <div style='font-size:13px;font-weight:600;color:var(--wf-ink);margin-bottom:10px'>Target count</div>\n      <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:13px;color:var(--wf-ink)'>90</div>\n    </div>\n  </div>\n  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n    <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'>\n      <div style='font-size:13px;font-weight:600;color:var(--wf-ink)'>Seed Policy</div>\n      <div style='font-size:11px;color:var(--wf-muted)'>Saved as this site's default</div>\n    </div>\n    <div style='display:grid;grid-template-columns:1fr 1fr;gap:14px'>\n      <div>\n        <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:8px'>Badge mix</div>\n        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-ink);margin-bottom:6px'><span>VIP (featured)</span><span style='color:var(--wf-muted)'>10% &middot; 9 profiles</span></div>\n        <div style='height:6px;background:var(--wf-line);border-radius:3px;margin-bottom:10px'><div style='width:10%;height:6px;background:var(--wf-accent);border-radius:3px'></div></div>\n        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-ink);margin-bottom:6px'><span>Premium</span><span style='color:var(--wf-muted)'>25% &middot; 22 profiles</span></div>\n        <div style='height:6px;background:var(--wf-line);border-radius:3px;margin-bottom:10px'><div style='width:25%;height:6px;background:var(--wf-accent);border-radius:3px'></div></div>\n        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-muted)'><span>Verified</span><span>Off</span></div>\n      </div>\n      <div>\n        <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:8px'>Content</div>\n        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink);margin-bottom:8px'>Bio &nbsp;&middot;&nbsp; <strong>Rewrite with AI</strong></div>\n        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink);margin-bottom:8px'>Main image &nbsp;&middot;&nbsp; <strong>Rotate to alternative</strong></div>\n        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink)'>Expires &nbsp;&middot;&nbsp; <strong>30&ndash;90 days, spread</strong></div>\n        <div style='font-size:11px;color:var(--wf-muted);margin-top:8px'>Estimated AI cost for 90 profiles: ~$0.40</div>\n      </div>\n    </div>\n  </div>\n</div>"}
+/>
+
+## Approach
+
+The four levers attach at four points that already exist. None of them needs a new
+pipeline — each is a decision inserted where the value is currently hard-coded.
+
+<Diagram
+  title="Where each policy lever attaches"
+  caption="The policy is resolved once per item at batch creation and recorded, so provisioning and media both read a decision rather than making one."
+  html={"<div style='display:grid;gap:10px'>\n  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>1 &middot; Batch creation &mdash; PbnSeedPreviewService::createBatch</div>\n    <div style='font-size:12px;color:var(--wf-muted)'>Resolves the batch policy into a per-item decision: badge tier, expiry timestamp, main-image index. Written to pbn_seed_items.applied_policy.</div>\n  </div>\n  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>2 &middot; Bio stage &mdash; PbnSeedBioService (new)</div>\n    <div style='font-size:12px;color:var(--wf-muted)'>Runs inside provisionItem before the WordPress insert. On provider failure the item falls back per policy rather than failing the create.</div>\n  </div>\n  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>3 &middot; Meta write &mdash; WpDirectProvisioningService::storeProfileMeta</div>\n    <div style='font-size:12px;color:var(--wf-muted)'>Stops hard-writing premium/featured/verified to 0. Writes the resolved badges and escort_expire instead.</div>\n  </div>\n  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>\n    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>4 &middot; Media stage &mdash; PbnSeedMediaService::processItem</div>\n    <div style='font-size:12px;color:var(--wf-muted)'>The is_main flag comes from the item's recorded image index instead of index === 0.</div>\n  </div>\n</div>"}
+/>
+
+<Callout tone="decision" title="Policy is resolved once, at batch creation" body="Badge tier, expiry and main-image index are decided when the batch is created and stored per item, not recomputed during provisioning. Provisioning and the media stage run in separate queued passes and the media stage retries independently — recomputing a random choice in either pass would give an item a different badge on retry than the one the preview promised. Recording the decision also makes a batch reproducible and reviewable after the fact." />
+
+<Callout tone="decision" title="Percentages are of the batch, not per profile" body="A 10% VIP setting on a 90-profile batch means exactly 9 profiles, allocated by shuffling the item list and taking the first 9 — not a 10% dice roll per profile that can land on 3 or 17. Small batches stay predictable, and the wizard can show the resulting counts before you queue." />
+
+## The policy shape
+
+`copy_policy` is already a JSON column on both `pbn_sites` and `pbn_seed_batches`,
+merged through `PbnSite::effectiveCopyPolicy()`. The new keys are additive, so
+existing sites and historical batches keep working — `array_replace_recursive`
+fills the defaults for anything absent. No migration is needed for the policy
+itself.
+
+<DataModel
+  name="copy_policy (JSON, additive keys)"
+  note="Existing keys post_status, phone, media, seo_fields, duplicate_policy, update_policy are unchanged. vip_flags and verification are removed in favour of the badges block, which actually reaches WordPress."
+  fields={[
+    {"name":"badges.featured_pct","type":"int 0-100","note":"Share of the batch that gets featured=1 (the VIP pool)"},
+    {"name":"badges.premium_pct","type":"int 0-100","note":"Share that gets premium=1 (the Premium pool); disjoint from featured"},
+    {"name":"badges.verified_pct","type":"int 0-100","note":"Share that gets verified=1; defaults to 0, see the open question"},
+    {"name":"bio.mode","type":"'rewrite' | 'verbatim'","note":"rewrite calls AiGateway per profile"},
+    {"name":"bio.on_failure","type":"'verbatim' | 'attention'","note":"What happens when every AI provider fails for one profile"},
+    {"name":"main_image.mode","type":"'rotate' | 'source'","note":"rotate picks a non-first image when the source has more than one"},
+    {"name":"expiry.mode","type":"'window' | 'fixed' | 'none'","note":"window spreads across a range; fixed uses one offset"},
+    {"name":"expiry.min_days","type":"int","note":"Lower bound of the window, or the offset when mode is fixed"},
+    {"name":"expiry.max_days","type":"int","note":"Upper bound of the window; ignored when mode is fixed"}
+  ]}
+/>
+
+<DataModel
+  name="pbn_seed_items.applied_policy (new JSON column)"
+  note="The resolved decision for one profile. Written at batch creation, read by provisioning and by the media stage. This is the audit trail for what a given PBN profile actually received."
+  fields={[
+    {"name":"badge","type":"'featured' | 'premium' | 'basic'","note":"Mutually exclusive tier for this profile"},
+    {"name":"verified","type":"bool","note":"Independent of the tier"},
+    {"name":"expires_at","type":"int|null","note":"Unix timestamp written to the escort_expire meta key"},
+    {"name":"main_image_index","type":"int","note":"Index into the normalised source media list; 0 when the source has one image"},
+    {"name":"bio_mode","type":"'rewrite' | 'verbatim'","note":"Copied from the batch policy so a policy edit cannot retro-change a queued item"},
+    {"name":"bio_result","type":"'rewritten' | 'fallback' | 'skipped' | null","note":"Filled in by the bio stage; null until provisioning runs"}
+  ]}
+/>
+
+## The badge write is currently unreachable
+
+This is the specific defect that makes today's `vip_flags: copy` option inert. The
+loop above it writes whatever the payload carried, and then three unconditional
+lines overwrite all of it.
+
+<AnnotatedCode
+  file="app/Services/WpDirectProvisioningService.php"
+  lang="php"
+  code={"foreach ($this->profileMetaPayload($payload) as $key => $value) {\n    if ($value === null || $value === '') {\n        continue;\n    }\n\n    $this->upsertPostMeta($postId, $key, $value);\n}\n\n$this->upsertPostMeta($postId, 'premium', '0');\n$this->upsertPostMeta($postId, 'featured', '0');\n$this->upsertPostMeta($postId, 'verified', '0');\n$this->upsertPostMeta($postId, 'independent', 'yes');"}
+  annotations={[
+    {"lines":"1-7","label":"Filtered upstream","note":"profileMetaPayload() only iterates WpProfileFieldCatalog::editableFields() plus phone/whatsapp/website/personal_phone. premium, featured and verified are not in that catalog, so a payload carrying them is dropped here before it can be written."},
+    {"lines":"9-11","label":"The hard write","note":"Even if the keys survived the filter, these three lines overwrite them. Replace with the values resolved from applied_policy, defaulting to 0 when a caller passes no policy so non-PBN provisioning is unaffected."}
+  ]}
+/>
+
+## Bio rewriting
+
+`AiGateway::generate($feature, $system, $user, $opts)` already runs a provider
+waterfall across Claude, OpenAI, Gemini and DeepSeek, and persists an
+`ai_interactions` row per call with provider, latency and cost. Reusing it means
+bio rewriting inherits the fallback chain, the cost accounting and the audit log
+for free. The new service supplies the feature slug `pbn_bio_rewrite` and the
+prompt; it owns no provider logic of its own.
+
+The prompt must preserve the facts a reader acts on — the working name, the city,
+services, rates and contact details — while changing sentence structure and
+wording. It must not invent attributes. The rewritten text is stored on the item
+before the WordPress insert, so a failure is visible in the CRM rather than
+producing a half-written profile on the destination site.
+
+<Callout tone="risk" title="Rate and latency" body="90 sequential provider calls at roughly 1–3 seconds each is 2–5 minutes of queue time on top of provisioning. The bio stage runs inside the existing per-item provisioning job, so it is already chunked and already retryable — but the batch will visibly take longer than today's. The wizard shows an estimated cost and a longer ETA before queueing." />
+
+## Steps
+
+<Steps items={[
+  {"title":"Extend the copy policy schema and its validation",
+   "reuses":"PbnSite::defaultCopyPolicy() and effectiveCopyPolicy(), which already merge site defaults with per-batch overrides through array_replace_recursive",
+   "adds":"badges, bio, main_image and expiry blocks with defaults; drops vip_flags and verification; replaces the loose `copy_policy => sometimes|nullable|array` rule in PbnSiteController::seedRules() with typed rules per key so a bad percentage is a 422 rather than a silent no-op",
+   "files":"app/Models/PbnSite.php, app/Http/Controllers/CRM/PbnSiteController.php",
+   "verify":"POST a batch with featured_pct 150 and assert a 422 naming copy_policy.badges.featured_pct"},
+
+  {"title":"Add pbn_seed_items.applied_policy",
+   "reuses":"the existing eligibility_snapshot JSON column as the precedent for per-item recorded state, including its array cast",
+   "adds":"a nullable JSON column plus the cast on PbnSeedItem, and a migration Ian runs on cPanel",
+   "files":"database/migrations/2026_09_04_000001_add_applied_policy_to_pbn_seed_items.php, app/Models/PbnSeedItem.php",
+   "verify":"migrate on local MySQL, then confirm a newly created batch writes a non-null applied_policy for every item"},
+
+  {"title":"Resolve the policy per item at batch creation",
+   "reuses":"PbnSeedPreviewService::createBatch, which already loops the selected clients and writes one PbnSeedItem per profile inside a transaction",
+   "adds":"a PbnSeedPolicyResolver that takes the batch policy and the ordered item list and returns one decision per item — badge tiers allocated by count from a shuffled list, expiry drawn per item from the window, main-image index deferred to the media stage as a flag plus a seed",
+   "files":"app/Services/Pbn/PbnSeedPolicyResolver.php, app/Services/Pbn/PbnSeedPreviewService.php",
+   "verify":"unit test: 90 items at 10% featured and 25% premium yields exactly 9 featured, 22 premium, 59 basic, and no item holding both"},
+
+  {"title":"Make the badge and expiry meta writes honour the policy",
+   "reuses":"upsertPostMeta() and the storeProfileMeta() call site",
+   "adds":"an optional resolved-policy argument on provisionEscort/storeProfileMeta; premium, featured and verified are written from it and default to '0' when absent, so the Ads API and CRM provisioning paths are unchanged; escort_expire is written as a Unix timestamp when the policy sets one",
+   "files":"app/Services/WpDirectProvisioningService.php, app/Services/Pbn/PbnSeedProvisioningService.php",
+   "verify":"provision one item against the local WP database and assert the postmeta rows for featured, premium and escort_expire match the item's applied_policy"},
+
+  {"title":"Add the bio rewrite stage",
+   "reuses":"AiGateway::generate() with its provider waterfall, cost accounting and ai_interactions logging",
+   "adds":"PbnSeedBioService with the pbn_bio_rewrite feature slug and a fact-preserving prompt; called from PbnSeedProvisioningService::buildProvisionPayload before the insert; on AllProvidersFailedException it honours bio.on_failure and records bio_result on the item",
+   "files":"app/Services/Pbn/PbnSeedBioService.php, app/Services/Pbn/PbnSeedProvisioningService.php",
+   "verify":"fake the gateway to throw and assert the item still provisions with the source bio and bio_result = 'fallback'; then run one real profile and read the rewritten text on the destination site"},
+
+  {"title":"Rotate the main image",
+   "reuses":"PbnSeedMediaService::processItem and its normalised source media list",
+   "adds":"replaces the `(bool) ($media['is_main'] ?? false) || $index === 0` decision with the item's resolved main-image index, chosen from the actual media count once it is known and written back to applied_policy",
+   "files":"app/Services/Pbn/PbnSeedMediaService.php",
+   "verify":"seed two profiles from one source advertiser to two PBN sites and confirm the destination lead photos differ"},
+
+  {"title":"Build the Seed Policy panel",
+   "reuses":"the existing Setup step layout, crm-input styling and the resetPreview() pattern that invalidates a stale preview when an input changes",
+   "adds":"badge percentage sliders with live profile counts derived from target_count, bio and main-image mode selects, an expiry window control, an estimated AI cost line, and a save-as-site-default action; every control writes into the copy_policy payload already sent to preview and batches",
+   "files":"resources/js/components/settings/PbnSeedWizard.jsx",
+   "verify":"open the wizard, set 10% VIP on a 90 target, and confirm the panel reads 9 profiles and the queued batch's copy_policy matches"},
+
+  {"title":"Surface the applied policy in the batch view",
+   "reuses":"PbnSeedPreviewService::showBatch and the existing Items table in Pbn.jsx",
+   "adds":"badge, expiry date and bio result per item, plus a batch-level summary of the mix that was actually applied",
+   "files":"app/Services/Pbn/PbnSeedPreviewService.php, resources/js/pages/Pbn.jsx",
+   "verify":"queue a small batch and confirm the Items tab shows the tier and expiry for each row"},
+
+  {"title":"Cover the new behaviour with tests",
+   "reuses":"tests/Feature/PbnSiteTest.php and its existing provisioning fixtures",
+   "adds":"policy resolver distribution test, badge and expiry meta assertions, bio fallback test with a faked gateway, and main-image rotation assertion",
+   "files":"tests/Feature/PbnSiteTest.php, tests/Unit/PbnSeedPolicyResolverTest.php",
+   "verify":"/usr/local/opt/php@8.2/bin/php artisan test --filter='PbnSeedPolicy|PbnSiteTest'"}
+]} />
+
+<FileMap items={[
+  {"path":"app/Models/PbnSite.php","action":"edit","note":"defaultCopyPolicy() gains the four new blocks"},
+  {"path":"app/Models/PbnSeedItem.php","action":"edit","note":"applied_policy fillable and array cast"},
+  {"path":"database/migrations/2026_09_04_000001_add_applied_policy_to_pbn_seed_items.php","action":"add","note":"nullable JSON column; must be run on cPanel"},
+  {"path":"app/Services/Pbn/PbnSeedPolicyResolver.php","action":"add","note":"pure allocation logic, no I/O, unit testable"},
+  {"path":"app/Services/Pbn/PbnSeedBioService.php","action":"add","note":"wraps AiGateway with the rewrite prompt and the failure policy"},
+  {"path":"app/Services/Pbn/PbnSeedPreviewService.php","action":"edit","note":"resolve and persist the policy while writing items; expose it in showBatch"},
+  {"path":"app/Services/Pbn/PbnSeedProvisioningService.php","action":"edit","note":"call the bio service and pass the resolved policy into provisioning"},
+  {"path":"app/Services/WpDirectProvisioningService.php","action":"edit","note":"badge and escort_expire writes; the only file here shared with non-PBN callers"},
+  {"path":"app/Services/Pbn/PbnSeedMediaService.php","action":"edit","note":"main-image index instead of index zero"},
+  {"path":"app/Http/Controllers/CRM/PbnSiteController.php","action":"edit","note":"typed copy_policy validation rules"},
+  {"path":"resources/js/components/settings/PbnSeedWizard.jsx","action":"edit","note":"Seed Policy panel in the Setup step"},
+  {"path":"resources/js/pages/Pbn.jsx","action":"edit","note":"per-item badge, expiry and bio result columns"}
+]} />
+
+<Table
+  title="Defaults shipped with the schema"
+  caption="A site that has never been configured gets these. They are deliberately conservative: no fabricated verification, and an expiry window long enough that a batch does not churn."
+  columns={["Key","Default","Rationale"]}
+  rows={[
+    ["badges.featured_pct","10","Enough to populate the VIP pool without every profile claiming the top tier"],
+    ["badges.premium_pct","25","Mirrors a plausible paid mix on a real market"],
+    ["badges.verified_pct","0","Verification asserts a KYC check that did not happen — off unless deliberately enabled"],
+    ["bio.mode","rewrite","Duplicate bios across a PBN are the main content risk the batch carries"],
+    ["bio.on_failure","verbatim","A provider outage should degrade the batch, not stall it"],
+    ["main_image.mode","rotate","Costs nothing and removes the most obvious visual duplicate signal"],
+    ["expiry.mode / min / max","window, 30, 90","Spread avoids a single day where a whole batch disappears"]
+  ]}
+/>
+
+<Risks items={[
+  {"risk":"The badge write is in WpDirectProvisioningService, which also serves non-PBN provisioning paths.","mitigation":"The resolved policy is an optional argument that defaults to the current behaviour of writing zeroes, so callers that pass nothing are byte-identical to today. Assert this with a test on the existing non-PBN provisioning path.","impact":"high","likelihood":"low"},
+  {"risk":"AI rewriting costs real money per batch and a runaway loop could be expensive.","mitigation":"One call per item, capped by the existing 200-profile batch limit, with the estimated cost shown before queueing and every call logged to ai_interactions with its provider and cost.","impact":"medium","likelihood":"low"},
+  {"risk":"A rewritten bio could drop a phone number or rate the advertiser depends on.","mitigation":"The prompt pins the factual fields, and the bio stage compares the digit sequences present in the source against the rewrite — a mismatch falls back to verbatim and records bio_result = 'fallback'.","impact":"medium","likelihood":"medium"},
+  {"risk":"Writing escort_expire brings seeded profiles under the destination site's expiry actors, whose behaviour differs per market.","mitigation":"First batch after this ships uses a single small target so the expiry path can be observed on one site before a full batch is queued.","impact":"medium","likelihood":"medium"},
+  {"risk":"Badges widen homepage coverage but do not remove the theme's newest-100 pool cap, so a large enough site still buries older batches.","mitigation":"Named as an explicit non-goal; the theme change is tracked separately and needs a manual upload per PBN site.","impact":"low","likelihood":"high"}
+]} />
+
+## Verification
+
+Beyond `--filter='PbnSeedPolicy|PbnSiteTest'`, the batch has to be watched end to
+end on a real site, because the failure modes here are all at the WordPress
+boundary rather than in PHP.
+
+1. Revert the existing Manuel batch through the current revert flow and confirm the item rows reach `reverted`.
+2. Queue a deliberately small batch — 6 profiles across two Jinja destinations, 33% featured — and let it run to `created`.
+3. In phpMyAdmin on Manuel, read the `postmeta` rows for those six post IDs and assert `featured`, `premium` and `escort_expire` match the `applied_policy` recorded in the CRM.
+4. Open the destination homepage and confirm the featured profiles appear in the VIP section, which has been empty on that site until now.
+5. Open two of the seeded profiles and confirm the bios differ from their source profiles in wording while keeping the same phone number, and that their lead photos are not the source's lead photo.
+6. Only once that batch is verified, queue the full replacement batch.
+
+<Questions items={[
+  {"id":"verified","mode":"single",
+   "q":"Should the policy be allowed to set the verified badge at all?",
+   "why":"On the live sites the verified badge asserts a KYC check that a seeded profile has not been through. Allowing it is a product decision rather than a technical one, and it is the one badge that makes a claim about a person.",
+   "options":[
+     {"label":"Ship it, defaulted off","detail":"The control exists and is set to 0% by default, so enabling it is a deliberate act rather than an accident.","recommended":true},
+     {"label":"Do not build it","detail":"Only featured and premium are configurable; verified is always 0 for seeded profiles and the control never appears."},
+     {"label":"Ship it, defaulted on at a low percentage","detail":"Treated like the other badges, with a small share of the batch marked verified."}
+   ]},
+  {"id":"stagger",
+   "mode":"single",
+   "q":"Should the batch stagger post_date so profiles do not all land in the same minute?",
+   "why":"Provisioning stamps post_date at insert time, so a 90-profile batch produces 90 posts within a few minutes. That is both a visible pattern and the reason an older batch drops out of the destination's newest-100 homepage pool all at once. Spreading the dates changes how the batch behaves on the destination site, so it is worth deciding now rather than retrofitting.",
+   "options":[
+     {"label":"Backdate across a window","detail":"Spread post_date across the last N days, oldest first, so the batch looks like organic signups accumulating rather than one import event.","recommended":true},
+     {"label":"Drip the queue over hours","detail":"Keep post_date as insert time but pace the provisioning jobs so creation genuinely spreads out. More faithful, but the batch takes hours to complete and is harder to supervise."},
+     {"label":"Leave as is","detail":"All profiles carry their true creation time."}
+   ]},
+  {"id":"scope",
+   "mode":"single",
+   "q":"Ship all four levers together, or land the cheap three first?",
+   "why":"Badges, expiry and image rotation are self-contained and testable in a single pass. Bio rewriting adds a provider dependency, per-batch cost and several minutes of queue time, and it carries the fact-preservation risk. Splitting lets a replacement batch go out sooner.",
+   "options":[
+     {"label":"Badges, expiry and image first","detail":"Land steps 1–4 and 6–9 in one push, then add the bio stage as a follow-up once a batch has been verified end to end on Manuel.","recommended":true},
+     {"label":"All four together","detail":"One larger change; the replacement batch waits until the bio stage is verified too."}
+   ]}
+]} />

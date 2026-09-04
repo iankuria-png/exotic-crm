@@ -112,11 +112,51 @@ class PbnSite extends Model
             'post_status' => 'publish',
             'phone' => 'copy',
             'media' => 'two_stage',
-            'vip_flags' => 'strip',
-            'verification' => 'strip',
             'seo_fields' => 'copy',
             'duplicate_policy' => 'skip',
             'update_policy' => 'snapshot',
+
+            // Share of the batch that receives each badge. Allocated by count
+            // from a shuffled item list, not rolled per profile, so a 10% VIP
+            // setting on 90 profiles is exactly 9 and never 3 or 17.
+            // `verified` asserts a KYC check the seeded profile has not been
+            // through, so it defaults to nobody and must be set deliberately.
+            'badges' => [
+                'featured_pct' => 10,
+                'premium_pct' => 25,
+                'verified_pct' => 0,
+            ],
+
+            // Duplicate bios across a PBN are the main content risk a batch
+            // carries. `on_failure` decides what happens when every AI
+            // provider fails for one profile: degrade the batch, or hold the
+            // item for a human.
+            'bio' => [
+                'mode' => 'rewrite',
+                'on_failure' => 'verbatim',
+            ],
+
+            // Rotating away from the source's lead photo costs nothing and
+            // removes the most obvious visual duplicate signal.
+            'main_image' => [
+                'mode' => 'rotate',
+            ],
+
+            // A window spreads expiry across a range so a whole batch does not
+            // disappear on one day.
+            'expiry' => [
+                'mode' => 'window',
+                'min_days' => 30,
+                'max_days' => 90,
+            ],
+
+            // Trickle. Items carry a release_at and the batch job provisions
+            // only what is due, then re-queues itself for the next release —
+            // never sleeping and never holding a worker open.
+            'release' => [
+                'mode' => 'immediate',
+                'per_period' => 10,
+            ],
         ];
     }
 

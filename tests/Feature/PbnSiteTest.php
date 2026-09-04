@@ -266,6 +266,76 @@ class PbnSiteTest extends TestCase
         $this->assertSame(1, DB::connection($connectionName)->table('exotic_crm_provisions')->count());
     }
 
+    /**
+     * The badge and expiry meta are the whole point of the seed policy, and
+     * they are written at the WordPress boundary where a PHP test is the only
+     * thing that catches a regression before a batch goes out.
+     */
+    public function test_seed_policy_writes_badge_and_expiry_meta(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-badges.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $connection = WordPressSiteConnection::fromPbnSite($site->fresh());
+        $expiresAt = now()->addDays(45)->getTimestamp();
+
+        $result = (new WpDirectProvisioningService($connection, $connectionConfig))->provisionEscort([
+            'name' => 'PBN Badge Demo',
+            'email' => 'pbn.badge@example.test',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'post_status' => 'publish',
+            'provision_request_id' => 'pbn-badge-demo-1',
+            'seed_policy' => [
+                'badge' => 'featured',
+                'verified' => true,
+                'expires_at' => $expiresAt,
+            ],
+        ]);
+
+        $meta = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', (int) $result['wp_post_id'])
+            ->pluck('meta_value', 'meta_key');
+
+        $this->assertSame('1', $meta['featured']);
+        $this->assertSame('0', $meta['premium']);
+        $this->assertSame('1', $meta['verified']);
+        $this->assertSame((string) $expiresAt, $meta['escort_expire']);
+    }
+
+    /**
+     * Callers that pass no policy — the Ads API and ordinary CRM provisioning —
+     * must be byte-identical to the behaviour before seed policies existed.
+     */
+    public function test_provisioning_without_a_seed_policy_still_writes_zeroed_badges(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-nobadges.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN Plain Demo',
+                'email' => 'pbn.plain@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-plain-demo-1',
+            ]);
+
+        $meta = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', (int) $result['wp_post_id'])
+            ->pluck('meta_value', 'meta_key');
+
+        $this->assertSame('0', $meta['featured']);
+        $this->assertSame('0', $meta['premium']);
+        $this->assertSame('0', $meta['verified']);
+        $this->assertArrayNotHasKey('escort_expire', $meta->toArray());
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

@@ -2,6 +2,7 @@
 
 namespace App\Services\Pbn;
 
+use App\Jobs\RunPbnSeedBatchJob;
 use App\Models\Client;
 use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
@@ -10,12 +11,14 @@ use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\WordPressSiteConnection;
 use App\Support\WpProfileFieldCatalog;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 
 class PbnSeedProvisioningService
 {
     public function __construct(
-        private readonly PbnSeedPreviewService $previewService
+        private readonly PbnSeedPreviewService $previewService,
+        private readonly PbnSeedBioService $bioService
     ) {
     }
 
@@ -36,11 +39,22 @@ class PbnSeedProvisioningService
             'failed_count' => (int) $batch->failed_count,
         ]);
 
-        foreach ($batch->items()->whereIn('status', [
+        $pendingStatuses = [
             PbnSeedItem::STATUS_QUEUED,
             PbnSeedItem::STATUS_SELECTED,
             PbnSeedItem::STATUS_FAILED,
-        ])->with('sourceClient.platform')->orderBy('id')->get() as $item) {
+        ];
+
+        // Trickle: provision only what is due now. Items scheduled for a later
+        // period stay queued and the job re-dispatches itself for the next
+        // release, so a batch spread over nine hours never holds a worker open
+        // or sleeps inside a job.
+        foreach ($batch->items()
+            ->whereIn('status', $pendingStatuses)
+            ->where(fn ($query) => $query->whereNull('release_at')->orWhere('release_at', '<=', now()))
+            ->with('sourceClient.platform')
+            ->orderBy('id')
+            ->get() as $item) {
             $batch->refresh();
             if ($batch->status === PbnSeedBatch::STATUS_CANCELLED) {
                 break;
@@ -60,6 +74,12 @@ class PbnSeedProvisioningService
 
         $this->previewService->refreshBatchCounts($batch->fresh(['targets']));
         $fresh = $batch->fresh();
+
+        if ($fresh->status !== PbnSeedBatch::STATUS_CANCELLED
+            && $this->scheduleNextRelease($fresh, $pendingStatuses)) {
+            return;
+        }
+
         if ($fresh->status === PbnSeedBatch::STATUS_CANCELLED) {
             $this->recordEvent($fresh, null, 'batch_stopped', 'warning', 'PBN seed batch stopped before all queued items completed.', [
                 'selected_count' => (int) $fresh->selected_count,
@@ -75,6 +95,37 @@ class PbnSeedProvisioningService
             'created_count' => (int) $fresh->created_count,
             'failed_count' => (int) $fresh->failed_count,
         ]);
+    }
+
+    /**
+     * Re-queue the batch for its next trickle release, if one is pending.
+     *
+     * Returns true when the batch is mid-trickle and should NOT be reported as
+     * finished. The delay is clamped to at least a minute so a clock skew or a
+     * release time that has just passed cannot spin the queue.
+     *
+     * @param  array<int, string>  $pendingStatuses
+     */
+    private function scheduleNextRelease(PbnSeedBatch $batch, array $pendingStatuses): bool
+    {
+        $nextReleaseAt = $batch->items()
+            ->whereIn('status', $pendingStatuses)
+            ->whereNotNull('release_at')
+            ->min('release_at');
+
+        if (!$nextReleaseAt) {
+            return false;
+        }
+
+        $delaySeconds = max(60, now()->diffInSeconds(CarbonImmutable::parse($nextReleaseAt), false));
+        RunPbnSeedBatchJob::dispatch((int) $batch->id)->delay(now()->addSeconds($delaySeconds));
+
+        $this->recordEvent($batch, null, 'batch_release_scheduled', 'info', 'PBN seed batch paused until the next trickle release.', [
+            'next_release_at' => (string) $nextReleaseAt,
+            'remaining' => $batch->items()->whereIn('status', $pendingStatuses)->count(),
+        ]);
+
+        return true;
     }
 
     public function provisionItem(PbnSeedItem $item): void
@@ -132,14 +183,21 @@ class PbnSeedProvisioningService
     private function buildProvisionPayload(PbnSeedItem $item, Client $client, array $sourcePayload): array
     {
         $policy = $item->batch?->copy_policy ?: [];
+        $seedPolicy = is_array($item->applied_policy) ? $item->applied_policy : [];
+        $sourceBio = (string) ($this->sourceValue($sourcePayload, $client, 'content')
+            ?: $this->sourceValue($sourcePayload, $client, 'bio')
+            ?: ($client->bio_original_html ?? ''));
+
+        $bio = $this->bioService->rewrite($sourceBio, $client, $seedPolicy);
+        $this->recordBioOutcome($item, $seedPolicy, $bio);
+
         $payload = [
             'name' => $this->sourceValue($sourcePayload, $client, 'name') ?: $client->name,
             'email' => $this->destinationEmail($item),
             'phone' => data_get($policy, 'phone', 'copy') === 'copy' ? (string) $client->phone_normalized : '',
             'whatsapp' => data_get($policy, 'phone', 'copy') === 'copy' ? (string) $client->phone_normalized : '',
-            'bio' => $this->sourceValue($sourcePayload, $client, 'content')
-                ?: $this->sourceValue($sourcePayload, $client, 'bio')
-                ?: (string) ($client->bio_original_html ?? ''),
+            'bio' => $bio['text'],
+            'seed_policy' => $seedPolicy,
             'region_id' => $item->target_region_id,
             'city_id' => $item->target_city_id,
             'post_status' => in_array(data_get($policy, 'post_status'), ['publish', 'private', 'draft', 'pending'], true)
@@ -161,15 +219,26 @@ class PbnSeedProvisioningService
             }
         }
 
-        if (data_get($policy, 'vip_flags', 'strip') === 'copy') {
-            $payload['premium'] = (bool) $client->premium;
-            $payload['featured'] = (bool) $client->featured;
-        }
-        if (data_get($policy, 'verification', 'strip') === 'copy') {
-            $payload['verified'] = (bool) $client->verified;
-        }
-
         return $payload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $seedPolicy
+     * @param  array{text: string, result: string, provider: ?string, note: ?string}  $bio
+     */
+    private function recordBioOutcome(PbnSeedItem $item, array $seedPolicy, array $bio): void
+    {
+        $seedPolicy['bio_result'] = $bio['result'];
+        $seedPolicy['bio_provider'] = $bio['provider'];
+        $seedPolicy['bio_cost_usd'] = $bio['cost'];
+        $seedPolicy['bio_note'] = $bio['note'];
+        $item->forceFill(['applied_policy' => $seedPolicy])->save();
+
+        if ($bio['result'] === PbnSeedBioService::RESULT_FALLBACK) {
+            $this->recordEvent($item->batch, $item, 'item_bio_fallback', 'warning', 'Bio rewrite fell back to the source text.', [
+                'note' => $bio['note'],
+            ]);
+        }
     }
 
     private function sourceValue(array $sourcePayload, Client $client, string $field): mixed

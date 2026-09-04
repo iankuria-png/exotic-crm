@@ -5,6 +5,8 @@ namespace App\Services\Pbn;
 use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
+use App\Services\AutoOptimize\AutoOptimizeConfig;
+use App\Services\AutoOptimize\AutoOptimizeImagePicker;
 use App\Services\ClientProfileImageService;
 use App\Services\WpSyncService;
 use App\Support\WordPressSiteConnection;
@@ -21,7 +23,8 @@ class PbnSeedMediaService
 
     public function __construct(
         private readonly ClientProfileImageService $imageService,
-        private readonly PbnSeedPreviewService $previewService
+        private readonly PbnSeedPreviewService $previewService,
+        private readonly AutoOptimizeImagePicker $imagePicker
     ) {
     }
 
@@ -97,6 +100,7 @@ class PbnSeedMediaService
             }
 
             $destinationSync = new WpSyncService(WordPressSiteConnection::fromPbnSite($site));
+            $mainIndex = $this->resolveMainImageIndex($item, $sourceMediaPayload, $sourceMedia);
             $uploaded = 0;
             foreach ($sourceMedia as $index => $media) {
                 [$uploadedFile, $temporaryPath] = $this->downloadMedia($item, $media);
@@ -104,7 +108,7 @@ class PbnSeedMediaService
                     $destinationSync->uploadClientMedia(
                         (int) $item->target_wp_post_id,
                         $uploadedFile,
-                        (bool) ($media['is_main'] ?? false) || $index === 0
+                        $index === $mainIndex
                     );
                     $uploaded++;
                 } finally {
@@ -182,6 +186,84 @@ class PbnSeedMediaService
                 : 'Run the batch media copy action.',
             'retry_available' => (bool) $item->target_wp_post_id,
         ];
+    }
+
+    /**
+     * Which source image becomes the destination's lead photo.
+     *
+     * Delegates to AutoOptimizeImagePicker so seeding applies the same quality
+     * floor the optimizer does — an alternative below the market's minimum
+     * dimensions is worse than a duplicate lead photo. Falls back to the
+     * source's own main image when rotation is off, the profile has only one
+     * image, or nothing clears the floor.
+     *
+     * @param  array<int, array<string, mixed>>  $sourceMedia  The normalised, capped upload list.
+     */
+    private function resolveMainImageIndex(PbnSeedItem $item, array $sourceMediaPayload, array $sourceMedia): int
+    {
+        $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
+        $sourceMainIndex = $this->sourceMainIndex($sourceMedia);
+
+        if (count($sourceMedia) < 2 || ($policy['main_image_mode'] ?? 'source') !== 'rotate') {
+            return $sourceMainIndex;
+        }
+
+        $config = AutoOptimizeConfig::effectiveForPlatform((int) $item->source_platform_id);
+        $imageQuality = is_array($config['actions']['image_quality'] ?? null) ? $config['actions']['image_quality'] : [];
+
+        $picked = $this->imagePicker->pickAlternateMain(
+            $sourceMediaPayload,
+            (int) ($sourceMedia[$sourceMainIndex]['id'] ?? 0) ?: null,
+            $imageQuality,
+            (int) ($policy['main_image_seed'] ?? $item->id)
+        );
+
+        if ($picked === null) {
+            return $sourceMainIndex;
+        }
+
+        $index = $this->indexOfMediaId($sourceMedia, (int) ($picked['id'] ?? 0));
+        if ($index === null) {
+            return $sourceMainIndex;
+        }
+
+        $policy['main_image_index'] = $index;
+        $policy['main_image_id'] = (int) $picked['id'];
+        $item->forceFill(['applied_policy' => $policy])->save();
+
+        return $index;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $sourceMedia
+     */
+    private function sourceMainIndex(array $sourceMedia): int
+    {
+        foreach ($sourceMedia as $index => $media) {
+            if (!empty($media['is_main'])) {
+                return $index;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $sourceMedia
+     */
+    private function indexOfMediaId(array $sourceMedia, int $mediaId): ?int
+    {
+        if ($mediaId < 1) {
+            return null;
+        }
+
+        foreach ($sourceMedia as $index => $media) {
+            if ((int) ($media['id'] ?? 0) === $mediaId) {
+                return $index;
+            }
+        }
+
+        return null;
     }
 
     private function downloadMedia(PbnSeedItem $item, array $media): array

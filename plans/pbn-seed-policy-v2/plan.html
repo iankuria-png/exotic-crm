@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PBN seed batches get a real content policy — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#approach">Approach</a><a class="l2" href="#the-policy-shape">The policy shape</a><a class="l2" href="#the-badge-write-is-currently-unreachable">The badge write is currently unreachable</a><a class="l2" href="#bio-rewriting">Bio rewriting</a><a class="l2" href="#steps">Steps</a><a class="l2" href="#verification">Verification</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>PBN seed batches get a real content policy</h1>
+<p class="obj">Give each PBN seed batch an explicit, auditable policy for badges, bio text, main image and expiry, so a seeded batch stops looking like 90 identical clones of the source market.</p>
+<div class="meta"><span class="chip">Status <b>awaiting review</b></span><span class="chip">Owner <b>Ian K</b></span><span class="chip">Date <b>2026-09-04</b></span><span class="chip">Scope <b>PBN seed policy schema, provisioning meta writes, a bio-rewrite stage, main-image rotation, expiry stamping, and the Seed wizard Setup step</b></span><span class="chip">Non-goals <b>Changing the destination theme&#x27;s homepage query (newest-100 pool, shuffle, card limit) — that is a manual theme upload on each PBN site, tracked separately; Reverting the existing Manuel batch — the existing revert flow already covers it; Rewriting media storage or the two-stage media pipeline itself</b></span></div>
+</header>
+<main><p>Today every profile a seed batch creates is the same shape: basic tier, no expiry, the source&#x27;s bio verbatim, and the source&#x27;s lead photo. <code>storeProfileMeta</code> writes <code>premium=0</code>, <code>featured=0</code>, <code>verified=0</code> unconditionally, so the <code>vip_flags</code> and <code>verification</code> copy-policy options that already exist are dead — they cannot change the outcome. Nothing writes <code>escort_expire</code> at all.</p>
+<p>Two things follow. The obvious one is that the destination site reads as generated. The less obvious one is a visibility problem: the destination homepage&#x27;s VIP and Premium sections query <code>featured=1</code> and <code>premium=1</code>, which are separate pools from the capped basic pool. A batch where every profile is basic can only ever compete in the one pool that is capped and shuffled.</p>
+<p>This plan makes the four content decisions explicit, per batch, and records what each profile actually received.</p>
+<section class="blk"><header class="bh">Seed wizard — Setup step with the policy panel</header><div class="bb"><div class="wfw"><div class="wf s-desktop"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style='background:var(--wf-paper);padding:16px;border-radius:var(--wf-radius)'>
+  <div style='display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--wf-line);padding-bottom:12px;margin-bottom:14px'>
+    <div><div style='font-weight:600;color:var(--wf-ink)'>Seed Manuel Escorts</div><div style='font-size:12px;color:var(--wf-muted)'>manuelescorts.com &middot; 0 selected</div></div>
+    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-ink)'>Close</div>
+  </div>
+  <div style='display:flex;gap:8px;margin-bottom:16px'>
+    <div style='border:1px solid var(--wf-accent);background:var(--wf-accent-soft);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;font-weight:600;color:var(--wf-ink)'>1 Setup</div>
+    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>2 Locations</div>
+    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>3 Preview</div>
+    <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 12px;font-size:12px;color:var(--wf-muted)'>4 Queue</div>
+  </div>
+  <div style='display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:12px'>
+    <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+      <div style='font-size:13px;font-weight:600;color:var(--wf-ink);margin-bottom:10px'>Source Markets</div>
+      <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px'>
+        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink)'>☑ Exotic Uganda</div>
+        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-muted)'>☐ Exotic Kenya</div>
+      </div>
+    </div>
+    <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+      <div style='font-size:13px;font-weight:600;color:var(--wf-ink);margin-bottom:10px'>Target count</div>
+      <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:13px;color:var(--wf-ink)'>90</div>
+    </div>
+  </div>
+  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+    <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'>
+      <div style='font-size:13px;font-weight:600;color:var(--wf-ink)'>Seed Policy</div>
+      <div style='font-size:11px;color:var(--wf-muted)'>Saved as this site's default</div>
+    </div>
+    <div style='display:grid;grid-template-columns:1fr 1fr;gap:14px'>
+      <div>
+        <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:8px'>Badge mix</div>
+        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-ink);margin-bottom:6px'><span>VIP (featured)</span><span style='color:var(--wf-muted)'>10% &middot; 9 profiles</span></div>
+        <div style='height:6px;background:var(--wf-line);border-radius:3px;margin-bottom:10px'><div style='width:10%;height:6px;background:var(--wf-accent);border-radius:3px'></div></div>
+        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-ink);margin-bottom:6px'><span>Premium</span><span style='color:var(--wf-muted)'>25% &middot; 22 profiles</span></div>
+        <div style='height:6px;background:var(--wf-line);border-radius:3px;margin-bottom:10px'><div style='width:25%;height:6px;background:var(--wf-accent);border-radius:3px'></div></div>
+        <div style='display:flex;justify-content:space-between;font-size:12px;color:var(--wf-muted)'><span>Verified</span><span>Off</span></div>
+      </div>
+      <div>
+        <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:8px'>Content</div>
+        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink);margin-bottom:8px'>Bio &nbsp;&middot;&nbsp; <strong>Rewrite with AI</strong></div>
+        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink);margin-bottom:8px'>Main image &nbsp;&middot;&nbsp; <strong>Rotate to alternative</strong></div>
+        <div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:12px;color:var(--wf-ink)'>Expires &nbsp;&middot;&nbsp; <strong>30&ndash;90 days, spread</strong></div>
+        <div style='font-size:11px;color:var(--wf-muted);margin-top:8px'>Estimated AI cost for 90 profiles: ~$0.40</div>
+      </div>
+    </div>
+  </div>
+</div></div></div></div><p class="cap">The policy panel sits below the existing Source Markets and Target count controls, in the same Setup step. Percentages are of the batch, not of each profile.</p></div></section>
+<h2 id="approach">Approach</h2>
+<p>The four levers attach at four points that already exist. None of them needs a new pipeline — each is a decision inserted where the value is currently hard-coded.</p>
+<section class="blk"><header class="bh">Where each policy lever attaches</header><div class="bb"><div class="dg"><div style='display:grid;gap:10px'>
+  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>1 &middot; Batch creation &mdash; PbnSeedPreviewService::createBatch</div>
+    <div style='font-size:12px;color:var(--wf-muted)'>Resolves the batch policy into a per-item decision: badge tier, expiry timestamp, main-image index. Written to pbn_seed_items.applied_policy.</div>
+  </div>
+  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>2 &middot; Bio stage &mdash; PbnSeedBioService (new)</div>
+    <div style='font-size:12px;color:var(--wf-muted)'>Runs inside provisionItem before the WordPress insert. On provider failure the item falls back per policy rather than failing the create.</div>
+  </div>
+  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>3 &middot; Meta write &mdash; WpDirectProvisioningService::storeProfileMeta</div>
+    <div style='font-size:12px;color:var(--wf-muted)'>Stops hard-writing premium/featured/verified to 0. Writes the resolved badges and escort_expire instead.</div>
+  </div>
+  <div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px'>
+    <div style='font-size:12px;font-weight:600;color:var(--wf-ink);margin-bottom:6px'>4 &middot; Media stage &mdash; PbnSeedMediaService::processItem</div>
+    <div style='font-size:12px;color:var(--wf-muted)'>The is_main flag comes from the item's recorded image index instead of index === 0.</div>
+  </div>
+</div></div><p class="cap">The policy is resolved once per item at batch creation and recorded, so provisioning and media both read a decision rather than making one.</p></div></section>
+<aside class="callout t-decision"><div class="ct">Policy is resolved once, at batch creation</div><div class="cb"><p>Badge tier, expiry and main-image index are decided when the batch is created and stored per item, not recomputed during provisioning. Provisioning and the media stage run in separate queued passes and the media stage retries independently — recomputing a random choice in either pass would give an item a different badge on retry than the one the preview promised. Recording the decision also makes a batch reproducible and reviewable after the fact.</p></div></aside>
+<aside class="callout t-decision"><div class="ct">Percentages are of the batch, not per profile</div><div class="cb"><p>A 10% VIP setting on a 90-profile batch means exactly 9 profiles, allocated by shuffling the item list and taking the first 9 — not a 10% dice roll per profile that can land on 3 or 17. Small batches stay predictable, and the wizard can show the resulting counts before you queue.</p></div></aside>
+<h2 id="the-policy-shape">The policy shape</h2>
+<p><code>copy_policy</code> is already a JSON column on both <code>pbn_sites</code> and <code>pbn_seed_batches</code>, merged through <code>PbnSite::effectiveCopyPolicy()</code>. The new keys are additive, so existing sites and historical batches keep working — <code>array_replace_recursive</code> fills the defaults for anything absent. No migration is needed for the policy itself.</p>
+<section class="blk"><header class="bh">Data model · copy_policy (JSON, additive keys)</header><div class="bb"><div class="tw"><table><thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead><tbody><tr><td><code>badges.featured_pct</code></td><td><span class="ty">int 0-100</span></td><td>Share of the batch that gets featured=1 (the VIP pool)</td></tr><tr><td><code>badges.premium_pct</code></td><td><span class="ty">int 0-100</span></td><td>Share that gets premium=1 (the Premium pool); disjoint from featured</td></tr><tr><td><code>badges.verified_pct</code></td><td><span class="ty">int 0-100</span></td><td>Share that gets verified=1; defaults to 0, see the open question</td></tr><tr><td><code>bio.mode</code></td><td><span class="ty">&#x27;rewrite&#x27; | &#x27;verbatim&#x27;</span></td><td>rewrite calls AiGateway per profile</td></tr><tr><td><code>bio.on_failure</code></td><td><span class="ty">&#x27;verbatim&#x27; | &#x27;attention&#x27;</span></td><td>What happens when every AI provider fails for one profile</td></tr><tr><td><code>main_image.mode</code></td><td><span class="ty">&#x27;rotate&#x27; | &#x27;source&#x27;</span></td><td>rotate picks a non-first image when the source has more than one</td></tr><tr><td><code>expiry.mode</code></td><td><span class="ty">&#x27;window&#x27; | &#x27;fixed&#x27; | &#x27;none&#x27;</span></td><td>window spreads across a range; fixed uses one offset</td></tr><tr><td><code>expiry.min_days</code></td><td><span class="ty">int</span></td><td>Lower bound of the window, or the offset when mode is fixed</td></tr><tr><td><code>expiry.max_days</code></td><td><span class="ty">int</span></td><td>Upper bound of the window; ignored when mode is fixed</td></tr></tbody></table></div><p class="cap">Existing keys post_status, phone, media, seo_fields, duplicate_policy, update_policy are unchanged. vip_flags and verification are removed in favour of the badges block, which actually reaches WordPress.</p></div></section>
+<section class="blk"><header class="bh">Data model · pbn_seed_items.applied_policy (new JSON column)</header><div class="bb"><div class="tw"><table><thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead><tbody><tr><td><code>badge</code></td><td><span class="ty">&#x27;featured&#x27; | &#x27;premium&#x27; | &#x27;basic&#x27;</span></td><td>Mutually exclusive tier for this profile</td></tr><tr><td><code>verified</code></td><td><span class="ty">bool</span></td><td>Independent of the tier</td></tr><tr><td><code>expires_at</code></td><td><span class="ty">int|null</span></td><td>Unix timestamp written to the escort_expire meta key</td></tr><tr><td><code>main_image_index</code></td><td><span class="ty">int</span></td><td>Index into the normalised source media list; 0 when the source has one image</td></tr><tr><td><code>bio_mode</code></td><td><span class="ty">&#x27;rewrite&#x27; | &#x27;verbatim&#x27;</span></td><td>Copied from the batch policy so a policy edit cannot retro-change a queued item</td></tr><tr><td><code>bio_result</code></td><td><span class="ty">&#x27;rewritten&#x27; | &#x27;fallback&#x27; | &#x27;skipped&#x27; | null</span></td><td>Filled in by the bio stage; null until provisioning runs</td></tr></tbody></table></div><p class="cap">The resolved decision for one profile. Written at batch creation, read by provisioning and by the media stage. This is the audit trail for what a given PBN profile actually received.</p></div></section>
+<h2 id="the-badge-write-is-currently-unreachable">The badge write is currently unreachable</h2>
+<p>This is the specific defect that makes today&#x27;s <code>vip_flags: copy</code> option inert. The loop above it writes whatever the payload carried, and then three unconditional lines overwrite all of it.</p>
+<section class="blk"><header class="bh"><code>app/Services/WpDirectProvisioningService.php</code> <span class="tag">php</span></header><div class="bb"><div class="tw"><table class="ac"><tbody><tr class="cl hl"><td class="ln">1</td><td class="cd"><code>foreach ($this-&gt;profileMetaPayload($payload) as $key =&gt; $value) {</code></td><td class="nt"><span class="an"><b>Filtered upstream</b> profileMetaPayload() only iterates WpProfileFieldCatalog::editableFields() plus phone/whatsapp/website/personal_phone. premium, featured and verified are not in that catalog, so a payload carrying them is dropped here before it can be written.</span></td></tr><tr class="cl hl"><td class="ln">2</td><td class="cd"><code>    if ($value === null || $value === &#x27;&#x27;) {</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">3</td><td class="cd"><code>        continue;</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">4</td><td class="cd"><code>    }</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">5</td><td class="cd"><code>&nbsp;</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">6</td><td class="cd"><code>    $this-&gt;upsertPostMeta($postId, $key, $value);</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">7</td><td class="cd"><code>}</code></td><td class="nt"></td></tr><tr class="cl"><td class="ln">8</td><td class="cd"><code>&nbsp;</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">9</td><td class="cd"><code>$this-&gt;upsertPostMeta($postId, &#x27;premium&#x27;, &#x27;0&#x27;);</code></td><td class="nt"><span class="an"><b>The hard write</b> Even if the keys survived the filter, these three lines overwrite them. Replace with the values resolved from applied_policy, defaulting to 0 when a caller passes no policy so non-PBN provisioning is unaffected.</span></td></tr><tr class="cl hl"><td class="ln">10</td><td class="cd"><code>$this-&gt;upsertPostMeta($postId, &#x27;featured&#x27;, &#x27;0&#x27;);</code></td><td class="nt"></td></tr><tr class="cl hl"><td class="ln">11</td><td class="cd"><code>$this-&gt;upsertPostMeta($postId, &#x27;verified&#x27;, &#x27;0&#x27;);</code></td><td class="nt"></td></tr><tr class="cl"><td class="ln">12</td><td class="cd"><code>$this-&gt;upsertPostMeta($postId, &#x27;independent&#x27;, &#x27;yes&#x27;);</code></td><td class="nt"></td></tr></tbody></table></div></div></section>
+<h2 id="bio-rewriting">Bio rewriting</h2>
+<p><code>AiGateway::generate($feature, $system, $user, $opts)</code> already runs a provider waterfall across Claude, OpenAI, Gemini and DeepSeek, and persists an <code>ai_interactions</code> row per call with provider, latency and cost. Reusing it means bio rewriting inherits the fallback chain, the cost accounting and the audit log for free. The new service supplies the feature slug <code>pbn_bio_rewrite</code> and the prompt; it owns no provider logic of its own.</p>
+<p>The prompt must preserve the facts a reader acts on — the working name, the city, services, rates and contact details — while changing sentence structure and wording. It must not invent attributes. The rewritten text is stored on the item before the WordPress insert, so a failure is visible in the CRM rather than producing a half-written profile on the destination site.</p>
+<aside class="callout t-risk"><div class="ct">Rate and latency</div><div class="cb"><p>90 sequential provider calls at roughly 1–3 seconds each is 2–5 minutes of queue time on top of provisioning. The bio stage runs inside the existing per-item provisioning job, so it is already chunked and already retryable — but the batch will visibly take longer than today&#x27;s. The wizard shows an estimated cost and a longer ETA before queueing.</p></div></aside>
+<h2 id="steps">Steps</h2>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Extend the copy policy schema and its validation</h4><div class="sm"><span class="k">Reuses</span><span class="v">PbnSite::defaultCopyPolicy() and effectiveCopyPolicy(), which already merge site defaults with per-batch overrides through array_replace_recursive</span></div><div class="sm"><span class="k">Adds</span><span class="v">badges, bio, main_image and expiry blocks with defaults; drops vip_flags and verification; replaces the loose <code>copy_policy =&gt; sometimes|nullable|array</code> rule in PbnSiteController::seedRules() with typed rules per key so a bad percentage is a 422 rather than a silent no-op</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Models/PbnSite.php, app/Http/Controllers/CRM/PbnSiteController.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">POST a batch with featured_pct 150 and assert a 422 naming copy_policy.badges.featured_pct</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Add pbn_seed_items.applied_policy</h4><div class="sm"><span class="k">Reuses</span><span class="v">the existing eligibility_snapshot JSON column as the precedent for per-item recorded state, including its array cast</span></div><div class="sm"><span class="k">Adds</span><span class="v">a nullable JSON column plus the cast on PbnSeedItem, and a migration Ian runs on cPanel</span></div><div class="sm"><span class="k">Files</span><span class="v">database/migrations/2026_09_04_000001_add_applied_policy_to_pbn_seed_items.php, app/Models/PbnSeedItem.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">migrate on local MySQL, then confirm a newly created batch writes a non-null applied_policy for every item</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Resolve the policy per item at batch creation</h4><div class="sm"><span class="k">Reuses</span><span class="v">PbnSeedPreviewService::createBatch, which already loops the selected clients and writes one PbnSeedItem per profile inside a transaction</span></div><div class="sm"><span class="k">Adds</span><span class="v">a PbnSeedPolicyResolver that takes the batch policy and the ordered item list and returns one decision per item — badge tiers allocated by count from a shuffled list, expiry drawn per item from the window, main-image index deferred to the media stage as a flag plus a seed</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Pbn/PbnSeedPolicyResolver.php, app/Services/Pbn/PbnSeedPreviewService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">unit test: 90 items at 10% featured and 25% premium yields exactly 9 featured, 22 premium, 59 basic, and no item holding both</span></div></div></li><li class="step"><div class="sn">4</div><div class="sc"><h4>Make the badge and expiry meta writes honour the policy</h4><div class="sm"><span class="k">Reuses</span><span class="v">upsertPostMeta() and the storeProfileMeta() call site</span></div><div class="sm"><span class="k">Adds</span><span class="v">an optional resolved-policy argument on provisionEscort/storeProfileMeta; premium, featured and verified are written from it and default to &#x27;0&#x27; when absent, so the Ads API and CRM provisioning paths are unchanged; escort_expire is written as a Unix timestamp when the policy sets one</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/WpDirectProvisioningService.php, app/Services/Pbn/PbnSeedProvisioningService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">provision one item against the local WP database and assert the postmeta rows for featured, premium and escort_expire match the item&#x27;s applied_policy</span></div></div></li><li class="step"><div class="sn">5</div><div class="sc"><h4>Add the bio rewrite stage</h4><div class="sm"><span class="k">Reuses</span><span class="v">AiGateway::generate() with its provider waterfall, cost accounting and ai_interactions logging</span></div><div class="sm"><span class="k">Adds</span><span class="v">PbnSeedBioService with the pbn_bio_rewrite feature slug and a fact-preserving prompt; called from PbnSeedProvisioningService::buildProvisionPayload before the insert; on AllProvidersFailedException it honours bio.on_failure and records bio_result on the item</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Pbn/PbnSeedBioService.php, app/Services/Pbn/PbnSeedProvisioningService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">fake the gateway to throw and assert the item still provisions with the source bio and bio_result = &#x27;fallback&#x27;; then run one real profile and read the rewritten text on the destination site</span></div></div></li><li class="step"><div class="sn">6</div><div class="sc"><h4>Rotate the main image</h4><div class="sm"><span class="k">Reuses</span><span class="v">PbnSeedMediaService::processItem and its normalised source media list</span></div><div class="sm"><span class="k">Adds</span><span class="v">replaces the <code>(bool) ($media[&#x27;is_main&#x27;] ?? false) || $index === 0</code> decision with the item&#x27;s resolved main-image index, chosen from the actual media count once it is known and written back to applied_policy</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Pbn/PbnSeedMediaService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">seed two profiles from one source advertiser to two PBN sites and confirm the destination lead photos differ</span></div></div></li><li class="step"><div class="sn">7</div><div class="sc"><h4>Build the Seed Policy panel</h4><div class="sm"><span class="k">Reuses</span><span class="v">the existing Setup step layout, crm-input styling and the resetPreview() pattern that invalidates a stale preview when an input changes</span></div><div class="sm"><span class="k">Adds</span><span class="v">badge percentage sliders with live profile counts derived from target_count, bio and main-image mode selects, an expiry window control, an estimated AI cost line, and a save-as-site-default action; every control writes into the copy_policy payload already sent to preview and batches</span></div><div class="sm"><span class="k">Files</span><span class="v">resources/js/components/settings/PbnSeedWizard.jsx</span></div><div class="sm"><span class="k">Verify</span><span class="v">open the wizard, set 10% VIP on a 90 target, and confirm the panel reads 9 profiles and the queued batch&#x27;s copy_policy matches</span></div></div></li><li class="step"><div class="sn">8</div><div class="sc"><h4>Surface the applied policy in the batch view</h4><div class="sm"><span class="k">Reuses</span><span class="v">PbnSeedPreviewService::showBatch and the existing Items table in Pbn.jsx</span></div><div class="sm"><span class="k">Adds</span><span class="v">badge, expiry date and bio result per item, plus a batch-level summary of the mix that was actually applied</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Pbn/PbnSeedPreviewService.php, resources/js/pages/Pbn.jsx</span></div><div class="sm"><span class="k">Verify</span><span class="v">queue a small batch and confirm the Items tab shows the tier and expiry for each row</span></div></div></li><li class="step"><div class="sn">9</div><div class="sc"><h4>Cover the new behaviour with tests</h4><div class="sm"><span class="k">Reuses</span><span class="v">tests/Feature/PbnSiteTest.php and its existing provisioning fixtures</span></div><div class="sm"><span class="k">Adds</span><span class="v">policy resolver distribution test, badge and expiry meta assertions, bio fallback test with a faked gateway, and main-image rotation assertion</span></div><div class="sm"><span class="k">Files</span><span class="v">tests/Feature/PbnSiteTest.php, tests/Unit/PbnSeedPolicyResolverTest.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">/usr/local/opt/php@8.2/bin/php artisan test --filter=&#x27;PbnSeedPolicy|PbnSiteTest&#x27;</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Files touched</header><div class="bb"><div class="tw"><table class="fm"><thead><tr><th>Action</th><th>Path</th><th>Why</th></tr></thead><tbody><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Models/PbnSite.php</code></td><td>defaultCopyPolicy() gains the four new blocks</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Models/PbnSeedItem.php</code></td><td>applied_policy fillable and array cast</td></tr><tr><td><span class="pill p-ok">add</span></td><td><code>database/migrations/2026_09_04_000001_add_applied_policy_to_pbn_seed_items.php</code></td><td>nullable JSON column; must be run on cPanel</td></tr><tr><td><span class="pill p-ok">add</span></td><td><code>app/Services/Pbn/PbnSeedPolicyResolver.php</code></td><td>pure allocation logic, no I/O, unit testable</td></tr><tr><td><span class="pill p-ok">add</span></td><td><code>app/Services/Pbn/PbnSeedBioService.php</code></td><td>wraps AiGateway with the rewrite prompt and the failure policy</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Services/Pbn/PbnSeedPreviewService.php</code></td><td>resolve and persist the policy while writing items; expose it in showBatch</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Services/Pbn/PbnSeedProvisioningService.php</code></td><td>call the bio service and pass the resolved policy into provisioning</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Services/WpDirectProvisioningService.php</code></td><td>badge and escort_expire writes; the only file here shared with non-PBN callers</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Services/Pbn/PbnSeedMediaService.php</code></td><td>main-image index instead of index zero</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>app/Http/Controllers/CRM/PbnSiteController.php</code></td><td>typed copy_policy validation rules</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>resources/js/components/settings/PbnSeedWizard.jsx</code></td><td>Seed Policy panel in the Setup step</td></tr><tr><td><span class="pill p-warn">edit</span></td><td><code>resources/js/pages/Pbn.jsx</code></td><td>per-item badge, expiry and bio result columns</td></tr></tbody></table></div></div></section>
+<section class="blk"><header class="bh">Defaults shipped with the schema</header><div class="bb"><div class="tw"><table><thead><tr><th>Key</th><th>Default</th><th>Rationale</th></tr></thead><tbody><tr><td>badges.featured_pct</td><td>10</td><td>Enough to populate the VIP pool without every profile claiming the top tier</td></tr><tr><td>badges.premium_pct</td><td>25</td><td>Mirrors a plausible paid mix on a real market</td></tr><tr><td>badges.verified_pct</td><td>0</td><td>Verification asserts a KYC check that did not happen — off unless deliberately enabled</td></tr><tr><td>bio.mode</td><td>rewrite</td><td>Duplicate bios across a PBN are the main content risk the batch carries</td></tr><tr><td>bio.on_failure</td><td>verbatim</td><td>A provider outage should degrade the batch, not stall it</td></tr><tr><td>main_image.mode</td><td>rotate</td><td>Costs nothing and removes the most obvious visual duplicate signal</td></tr><tr><td>expiry.mode / min / max</td><td>window, 30, 90</td><td>Spread avoids a single day where a whole batch disappears</td></tr></tbody></table></div><p class="cap">A site that has never been configured gets these. They are deliberately conservative: no fabricated verification, and an expiry window long enough that a batch does not churn.</p></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>The badge write is in WpDirectProvisioningService, which also serves non-PBN provisioning paths.</td><td><span class="pill p-bad">high</span></td><td>low</td><td>The resolved policy is an optional argument that defaults to the current behaviour of writing zeroes, so callers that pass nothing are byte-identical to today. Assert this with a test on the existing non-PBN provisioning path.</td></tr><tr><td>AI rewriting costs real money per batch and a runaway loop could be expensive.</td><td><span class="pill p-warn">medium</span></td><td>low</td><td>One call per item, capped by the existing 200-profile batch limit, with the estimated cost shown before queueing and every call logged to ai_interactions with its provider and cost.</td></tr><tr><td>A rewritten bio could drop a phone number or rate the advertiser depends on.</td><td><span class="pill p-warn">medium</span></td><td>medium</td><td>The prompt pins the factual fields, and the bio stage compares the digit sequences present in the source against the rewrite — a mismatch falls back to verbatim and records bio_result = &#x27;fallback&#x27;.</td></tr><tr><td>Writing escort_expire brings seeded profiles under the destination site&#x27;s expiry actors, whose behaviour differs per market.</td><td><span class="pill p-warn">medium</span></td><td>medium</td><td>First batch after this ships uses a single small target so the expiry path can be observed on one site before a full batch is queued.</td></tr><tr><td>Badges widen homepage coverage but do not remove the theme&#x27;s newest-100 pool cap, so a large enough site still buries older batches.</td><td><span class="pill p-mut">low</span></td><td>high</td><td>Named as an explicit non-goal; the theme change is tracked separately and needs a manual upload per PBN site.</td></tr></tbody></table></div></div></section>
+<h2 id="verification">Verification</h2>
+<p>Beyond <code>--filter=&#x27;PbnSeedPolicy|PbnSiteTest&#x27;</code>, the batch has to be watched end to end on a real site, because the failure modes here are all at the WordPress boundary rather than in PHP.</p>
+<ol><li>Revert the existing Manuel batch through the current revert flow and confirm the item rows reach <code>reverted</code>.</li><li>Queue a deliberately small batch — 6 profiles across two Jinja destinations, 33% featured — and let it run to <code>created</code>.</li><li>In phpMyAdmin on Manuel, read the <code>postmeta</code> rows for those six post IDs and assert <code>featured</code>, <code>premium</code> and <code>escort_expire</code> match the <code>applied_policy</code> recorded in the CRM.</li><li>Open the destination homepage and confirm the featured profiles appear in the VIP section, which has been empty on that site until now.</li><li>Open two of the seeded profiles and confirm the bios differ from their source profiles in wording while keeping the same phone number, and that their lead photos are not the source&#x27;s lead photo.</li><li>Only once that batch is verified, queue the full replacement batch.</li></ol>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"><li class="q"><div class="qh"><span class="qn">Q1</span><span class="qt">Should the policy be allowed to set the verified badge at all?</span><span class="tag">single</span></div><p class="cap">On the live sites the verified badge asserts a KYC check that a seeded profile has not been through. Allowing it is a product decision rather than a technical one, and it is the one badge that makes a claim about a person.</p><ul class="opts"><li><span class="box "></span><span class="ol"><b>Ship it, defaulted off</b> <span class="pill p-ok">recommended</span><span class="od">The control exists and is set to 0% by default, so enabling it is a deliberate act rather than an accident.</span></span></li><li><span class="box "></span><span class="ol"><b>Do not build it</b><span class="od">Only featured and premium are configurable; verified is always 0 for seeded profiles and the control never appears.</span></span></li><li><span class="box "></span><span class="ol"><b>Ship it, defaulted on at a low percentage</b><span class="od">Treated like the other badges, with a small share of the batch marked verified.</span></span></li></ul></li><li class="q"><div class="qh"><span class="qn">Q2</span><span class="qt">Should the batch stagger post_date so profiles do not all land in the same minute?</span><span class="tag">single</span></div><p class="cap">Provisioning stamps post_date at insert time, so a 90-profile batch produces 90 posts within a few minutes. That is both a visible pattern and the reason an older batch drops out of the destination&#x27;s newest-100 homepage pool all at once. Spreading the dates changes how the batch behaves on the destination site, so it is worth deciding now rather than retrofitting.</p><ul class="opts"><li><span class="box "></span><span class="ol"><b>Backdate across a window</b> <span class="pill p-ok">recommended</span><span class="od">Spread post_date across the last N days, oldest first, so the batch looks like organic signups accumulating rather than one import event.</span></span></li><li><span class="box "></span><span class="ol"><b>Drip the queue over hours</b><span class="od">Keep post_date as insert time but pace the provisioning jobs so creation genuinely spreads out. More faithful, but the batch takes hours to complete and is harder to supervise.</span></span></li><li><span class="box "></span><span class="ol"><b>Leave as is</b><span class="od">All profiles carry their true creation time.</span></span></li></ul></li><li class="q"><div class="qh"><span class="qn">Q3</span><span class="qt">Ship all four levers together, or land the cheap three first?</span><span class="tag">single</span></div><p class="cap">Badges, expiry and image rotation are self-contained and testable in a single pass. Bio rewriting adds a provider dependency, per-batch cost and several minutes of queue time, and it carries the fact-preservation risk. Splitting lets a replacement batch go out sooner.</p><ul class="opts"><li><span class="box "></span><span class="ol"><b>Badges, expiry and image first</b> <span class="pill p-ok">recommended</span><span class="od">Land steps 1–4 and 6–9 in one push, then add the bio stage as a follow-up once a batch has been verified end to end on Manuel.</span></span></li><li><span class="box "></span><span class="ol"><b>All four together</b><span class="od">One larger change; the replacement batch waits until the bio stage is verified too.</span></span></li></ul></li></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

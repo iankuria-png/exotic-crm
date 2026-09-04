@@ -33,6 +33,24 @@ class AutoOptimizeConfig
     }
 
     /**
+     * Effective config for a market that may not have an Auto Optimize plan.
+     *
+     * PBN seeding needs the same generation, language and image-quality
+     * settings the optimizer uses, but it runs against source markets that may
+     * never have had a plan created. Resolving through here keeps the "no magic
+     * numbers in service code" rule intact for those callers: an existing plan
+     * wins, and otherwise the same defaults the resolver would have layered.
+     */
+    public static function effectiveForPlatform(?int $platformId): array
+    {
+        $plan = $platformId
+            ? AutoOptimizePlan::query()->where('platform_id', $platformId)->first()
+            : null;
+
+        return self::effective($plan ?: new AutoOptimizePlan());
+    }
+
+    /**
      * Sane starting values written to the DB when a market first creates a plan.
      * NOT used at runtime — only for UI pre-population.
      */

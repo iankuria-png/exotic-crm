@@ -98,6 +98,64 @@ class AutoOptimizeImagePicker
     }
 
     /**
+     * Picks a lead image for a COPY of a profile on another site.
+     *
+     * The objective differs from pickBetterMain(): seeding does not want a
+     * better photo, it wants a *different* one, so the same advertiser does not
+     * lead with the identical image across every PBN. Quality still gates the
+     * choice — an alternative below the market's minimum dimensions is worse
+     * than a duplicate — so this shares the same normalisation and floor and
+     * only relaxes the "must beat the current main" gain requirement.
+     *
+     * Prefers a genuinely better image when one exists, since that is a strict
+     * win on both counts. Deterministic in $seed so a media retry re-picks the
+     * same image instead of reshuffling the gallery.
+     *
+     * @param  array  $mediaPayload  Raw WP media payload
+     * @param  int|null  $currentMainId  The source profile's own main attachment id
+     * @param  array  $imageQualityCfg  From actions.image_quality
+     * @return array|null  The selected media item, or null to keep the source's main
+     */
+    public function pickAlternateMain(array $mediaPayload, ?int $currentMainId, array $imageQualityCfg, int $seed): ?array
+    {
+        $better = $this->pickBetterMain($mediaPayload, $currentMainId, $imageQualityCfg);
+        if ($better !== null) {
+            return $better;
+        }
+
+        $minWidth = (int) ($imageQualityCfg['min_width'] ?? 800);
+        $minHeight = (int) ($imageQualityCfg['min_height'] ?? 1000);
+
+        $candidates = [];
+        foreach ($this->normalizeMediaItemsWithQuality($mediaPayload) as $item) {
+            if ((int) ($item['id'] ?? 0) === $currentMainId) {
+                continue;
+            }
+
+            // An image whose dimensions we can read must clear the floor. One
+            // whose dimensions are unknown is allowed through here — unlike a
+            // quality upgrade, an unverifiable alternative is still preferable
+            // to publishing the identical lead photo on every site.
+            if ($this->hasDimensions($item)) {
+                if ($minWidth > 0 && (int) $item['width'] < $minWidth) {
+                    continue;
+                }
+                if ($minHeight > 0 && (int) $item['height'] < $minHeight) {
+                    continue;
+                }
+            }
+
+            $candidates[] = $item;
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        return $candidates[abs($seed) % count($candidates)];
+    }
+
+    /**
      * Normalizes media items, preserving width/height/filesize when the WP payload provides them.
      * Falls back to normalizeMediaItems (which drops dimensions) for backward compat.
      */

@@ -5,6 +5,46 @@ import { useToast } from '../ToastProvider';
 
 const MAX_TARGETS = 40;
 
+// Auto Optimize's own ledger reports roughly a tenth of a cent per generated
+// bio. Used only to show an order-of-magnitude estimate before queueing — the
+// real per-item cost is recorded on the batch once it runs.
+const BIO_COST_PER_PROFILE_USD = 0.001;
+
+const DEFAULT_POLICY = {
+    badges: { featured_pct: 10, premium_pct: 25, verified_pct: 0 },
+    bio: { mode: 'rewrite', on_failure: 'verbatim' },
+    main_image: { mode: 'rotate' },
+    expiry: { mode: 'window', min_days: 30, max_days: 90 },
+    release: { mode: 'immediate', per_period: 10 },
+};
+
+function mergePolicy(sitePolicy) {
+    const source = sitePolicy || {};
+
+    return {
+        badges: { ...DEFAULT_POLICY.badges, ...(source.badges || {}) },
+        bio: { ...DEFAULT_POLICY.bio, ...(source.bio || {}) },
+        main_image: { ...DEFAULT_POLICY.main_image, ...(source.main_image || {}) },
+        expiry: { ...DEFAULT_POLICY.expiry, ...(source.expiry || {}) },
+        release: { ...DEFAULT_POLICY.release, ...(source.release || {}) },
+    };
+}
+
+function profilesFor(percent, total) {
+    return Math.floor((Math.max(0, Math.min(100, Number(percent) || 0)) * total) / 100);
+}
+
+function trickleSummary(release, total) {
+    if (release.mode === 'immediate' || total < 1) return 'All profiles are created as soon as the batch is queued.';
+
+    const perPeriod = Math.max(1, Number(release.per_period) || 1);
+    const periods = Math.ceil(total / perPeriod);
+    const unit = release.mode === 'daily' ? 'day' : 'hour';
+    if (periods <= 1) return `All ${total} profiles land in the first ${unit}.`;
+
+    return `${perPeriod} per ${unit} · finishes about ${periods - 1} ${unit}${periods - 1 === 1 ? '' : 's'} after the batch starts.`;
+}
+
 function normalizeLocationTree(payload) {
     const raw = Array.isArray(payload?.locations?.locations)
         ? payload.locations.locations
@@ -89,6 +129,7 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
     const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
     const [notes, setNotes] = useState(defaultNotes);
     const [locationQuery, setLocationQuery] = useState('');
+    const [policy, setPolicy] = useState(() => mergePolicy(site?.copy_policy));
 
     const locationsQuery = useQuery({
         queryKey: ['settings-pbn-site-locations', site?.id],
@@ -133,6 +174,7 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         setDuplicateAcknowledged(false);
         setNotes(defaultNotes);
         setLocationQuery('');
+        setPolicy(mergePolicy(site.copy_policy));
         setStep('setup');
     }, [defaultNotes, open, site]);
 
@@ -155,8 +197,9 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
         targets: compactTargets,
         selected_client_ids: selectedClientIds,
         duplicate_acknowledged: duplicateAcknowledged,
+        copy_policy: policy,
         notes,
-    }), [sourcePlatformIds, targetCount, compactTargets, selectedClientIds, duplicateAcknowledged, notes]);
+    }), [sourcePlatformIds, targetCount, compactTargets, selectedClientIds, duplicateAcknowledged, policy, notes]);
 
     const previewMutation = useMutation({
         mutationFn: () => api.post(`/crm/settings/integrations/pbn-sites/${site.id}/preview`, payload).then((response) => response.data),
@@ -185,6 +228,19 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
             toast.error(error?.response?.data?.message || 'Could not queue PBN seed batch.');
         },
     });
+
+    const updatePolicy = (section, key, value) => {
+        resetPreview();
+        setPolicy((current) => ({ ...current, [section]: { ...current[section], [key]: value } }));
+    };
+    const plannedTotal = Math.max(0, Math.min(200, Number(targetCount) || 0));
+    const badgeCounts = useMemo(() => ({
+        featured: profilesFor(policy.badges.featured_pct, plannedTotal),
+        premium: profilesFor(policy.badges.premium_pct, plannedTotal),
+        verified: profilesFor(policy.badges.verified_pct, plannedTotal),
+    }), [policy.badges, plannedTotal]);
+    const badgeOversubscribed = badgeCounts.featured + badgeCounts.premium > plannedTotal;
+    const estimatedBioCost = policy.bio.mode === 'rewrite' ? plannedTotal * BIO_COST_PER_PROFILE_USD : 0;
 
     const selectedTargetKeys = useMemo(() => new Set(targets.map((target) => targetKey(target))), [targets]);
     const allocatedTotal = useMemo(
@@ -311,6 +367,140 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
                                     <input type="checkbox" checked={duplicateAcknowledged} onChange={(event) => setDuplicateAcknowledged(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
                                     Accept duplicate warnings and skip same-site duplicates
                                 </label>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3 lg:col-span-12">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Seed Policy</p>
+                                    <span className="text-[11px] text-slate-500">Applied per profile and recorded on the batch</span>
+                                </div>
+
+                                <div className="mt-3 grid gap-4 lg:grid-cols-3">
+                                    <div>
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Badge mix</p>
+                                        {[
+                                            ['featured_pct', 'VIP (featured)', badgeCounts.featured, 'Enters the destination VIP pool, which is queried separately from the basic pool.'],
+                                            ['premium_pct', 'Premium', badgeCounts.premium, 'Enters the Premium pool.'],
+                                            ['verified_pct', 'Verified', badgeCounts.verified, 'Asserts a KYC check the seeded profile has not been through.'],
+                                        ].map(([key, label, count, hint]) => (
+                                            <div key={key} className="mt-3">
+                                                <div className="flex items-center justify-between text-sm text-slate-800">
+                                                    <label htmlFor={`policy-${key}`} className="font-medium">{label}</label>
+                                                    <span className="text-xs text-slate-500">{policy.badges[key]}% · {count} profile{count === 1 ? '' : 's'}</span>
+                                                </div>
+                                                <input
+                                                    id={`policy-${key}`}
+                                                    type="range"
+                                                    min="0"
+                                                    max="100"
+                                                    value={policy.badges[key]}
+                                                    onChange={(event) => updatePolicy('badges', key, Number(event.target.value))}
+                                                    className="mt-1 w-full accent-teal-700"
+                                                />
+                                                <p className="text-[11px] text-slate-500">{hint}</p>
+                                            </div>
+                                        ))}
+                                        {badgeOversubscribed ? (
+                                            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                                                VIP and Premium together exceed the batch. VIP is filled first and Premium takes what is left.
+                                            </p>
+                                        ) : null}
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="policy-bio-mode">Bio</label>
+                                            <select id="policy-bio-mode" value={policy.bio.mode} onChange={(event) => updatePolicy('bio', 'mode', event.target.value)} className="crm-input mt-1">
+                                                <option value="rewrite">Rewrite for this site</option>
+                                                <option value="verbatim">Copy the source bio</option>
+                                            </select>
+                                            {policy.bio.mode === 'rewrite' ? (
+                                                <>
+                                                    <select
+                                                        aria-label="What happens when bio generation fails"
+                                                        value={policy.bio.on_failure}
+                                                        onChange={(event) => updatePolicy('bio', 'on_failure', event.target.value)}
+                                                        className="crm-input mt-2"
+                                                    >
+                                                        <option value="verbatim">On failure · fall back to the source bio</option>
+                                                        <option value="attention">On failure · hold the profile for review</option>
+                                                    </select>
+                                                    <p className="mt-1 text-[11px] text-slate-500">
+                                                        Uses the same generator as Auto Optimize. Estimated spend for {plannedTotal} profiles: ${estimatedBioCost.toFixed(2)}.
+                                                    </p>
+                                                </>
+                                            ) : (
+                                                <p className="mt-1 text-[11px] text-amber-700">Every site will carry a byte-identical copy of the source text.</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="policy-image-mode">Main image</label>
+                                            <select id="policy-image-mode" value={policy.main_image.mode} onChange={(event) => updatePolicy('main_image', 'mode', event.target.value)} className="crm-input mt-1">
+                                                <option value="rotate">Rotate to an alternative</option>
+                                                <option value="source">Keep the source lead photo</option>
+                                            </select>
+                                            <p className="mt-1 text-[11px] text-slate-500">Rotation honours the market's minimum image dimensions.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="policy-expiry-mode">Profiles expire</label>
+                                            <select id="policy-expiry-mode" value={policy.expiry.mode} onChange={(event) => updatePolicy('expiry', 'mode', event.target.value)} className="crm-input mt-1">
+                                                <option value="window">Spread across a window</option>
+                                                <option value="fixed">A fixed number of days</option>
+                                                <option value="none">Never</option>
+                                            </select>
+                                            {policy.expiry.mode !== 'none' ? (
+                                                <div className="mt-2 flex items-center gap-2">
+                                                    <input
+                                                        type="number" min="1" max="3650"
+                                                        aria-label={policy.expiry.mode === 'window' ? 'Minimum days' : 'Days until expiry'}
+                                                        value={policy.expiry.min_days}
+                                                        onChange={(event) => updatePolicy('expiry', 'min_days', Number(event.target.value))}
+                                                        className="crm-input"
+                                                    />
+                                                    {policy.expiry.mode === 'window' ? (
+                                                        <>
+                                                            <span className="text-xs text-slate-500">to</span>
+                                                            <input
+                                                                type="number" min="1" max="3650"
+                                                                aria-label="Maximum days"
+                                                                value={policy.expiry.max_days}
+                                                                onChange={(event) => updatePolicy('expiry', 'max_days', Number(event.target.value))}
+                                                                className="crm-input"
+                                                            />
+                                                        </>
+                                                    ) : null}
+                                                    <span className="whitespace-nowrap text-xs text-slate-500">days</span>
+                                                </div>
+                                            ) : null}
+                                            {policy.expiry.mode === 'window' && Number(policy.expiry.max_days) < Number(policy.expiry.min_days) ? (
+                                                <p className="mt-1 text-[11px] text-rose-700">The window's end must not be before its start.</p>
+                                            ) : null}
+                                        </div>
+
+                                        <div>
+                                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="policy-release-mode">Release</label>
+                                            <select id="policy-release-mode" value={policy.release.mode} onChange={(event) => updatePolicy('release', 'mode', event.target.value)} className="crm-input mt-1">
+                                                <option value="immediate">All at once</option>
+                                                <option value="hourly">Trickle hourly</option>
+                                                <option value="daily">Trickle daily</option>
+                                            </select>
+                                            {policy.release.mode !== 'immediate' ? (
+                                                <input
+                                                    type="number" min="1" max="200"
+                                                    aria-label="Profiles per period"
+                                                    value={policy.release.per_period}
+                                                    onChange={(event) => updatePolicy('release', 'per_period', Number(event.target.value))}
+                                                    className="crm-input mt-2"
+                                                />
+                                            ) : null}
+                                            <p className="mt-1 text-[11px] text-slate-500">{trickleSummary(policy.release, plannedTotal)}</p>
+                                        </div>
+                                    </div>
+                                </div>
                             </section>
                         </div>
                     ) : null}

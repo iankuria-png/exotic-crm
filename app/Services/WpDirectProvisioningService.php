@@ -307,10 +307,24 @@ class WpDirectProvisioningService
             $this->upsertPostMeta($postId, $key, $value);
         }
 
-        $this->upsertPostMeta($postId, 'premium', '0');
-        $this->upsertPostMeta($postId, 'featured', '0');
-        $this->upsertPostMeta($postId, 'verified', '0');
+        // Badges come from the caller's resolved policy. `premium`, `featured`
+        // and `verified` are not in WpProfileFieldCatalog, so they never
+        // survive profileMetaPayload() above and must be written here. The
+        // default is all-zero, which is what every non-PBN caller gets.
+        $badges = $this->resolveBadgeMeta($payload['seed_policy'] ?? null);
+        $this->upsertPostMeta($postId, 'premium', $badges['premium']);
+        $this->upsertPostMeta($postId, 'featured', $badges['featured']);
+        $this->upsertPostMeta($postId, 'verified', $badges['verified']);
         $this->upsertPostMeta($postId, 'independent', 'yes');
+
+        // WordPress stores profile expiry as a Unix timestamp in
+        // `escort_expire`. Nothing is written when the policy sets no expiry,
+        // which leaves the profile on whatever the destination site's own
+        // lifecycle does with an absent key.
+        $expiresAt = $payload['seed_policy']['expires_at'] ?? null;
+        if (is_numeric($expiresAt) && (int) $expiresAt > 0) {
+            $this->upsertPostMeta($postId, 'escort_expire', (string) (int) $expiresAt);
+        }
         $uploadFolder = (string) (time() . random_int(100, 999));
         $secret = hash('sha256', trim((string) ($payload['name'] ?? '')) . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20));
         $this->upsertPostMeta($postId, 'upload_folder', $uploadFolder);
@@ -325,6 +339,20 @@ class WpDirectProvisioningService
         return [
             'upload_folder' => $uploadFolder,
             'secret' => $secret,
+        ];
+    }
+
+    /**
+     * @return array{premium: string, featured: string, verified: string}
+     */
+    private function resolveBadgeMeta(?array $seedPolicy): array
+    {
+        $badge = (string) ($seedPolicy['badge'] ?? '');
+
+        return [
+            'premium' => $badge === 'premium' ? '1' : '0',
+            'featured' => $badge === 'featured' ? '1' : '0',
+            'verified' => !empty($seedPolicy['verified']) ? '1' : '0',
         ];
     }
 
