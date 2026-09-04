@@ -579,9 +579,31 @@ class WpSyncService
      */
     public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false): array
     {
+        return $this->uploadClientMediaFile(
+            $postId,
+            (string) $file->getRealPath(),
+            $file->getClientOriginalName(),
+            $file->getMimeType() ?: 'application/octet-stream',
+            $setMain
+        );
+    }
+
+    /**
+     * Upload media from a path on disk.
+     *
+     * Used by the video conversion job, which holds a converted MP4 on the
+     * filesystem rather than an UploadedFile from the current request.
+     */
+    public function uploadClientMediaFile(
+        int $postId,
+        string $path,
+        string $fileName,
+        string $mimeType = 'application/octet-stream',
+        bool $setMain = false
+    ): array {
         $this->assertRemoteWriteAllowed("/clients/{$postId}/media");
 
-        $handle = fopen($file->getRealPath(), 'rb');
+        $handle = @fopen($path, 'rb');
         if ($handle === false) {
             throw new \RuntimeException('Unable to read media file for upload.');
         }
@@ -589,8 +611,8 @@ class WpSyncService
         try {
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->mediaUploadTimeout)
-                ->attach('file', $handle, $file->getClientOriginalName(), [
-                    'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
+                ->attach('file', $handle, $fileName, [
+                    'Content-Type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
                 ])
                 ->post($this->baseUrl . "/clients/{$postId}/media", [
                     'set_main' => $setMain ? '1' : '0',

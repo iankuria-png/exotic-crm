@@ -40,13 +40,16 @@ use App\Services\DealPaymentService;
 use App\Services\ExpiredSubscriptionReconciler;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
+use App\Services\MediaConversionStatusService;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
 use App\Services\SupportBoardService;
+use App\Services\VideoTranscodeService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
+use App\Jobs\ConvertClientVideoUploadJob;
 use App\Support\CityNormalizer;
 use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
@@ -65,6 +68,7 @@ use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -73,7 +77,7 @@ class ClientController extends Controller
 {
     private const PLAN_FILTER_NO_ACTIVE_SUBSCRIPTION = 'no-active-subscription';
 
-    private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4';
+    private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4,mov,qt';
 
     private const PROFILE_MEDIA_IMAGE_MAX_KB = 5120;
 
@@ -3276,8 +3280,8 @@ class ClientController extends Controller
             'set_main' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ], [
-            'file.mimes' => 'The file must be a JPEG, PNG, WEBP image, or MP4 video.',
-            'files.*.mimes' => 'Each file must be a JPEG, PNG, WEBP image, or MP4 video.',
+            'file.mimes' => 'The file must be a JPEG, PNG, WEBP image, or an MP4 or MOV video.',
+            'files.*.mimes' => 'Each file must be a JPEG, PNG, WEBP image, or an MP4 or MOV video.',
         ]);
 
         $uploadedFiles = $this->resolveProfileMediaUploadFiles($request);
@@ -3304,8 +3308,24 @@ class ClientController extends Controller
             $existingMedia = $wpSync->getClientMedia((int) $client->wp_post_id);
             $this->ensureProfileMediaCapacity($existingMedia, $uploadedFiles);
 
+            // WordPress only stores MP4. Anything in another container is
+            // handed to the conversion queue and uploaded once it is MP4, so
+            // the sync plugin and theme never have to learn a second format.
+            $conversions = [];
+            $directFiles = [];
+
+            foreach ($uploadedFiles as $file) {
+                if (VideoTranscodeService::needsConversion(strtolower((string) $file->getClientOriginalExtension()))) {
+                    $conversions[] = $this->queueProfileVideoConversion($request, $client, $file, $validated['reason'] ?? null);
+
+                    continue;
+                }
+
+                $directFiles[] = $file;
+            }
+
             $results = [];
-            foreach ($uploadedFiles as $index => $file) {
+            foreach ($directFiles as $index => $file) {
                 $results[] = $wpSync->uploadClientMedia(
                     (int) $client->wp_post_id,
                     $file,
@@ -3352,6 +3372,7 @@ class ClientController extends Controller
                 'success' => true,
                 'uploaded_count' => count($uploadedAttachments),
                 'attachments' => $uploadedAttachments,
+                'conversions' => $conversions,
                 'message' => count($uploadedAttachments) === 1
                     ? 'Media uploaded successfully.'
                     : sprintf('%d media files uploaded successfully.', count($uploadedAttachments)),
@@ -3359,6 +3380,21 @@ class ClientController extends Controller
 
             if (count($uploadedAttachments) === 1) {
                 $response['attachment'] = $uploadedAttachments[0];
+            }
+
+            if ($conversions !== []) {
+                $response['message'] = $uploadedAttachments === []
+                    ? 'Video queued for conversion to MP4.'
+                    : sprintf(
+                        '%d media file%s uploaded. %d video%s queued for conversion to MP4.',
+                        count($uploadedAttachments),
+                        count($uploadedAttachments) === 1 ? '' : 's',
+                        count($conversions),
+                        count($conversions) === 1 ? '' : 's'
+                    );
+
+                // 202: the request is done, the video is not.
+                return response()->json($response, $uploadedAttachments === [] ? 202 : 200);
             }
 
             return response()->json($response);
@@ -3372,6 +3408,78 @@ class ClientController extends Controller
                 'error' => $exception->getMessage(),
             ], 502);
         }
+    }
+
+    /**
+     * Stash one upload on disk and queue it for conversion to MP4.
+     *
+     * @return array<string, mixed>
+     */
+    private function queueProfileVideoConversion(Request $request, Client $client, UploadedFile $file, ?string $reason): array
+    {
+        $conversionId = (string) Str::uuid();
+        $extension = strtolower((string) $file->getClientOriginalExtension()) ?: 'mov';
+        $directory = storage_path('app/media-conversions');
+
+        if (! is_dir($directory) && ! @mkdir($directory, 0775, true) && ! is_dir($directory)) {
+            throw new \RuntimeException('Unable to prepare the conversion workspace on this server.');
+        }
+
+        $this->pruneStaleConversionFiles($directory);
+
+        $sourcePath = $directory.'/'.$conversionId.'.'.$extension;
+        $file->move($directory, basename($sourcePath));
+
+        $status = app(MediaConversionStatusService::class)->put($conversionId, [
+            'client_id' => (int) $client->id,
+            'status' => 'queued',
+            'original_name' => $file->getClientOriginalName(),
+            'message' => 'Queued for conversion to MP4.',
+            'queued_at' => now()->toIso8601String(),
+        ]);
+
+        ConvertClientVideoUploadJob::dispatch(
+            $conversionId,
+            (int) $client->id,
+            $sourcePath,
+            (string) $file->getClientOriginalName(),
+            $request->user()?->id,
+            $reason
+        );
+
+        return $status;
+    }
+
+    /**
+     * Drop conversion leftovers a day old.
+     *
+     * The job removes its own files, so anything still here belongs to a run
+     * that never happened — a queue worker that was down when it was queued.
+     * Swept on the next upload rather than by a scheduled task, which keeps
+     * this self-limiting and adds no cron surface.
+     */
+    private function pruneStaleConversionFiles(string $directory): void
+    {
+        $cutoff = time() - 86400;
+
+        foreach ((array) glob($directory.'/*') as $path) {
+            if (is_file($path) && @filemtime($path) < $cutoff) {
+                @unlink($path);
+            }
+        }
+    }
+
+    /**
+     * Status feed for this client's background video conversions.
+     */
+    public function mediaConversions(Request $request, Client $client, MediaConversionStatusService $status)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        return response()->json([
+            'data' => $status->forClient((int) $client->id),
+            'transcoding_available' => app(VideoTranscodeService::class)->available(),
+        ]);
     }
 
     public function deleteMedia(Request $request, Client $client, int $attachmentId)
@@ -5603,8 +5711,19 @@ class ClientController extends Controller
         }
 
         $isVideo = $this->isProfileMediaVideoUpload($file);
-        if ($isVideo && strtolower((string) $file->getClientOriginalExtension()) !== 'mp4') {
-            $fail('The file must be a JPEG, PNG, WEBP image, or MP4 video.');
+        $extension = strtolower((string) $file->getClientOriginalExtension());
+
+        if ($isVideo && $extension !== 'mp4' && ! VideoTranscodeService::needsConversion($extension)) {
+            $fail('The file must be a JPEG, PNG, WEBP image, or an MP4 or MOV video.');
+
+            return;
+        }
+
+        // MOV is accepted only because the CRM converts it to MP4 before it
+        // reaches WordPress. Without a converter on this host, saying yes here
+        // would mean uploading a file the market site cannot play.
+        if ($isVideo && VideoTranscodeService::needsConversion($extension) && ! app(VideoTranscodeService::class)->available()) {
+            $fail('MOV videos cannot be converted on this server yet. Export the clip as MP4 and upload that instead.');
 
             return;
         }
@@ -5613,7 +5732,7 @@ class ClientController extends Controller
         $sizeKb = (int) ceil(((int) ($file->getSize() ?? 0)) / 1024);
 
         if ($sizeKb > $maxKb) {
-            $fail($isVideo ? 'MP4 videos must not exceed 50MB.' : 'Images must not exceed 5MB.');
+            $fail($isVideo ? 'Videos must not exceed 50MB.' : 'Images must not exceed 5MB.');
         }
 
         if ($isVideo && $setMain) {
@@ -5800,7 +5919,9 @@ class ClientController extends Controller
         $mimeType = strtolower((string) $file->getMimeType());
         $extension = strtolower((string) $file->getClientOriginalExtension());
 
-        return str_starts_with($mimeType, 'video/') || $extension === 'mp4';
+        return str_starts_with($mimeType, 'video/')
+            || $extension === 'mp4'
+            || VideoTranscodeService::needsConversion($extension);
     }
 
     public function closeReasons()
