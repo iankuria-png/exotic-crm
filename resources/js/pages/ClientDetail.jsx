@@ -2396,36 +2396,39 @@ export default function ClientDetail() {
     const clientMediaDeletions = deletionsForClient(id);
     const hasMediaDeletions = clientMediaDeletions.length > 0;
     const pendingDeleteIds = pendingDeleteIdsForClient(id);
-    const visibleMediaItems = mediaItems.filter((media) => !pendingDeleteIds.has(Number(media.id)));
-    const selectableMediaIds = visibleMediaItems.map((media) => Number(media.id));
-    const selectedMediaIdSet = new Set(selectedMediaIds.map((value) => Number(value)));
-    const selectedVisibleMediaIds = selectableMediaIds.filter((mediaId) => selectedMediaIdSet.has(mediaId));
-    const selectedMediaCount = selectedVisibleMediaIds.length;
-    const allMediaSelected = selectableMediaIds.length > 0 && selectedMediaCount === selectableMediaIds.length;
+    const visibleMediaItems = mediaItems
+        .map((media, index) => ({ media, key: `${media?.id ?? 'media'}-${index}` }))
+        .filter(({ media }) => !pendingDeleteIds.has(Number(media.id)));
+    const selectableMediaKeys = visibleMediaItems.map((entry) => entry.key);
+    const selectableMediaKeySet = new Set(selectableMediaKeys);
+    const selectedMediaKeySet = new Set(
+        selectedMediaIds.filter((key) => selectableMediaKeySet.has(key))
+    );
+    const selectedMediaCount = selectedMediaKeySet.size;
+    const allMediaSelected = selectableMediaKeys.length > 0 && selectedMediaCount === selectableMediaKeys.length;
     const selectedMediaIncludesMain = visibleMediaItems.some(
-        (media) => media.is_main && selectedMediaIdSet.has(Number(media.id))
+        ({ media, key }) => media.is_main && selectedMediaKeySet.has(key)
     );
     const mediaDeletionRunning = clientMediaDeletions.some((deletion) => deletion.status === 'deleting');
 
-    const toggleMediaSelection = (mediaId, index, shiftKey = false) => {
-        const numericId = Number(mediaId);
+    const toggleMediaSelection = (mediaKey, index, shiftKey = false) => {
         const lastIndex = lastSelectedMediaIndexRef.current;
 
         if (shiftKey && lastIndex !== null && lastIndex !== index) {
             const start = Math.min(lastIndex, index);
             const end = Math.max(lastIndex, index);
-            const rangeIds = selectableMediaIds.slice(start, end + 1);
-            setSelectedMediaIds((current) => Array.from(new Set([...current.map(Number), ...rangeIds])));
+            const rangeKeys = selectableMediaKeys.slice(start, end + 1);
+            setSelectedMediaIds((current) => Array.from(new Set([...current, ...rangeKeys])));
             lastSelectedMediaIndexRef.current = index;
             return;
         }
 
         setSelectedMediaIds((current) => {
-            const next = new Set(current.map(Number));
-            if (next.has(numericId)) {
-                next.delete(numericId);
+            const next = new Set(current);
+            if (next.has(mediaKey)) {
+                next.delete(mediaKey);
             } else {
-                next.add(numericId);
+                next.add(mediaKey);
             }
 
             return Array.from(next);
@@ -2444,17 +2447,27 @@ export default function ClientDetail() {
             return;
         }
 
-        setSelectedMediaIds(selectableMediaIds);
+        setSelectedMediaIds(selectableMediaKeys);
         lastSelectedMediaIndexRef.current = null;
     };
 
     const confirmBulkMediaDelete = () => {
+        const seenAttachmentIds = new Set();
         const items = visibleMediaItems
-            .filter((media) => selectedMediaIdSet.has(Number(media.id)))
-            .map((media) => ({
+            .filter(({ key }) => selectedMediaKeySet.has(key))
+            .map(({ media }) => ({
                 attachmentId: Number(media.id),
                 name: media.file_name || media.filename || `Attachment ${media.id}`,
-            }));
+            }))
+            .filter((item) => {
+                if (!Number.isFinite(item.attachmentId) || item.attachmentId <= 0 || seenAttachmentIds.has(item.attachmentId)) {
+                    return false;
+                }
+
+                seenAttachmentIds.add(item.attachmentId);
+
+                return true;
+            });
 
         const result = startClientMediaDeletion({
             clientId: id,
@@ -5497,13 +5510,13 @@ export default function ClientDetail() {
                                                             }
                                                         }}
                                                         onChange={toggleSelectAllMedia}
-                                                        disabled={selectableMediaIds.length === 0}
+                                                        disabled={selectableMediaKeys.length === 0}
                                                         className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
                                                     />
                                                     <span>
                                                         {selectedMediaCount > 0
-                                                            ? `${selectedMediaCount} of ${selectableMediaIds.length} selected`
-                                                            : `Select all (${selectableMediaIds.length})`}
+                                                            ? `${selectedMediaCount} of ${selectableMediaKeys.length} selected`
+                                                            : `Select all (${selectableMediaKeys.length})`}
                                                     </span>
                                                 </label>
                                                 <p className="text-xs text-slate-500">
@@ -5542,12 +5555,12 @@ export default function ClientDetail() {
 
                                             {visibleMediaItems.length > 0 ? (
                                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                                    {visibleMediaItems.map((media, index) => (
+                                                    {visibleMediaItems.map(({ media, key }, index) => (
                                                         <ClientMediaCard
-                                                            key={media.id}
+                                                            key={key}
                                                             media={media}
-                                                            selected={selectedMediaIdSet.has(Number(media.id))}
-                                                            onToggleSelect={(event) => toggleMediaSelection(media.id, index, event?.shiftKey)}
+                                                            selected={selectedMediaKeySet.has(key)}
+                                                            onToggleSelect={(shiftKey) => toggleMediaSelection(key, index, shiftKey)}
                                                             setMainPending={setMainMediaMutation.isPending}
                                                             deletePending={deleteMediaMutation.isPending}
                                                             onSetMain={() => setMainMediaMutation.mutate(media.id)}
@@ -6557,21 +6570,15 @@ function ClientMediaCard({
 
     return (
         <div className={`relative rounded-lg border p-3 transition ${borderClass}`}>
-            <label
-                className="absolute left-5 top-5 z-10 flex cursor-pointer items-center justify-center rounded-md bg-white/95 p-1 shadow-sm ring-1 ring-slate-200"
-                onClick={(event) => {
-                    event.preventDefault();
-                    onToggleSelect?.(event);
-                }}
-            >
+            <span className="absolute left-5 top-5 z-10 flex items-center justify-center rounded-md bg-white/95 p-1 shadow-sm ring-1 ring-slate-200">
                 <input
                     type="checkbox"
                     checked={selected}
-                    onChange={() => {}}
+                    onChange={(event) => onToggleSelect?.(Boolean(event.nativeEvent?.shiftKey))}
                     aria-label={`Select ${displayName}`}
-                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                    className="h-4 w-4 cursor-pointer rounded border-slate-300 text-teal-700 focus:ring-teal-200"
                 />
-            </label>
+            </span>
             <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-100">
                 <div className="aspect-[4/3]">
                     {assetState === 'checking' ? (
