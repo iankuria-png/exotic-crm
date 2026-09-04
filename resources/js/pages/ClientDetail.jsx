@@ -5259,7 +5259,7 @@ export default function ClientDetail() {
                                                 ref={mediaUploadInputRef}
                                                 type="file"
                                                 multiple
-                                                accept="image/jpeg,image/png,image/webp,video/mp4"
+                                                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,.mov"
                                                 onChange={(event) => {
                                                     const selectedFiles = Array.from(event.target.files || []);
                                                     setMediaUploadFiles(selectedFiles);
@@ -5285,7 +5285,7 @@ export default function ClientDetail() {
                                             <p className="mt-2 text-xs text-slate-500">{mediaUploadSelectionLabel}</p>
                                         ) : null}
                                         <p className="mt-2 text-xs text-slate-500">
-                                            Videos: MP4 up to 50MB (max 5). Images: JPG/PNG/WEBP up to 5MB (max 20).
+                                            Videos: MP4 or MOV up to 50MB (max 5) — MOV is converted to MP4 automatically. Images: JPG/PNG/WEBP up to 5MB (max 20).
                                         </p>
                                         {mediaUploadPreflight.errors.map((message) => (
                                             <p key={message} className="mt-2 text-xs text-rose-700">{message}</p>
@@ -5576,7 +5576,7 @@ export default function ClientDetail() {
                                         </div>
                                     ) : (
                                         <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
-                                            No media uploaded yet. Choose a file above to upload an image or MP4 video.
+                                            No media uploaded yet. Choose a file above to upload an image or a video.
                                         </p>
                                     )}
                                 </div>

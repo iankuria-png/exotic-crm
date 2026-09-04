@@ -650,6 +650,7 @@ class PbnSeedPreviewService
             'premium' => 0,
             'verified' => 0,
             'bio_rewritten' => 0,
+            'bio_template' => 0,
             'bio_fallback' => 0,
             'bio_cost_usd' => 0.0,
             'awaiting_release' => 0,
@@ -670,6 +671,9 @@ class PbnSeedPreviewService
             }
             if (($policy['bio_result'] ?? null) === PbnSeedBioService::RESULT_REWRITTEN) {
                 $summary['bio_rewritten']++;
+            }
+            if (($policy['bio_result'] ?? null) === PbnSeedBioService::RESULT_TEMPLATE) {
+                $summary['bio_template']++;
             }
             if (($policy['bio_result'] ?? null) === PbnSeedBioService::RESULT_FALLBACK) {
                 $summary['bio_fallback']++;

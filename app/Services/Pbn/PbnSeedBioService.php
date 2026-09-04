@@ -30,6 +30,7 @@ use Illuminate\Support\Str;
 class PbnSeedBioService
 {
     public const RESULT_REWRITTEN = 'rewritten';
+    public const RESULT_TEMPLATE = 'template';
     public const RESULT_FALLBACK = 'fallback';
     public const RESULT_SKIPPED = 'skipped';
 
@@ -69,18 +70,67 @@ class PbnSeedBioService
         }
 
         $cost = (float) data_get($generated, 'usage.estimated_cost_usd', 0.0);
-        $problem = $this->rejectionReason($generated, $sourceBio, $language);
-        if ($problem !== null) {
-            return $this->failure($sourceBio, $seedPolicy, $problem, $cost);
+        $bioHtml = (string) ($generated['bio_html'] ?? '');
+
+        if (trim(strip_tags($bioHtml)) === '') {
+            return $this->failure($sourceBio, $seedPolicy, 'Bio generation returned empty text.', $cost);
+        }
+
+        // Every provider failed and BioGenerationService substituted its
+        // deterministic template. Whether that is publishable is a policy
+        // question, so it is answered by the batch rather than assumed.
+        if ((bool) ($generated['fallback_used'] ?? false)) {
+            return $this->handleTemplateFallback($bioHtml, $sourceBio, $seedPolicy, $language, $cost);
+        }
+
+        if ($this->normalise($bioHtml) === $this->normalise($sourceBio)) {
+            return $this->failure($sourceBio, $seedPolicy, 'Generation returned the source bio unchanged.', $cost);
         }
 
         return $this->outcome(
-            (string) $generated['bio_html'],
+            $bioHtml,
             self::RESULT_REWRITTEN,
             (string) ($generated['provider_used'] ?? null) ?: null,
             $cost,
             null
         );
+    }
+
+    /**
+     * The template fallback is free, instant and — unlike copying the source —
+     * genuinely different text, which is why it is worth offering as the
+     * preferred degradation for seeding.
+     *
+     * Two limits shape when it may be used, and neither is negotiable by
+     * config:
+     *
+     *  - The templates in Services/Seo/Templates are English-only, so a
+     *    non-English market falls through to the next option rather than
+     *    publishing English. This is the same block Auto Optimize applies.
+     *  - TemplateFallbackEngine keys its variant on the source wp_post_id, so
+     *    one advertiser seeded to several PBNs receives the SAME template text
+     *    on each. It removes the duplicate against the source, not against the
+     *    network.
+     *
+     * @param  array<string, mixed>  $seedPolicy
+     * @return array{text: string, result: string, provider: ?string, cost: float, note: ?string}
+     */
+    private function handleTemplateFallback(string $bioHtml, string $sourceBio, array $seedPolicy, string $language, float $cost): array
+    {
+        if (($seedPolicy['bio_on_failure'] ?? 'template') !== 'template') {
+            return $this->failure($sourceBio, $seedPolicy, 'Every AI provider failed and the batch does not accept the template fallback.', $cost);
+        }
+
+        if ($language !== 'en') {
+            return $this->failure(
+                $sourceBio,
+                $seedPolicy,
+                'Every AI provider failed and the template fallback is English-only for a ' . $language . ' market.',
+                $cost
+            );
+        }
+
+        return $this->outcome($bioHtml, self::RESULT_TEMPLATE, 'template_fallback', $cost, 'All AI providers failed; the deterministic template was used.');
     }
 
     /**
@@ -107,29 +157,6 @@ class PbnSeedBioService
             : $language;
     }
 
-    /**
-     * @param  array<string, mixed>  $generated
-     */
-    private function rejectionReason(array $generated, string $sourceBio, string $language): ?string
-    {
-        $bioHtml = (string) ($generated['bio_html'] ?? '');
-
-        if (trim(strip_tags($bioHtml)) === '') {
-            return 'Bio generation returned empty text.';
-        }
-
-        // Never publish the English template into a non-English market.
-        if ((bool) ($generated['fallback_used'] ?? false) && $language !== 'en') {
-            return 'All providers failed and the template fallback is English-only for a ' . $language . ' market.';
-        }
-
-        if ($this->normalise($bioHtml) === $this->normalise($sourceBio)) {
-            return 'Generation returned the source bio unchanged.';
-        }
-
-        return null;
-    }
-
     private function normalise(string $html): string
     {
         return Str::lower(trim(preg_replace('/\s+/', ' ', strip_tags($html)) ?? ''));
@@ -141,7 +168,7 @@ class PbnSeedBioService
      */
     private function failure(string $sourceBio, array $seedPolicy, string $note, float $cost = 0.0): array
     {
-        if (($seedPolicy['bio_on_failure'] ?? 'verbatim') === 'attention') {
+        if (($seedPolicy['bio_on_failure'] ?? 'template') === 'attention') {
             throw new \RuntimeException('Bio rewrite failed and the batch policy holds the item: ' . $note);
         }
 

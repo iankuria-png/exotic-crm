@@ -128,12 +128,14 @@ class PbnSite extends Model
             ],
 
             // Duplicate bios across a PBN are the main content risk a batch
-            // carries. `on_failure` decides what happens when every AI
-            // provider fails for one profile: degrade the batch, or hold the
-            // item for a human.
+            // carries. `on_failure` decides what happens when every AI provider
+            // fails for one profile. The default is the SEO engine's own
+            // deterministic template: free, instant, and unlike copying the
+            // source it still produces different text. It is English-only, so a
+            // non-English market degrades past it automatically.
             'bio' => [
                 'mode' => 'rewrite',
-                'on_failure' => 'verbatim',
+                'on_failure' => 'template',
             ],
 
             // Rotating away from the source's lead photo costs nothing and

@@ -12,7 +12,7 @@ const BIO_COST_PER_PROFILE_USD = 0.001;
 
 const DEFAULT_POLICY = {
     badges: { featured_pct: 10, premium_pct: 25, verified_pct: 0 },
-    bio: { mode: 'rewrite', on_failure: 'verbatim' },
+    bio: { mode: 'rewrite', on_failure: 'template' },
     main_image: { mode: 'rotate' },
     expiry: { mode: 'window', min_days: 30, max_days: 90 },
     release: { mode: 'immediate', per_period: 10 },
@@ -422,12 +422,18 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
                                                         onChange={(event) => updatePolicy('bio', 'on_failure', event.target.value)}
                                                         className="crm-input mt-2"
                                                     >
-                                                        <option value="verbatim">On failure · fall back to the source bio</option>
+                                                        <option value="template">On failure · use the SEO template</option>
+                                                        <option value="verbatim">On failure · copy the source bio</option>
                                                         <option value="attention">On failure · hold the profile for review</option>
                                                     </select>
                                                     <p className="mt-1 text-[11px] text-slate-500">
                                                         Uses the same generator as Auto Optimize. Estimated spend for {plannedTotal} profiles: ${estimatedBioCost.toFixed(2)}.
                                                     </p>
+                                                    {policy.bio.on_failure === 'template' ? (
+                                                        <p className="mt-1 text-[11px] text-slate-500">
+                                                            The template is English-only, so non-English markets copy the source bio instead. One advertiser gets the same template on every PBN.
+                                                        </p>
+                                                    ) : null}
                                                 </>
                                             ) : (
                                                 <p className="mt-1 text-[11px] text-amber-700">Every site will carry a byte-identical copy of the source text.</p>

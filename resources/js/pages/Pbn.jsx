@@ -40,6 +40,9 @@ function bioOutcome(policy) {
     if (policy.bio_result === 'rewritten') {
         return { label: 'Rewritten', tone: 'text-teal-700', hint: policy.bio_provider ? `via ${policy.bio_provider}` : null };
     }
+    if (policy.bio_result === 'template') {
+        return { label: 'Template', tone: 'text-sky-700', hint: policy.bio_note };
+    }
     if (policy.bio_result === 'fallback') {
         return { label: 'Fell back', tone: 'text-amber-700', hint: policy.bio_note };
     }
@@ -63,6 +66,7 @@ const itemPolicyFilters = [
     { id: 'featured', label: 'VIP', match: (item) => item.policy?.badge === 'featured' },
     { id: 'premium', label: 'Premium', match: (item) => item.policy?.badge === 'premium' },
     { id: 'basic', label: 'Basic', match: (item) => (item.policy?.badge || 'basic') === 'basic' },
+    { id: 'bio_template', label: 'Bio from template', match: (item) => item.policy?.bio_result === 'template' },
     { id: 'bio_fallback', label: 'Bio fell back', match: (item) => item.policy?.bio_result === 'fallback' },
     { id: 'not_rotated', label: 'Photo not rotated', match: (item) => item.policy?.main_image_mode === 'rotate' && !item.policy?.main_image_rotated },
     { id: 'awaiting', label: 'Awaiting release', match: (item) => item.policy?.awaiting_release },
@@ -852,6 +856,7 @@ export default function Pbn() {
                                                 <p className="mt-0.5 text-xs text-slate-500">
                                                     {batchPolicySummary.featured} VIP · {batchPolicySummary.premium} premium · {batchPolicySummary.verified} verified ·{' '}
                                                     {batchPolicySummary.bio_rewritten} bios rewritten
+                                                    {batchPolicySummary.bio_template > 0 ? ` · ${batchPolicySummary.bio_template} from template` : ''}
                                                     {batchPolicySummary.bio_fallback > 0 ? ` · ${batchPolicySummary.bio_fallback} fell back` : ''}
                                                     {batchPolicySummary.bio_cost_usd > 0 ? ` · $${Number(batchPolicySummary.bio_cost_usd).toFixed(3)}` : ''}
                                                     {batchPolicySummary.awaiting_release > 0

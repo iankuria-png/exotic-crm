@@ -38,7 +38,18 @@ export function isVideoUploadFile(file) {
     const mime = String(file?.type || '').toLowerCase();
     const ext = fileExtension(file);
 
-    return mime === 'video/mp4' || ext === 'mp4';
+    return mime.startsWith('video/') || ['mp4', 'mov', 'qt'].includes(ext);
+}
+
+/**
+ * MOV cannot go to WordPress as-is — the CRM converts it to MP4 first, which
+ * happens on the server after the file has finished uploading.
+ */
+export function isConvertibleVideoFile(file) {
+    const mime = String(file?.type || '').toLowerCase();
+    const ext = fileExtension(file);
+
+    return mime === 'video/quicktime' || ['mov', 'qt'].includes(ext);
 }
 
 function describeMediaUploadFiles(files) {
@@ -124,7 +135,7 @@ export function getMediaUploadPreflight(files, setMain = false) {
         const isVideo = isVideoUploadFile(file);
 
         if (!isImage && !isVideo) {
-            errors.push(`${name} must be a JPG, PNG, WEBP, or MP4 file.`);
+            errors.push(`${name} must be a JPG, PNG, WEBP, MP4, or MOV file.`);
             return;
         }
 
@@ -139,9 +150,13 @@ export function getMediaUploadPreflight(files, setMain = false) {
         }
 
         if (isVideo && size > MEDIA_UPLOAD_LIMITS.videoMaxBytes) {
-            errors.push(`${name} is ${formatBytes(size)}. MP4 videos must be 50MB or smaller.`);
+            errors.push(`${name} is ${formatBytes(size)}. Videos must be 50MB or smaller.`);
         } else if (isVideo && size >= MEDIA_UPLOAD_LIMITS.largeVideoBytes) {
             guidance.push(`${name} is a large video. H.264 MP4 under 30MB usually uploads faster.`);
+        }
+
+        if (isConvertibleVideoFile(file)) {
+            guidance.push(`${name} will be converted to MP4 after upload, which can take a few minutes for a long clip.`);
         }
     });
 
@@ -150,6 +165,67 @@ export function getMediaUploadPreflight(files, setMain = false) {
         errors,
         guidance,
         label: describeMediaUploadFiles(list),
+    };
+}
+
+const CONVERSION_POLL_INTERVAL_MS = 5000;
+const CONVERSION_POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const CONVERSION_ACTIVE_STATUSES = ['queued', 'converting', 'uploading'];
+
+function conversionProgressMessage(status) {
+    if (status === 'converting') return 'Converting to MP4';
+    if (status === 'uploading') return 'Uploading converted MP4';
+
+    return 'Queued for conversion';
+}
+
+/**
+ * A MOV upload finishes on the server, not in the request: the file is
+ * converted to MP4 on a queue and only then pushed to WordPress. Follow that
+ * status until it settles so the tray reports the real outcome rather than
+ * "uploaded" for a video that is still being encoded.
+ */
+async function waitForConversion(clientId, conversionId, onProgress) {
+    const deadline = Date.now() + CONVERSION_POLL_TIMEOUT_MS;
+    let lastStatus = '';
+
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, CONVERSION_POLL_INTERVAL_MS));
+
+        let conversion = null;
+        try {
+            const response = await api.get(`/crm/clients/${clientId}/media/conversions`);
+            const rows = Array.isArray(response?.data?.data) ? response.data.data : [];
+            conversion = rows.find((row) => row.conversion_id === conversionId) || null;
+        } catch {
+            // A dropped poll is not a failed conversion — the job keeps
+            // running server-side. Try again on the next tick.
+            continue;
+        }
+
+        if (!conversion) {
+            continue;
+        }
+
+        const status = String(conversion.status || '');
+
+        if (status === 'completed') {
+            return { ok: true, message: conversion.message || 'Converted to MP4 and uploaded.' };
+        }
+
+        if (status === 'failed') {
+            return { ok: false, message: conversion.message || 'Video conversion failed.' };
+        }
+
+        if (CONVERSION_ACTIVE_STATUSES.includes(status) && status !== lastStatus) {
+            lastStatus = status;
+            onProgress?.(conversionProgressMessage(status));
+        }
+    }
+
+    return {
+        ok: false,
+        message: 'Conversion is taking longer than expected. Check the media list in a few minutes.',
     };
 }
 
@@ -295,7 +371,7 @@ export function MediaUploadProvider({ children }) {
                 }));
 
                 try {
-                    await api.post(`/crm/clients/${clientId}/media`, formData, {
+                    const response = await api.post(`/crm/clients/${clientId}/media`, formData, {
                         headers: {
                             'Content-Type': 'multipart/form-data',
                         },
@@ -312,6 +388,39 @@ export function MediaUploadProvider({ children }) {
                             });
                         },
                     });
+
+                    const conversion = (response?.data?.conversions || [])[0] || null;
+
+                    if (conversion?.conversion_id) {
+                        updateUploadItem(uploadId, item.id, {
+                            status: 'converting',
+                            percent: 100,
+                            message: 'Queued for conversion',
+                        });
+
+                        const outcome = await waitForConversion(
+                            clientId,
+                            conversion.conversion_id,
+                            (message) => updateUploadItem(uploadId, item.id, { message })
+                        );
+
+                        if (!outcome.ok) {
+                            runResults.set(item.id, 'failed');
+                            updateUploadItem(uploadId, item.id, {
+                                status: 'failed',
+                                message: outcome.message,
+                            });
+                            continue;
+                        }
+
+                        runResults.set(item.id, 'success');
+                        updateUploadItem(uploadId, item.id, {
+                            status: 'success',
+                            percent: 100,
+                            message: outcome.message,
+                        });
+                        continue;
+                    }
 
                     runResults.set(item.id, 'success');
                     updateUploadItem(uploadId, item.id, {
