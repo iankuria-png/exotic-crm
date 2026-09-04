@@ -20,6 +20,7 @@ const defaultForm = {
     db_user: '',
     db_pass: '',
     db_prefix: 'wp_',
+    legacy_self_upload_secret_option: true,
     is_active: false,
 };
 
@@ -67,11 +68,14 @@ export default function PbnSiteCreateModal({ open, onClose, platforms = [], onCr
         });
     };
     const submit = () => {
+        const { legacy_self_upload_secret_option: legacySelfUploadSecret, ...fields } = form;
+
         createMutation.mutate({
-            ...form,
+            ...fields,
             default_source_platform_id: form.default_source_platform_id ? Number(form.default_source_platform_id) : null,
             source_platform_ids: form.source_platform_ids.map(Number),
             currency_code: form.currency_code.toUpperCase(),
+            wp_compatibility_settings: { legacy_self_upload_secret_option: legacySelfUploadSecret },
         });
     };
 
@@ -140,6 +144,21 @@ export default function PbnSiteCreateModal({ open, onClose, platforms = [], onCr
                         <label className="flex min-h-11 items-center gap-2 text-sm text-slate-700">
                             <input type="checkbox" checked={form.is_active} onChange={(event) => update('is_active', event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
                             Site active for seed previews
+                        </label>
+                        <label className="flex min-h-11 items-start gap-2 text-sm text-slate-700 md:col-span-2">
+                            <input
+                                type="checkbox"
+                                checked={form.legacy_self_upload_secret_option}
+                                onChange={(event) => update('legacy_self_upload_secret_option', event.target.checked)}
+                                className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                            />
+                            <span>
+                                <span className="block font-medium text-slate-900">Legacy self-upload secret</span>
+                                <span className="block text-xs text-slate-500">
+                                    Writes the WordPress option the theme's photo and video uploaders use to find a profile. Leave on unless this site
+                                    runs a newer uploader — without it, seeded owners cannot upload media.
+                                </span>
+                            </span>
                         </label>
                     </section>
                 </div>

@@ -336,6 +336,142 @@ class PbnSiteTest extends TestCase
         $this->assertArrayNotHasKey('escort_expire', $meta->toArray());
     }
 
+    /**
+     * The parent theme's photo and video uploaders resolve a profile ONLY
+     * through an option named by its `secret` post meta, and die with "We
+     * couldn't find a profile" when it is absent — before any authorship or
+     * nonce check. PBN sites default this on, so a seeded owner can upload.
+     */
+    public function test_provisioning_writes_the_self_edit_links_a_seeded_owner_needs(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-links.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN Links Demo',
+                'email' => 'pbn.links@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-links-demo-1',
+            ]);
+
+        $postId = (int) $result['wp_post_id'];
+        $userId = (int) $result['wp_user_id'];
+
+        $secret = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', $postId)->where('meta_key', 'secret')->value('meta_value');
+        $this->assertNotEmpty($secret);
+
+        $options = DB::connection($connectionName)->table('options')
+            ->whereIn('option_name', [$secret, 'escortid' . $userId, 'escortpostid' . $userId])
+            ->pluck('option_value', 'option_name');
+
+        $this->assertSame((string) $userId, $options[$secret], 'The uploader resolves the profile through this option.');
+        $this->assertSame((string) $postId, $options['escortpostid' . $userId]);
+        $this->assertSame('escort', $options['escortid' . $userId]);
+    }
+
+    /** A site that runs a newer uploader can turn the legacy row off. */
+    public function test_the_legacy_upload_secret_option_is_configurable_per_site(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], [
+            'domain' => 'pbn-nolegacy.test',
+            'wp_compatibility_settings' => ['legacy_self_upload_secret_option' => false],
+        ]);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN No Legacy',
+                'email' => 'pbn.nolegacy@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-nolegacy-1',
+            ]);
+
+        $secret = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', (int) $result['wp_post_id'])->where('meta_key', 'secret')->value('meta_value');
+
+        $this->assertNull(DB::connection($connectionName)->table('options')->where('option_name', $secret)->value('option_value'));
+    }
+
+    /**
+     * Profiles seeded before the compatibility flag existed are missing the
+     * upload option and cannot accept media. Repair writes the row in place
+     * rather than requiring a revert and re-seed.
+     */
+    public function test_repair_restores_the_upload_link_on_an_already_seeded_profile(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-repair.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        $client = $this->publishedClient($platform, ['seo_score' => 80]);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN Repair Demo',
+                'email' => 'pbn.repair@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-repair-demo-1',
+            ]);
+
+        $postId = (int) $result['wp_post_id'];
+        $userId = (int) $result['wp_user_id'];
+        $secret = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', $postId)->where('meta_key', 'secret')->value('meta_value');
+
+        // Reproduce the broken state every previously seeded profile is in.
+        DB::connection($connectionName)->table('options')->where('option_name', $secret)->delete();
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => 'completed',
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => $postId,
+            'target_wp_user_id' => $userId,
+            'status' => 'created',
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('b', 64),
+        ]);
+
+        $service = app(\App\Services\Pbn\PbnProfileLinkRepairService::class);
+
+        $inspection = $service->inspect($batch->fresh(), $connectionConfig);
+        $this->assertSame(1, $inspection['needs_repair']);
+        $this->assertContains('upload_secret_option', $inspection['items'][0]['missing']);
+        $this->assertNull(
+            DB::connection($connectionName)->table('options')->where('option_name', $secret)->value('option_value'),
+            'Inspection must not write anything.'
+        );
+
+        $repair = $service->repair($batch->fresh(), $connectionConfig);
+        $this->assertSame(1, $repair['repaired']);
+        $this->assertSame((string) $userId, DB::connection($connectionName)->table('options')->where('option_name', $secret)->value('option_value'));
+
+        $this->assertSame(0, $service->inspect($batch->fresh(), $connectionConfig)['needs_repair'], 'Repair should be idempotent.');
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

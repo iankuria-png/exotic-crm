@@ -364,11 +364,17 @@ class WpDirectProvisioningService
         );
     }
 
-    private function upsertOption(string $name, string $value): void
+    /**
+     * Per-user link options are read on one request per owner, so they are
+     * written with autoload 'no'. The theme runs a migration that de-autoloads
+     * exactly these names; writing them back as 'yes' would undo it and grow
+     * alloptions on every page load of the destination site.
+     */
+    private function upsertOption(string $name, string $value, bool $autoload = false): void
     {
         DB::connection($this->connectionName)->table('options')->updateOrInsert(
             ['option_name' => $name],
-            ['option_value' => $value, 'autoload' => 'yes']
+            ['option_value' => $value, 'autoload' => $autoload ? 'yes' : 'no']
         );
     }
 

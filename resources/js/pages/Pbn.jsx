@@ -327,6 +327,7 @@ export default function Pbn() {
         refetchInterval: 20_000,
     });
     const [itemPolicyFilter, setItemPolicyFilter] = useState('all');
+    const [linkCheckOpen, setLinkCheckOpen] = useState(false);
     const batchDetailQuery = useQuery({
         queryKey: ['pbn-batch-detail', selectedBatch?.id],
         queryFn: () => api.get(`/crm/pbn/batches/${selectedBatch.id}`).then((response) => response.data),
@@ -339,6 +340,24 @@ export default function Pbn() {
         enabled: Boolean(selectedBatch?.id),
         refetchInterval: selectedBatch && ['queued', 'running'].includes(selectedBatch.status) ? 8000 : false,
     });
+    // Read-only, and only once the drawer asks for it — the check opens a
+    // connection to the destination WordPress database.
+    const profileLinksQuery = useQuery({
+        queryKey: ['pbn-batch-profile-links', selectedBatch?.id],
+        queryFn: () => api.get(`/crm/pbn/batches/${selectedBatch.id}/profile-links`).then((response) => response.data),
+        enabled: Boolean(selectedBatch?.id) && linkCheckOpen,
+    });
+    const repairLinksMutation = useMutation({
+        mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/profile-links/repair`).then((response) => response.data),
+        onSuccess: (data) => {
+            toast.success(data?.repaired > 0
+                ? `Repaired ${data.repaired} profile${data.repaired === 1 ? '' : 's'}.`
+                : 'Nothing needed repairing.');
+            queryClient.invalidateQueries({ queryKey: ['pbn-batch-profile-links', selectedBatch?.id] });
+        },
+        onError: (error) => toast.error(apiErrorMessage(error, 'Could not repair profile links.')),
+    });
+
     const batchEventsQuery = useQuery({
         queryKey: ['pbn-batch-events', selectedBatch?.id],
         queryFn: () => api.get('/crm/pbn/events', { params: { batch_id: selectedBatch.id, per_page: 25 } }).then((response) => response.data),
@@ -406,6 +425,7 @@ export default function Pbn() {
     const activePolicyFilter = itemPolicyFilters.find((filter) => filter.id === itemPolicyFilter) || itemPolicyFilters[0];
     const batchItems = activePolicyFilter.match ? allBatchItems.filter(activePolicyFilter.match) : allBatchItems;
     const batchPolicySummary = batchDetailQuery.data?.summary?.policy || null;
+    const profileLinks = profileLinksQuery.data || null;
     const batchEvents = batchEventsQuery.data?.data || [];
     const revertPreview = batchDetailQuery.data?.revert_preview || {};
     const isBatchActive = ['queued', 'running'].includes(batchDetail?.status);
@@ -847,6 +867,92 @@ export default function Pbn() {
                                     </div>
                                 </section>
                             ) : null}
+                            <section className="rounded-lg border border-slate-200 bg-white">
+                                <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-900">Profile self-edit links</p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            Checks the WordPress rows an owner needs to edit their profile and upload photos.
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {!linkCheckOpen ? (
+                                            <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => setLinkCheckOpen(true)}>
+                                                Run check
+                                            </button>
+                                        ) : (
+                                            <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => profileLinksQuery.refetch()} disabled={profileLinksQuery.isFetching}>
+                                                {profileLinksQuery.isFetching ? 'Checking...' : 'Re-check'}
+                                            </button>
+                                        )}
+                                        {canRevert && profileLinks?.needs_repair > 0 ? (
+                                            <button
+                                                type="button"
+                                                className="crm-btn-primary px-3 py-1.5 text-xs"
+                                                onClick={() => repairLinksMutation.mutate()}
+                                                disabled={repairLinksMutation.isPending}
+                                            >
+                                                {repairLinksMutation.isPending ? 'Repairing...' : `Repair ${profileLinks.needs_repair} profile${profileLinks.needs_repair === 1 ? '' : 's'}`}
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                </div>
+                                {linkCheckOpen ? (
+                                    <div className="border-t border-slate-100 px-4 py-3">
+                                        {profileLinksQuery.isLoading ? (
+                                            <p className="text-sm text-slate-500">Checking profiles on the destination site...</p>
+                                        ) : null}
+                                        {profileLinksQuery.isError ? (
+                                            <div className="flex flex-col gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 sm:flex-row sm:items-center sm:justify-between">
+                                                <p>{apiErrorMessage(profileLinksQuery.error, 'Could not check profile links.')}</p>
+                                                <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => profileLinksQuery.refetch()}>Retry</button>
+                                            </div>
+                                        ) : null}
+                                        {profileLinks?.error ? (
+                                            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{profileLinks.error}</p>
+                                        ) : null}
+                                        {profileLinks && !profileLinks.error ? (
+                                            <>
+                                                <div className="grid gap-2 sm:grid-cols-3">
+                                                    {[
+                                                        ['Checked', profileLinks.checked, 'text-slate-900'],
+                                                        ['Healthy', profileLinks.healthy + profileLinks.repaired, 'text-teal-700'],
+                                                        ['Need repair', profileLinks.needs_repair, profileLinks.needs_repair > 0 ? 'text-amber-700' : 'text-slate-400'],
+                                                    ].map(([label, value, tone]) => (
+                                                        <div key={label} className="rounded-md border border-slate-200 px-3 py-2">
+                                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+                                                            <p className={`mt-0.5 text-xl font-semibold ${tone}`}>{value}</p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                {profileLinks.needs_repair > 0 ? (
+                                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                        These profiles cannot be edited or accept photo uploads on the destination site. Repairing writes the missing
+                                                        WordPress rows in place — no profile is recreated and nothing published changes.
+                                                    </p>
+                                                ) : (
+                                                    <p className="mt-3 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-800">
+                                                        Every profile in this batch has the rows it needs to be edited and to accept uploads.
+                                                    </p>
+                                                )}
+                                                {profileLinks.items.filter((row) => row.state !== 'ok' || row.repaired.length > 0).length > 0 ? (
+                                                    <ul className="mt-3 max-h-48 space-y-1 overflow-auto">
+                                                        {profileLinks.items.filter((row) => row.state !== 'ok' || row.repaired.length > 0).map((row) => (
+                                                            <li key={row.item_id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 px-3 py-1.5 text-xs">
+                                                                <span className="font-medium text-slate-800">{row.name} · WP {row.target_wp_post_id}</span>
+                                                                <span className={row.repaired.length > 0 ? 'text-teal-700' : 'text-amber-700'}>
+                                                                    {row.repaired.length > 0 ? `repaired: ${row.repaired.join(', ')}` : `missing: ${row.missing.join(', ')}`}
+                                                                </span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : null}
+                                            </>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                            </section>
+
                             <section className="rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-100 px-4 py-3">
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

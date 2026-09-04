@@ -27,6 +27,7 @@ class PbnSite extends Model
         'db_pass',
         'db_prefix',
         'copy_policy',
+        'wp_compatibility_settings',
         'last_checked_at',
         'last_status',
         'last_error',
@@ -42,6 +43,7 @@ class PbnSite extends Model
         'wp_api_password' => 'encrypted',
         'db_pass' => 'encrypted',
         'copy_policy' => 'array',
+        'wp_compatibility_settings' => 'array',
         'last_checked_at' => 'datetime',
     ];
 
@@ -160,6 +162,41 @@ class PbnSite extends Model
                 'per_period' => 10,
             ],
         ];
+    }
+
+    /**
+     * WordPress quirks this destination site needs the CRM to accommodate.
+     * Mirrors Platform::wpCompatibilitySettings() so both site types answer the
+     * same question the same way.
+     */
+    public function wpCompatibilitySettings(): array
+    {
+        $settings = is_array($this->wp_compatibility_settings) ? $this->wp_compatibility_settings : [];
+
+        return array_merge(self::defaultWpCompatibilitySettings(), [
+            'legacy_self_upload_secret_option' => (bool) (
+                $settings['legacy_self_upload_secret_option'] ?? self::defaultWpCompatibilitySettings()['legacy_self_upload_secret_option']
+            ),
+        ]);
+    }
+
+    /**
+     * On by default, unlike a platform.
+     *
+     * The parent theme's photo and video uploaders resolve a profile only
+     * through an option named by its `secret` post meta, and die with "We
+     * couldn't find a profile" when the row is absent. A market may have moved
+     * to a newer uploader; a PBN site is a stock install where a profile that
+     * cannot accept media is worthless.
+     */
+    public static function defaultWpCompatibilitySettings(): array
+    {
+        return ['legacy_self_upload_secret_option' => true];
+    }
+
+    public function writesLegacySelfUploadSecretOption(): bool
+    {
+        return (bool) $this->wpCompatibilitySettings()['legacy_self_upload_secret_option'];
     }
 
     public function credentialsReady(): bool

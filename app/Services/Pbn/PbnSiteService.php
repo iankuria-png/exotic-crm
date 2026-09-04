@@ -125,6 +125,7 @@ class PbnSiteService
                 'domain' => $platform->domain,
             ])->values(),
             'copy_policy' => $site->effectiveCopyPolicy(),
+            'wp_compatibility_settings' => $site->wpCompatibilitySettings(),
             'wp_sync' => [
                 'credentials_ready' => filled($site->wp_api_url) && filled($site->wp_api_user) && filled($site->wp_api_password),
                 'api_url' => $site->wp_api_url,

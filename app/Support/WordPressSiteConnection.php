@@ -63,6 +63,7 @@ final class WordPressSiteConnection
             dbPass: $site->db_pass,
             dbPrefix: $site->db_prefix,
             timezone: $site->timezone ?: config('app.timezone', 'UTC'),
+            writesLegacySelfUploadSecretOption: $site->writesLegacySelfUploadSecretOption(),
         );
     }
 

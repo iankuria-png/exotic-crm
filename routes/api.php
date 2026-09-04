@@ -271,6 +271,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/batches/{batch}/retry', [PbnSiteController::class, 'retryBatch']);
         Route::post('/batches/{batch}/cancel', [PbnSiteController::class, 'cancelBatch']);
         Route::post('/batches/{batch}/media/retry', [PbnSiteController::class, 'processBatchMedia']);
+        Route::get('/batches/{batch}/profile-links', [PbnSiteController::class, 'inspectProfileLinks']);
+        Route::post('/batches/{batch}/profile-links/repair', [PbnSiteController::class, 'repairProfileLinks']);
         Route::get('/items', [PbnSiteController::class, 'items']);
         Route::get('/events', [PbnSiteController::class, 'events']);
     });

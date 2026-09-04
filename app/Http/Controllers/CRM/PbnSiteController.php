@@ -9,6 +9,7 @@ use App\Models\PbnSeedItem;
 use App\Models\PbnSite;
 use App\Services\MarketAuthorizationService;
 use App\Services\Pbn\PbnOperationsService;
+use App\Services\Pbn\PbnProfileLinkRepairService;
 use App\Services\Pbn\PbnSeedPreviewService;
 use App\Services\Pbn\PbnSeedProvisioningService;
 use App\Services\Pbn\PbnSiteService;
@@ -24,7 +25,8 @@ class PbnSiteController extends Controller
         private readonly PbnSiteService $siteService,
         private readonly PbnOperationsService $operationsService,
         private readonly PbnSeedPreviewService $previewService,
-        private readonly PbnSeedProvisioningService $provisioningService
+        private readonly PbnSeedProvisioningService $provisioningService,
+        private readonly PbnProfileLinkRepairService $linkRepairService
     ) {
     }
 
@@ -184,6 +186,30 @@ class PbnSiteController extends Controller
         return response()->json($this->operationsService->batch($request->user(), $batch));
     }
 
+    /**
+     * Read-only check of the WordPress rows that make a seeded profile
+     * self-editable. Safe to run at any time; writes nothing.
+     */
+    public function inspectProfileLinks(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+        $this->ensureBatchVisible($request, $batch);
+
+        return response()->json($this->linkRepairService->inspect($batch));
+    }
+
+    public function repairProfileLinks(Request $request, PbnSeedBatch $batch): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+        $this->ensureBatchVisible($request, $batch);
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can repair PBN profile links.'
+        );
+
+        return response()->json($this->linkRepairService->repair($batch));
+    }
+
     public function items(Request $request): JsonResponse
     {
         $this->ensurePbnUser($request);
@@ -290,6 +316,8 @@ class PbnSiteController extends Controller
             'db_pass' => 'sometimes|nullable|string|max:255',
             'db_prefix' => 'sometimes|nullable|string|max:32',
             ...$this->copyPolicyRules(),
+            'wp_compatibility_settings' => 'sometimes|nullable|array',
+            'wp_compatibility_settings.legacy_self_upload_secret_option' => 'sometimes|boolean',
             'reason' => 'nullable|string|max:500',
         ];
     }
