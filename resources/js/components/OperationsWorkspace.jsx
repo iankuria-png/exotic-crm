@@ -64,6 +64,7 @@ export default function OperationsWorkspace({ canOverride = false, onOpenMarket 
                     : `${data.updated} setting${data.updated === 1 ? '' : 's'} saved — in force on the next scheduler tick.`
             );
             queryClient.invalidateQueries({ queryKey: ['ops-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['ops-vitals'] });
         },
         onError: (error) => {
             const message = error?.response?.data?.message || 'The change was rejected.';
@@ -125,6 +126,7 @@ export default function OperationsWorkspace({ canOverride = false, onOpenMarket 
                 onForce={() => setOverrideOpen(true)}
                 onRelease={handleRelease}
                 onOpenMarket={onOpenMarket}
+                onApplyThresholdFix={(updates) => saveMutation.mutate(updates)}
             />
 
             <LevelSummaryPanel

@@ -1,6 +1,8 @@
 import React from 'react';
 import SectionFrame from '../SectionFrame';
 import Sparkline from './Sparkline';
+import InfoTip from './InfoTip';
+import ThresholdGuidance from './ThresholdGuidance';
 import exportRowsToCsv from '../../utils/csvExport';
 import {
     LEVEL_TONE,
@@ -33,7 +35,27 @@ function SignalTile({ signal, ceilingVerified, history }) {
 
     return (
         <div className={`rounded-lg border bg-white p-3 ${tone}`}>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{signal.label}</p>
+            <div className="flex items-start justify-between gap-1">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{signal.label}</p>
+                <InfoTip label={signal.label} align="right">
+                    <span className="block font-semibold text-slate-800">What the numbers mean</span>
+                    <span className="mt-1 block">
+                        <b>Watch ({signal.watch})</b> — crossing this for consecutive samples moves the platform to Cautious.
+                    </span>
+                    <span className="mt-1 block">
+                        <b>Shed ({signal.shed})</b> — crossing this moves it to Limp, which pauses more work.
+                    </span>
+                    {signal.ceiling ? (
+                        <span className="mt-1 block">
+                            <b>Ceiling ({signal.ceiling})</b> — the hard limit. Reaching it is the outage, not a warning about one
+                            {signal.ceiling_enforced ? '.' : ', but it is unconfirmed so it cannot escalate anything yet.'}
+                        </span>
+                    ) : null}
+                    <span className="mt-1 block text-slate-500">
+                        A level only changes after consecutive samples agree, so one spike does not shed real work.
+                    </span>
+                </InfoTip>
+            </div>
             <p className="mt-1 text-2xl font-semibold text-slate-900">
                 {formatSignalValue(signal)}
                 {signal.available && signal.ceiling ? (
@@ -82,7 +104,7 @@ function SignalTile({ signal, ceilingVerified, history }) {
     );
 }
 
-export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelease, canOverride, isMutating, onOpenMarket }) {
+export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelease, canOverride, isMutating, onOpenMarket, onApplyThresholdFix }) {
     if (isLoading) {
         return (
             <SectionFrame title="System health" subtitle="Loading the last sample…">
@@ -149,16 +171,12 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
             }
         >
             <div className="space-y-4">
-                {(vitals?.configuration_warnings || []).length > 0 ? (
-                    <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
-                        <p className="text-sm font-semibold text-amber-900">Threshold configuration needs attention</p>
-                        <ul className="mt-1 space-y-1 text-[13px] text-amber-900">
-                            {vitals.configuration_warnings.map((warning) => (
-                                <li key={warning.key}>· {warning.message}</li>
-                            ))}
-                        </ul>
-                    </div>
-                ) : null}
+                <ThresholdGuidance
+                    warnings={vitals?.configuration_warnings || []}
+                    ladder={vitals?.process_ladder || []}
+                    onApply={onApplyThresholdFix}
+                    isApplying={isMutating}
+                />
 
                 {vitals?.sampler_stale ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -206,6 +224,10 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
                                 : vitals.enforcement_enabled
                                     ? `Paused: ${paused.map(capabilityLabel).join(', ')}.`
                                     : `Would be paused if enforcement were on: ${paused.map(capabilityLabel).join(', ')}.`}
+                        </p>
+                        <p className="mt-1 text-[12px] text-slate-500">
+                            These are what would <em>stand down</em> to relieve pressure — not what caused it. What caused it is in
+                            the process breakdown below.
                         </p>
                     </div>
                 ) : null}

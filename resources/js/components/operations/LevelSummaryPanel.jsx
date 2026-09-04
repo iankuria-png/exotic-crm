@@ -86,9 +86,15 @@ export default function LevelSummaryPanel({ summary, isLoading, error, hours, on
                     {capabilities.length === 0 ? null : (
                         <div>
                             <div className="mb-2 flex items-center justify-between">
-                                <p className="text-xs font-semibold text-slate-700">
-                                    {enforced ? 'Time actually paused' : 'Time that would have been paused'}
-                                </p>
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-700">
+                                        {enforced ? 'Time actually paused' : 'Time that would have been paused'}
+                                    </p>
+                                    <p className="text-[11px] text-slate-500">
+                                        Cost of shedding, not cause of load. A capability high on this list is shed early, not
+                                        responsible for the pressure.
+                                    </p>
+                                </div>
                                 <button type="button" onClick={() => setShowAll((v) => !v)} className="text-[11px] font-medium text-teal-700 hover:underline">
                                     {showAll ? 'Hide unaffected' : `Show all ${capabilities.length}`}
                                 </button>

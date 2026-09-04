@@ -251,15 +251,78 @@ class OperationsSettingsTest extends TestCase
         $features->set('ops.threshold.php_processes.shed', 100);
         Cache::flush();
 
-        $messages = array_column($this->service()->configurationWarnings(), 'message');
+        $warnings = $this->service()->configurationWarnings();
+        $conflict = collect($warnings)->firstWhere('key', 'ops.threshold.php_processes.shed');
 
-        $this->assertNotEmpty(array_filter($messages, fn ($m) => str_contains($m, 'above the ceiling')));
+        $this->assertNotNull($conflict, 'The stored conflict must be reported.');
+        $this->assertSame('error', $conflict['severity']);
+        // The board has to explain the ladder, not just name the fields.
+        $this->assertStringContainsString('ladder', $conflict['why']);
+        $this->assertStringContainsString('60', $conflict['why']);
+        $this->assertStringContainsString('100', $conflict['why']);
+        $this->assertNotEmpty($conflict['suggestions'], 'A conflict must come with a way to fix it.');
     }
 
     public function test_an_unverified_ceiling_is_reported_as_unable_to_escalate(): void
     {
-        $messages = array_column($this->service()->configurationWarnings(), 'message');
+        $warning = collect($this->service()->configurationWarnings())
+            ->firstWhere('key', 'ops.threshold.php_processes.ceiling_verified');
 
-        $this->assertNotEmpty(array_filter($messages, fn ($m) => str_contains($m, 'cannot escalate')));
+        $this->assertNotNull($warning);
+        $this->assertSame('info', $warning['severity'], 'An unconfirmed ceiling is worth stating, but it is not a misconfiguration.');
+        $this->assertStringContainsString('cannot escalate', $warning['why']);
+        $this->assertStringContainsString('entry-process limit', $warning['fix']);
+    }
+
+    public function test_every_suggested_fix_actually_passes_validation(): void
+    {
+        // A one-click fix that the server then rejects would be worse than no
+        // button at all, so each suggestion is applied for real.
+        $features = app(\App\Services\FeatureSettingsService::class);
+
+        foreach ([[60, 100, 26], [40, 32, 90]] as [$ceiling, $shed, $watch]) {
+            $features->set('ops.threshold.php_processes.ceiling', $ceiling);
+            $features->set('ops.threshold.php_processes.shed', $shed);
+            $features->set('ops.threshold.php_processes.watch', $watch);
+            Cache::flush();
+
+            foreach ($this->service()->configurationWarnings() as $warning) {
+                foreach ($warning['suggestions'] as $suggestion) {
+                    // Re-seed the broken state before each candidate fix.
+                    $features->set('ops.threshold.php_processes.ceiling', $ceiling);
+                    $features->set('ops.threshold.php_processes.shed', $shed);
+                    $features->set('ops.threshold.php_processes.watch', $watch);
+                    Cache::flush();
+
+                    $this->service()->update($suggestion['updates'], null, 'admin');
+
+                    $remaining = array_filter(
+                        $this->service()->configurationWarnings(),
+                        fn (array $w): bool => $w['severity'] === 'error'
+                    );
+
+                    $this->assertSame(
+                        [],
+                        array_values($remaining),
+                        sprintf('Applying "%s" should clear the conflict it offers to fix.', $suggestion['label'])
+                    );
+                }
+            }
+        }
+    }
+
+    public function test_the_ladder_marks_the_rung_that_cannot_be_reached(): void
+    {
+        $features = app(\App\Services\FeatureSettingsService::class);
+        $features->set('ops.threshold.php_processes.ceiling', 60);
+        $features->set('ops.threshold.php_processes.shed', 100);
+        Cache::flush();
+
+        $ladder = collect($this->service()->processLadder())->keyBy('label');
+
+        $this->assertTrue($ladder['Normal']['reachable']);
+        $this->assertTrue($ladder['Cautious']['reachable']);
+        $this->assertFalse($ladder['Limp']['reachable'], 'Limp sits above the ceiling and cannot be entered.');
+        $this->assertFalse($ladder['Critical']['reachable'], 'The ceiling is unverified, so Critical is off.');
     }
 }

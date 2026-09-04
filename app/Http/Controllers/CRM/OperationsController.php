@@ -83,6 +83,7 @@ class OperationsController extends Controller
             // board states it rather than rendering numbers that do not
             // reconcile and leaving the reader to notice.
             'configuration_warnings' => $this->settings->configurationWarnings(),
+            'process_ladder' => $this->settings->processLadder(),
             'process_breakdown' => $sample['process_breakdown'] ?? [],
             'process_reason' => $sample['process_reason'] ?? null,
             'history' => $sample['history'] ?? ['points' => [], 'series' => []],

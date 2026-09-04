@@ -374,33 +374,125 @@ class OperationsSettingsService
         if ($shed > $ceiling) {
             $warnings[] = [
                 'key' => 'ops.threshold.php_processes.shed',
-                'message' => sprintf(
-                    'PHP processes: shed (%d) is above the ceiling (%d), so the ceiling trips first and Limp can never be reached on this signal. Lower shed to at most %d, or raise the ceiling.',
+                'severity' => 'error',
+                'title' => 'Limp can never be reached on PHP processes',
+                'why' => sprintf(
+                    'The levels are a ladder read bottom-up: Cautious at %d, Limp at %d, Critical at the ceiling of %d. Because the ceiling (%d) is BELOW the Limp threshold (%d), a rising process count hits Critical before it ever reaches Limp — so the platform can only ever be Normal, Cautious or Critical on its most important signal.',
+                    $watch,
                     $shed,
                     $ceiling,
-                    $ceiling
+                    $ceiling,
+                    $shed
                 ),
+                'fix' => 'Put them back in order — every step must be higher than the one below it.',
+                'suggestions' => [
+                    [
+                        'label' => sprintf('Lower Limp to %d', max($watch + 1, (int) round($ceiling * 0.8))),
+                        'detail' => 'Keeps the ceiling where it is and gives Limp room below it.',
+                        'updates' => [
+                            ['key' => 'ops.threshold.php_processes.shed', 'value' => max($watch + 1, (int) round($ceiling * 0.8))],
+                        ],
+                    ],
+                    [
+                        'label' => sprintf('Raise the ceiling to %d', $shed + 20),
+                        'detail' => 'Only correct if the account really can run that many processes — check with the host first.',
+                        'updates' => [
+                            ['key' => 'ops.threshold.php_processes.ceiling', 'value' => $shed + 20],
+                        ],
+                    ],
+                ],
             ];
         }
 
         if ($watch > $shed) {
             $warnings[] = [
                 'key' => 'ops.threshold.php_processes.watch',
-                'message' => sprintf('PHP processes: watch (%d) is above shed (%d), so Limp would be entered before Cautious.', $watch, $shed),
+                'severity' => 'error',
+                'title' => 'Cautious sits above Limp on PHP processes',
+                'why' => sprintf(
+                    'Cautious is set at %d and Limp at %d, so a rising count would enter Limp before Cautious. The ladder has to climb.',
+                    $watch,
+                    $shed
+                ),
+                'fix' => 'Lower the Cautious threshold below the Limp one.',
+                'suggestions' => [
+                    [
+                        'label' => sprintf('Lower Cautious to %d', max(1, (int) round($shed * 0.6))),
+                        'detail' => 'Roughly 60% of the Limp threshold, which is the shipped default relationship.',
+                        'updates' => [
+                            ['key' => 'ops.threshold.php_processes.watch', 'value' => max(1, (int) round($shed * 0.6))],
+                        ],
+                    ],
+                ],
             ];
         }
 
         if (! $this->boolean('ops.threshold.php_processes.ceiling_verified')) {
             $warnings[] = [
                 'key' => 'ops.threshold.php_processes.ceiling_verified',
-                'message' => sprintf(
-                    'The process ceiling of %d has not been confirmed with the host, so it is shown for context but cannot escalate the platform to Critical. Confirm the real cPanel entry-process limit to enable it.',
+                'severity' => 'info',
+                'title' => 'The process ceiling is still a guess',
+                'why' => sprintf(
+                    'The ceiling is meant to be the account entry-process limit — the hard number the host enforces. Nobody has confirmed %d is that number, so it is shown for context but cannot escalate the platform to Critical. A guess must not drive the loudest state in the system.',
                     $ceiling
                 ),
+                'fix' => 'Ask the host for the account entry-process limit, set it here, then tick "Ceiling confirmed with the host" to switch escalation back on.',
+                'suggestions' => [],
             ];
         }
 
         return $warnings;
+    }
+
+    /**
+     * The level ladder for PHP processes, with the reading that moves between
+     * each step — the thing the tiles imply but never actually state.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function processLadder(): array
+    {
+        $watch = $this->integer('ops.threshold.php_processes.watch');
+        $shed = $this->integer('ops.threshold.php_processes.shed');
+        $ceiling = $this->integer('ops.threshold.php_processes.ceiling');
+        $verified = $this->boolean('ops.threshold.php_processes.ceiling_verified');
+
+        return [
+            [
+                'level' => LoadShedder::LEVEL_NORMAL,
+                'label' => 'Normal',
+                'enters_at' => 0,
+                'setting' => null,
+                'reachable' => true,
+                'note' => 'Nothing is paused.',
+            ],
+            [
+                'level' => LoadShedder::LEVEL_CAUTIOUS,
+                'label' => 'Cautious',
+                'enters_at' => $watch,
+                'setting' => 'ops.threshold.php_processes.watch',
+                'reachable' => $watch < $shed || $watch < $ceiling,
+                'note' => 'Auto Optimize, bulk bio, PBN seeding and geocoding stand down.',
+            ],
+            [
+                'level' => LoadShedder::LEVEL_LIMP,
+                'label' => 'Limp',
+                'enters_at' => $shed,
+                'setting' => 'ops.threshold.php_processes.shed',
+                'reachable' => $shed <= $ceiling,
+                'note' => 'Also push campaigns, AI briefings, retention insights and Support Board sync.',
+            ],
+            [
+                'level' => LoadShedder::LEVEL_CRITICAL,
+                'label' => 'Critical',
+                'enters_at' => $ceiling,
+                'setting' => 'ops.threshold.php_processes.ceiling',
+                'reachable' => $verified,
+                'note' => $verified
+                    ? 'Also the optimize and heavy queue workers are not started at all.'
+                    : 'Unreachable until the ceiling is confirmed with the host.',
+            ],
+        ];
     }
 
     /**
