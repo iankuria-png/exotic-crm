@@ -238,6 +238,21 @@ class WpSyncService
     }
 
     /**
+     * Set the public verified badge on WordPress.
+     *
+     * Deliberately not routed through updateClientProfile(): the WP plugin
+     * blocks `verified` on the generic profile-update endpoint so the trust
+     * badge cannot be flipped from the staff profile editor. Callers must have
+     * already enforced the admin-only emergency path and recorded a reason.
+     */
+    public function setClientVerified(int $postId, bool $verified): array
+    {
+        return $this->post("/clients/{$postId}/verified", [
+            'verified' => $verified,
+        ]);
+    }
+
+    /**
      * Single gate for bio writes: if this profile is lifecycle-restricted
      * (Expired/Archived) on a lifecycle market, redact contact details before
      * they reach WordPress. Every bio-writing path — SEO generation, bulk bios,

@@ -5,6 +5,7 @@ namespace Tests\Feature\Kyc;
 use App\Models\AuditLog;
 use App\Services\ClientSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\Feature\Kyc\Concerns\InteractsWithKycFixtures;
 use Tests\TestCase;
@@ -53,6 +54,36 @@ class VerifiedSourceTest extends TestCase
         ]);
 
         $response->assertStatus(422);
-        $this->assertSame(0, AuditLog::query()->where('action', 'client.verified_emergency_set')->count());
+        $this->assertSame(0, AuditLog::query()->where('action', 'client_verified_emergency_set')->count());
+    }
+
+    public function test_emergency_verify_writes_through_the_dedicated_wp_verified_route(): void
+    {
+        $base = 'https://sync.example.test/wp-json/exotic-crm-sync/v1';
+        $platform = $this->createPlatform([
+            'wp_api_url' => $base,
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = $this->createClientForPlatform($platform, ['wp_post_id' => 19633]);
+        Sanctum::actingAs($this->createKycUser('admin'));
+
+        Http::fake(['*' => Http::response(['success' => true, 'verified' => true], 200)]);
+
+        $response = $this->postJson('/api/crm/clients/' . $client->id . '/verified-status', [
+            'verified' => true,
+            'source' => 'manual_crm_emergency',
+            'reason' => 'Client verified in person at the Nairobi office.',
+        ]);
+
+        $response->assertOk();
+
+        // The generic profile-update route blocks `verified` outright, so the
+        // badge must never be pushed through it.
+        Http::assertSent(fn ($request) => $request->url() === "{$base}/clients/19633/verified"
+            && $request['verified'] === true);
+        Http::assertNotSent(fn ($request) => $request->url() === "{$base}/clients/19633/update");
+
+        $this->assertSame(1, AuditLog::query()->where('action', 'client_verified_emergency_set')->count());
     }
 }
