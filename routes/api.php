@@ -467,6 +467,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/{client}/repair-wp-link', [ClientController::class, 'repairWpLink'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/media/bulk-delete', [ClientController::class, 'bulkDeleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');

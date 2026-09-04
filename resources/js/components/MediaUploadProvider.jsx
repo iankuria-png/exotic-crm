@@ -153,6 +153,36 @@ export function getMediaUploadPreflight(files, setMain = false) {
     };
 }
 
+const MEDIA_DELETE_CHUNK_SIZE = 5;
+
+function deleteErrorDetails(error) {
+    const status = Number(error?.response?.status || 0);
+    const serverMessage = String(error?.response?.data?.message || '').trim();
+
+    if ([401, 419].includes(status)) {
+        return { status, message: serverMessage || 'Your CRM session expired. Sign in again, then retry.', stopBatch: true };
+    }
+
+    if (status === 403) {
+        return { status, message: serverMessage || 'You do not have permission to delete media for this client.', stopBatch: true };
+    }
+
+    if (!error?.response) {
+        return { status: 0, message: 'Network connection lost while deleting. Check your connection, then retry.', stopBatch: true };
+    }
+
+    return { status, message: serverMessage || 'Delete failed. Retry these files.', stopBatch: false };
+}
+
+function chunkList(list, size) {
+    const chunks = [];
+    for (let index = 0; index < list.length; index += size) {
+        chunks.push(list.slice(index, index + size));
+    }
+
+    return chunks;
+}
+
 export function MediaUploadProvider({ children }) {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -438,6 +468,184 @@ export function MediaUploadProvider({ children }) {
         });
     }, [startUploadRun, toast, uploads]);
 
+    const [deletions, setDeletions] = useState([]);
+    const activeClientDeletionsRef = useRef(new Set());
+
+    const dismissDeletion = useCallback((deletionId) => {
+        setDeletions((current) => current.filter((deletion) => (
+            deletion.id !== deletionId || deletion.status === 'deleting'
+        )));
+    }, []);
+
+    const updateDeletionItems = useCallback((deletionId, attachmentIds, patch) => {
+        const idSet = new Set(attachmentIds.map((value) => Number(value)));
+        setDeletions((current) => current.map((deletion) => (
+            deletion.id === deletionId
+                ? {
+                    ...deletion,
+                    items: deletion.items.map((item) => (
+                        idSet.has(Number(item.attachmentId)) ? { ...item, ...patch } : item
+                    )),
+                }
+                : deletion
+        )));
+    }, []);
+
+    const runDeletion = useCallback(async (deletionId, clientId, attachmentIds) => {
+        const clientKey = String(clientId);
+        const chunks = chunkList(attachmentIds, MEDIA_DELETE_CHUNK_SIZE);
+        let deletedCount = 0;
+        let failedCount = 0;
+        let stopMessage = '';
+
+        try {
+            for (let index = 0; index < chunks.length; index += 1) {
+                const chunk = chunks[index];
+
+                if (stopMessage) {
+                    failedCount += chunk.length;
+                    updateDeletionItems(deletionId, chunk, { status: 'failed', message: `Skipped: ${stopMessage}` });
+                    continue;
+                }
+
+                updateDeletionItems(deletionId, chunk, { status: 'deleting', message: 'Deleting' });
+                setDeletions((current) => current.map((deletion) => (
+                    deletion.id === deletionId
+                        ? {
+                            ...deletion,
+                            message: `Deleting ${Math.min(attachmentIds.length, (index * MEDIA_DELETE_CHUNK_SIZE) + chunk.length)} of ${attachmentIds.length}`,
+                        }
+                        : deletion
+                )));
+
+                try {
+                    const response = await api.post(`/crm/clients/${clientKey}/media/bulk-delete`, {
+                        attachment_ids: chunk,
+                        resync: index === chunks.length - 1,
+                        reason: 'Bulk media delete from client detail',
+                    });
+
+                    const results = Array.isArray(response?.data?.results) ? response.data.results : [];
+                    chunk.forEach((attachmentId) => {
+                        const result = results.find((entry) => Number(entry.attachment_id) === Number(attachmentId));
+                        if (!result || result.status === 'deleted') {
+                            deletedCount += 1;
+                            updateDeletionItems(deletionId, [attachmentId], { status: 'deleted', message: 'Deleted' });
+                            return;
+                        }
+
+                        failedCount += 1;
+                        updateDeletionItems(deletionId, [attachmentId], {
+                            status: 'failed',
+                            message: result.message || 'Delete failed.',
+                        });
+                    });
+                } catch (error) {
+                    const details = deleteErrorDetails(error);
+                    failedCount += chunk.length;
+                    updateDeletionItems(deletionId, chunk, { status: 'failed', message: details.message });
+
+                    if (details.stopBatch) {
+                        stopMessage = details.message;
+                    }
+                }
+            }
+        } finally {
+            activeClientDeletionsRef.current.delete(clientKey);
+
+            const finalStatus = failedCount > 0 ? 'failed' : 'success';
+            const finalMessage = failedCount > 0
+                ? `${deletedCount} of ${attachmentIds.length} deleted. ${failedCount} failed.`
+                : `${deletedCount} media file${deletedCount === 1 ? '' : 's'} deleted from WordPress.`;
+
+            setDeletions((current) => current.map((deletion) => (
+                deletion.id === deletionId
+                    ? { ...deletion, status: finalStatus, message: finalMessage }
+                    : deletion
+            )));
+
+            queryClient.invalidateQueries({ queryKey: ['client', clientKey] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', clientKey] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+            if (finalStatus === 'success') {
+                toast.success(finalMessage);
+                window.setTimeout(() => dismissDeletion(deletionId), 20000);
+            } else {
+                toast.warning(finalMessage, { duration: 7000 });
+            }
+        }
+    }, [dismissDeletion, queryClient, toast, updateDeletionItems]);
+
+    const startClientMediaDeletion = useCallback(({ clientId, clientName = '', items }) => {
+        const list = (Array.isArray(items) ? items : [])
+            .map((item) => ({
+                attachmentId: Number(item?.attachmentId ?? item?.id ?? 0),
+                name: String(item?.name || '').trim() || `Attachment ${item?.attachmentId ?? item?.id ?? ''}`,
+            }))
+            .filter((item) => item.attachmentId > 0);
+
+        if (list.length === 0) {
+            return { queued: false, error: 'Select at least one media file first.' };
+        }
+
+        const clientKey = String(clientId);
+        if (activeClientDeletionsRef.current.has(clientKey)) {
+            const message = 'A media deletion is already running for this client. Wait for it to finish.';
+            toast.warning(message);
+            return { queued: false, error: message };
+        }
+
+        const deletionId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const entry = {
+            id: deletionId,
+            clientId: clientKey,
+            clientName,
+            label: `${list.length} media file${list.length === 1 ? '' : 's'}`,
+            items: list.map((item) => ({ ...item, status: 'pending', message: 'Waiting' })),
+            status: 'deleting',
+            message: 'Deleting in the background',
+            createdAt: Date.now(),
+        };
+
+        activeClientDeletionsRef.current.add(clientKey);
+        setDeletions((current) => [entry, ...current]);
+        toast.info(`Deleting ${entry.label} in the background.`);
+        void runDeletion(deletionId, clientKey, list.map((item) => item.attachmentId));
+
+        return { queued: true, deletionId };
+    }, [runDeletion, toast]);
+
+    const retryDeletion = useCallback((deletionId) => {
+        const deletion = deletions.find((entry) => entry.id === deletionId);
+        const failedItems = deletion?.items?.filter((item) => item.status === 'failed') || [];
+        if (!deletion || deletion.status !== 'failed' || failedItems.length === 0) {
+            return;
+        }
+
+        const clientKey = String(deletion.clientId);
+        if (activeClientDeletionsRef.current.has(clientKey)) {
+            toast.warning('A media deletion is already running for this client. Wait for it to finish, then retry.');
+            return;
+        }
+
+        activeClientDeletionsRef.current.add(clientKey);
+        setDeletions((current) => current.map((entry) => (
+            entry.id === deletionId
+                ? {
+                    ...entry,
+                    status: 'deleting',
+                    message: 'Retrying deletion',
+                    items: entry.items.map((item) => (
+                        item.status === 'failed' ? { ...item, status: 'pending', message: 'Waiting to retry' } : item
+                    )),
+                }
+                : entry
+        )));
+        toast.info(`Retrying ${failedItems.length} media deletion${failedItems.length === 1 ? '' : 's'}.`);
+        void runDeletion(deletionId, clientKey, failedItems.map((item) => item.attachmentId));
+    }, [deletions, runDeletion, toast]);
+
     const value = useMemo(() => {
         const activeUploads = uploads.filter((upload) => upload.status === 'uploading');
         const failedUploads = uploads.filter((upload) => upload.status === 'failed');
@@ -452,8 +660,29 @@ export function MediaUploadProvider({ children }) {
             retryUpload,
             dismissUpload,
             uploadsForClient: (clientId) => uploads.filter((upload) => upload.clientId === String(clientId)),
+            deletions,
+            startClientMediaDeletion,
+            retryDeletion,
+            dismissDeletion,
+            deletionsForClient: (clientId) => deletions.filter((deletion) => deletion.clientId === String(clientId)),
+            pendingDeleteIdsForClient: (clientId) => new Set(
+                deletions
+                    .filter((deletion) => deletion.clientId === String(clientId))
+                    .flatMap((deletion) => deletion.items
+                        .filter((item) => item.status === 'pending' || item.status === 'deleting' || item.status === 'deleted')
+                        .map((item) => Number(item.attachmentId)))
+            ),
         };
-    }, [dismissUpload, retryUpload, startClientMediaUpload, uploads]);
+    }, [
+        deletions,
+        dismissDeletion,
+        dismissUpload,
+        retryDeletion,
+        retryUpload,
+        startClientMediaDeletion,
+        startClientMediaUpload,
+        uploads,
+    ]);
 
     return (
         <MediaUploadContext.Provider value={value}>

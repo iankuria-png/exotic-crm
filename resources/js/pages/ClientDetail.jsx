@@ -1019,7 +1019,17 @@ export default function ClientDetail() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
-    const { startClientMediaUpload, uploadsForClient, retryUpload, dismissUpload } = useMediaUploads();
+    const {
+        startClientMediaUpload,
+        uploadsForClient,
+        retryUpload,
+        dismissUpload,
+        startClientMediaDeletion,
+        deletionsForClient,
+        pendingDeleteIdsForClient,
+        retryDeletion,
+        dismissDeletion,
+    } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
     const initialTab = ['overview', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
@@ -1076,6 +1086,9 @@ export default function ClientDetail() {
     const [profileConflict, setProfileConflict] = useState(null);
     const [mediaUploadFiles, setMediaUploadFiles] = useState([]);
     const [mediaUploadSetMain, setMediaUploadSetMain] = useState(false);
+    const [selectedMediaIds, setSelectedMediaIds] = useState([]);
+    const [mediaBulkDeleteOpen, setMediaBulkDeleteOpen] = useState(false);
+    const lastSelectedMediaIndexRef = useRef(null);
     const mediaUploadInputRef = useRef(null);
     const [healthAction, setHealthAction] = useState('keep_primary');
     const [healthReason, setHealthReason] = useState('Duplicate resolution from CRM');
@@ -1262,6 +1275,13 @@ export default function ClientDetail() {
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    useEffect(() => {
+        if (activeTab !== 'edit_profile' || profileSection !== 'media') {
+            setSelectedMediaIds([]);
+            lastSelectedMediaIndexRef.current = null;
+        }
+    }, [activeTab, profileSection]);
 
     const { data: healthData, isLoading: healthLoading } = useQuery({
         queryKey: ['client-health', id],
@@ -2373,6 +2393,80 @@ export default function ClientDetail() {
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
+    const clientMediaDeletions = deletionsForClient(id);
+    const hasMediaDeletions = clientMediaDeletions.length > 0;
+    const pendingDeleteIds = pendingDeleteIdsForClient(id);
+    const visibleMediaItems = mediaItems.filter((media) => !pendingDeleteIds.has(Number(media.id)));
+    const selectableMediaIds = visibleMediaItems.map((media) => Number(media.id));
+    const selectedMediaIdSet = new Set(selectedMediaIds.map((value) => Number(value)));
+    const selectedVisibleMediaIds = selectableMediaIds.filter((mediaId) => selectedMediaIdSet.has(mediaId));
+    const selectedMediaCount = selectedVisibleMediaIds.length;
+    const allMediaSelected = selectableMediaIds.length > 0 && selectedMediaCount === selectableMediaIds.length;
+    const selectedMediaIncludesMain = visibleMediaItems.some(
+        (media) => media.is_main && selectedMediaIdSet.has(Number(media.id))
+    );
+    const mediaDeletionRunning = clientMediaDeletions.some((deletion) => deletion.status === 'deleting');
+
+    const toggleMediaSelection = (mediaId, index, shiftKey = false) => {
+        const numericId = Number(mediaId);
+        const lastIndex = lastSelectedMediaIndexRef.current;
+
+        if (shiftKey && lastIndex !== null && lastIndex !== index) {
+            const start = Math.min(lastIndex, index);
+            const end = Math.max(lastIndex, index);
+            const rangeIds = selectableMediaIds.slice(start, end + 1);
+            setSelectedMediaIds((current) => Array.from(new Set([...current.map(Number), ...rangeIds])));
+            lastSelectedMediaIndexRef.current = index;
+            return;
+        }
+
+        setSelectedMediaIds((current) => {
+            const next = new Set(current.map(Number));
+            if (next.has(numericId)) {
+                next.delete(numericId);
+            } else {
+                next.add(numericId);
+            }
+
+            return Array.from(next);
+        });
+        lastSelectedMediaIndexRef.current = index;
+    };
+
+    const clearMediaSelection = () => {
+        setSelectedMediaIds([]);
+        lastSelectedMediaIndexRef.current = null;
+    };
+
+    const toggleSelectAllMedia = () => {
+        if (allMediaSelected) {
+            clearMediaSelection();
+            return;
+        }
+
+        setSelectedMediaIds(selectableMediaIds);
+        lastSelectedMediaIndexRef.current = null;
+    };
+
+    const confirmBulkMediaDelete = () => {
+        const items = visibleMediaItems
+            .filter((media) => selectedMediaIdSet.has(Number(media.id)))
+            .map((media) => ({
+                attachmentId: Number(media.id),
+                name: media.file_name || media.filename || `Attachment ${media.id}`,
+            }));
+
+        const result = startClientMediaDeletion({
+            clientId: id,
+            clientName: client?.name || '',
+            items,
+        });
+
+        if (result?.queued) {
+            clearMediaSelection();
+            setMediaBulkDeleteOpen(false);
+        }
+    };
     const mediaUploadHasSelection = mediaUploadFiles.length > 0;
     const mediaUploadIsSingleImage = mediaUploadFiles.length === 1 && isImageUploadFile(mediaUploadFiles[0]);
     const mediaUploadPreflight = getMediaUploadPreflight(
@@ -5291,6 +5385,82 @@ export default function ClientDetail() {
                                         </div>
                                     ) : null}
 
+                                    {hasMediaDeletions ? (
+                                        <div className="rounded-md border border-slate-200 bg-white px-3 py-2" aria-live="polite">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Delete status</p>
+                                                <p className="text-xs text-slate-500">You can keep working while deletions finish.</p>
+                                            </div>
+                                            <div className="mt-2 space-y-2">
+                                                {clientMediaDeletions.map((deletion) => {
+                                                    const doneCount = deletion.items.filter((item) => item.status === 'deleted').length;
+                                                    const failedItems = deletion.items.filter((item) => item.status === 'failed');
+                                                    const percent = deletion.items.length > 0
+                                                        ? Math.round(((doneCount + failedItems.length) / deletion.items.length) * 100)
+                                                        : 0;
+
+                                                    return (
+                                                        <div key={deletion.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
+                                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                <div className="min-w-0">
+                                                                    <p className="font-medium text-slate-700">{deletion.label}</p>
+                                                                    <p className={
+                                                                        deletion.status === 'success'
+                                                                            ? 'text-emerald-700'
+                                                                            : deletion.status === 'failed'
+                                                                                ? 'text-rose-700'
+                                                                                : 'text-amber-700'
+                                                                    }>
+                                                                        {deletion.message}
+                                                                    </p>
+                                                                </div>
+                                                                {deletion.status === 'failed' ? (
+                                                                    <div className="flex gap-2">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => retryDeletion(deletion.id)}
+                                                                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                                                                        >
+                                                                            Retry failed
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => dismissDeletion(deletion.id)}
+                                                                            className="rounded-md px-2.5 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100"
+                                                                        >
+                                                                            Dismiss
+                                                                        </button>
+                                                                    </div>
+                                                                ) : null}
+                                                            </div>
+                                                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                                                                <div
+                                                                    className={`h-full rounded-full transition-all ${
+                                                                        deletion.status === 'failed'
+                                                                            ? 'bg-rose-500'
+                                                                            : deletion.status === 'success'
+                                                                                ? 'bg-emerald-500'
+                                                                                : 'bg-amber-500'
+                                                                    }`}
+                                                                    style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
+                                                                />
+                                                            </div>
+                                                            {failedItems.length > 0 ? (
+                                                                <ul className="mt-2 space-y-1">
+                                                                    {failedItems.map((item) => (
+                                                                        <li key={item.attachmentId} className="truncate text-xs text-rose-700">
+                                                                            {item.name}: {item.message}
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            ) : null}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ) : null}
+
                                     {mediaLoading ? (
                                         <p className="text-sm text-slate-500">Loading media...</p>
                                     ) : mediaErrorData ? (
@@ -5315,17 +5485,81 @@ export default function ClientDetail() {
                                             ) : null}
                                         </div>
                                     ) : mediaItems.length > 0 ? (
-                                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                            {mediaItems.map((media) => (
-                                                <ClientMediaCard
-                                                    key={media.id}
-                                                    media={media}
-                                                    setMainPending={setMainMediaMutation.isPending}
-                                                    deletePending={deleteMediaMutation.isPending}
-                                                    onSetMain={() => setMainMediaMutation.mutate(media.id)}
-                                                    onDelete={() => deleteMediaMutation.mutate(media.id)}
-                                                />
-                                            ))}
+                                        <div className="space-y-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={allMediaSelected}
+                                                        ref={(node) => {
+                                                            if (node) {
+                                                                node.indeterminate = selectedMediaCount > 0 && !allMediaSelected;
+                                                            }
+                                                        }}
+                                                        onChange={toggleSelectAllMedia}
+                                                        disabled={selectableMediaIds.length === 0}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    <span>
+                                                        {selectedMediaCount > 0
+                                                            ? `${selectedMediaCount} of ${selectableMediaIds.length} selected`
+                                                            : `Select all (${selectableMediaIds.length})`}
+                                                    </span>
+                                                </label>
+                                                <p className="text-xs text-slate-500">
+                                                    Tip: hold Shift to select a range.
+                                                </p>
+                                            </div>
+
+                                            {selectedMediaCount > 0 ? (
+                                                <div
+                                                    className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 shadow-sm"
+                                                    aria-live="polite"
+                                                >
+                                                    <p className="text-sm font-medium text-teal-900">
+                                                        {selectedMediaCount} media file{selectedMediaCount === 1 ? '' : 's'} selected
+                                                        {selectedMediaIncludesMain ? ' — includes the main image' : ''}
+                                                    </p>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={clearMediaSelection}
+                                                            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setMediaBulkDeleteOpen(true)}
+                                                            disabled={mediaDeletionRunning}
+                                                            className="rounded-md border border-rose-200 bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            Delete selected ({selectedMediaCount})
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : null}
+
+                                            {visibleMediaItems.length > 0 ? (
+                                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                                    {visibleMediaItems.map((media, index) => (
+                                                        <ClientMediaCard
+                                                            key={media.id}
+                                                            media={media}
+                                                            selected={selectedMediaIdSet.has(Number(media.id))}
+                                                            onToggleSelect={(event) => toggleMediaSelection(media.id, index, event?.shiftKey)}
+                                                            setMainPending={setMainMediaMutation.isPending}
+                                                            deletePending={deleteMediaMutation.isPending}
+                                                            onSetMain={() => setMainMediaMutation.mutate(media.id)}
+                                                            onDelete={() => deleteMediaMutation.mutate(media.id)}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                                                    Removing the last media files. This finishes in the background.
+                                                </p>
+                                            )}
                                         </div>
                                     ) : (
                                         <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
@@ -5983,6 +6217,23 @@ export default function ClientDetail() {
                 />
             ) : null}
 
+            <ConfirmDialog
+                open={mediaBulkDeleteOpen}
+                title={`Delete ${selectedMediaCount} media file${selectedMediaCount === 1 ? '' : 's'}?`}
+                message="Selected files are permanently removed from the WordPress profile. Deletion runs in the background, so you can keep working."
+                confirmLabel={`Delete ${selectedMediaCount} file${selectedMediaCount === 1 ? '' : 's'}`}
+                tone="danger"
+                onCancel={() => setMediaBulkDeleteOpen(false)}
+                onConfirm={confirmBulkMediaDelete}
+                confirmDisabled={selectedMediaCount === 0 || mediaDeletionRunning}
+            >
+                {selectedMediaIncludesMain ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        The main profile image is in this selection. After deleting, set a new main image so the profile keeps a cover photo.
+                    </div>
+                ) : null}
+            </ConfirmDialog>
+
             <LifecycleReminderDrawer
                 open={showRemindersDrawer}
                 client={client}
@@ -6200,6 +6451,8 @@ function resolveMediaKind(media) {
 
 function ClientMediaCard({
     media,
+    selected = false,
+    onToggleSelect,
     setMainPending,
     deletePending,
     onSetMain,
@@ -6296,8 +6549,29 @@ function ClientMediaCard({
 
     const unavailableMessage = resolveMediaUnavailableMessage(assetStatus);
 
+    const borderClass = selected
+        ? 'border-teal-500 bg-teal-50/40 ring-2 ring-teal-200'
+        : media.is_main
+            ? 'border-amber-300 bg-amber-50/30'
+            : 'border-slate-200 bg-white';
+
     return (
-        <div className={`rounded-lg border p-3 ${media.is_main ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200 bg-white'}`}>
+        <div className={`relative rounded-lg border p-3 transition ${borderClass}`}>
+            <label
+                className="absolute left-5 top-5 z-10 flex cursor-pointer items-center justify-center rounded-md bg-white/95 p-1 shadow-sm ring-1 ring-slate-200"
+                onClick={(event) => {
+                    event.preventDefault();
+                    onToggleSelect?.(event);
+                }}
+            >
+                <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => {}}
+                    aria-label={`Select ${displayName}`}
+                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                />
+            </label>
             <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-100">
                 <div className="aspect-[4/3]">
                     {assetState === 'checking' ? (

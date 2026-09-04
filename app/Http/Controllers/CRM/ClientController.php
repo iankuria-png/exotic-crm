@@ -2234,11 +2234,10 @@ class ClientController extends Controller
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-            // Push to WP via the existing generic update endpoint.
-            // Sends '1'/'0' so the WP theme treats it as a truthy meta value.
-            $wpSync->updateClientProfile((int) $client->wp_post_id, [
-                'verified' => $verified ? '1' : '0',
-            ]);
+            // Dedicated verified route, not the generic profile update: the WP
+            // plugin blocks `verified` there so the badge cannot be set from the
+            // staff profile editor, bypassing the gate above.
+            $wpSync->setClientVerified((int) $client->wp_post_id, $verified);
         } catch (RequestException $e) {
             $status = $e->response?->status() ?? 502;
             $payload = $e->response?->json();
@@ -3420,6 +3419,101 @@ class ClientController extends Controller
                 'error' => $exception->getMessage(),
             ], 502);
         }
+    }
+
+    public function bulkDeleteMedia(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'attachment_ids' => ['required', 'array', 'min:1', 'max:20'],
+            'attachment_ids.*' => ['integer', 'min:1'],
+            'resync' => ['nullable', 'boolean'],
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $attachmentIds = array_values(array_unique(array_map('intval', $validated['attachment_ids'])));
+        $shouldResync = (bool) ($validated['resync'] ?? true);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to reach the market site.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+
+        $results = [];
+        $deletedIds = [];
+
+        foreach ($attachmentIds as $attachmentId) {
+            try {
+                $wpSync->deleteClientMedia((int) $client->wp_post_id, $attachmentId);
+                $deletedIds[] = $attachmentId;
+                $results[] = [
+                    'attachment_id' => $attachmentId,
+                    'status' => 'deleted',
+                    'message' => 'Deleted from WordPress.',
+                ];
+            } catch (\Throwable $exception) {
+                $results[] = [
+                    'attachment_id' => $attachmentId,
+                    'status' => 'failed',
+                    'message' => $exception->getMessage() ?: 'Delete failed.',
+                ];
+            }
+        }
+
+        if ($deletedIds !== [] && $shouldResync) {
+            try {
+                $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+                (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+                $client->refresh();
+                $this->refreshClientDisplayImageCache($client, verifyReachable: false);
+            } catch (\Throwable $exception) {
+                Log::warning('Bulk media delete resync failed.', [
+                    'client_id' => (int) $client->id,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        if ($deletedIds !== []) {
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_PROFILE_EDIT,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'media_bulk_delete' => [
+                        'attachment_ids' => $deletedIds,
+                        'requested_count' => count($attachmentIds),
+                        'deleted_count' => count($deletedIds),
+                    ],
+                ],
+                $validated['reason'] ?? 'Deleted profile media in bulk from CRM'
+            );
+        }
+
+        $failedCount = count($attachmentIds) - count($deletedIds);
+
+        return response()->json([
+            'results' => $results,
+            'deleted_count' => count($deletedIds),
+            'failed_count' => $failedCount,
+            'message' => $failedCount === 0
+                ? count($deletedIds).' media file'.(count($deletedIds) === 1 ? '' : 's').' deleted.'
+                : count($deletedIds).' of '.count($attachmentIds).' deleted. '.$failedCount.' failed.',
+        ], $failedCount > 0 && $deletedIds === [] ? 502 : 200);
     }
 
     public function setMainMedia(Request $request, Client $client, int $attachmentId)
