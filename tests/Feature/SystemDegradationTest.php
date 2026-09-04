@@ -111,10 +111,10 @@ class SystemDegradationTest extends TestCase
         $this->assertSame(LoadShedder::LEVEL_CAUTIOUS, $fifth['level'], 'Recovery must step down one level, not jump to Normal.');
     }
 
-    public function test_process_ceiling_goes_straight_to_critical(): void
+    public function test_a_confirmed_process_ceiling_goes_straight_to_critical(): void
     {
         $evaluator = $this->evaluator();
-        $atCeiling = $this->sample([$this->signal('php_processes', 40, 26, 32, 40)]);
+        $atCeiling = $this->sample([$this->processSignal(40, 26, 32, 40, ceilingVerified: true)]);
 
         $evaluator->evaluate($atCeiling);
 
@@ -353,5 +353,123 @@ class SystemDegradationTest extends TestCase
 
         $this->assertStringContainsString('crm:run-auto-optimize', $joined);
         $this->assertStringContainsString('--queue=auto_optimize', $joined);
+    }
+
+    /**
+     * Rebuild the sample the sampler actually produces for PHP processes, so
+     * these tests exercise the same ceiling_enforced plumbing production does.
+     *
+     * @return array<string, mixed>
+     */
+    private function processSignal(float $value, int $watch, int $shed, int $ceiling, bool $ceilingVerified): array
+    {
+        $signal = $this->signal('php_processes', $value, $watch, $shed, $ceiling);
+        $signal['ceiling_enforced'] = $ceilingVerified;
+
+        return $signal;
+    }
+
+    public function test_an_unverified_ceiling_cannot_escalate_to_critical(): void
+    {
+        // Production, 4 Sep: 69 processes against a guessed ceiling of 60 held
+        // the board at Critical all day while every other signal was green.
+        $assessment = $this->evaluator()->assess([
+            $this->processSignal(69, 26, 100, 60, ceilingVerified: false),
+        ]);
+
+        $this->assertSame(
+            LoadShedder::LEVEL_CAUTIOUS,
+            $assessment['level'],
+            'An unverified ceiling must not drive Critical; the signal should still escalate on its own watch threshold.'
+        );
+        $this->assertSame('php_processes', $assessment['signal']);
+    }
+
+    public function test_a_verified_ceiling_still_escalates_to_critical(): void
+    {
+        $assessment = $this->evaluator()->assess([
+            $this->processSignal(69, 26, 100, 60, ceilingVerified: true),
+        ]);
+
+        $this->assertSame(LoadShedder::LEVEL_CRITICAL, $assessment['level']);
+        $this->assertSame(60.0, $assessment['threshold']);
+    }
+
+    public function test_state_survives_a_lost_cache_entry(): void
+    {
+        $evaluator = $this->evaluator();
+        $breaching = $this->sample([$this->signal('queue_depth', 3000, 500, 2000)]);
+
+        $evaluator->evaluate($breaching);
+        $this->assertSame(LoadShedder::LEVEL_LIMP, $evaluator->evaluate($breaching)['level']);
+        $this->assertSame(1, SystemIncident::query()->count());
+
+        // The cache is a read path, not a system of record. Losing it used to
+        // reset the level to Normal silently, stranding the open incident and
+        // making the next breach look like a brand new one.
+        Cache::flush();
+
+        $state = app(DegradationEvaluator::class)->currentState();
+        $this->assertSame(LoadShedder::LEVEL_LIMP, (int) $state['level'], 'State must be rehydrated from the durable copy.');
+
+        $next = app(DegradationEvaluator::class)->evaluate($breaching);
+        $this->assertSame(LoadShedder::LEVEL_LIMP, $next['level']);
+        $this->assertSame(1, SystemIncident::query()->count(), 'A cache eviction must not manufacture a second incident.');
+    }
+
+    public function test_open_incidents_are_reconciled_even_without_an_orderly_recovery(): void
+    {
+        $evaluator = $this->evaluator();
+
+        // Strand an incident the way production did: an open row at a level the
+        // platform is no longer at, with no recovery transition recorded.
+        SystemIncident::create([
+            'from_level' => LoadShedder::LEVEL_NORMAL,
+            'to_level' => LoadShedder::LEVEL_CRITICAL,
+            'trigger_signal' => 'php_processes',
+            'trigger_value' => 77,
+            'threshold' => 60,
+            'origin' => SystemIncident::ORIGIN_AUTOMATIC,
+            'started_at' => now()->subHours(3),
+        ]);
+
+        $this->assertNull(SystemIncident::query()->first()->resolved_at);
+
+        $evaluator->evaluate($this->sample([$this->signal('queue_depth', 10, 500, 2000)]));
+
+        $this->assertNotNull(
+            SystemIncident::query()->first()->resolved_at,
+            'An incident above the current level must be closed, however the platform got back down.'
+        );
+    }
+
+    public function test_repeated_evaluation_does_not_reopen_a_resolved_incident(): void
+    {
+        $evaluator = $this->evaluator();
+        $clear = $this->sample([$this->signal('queue_depth', 10, 500, 2000)]);
+
+        SystemIncident::create([
+            'from_level' => LoadShedder::LEVEL_NORMAL,
+            'to_level' => LoadShedder::LEVEL_LIMP,
+            'trigger_signal' => 'queue_depth',
+            'trigger_value' => 3000,
+            'threshold' => 2000,
+            'origin' => SystemIncident::ORIGIN_AUTOMATIC,
+            'started_at' => now()->subHour(),
+        ]);
+
+        $evaluator->evaluate($clear);
+        $resolvedAt = SystemIncident::query()->first()->resolved_at;
+        $this->assertNotNull($resolvedAt);
+
+        $this->travel(2)->minutes();
+        $evaluator->evaluate($clear);
+
+        $this->assertSame(1, SystemIncident::query()->count());
+        $this->assertEquals(
+            $resolvedAt->toIso8601String(),
+            SystemIncident::query()->first()->resolved_at->toIso8601String(),
+            'Reconciliation must be idempotent.'
+        );
     }
 }

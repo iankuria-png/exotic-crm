@@ -42,6 +42,18 @@ class VitalsSampler
     /** Cache key holding the failed_jobs count from the previous sample. */
     private const FAILED_BASELINE_KEY = 'ops.vitals.failed_baseline';
 
+    /**
+     * Rolling per-signal history, for the sparklines on the board.
+     *
+     * Kept as a bounded array on the sample itself rather than read back out of
+     * `pulse_entries` on every page load. That table was already 1.3M rows in
+     * production, and querying it per dashboard poll would make the board an
+     * instance of the load it exists to detect. 180 samples is three hours at
+     * one a minute, and the whole structure is a few kilobytes.
+     */
+    public const HISTORY_KEY = 'ops.vitals.history';
+    private const HISTORY_SAMPLES = 180;
+
     private const SAMPLE_TTL_MINUTES = 30;
 
     public function __construct(
@@ -67,9 +79,10 @@ class VitalsSampler
         $dbThreads = $this->readDatabaseThreads();
 
         $ceiling = $this->settings->integer('ops.threshold.php_processes.ceiling');
+        $ceilingVerified = $this->settings->boolean('ops.threshold.php_processes.ceiling_verified');
 
         $signals = [
-            $this->signal('php_processes', 'PHP processes', $processes['php'], 'processes', $ceiling),
+            $this->signal('php_processes', 'PHP processes', $processes['php'], 'processes', $ceiling, $ceilingVerified),
             $this->signal('concurrent_schedule_runs', 'Concurrent scheduler ticks', $scheduler['concurrent'], 'ticks'),
             $this->signal('scheduler_tick_seconds', 'Scheduler tick duration', $scheduler['tick_seconds'], 'seconds'),
             $this->signal('queue_depth', 'Queue depth', $lanes['total_pending'], 'jobs'),
@@ -87,9 +100,13 @@ class VitalsSampler
             'markets_down_names' => $marketsDown['names'],
             'stalled_runs' => $stalls['runs'],
             'process_ceiling' => $ceiling,
-            'process_ceiling_verified' => $this->settings->boolean('ops.threshold.php_processes.ceiling_verified'),
+            'process_ceiling_verified' => $ceilingVerified,
             'scheduler' => $scheduler,
+            'process_breakdown' => $processes['breakdown'] ?? [],
+            'process_reason' => $processes['reason'] ?? null,
         ];
+
+        $payload['history'] = $this->appendHistory($signals, $sampledAt);
 
         $this->writeToPulse($signals, $lanes['lanes']);
         $this->cache($payload);
@@ -117,6 +134,49 @@ class VitalsSampler
     }
 
     /**
+     * Append this sample's readings to the rolling window.
+     *
+     * @param  array<int, array<string, mixed>>  $signals
+     * @return array<string, mixed>
+     */
+    private function appendHistory(array $signals, \Illuminate\Support\Carbon $sampledAt): array
+    {
+        try {
+            $history = Cache::get(self::HISTORY_KEY);
+        } catch (\Throwable) {
+            $history = null;
+        }
+
+        $history = is_array($history) ? $history : ['points' => [], 'series' => []];
+        $series = is_array($history['series'] ?? null) ? $history['series'] : [];
+
+        foreach ($signals as $signal) {
+            $key = $signal['key'];
+            $existing = is_array($series[$key] ?? null) ? $series[$key] : [];
+            // Unavailable reads append null so a gap renders as a gap rather
+            // than as a plausible-looking zero.
+            $existing[] = $signal['available'] ? (float) $signal['value'] : null;
+            $series[$key] = array_slice($existing, -self::HISTORY_SAMPLES);
+        }
+
+        $points = is_array($history['points'] ?? null) ? $history['points'] : [];
+        $points[] = $sampledAt->toIso8601String();
+
+        $history = [
+            'points' => array_slice($points, -self::HISTORY_SAMPLES),
+            'series' => $series,
+        ];
+
+        try {
+            Cache::put(self::HISTORY_KEY, $history, now()->addHours(6));
+        } catch (\Throwable $exception) {
+            Log::warning('VitalsSampler could not cache signal history.', ['error' => $exception->getMessage()]);
+        }
+
+        return $history;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     private function cache(array $payload): void
@@ -133,7 +193,7 @@ class VitalsSampler
      *
      * @return array<string, mixed>
      */
-    private function signal(string $key, string $label, int|float|null $value, string $unit, ?int $ceiling = null): array
+    private function signal(string $key, string $label, int|float|null $value, string $unit, ?int $ceiling = null, bool $ceilingEnforced = false): array
     {
         $watch = $this->settings->integer("ops.threshold.{$key}.watch");
         $shed = $this->settings->integer("ops.threshold.{$key}.shed");
@@ -157,6 +217,10 @@ class VitalsSampler
             'value' => $value,
             'unit' => $unit,
             'ceiling' => $ceiling,
+            // Whether the ceiling is trustworthy enough to escalate on. An
+            // unverified ceiling is still SHOWN — it is useful context — but the
+            // evaluator will not take it as evidence of an outage.
+            'ceiling_enforced' => $ceiling !== null && $ceilingEnforced,
             'watch' => $watch,
             'shed' => $shed,
             'state' => $state,
@@ -178,6 +242,7 @@ class VitalsSampler
         $unavailable = [
             'php' => null,
             'schedule_run' => null,
+            'breakdown' => [],
             'available' => false,
             'reason' => 'Process listing is not permitted on this host.',
         ];
@@ -196,6 +261,7 @@ class VitalsSampler
 
         $php = 0;
         $scheduleRun = 0;
+        $breakdown = [];
 
         foreach ($listing as $line) {
             // Match the interpreter the app actually runs under as well as the
@@ -210,14 +276,59 @@ class VitalsSampler
             if (str_contains($line, 'artisan schedule:run')) {
                 $scheduleRun++;
             }
+
+            $bucket = $this->classifyProcess($line);
+            $breakdown[$bucket] = ($breakdown[$bucket] ?? 0) + 1;
         }
+
+        arsort($breakdown);
 
         return [
             'php' => $php,
             'schedule_run' => $scheduleRun,
+            'breakdown' => $breakdown,
             'available' => true,
             'reason' => null,
         ];
+    }
+
+    /**
+     * Name what a PHP process is actually doing.
+     *
+     * "69 processes" is an alarm; "41 of them are queue workers on the sync
+     * lane" is a diagnosis. The process table is already being read to produce
+     * the count, so the breakdown costs nothing beyond a regex per line and it
+     * is the difference between knowing something is wrong and knowing what.
+     */
+    private function classifyProcess(string $line): string
+    {
+        if (str_contains($line, 'artisan schedule:run')) {
+            return 'schedule:run';
+        }
+
+        if (str_contains($line, 'artisan queue:work')) {
+            if (preg_match('/--queue=([^\s]+)/', $line, $matches)) {
+                foreach (self::LANES as $lane => $queues) {
+                    foreach (explode(',', $matches[1]) as $queue) {
+                        if (in_array(trim($queue), $queues, true)) {
+                            return 'queue:work ('.$lane.')';
+                        }
+                    }
+                }
+            }
+
+            return 'queue:work';
+        }
+
+        if (preg_match('/artisan\s+([a-z0-9:_-]+)/i', $line, $matches)) {
+            return 'artisan '.$matches[1];
+        }
+
+        if (preg_match('/(php-fpm|lsphp)/', $line)) {
+            return 'web (php-fpm)';
+        }
+
+        return 'other php';
     }
 
     /**

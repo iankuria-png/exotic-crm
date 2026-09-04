@@ -808,6 +808,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     // shed and tuning the thresholds that govern it are admin-only.
     Route::get('/settings/system-health/vitals', [OperationsController::class, 'vitals'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/incidents', [OperationsController::class, 'incidents'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/system-health/operations-summary', [OperationsController::class, 'summary'])->middleware('role:admin,sub_admin');
     Route::post('/settings/system-health/degradation', [OperationsController::class, 'forceDegradation'])->middleware('role:admin');
     Route::delete('/settings/system-health/degradation', [OperationsController::class, 'releaseDegradation'])->middleware('role:admin');
     Route::get('/settings/system-health/operations-settings', [OperationsController::class, 'settings'])->middleware('role:admin,sub_admin');

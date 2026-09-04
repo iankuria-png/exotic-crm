@@ -311,7 +311,96 @@ class OperationsSettingsService
                     $shed
                 ));
             }
+
+            // The process ceiling is a hard stop: reaching it IS the outage, so
+            // it must sit at or above every softer threshold. Configured the
+            // other way round — as production was on 4 Sep, with watch 26, shed
+            // 100 and a ceiling of 60 — the ceiling fires first and Limp becomes
+            // unreachable, so the platform can only ever be Normal, Cautious or
+            // Critical on its most important signal. Nothing told anyone.
+            if ($signal === 'php_processes') {
+                $ceilingKey = 'ops.threshold.php_processes.ceiling';
+                $ceiling = (int) ($pending[$ceilingKey] ?? $this->value($ceilingKey));
+
+                if ($shed > $ceiling) {
+                    throw new OperationsSettingValidationException($key, sprintf(
+                        'The shed threshold for PHP processes (%d) must not be above the process ceiling (%d) — the ceiling would trip first and Limp could never be reached.',
+                        $shed,
+                        $ceiling
+                    ));
+                }
+            }
         }
+
+        // A ceiling lowered below an existing shed threshold is the same
+        // conflict approached from the other side.
+        foreach ($prepared as $entry) {
+            if ($entry['definition']['key'] !== 'ops.threshold.php_processes.ceiling') {
+                continue;
+            }
+
+            $ceiling = (int) $entry['value'];
+            $shed = (int) ($pending['ops.threshold.php_processes.shed'] ?? $this->value('ops.threshold.php_processes.shed'));
+
+            if ($ceiling < $shed) {
+                throw new OperationsSettingValidationException($entry['definition']['key'], sprintf(
+                    'The process ceiling (%d) must not be below the PHP processes shed threshold (%d) — the ceiling would trip first and Limp could never be reached.',
+                    $ceiling,
+                    $shed
+                ));
+            }
+        }
+    }
+
+    /**
+     * Conflicts in the CURRENTLY STORED configuration.
+     *
+     * Validation above rejects a bad combination at the moment somebody tries
+     * to save it, which does nothing about a bad combination already in the
+     * database — and production is in exactly that position. These are reported
+     * on the board so the misordering is visible rather than displayed deadpan
+     * as three numbers that do not reconcile.
+     *
+     * @return array<int, array{key:string, message:string}>
+     */
+    public function configurationWarnings(): array
+    {
+        $warnings = [];
+
+        $watch = $this->integer('ops.threshold.php_processes.watch');
+        $shed = $this->integer('ops.threshold.php_processes.shed');
+        $ceiling = $this->integer('ops.threshold.php_processes.ceiling');
+
+        if ($shed > $ceiling) {
+            $warnings[] = [
+                'key' => 'ops.threshold.php_processes.shed',
+                'message' => sprintf(
+                    'PHP processes: shed (%d) is above the ceiling (%d), so the ceiling trips first and Limp can never be reached on this signal. Lower shed to at most %d, or raise the ceiling.',
+                    $shed,
+                    $ceiling,
+                    $ceiling
+                ),
+            ];
+        }
+
+        if ($watch > $shed) {
+            $warnings[] = [
+                'key' => 'ops.threshold.php_processes.watch',
+                'message' => sprintf('PHP processes: watch (%d) is above shed (%d), so Limp would be entered before Cautious.', $watch, $shed),
+            ];
+        }
+
+        if (! $this->boolean('ops.threshold.php_processes.ceiling_verified')) {
+            $warnings[] = [
+                'key' => 'ops.threshold.php_processes.ceiling_verified',
+                'message' => sprintf(
+                    'The process ceiling of %d has not been confirmed with the host, so it is shown for context but cannot escalate the platform to Critical. Confirm the real cPanel entry-process limit to enable it.',
+                    $ceiling
+                ),
+            ];
+        }
+
+        return $warnings;
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Services\Ops;
 
 use App\Jobs\SendSystemDegradationAlertJob;
 use App\Models\SystemIncident;
+use App\Services\FeatureSettingsService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -22,8 +23,27 @@ class DegradationEvaluator
     private const STREAK_CACHE_KEY = 'ops.degradation.streak';
     private const STATE_TTL_MINUTES = 120;
 
+    /**
+     * Durable mirror of the cached state.
+     *
+     * The cache is the read path — LoadShedder::allows() is called from every
+     * scheduler skip closure and must never touch the database — but a cache
+     * entry is not a system of record. On 4 Sep production lost its entry
+     * between samples and the level silently reset to Normal: no transition was
+     * recorded, no incident was resolved, and the next breach read as a fresh
+     * `Normal -> Critical`. The timeline ended up with seven incidents open at
+     * once and five identical transitions with no recovery between them.
+     *
+     * These rows are runtime state, not settings, so they sit under an
+     * `ops.runtime.` prefix that the registry does not declare and the tuning UI
+     * therefore never shows.
+     */
+    private const DURABLE_STATE_KEY = 'ops.runtime.degradation_state';
+    private const DURABLE_STREAK_KEY = 'ops.runtime.degradation_streak';
+
     public function __construct(
         private readonly OperationsSettingsService $settings,
+        private readonly FeatureSettingsService $featureSettings,
     ) {
     }
 
@@ -85,6 +105,13 @@ class DegradationEvaluator
         if ($transitioned) {
             $this->recordTransition($currentLevel, $newLevel, $sample, $assessment, $state);
         }
+
+        // Self-healing, every sample rather than only on the way down. An
+        // incident is "open" while the platform is at or above its level; if we
+        // are now below it, it ended — whether we walked down through the
+        // levels or lost our state and came back. Without this, any gap in
+        // continuity leaves a row that reads "Still elevated" forever.
+        $this->reconcileOpenIncidents((int) $state['level']);
 
         return $state;
     }
@@ -163,11 +190,23 @@ class DegradationEvaluator
     {
         try {
             $state = Cache::get(LoadShedder::STATE_CACHE_KEY);
+
+            if (is_array($state)) {
+                return $state;
+            }
         } catch (\Throwable) {
-            return [];
+            // Fall through to the durable copy.
         }
 
-        return is_array($state) ? $state : [];
+        // Cache cold or evicted. Rehydrate rather than starting from Normal,
+        // which would lose an in-progress incident and its streak.
+        $state = $this->readDurable(self::DURABLE_STATE_KEY);
+
+        if ($state !== []) {
+            $this->primeCache($state);
+        }
+
+        return $state;
     }
 
     /**
@@ -198,9 +237,24 @@ class DegradationEvaluator
             $candidate = LoadShedder::LEVEL_NORMAL;
             $against = null;
 
-            if ($signal['key'] === 'php_processes' && $signal['ceiling'] !== null && $signalValue >= (float) $signal['ceiling']) {
+            if ($signal['key'] === 'php_processes'
+                && $signal['ceiling'] !== null
+                && ($signal['ceiling_enforced'] ?? false)
+                && $signalValue >= (float) $signal['ceiling']
+            ) {
                 // The ceiling is the literal resource that ran out. Reaching it
                 // is not a warning about a future outage; it is the outage.
+                //
+                // But only once somebody has confirmed the number with the host.
+                // An UNVERIFIED ceiling is a guess, and a guess must never drive
+                // the loudest state in the system: on 4 Sep the board sat at
+                // Critical all day reading 69 against a guessed 60, while every
+                // other signal was comfortably green. That is the same failure
+                // as the old always-healthy heartbeat, only inverted — and a
+                // board nobody believes is worth nothing. While the ceiling is
+                // unverified this signal still escalates through its own watch
+                // and shed thresholds, which are absolute process counts and
+                // mean something on their own; it just cannot reach Critical.
                 $candidate = LoadShedder::LEVEL_CRITICAL;
                 $against = (float) $signal['ceiling'];
             } elseif ($signal['key'] === 'scheduler_tick_seconds' && $signalValue >= (float) $criticalTick) {
@@ -333,10 +387,31 @@ class DegradationEvaluator
 
     private function resolveOpenIncidents(int $toLevel): void
     {
+        $this->reconcileOpenIncidents($toLevel);
+    }
+
+    /**
+     * Close every open incident whose level the platform has dropped below.
+     *
+     * Idempotent and cheap — usually a no-op update matching zero rows — so it
+     * is safe to run on every sample, which is what makes it a repair for state
+     * that was lost rather than only a step in an orderly recovery.
+     */
+    private function reconcileOpenIncidents(int $currentLevel): void
+    {
         try {
+            $stale = SystemIncident::query()
+                ->whereNull('resolved_at')
+                ->where('to_level', '>', $currentLevel)
+                ->exists();
+
+            if (! $stale) {
+                return;
+            }
+
             SystemIncident::query()
                 ->whereNull('resolved_at')
-                ->where('to_level', '>', $toLevel)
+                ->where('to_level', '>', $currentLevel)
                 ->update(['resolved_at' => now()]);
         } catch (\Throwable $exception) {
             Log::warning('Unable to resolve open system incidents.', ['error' => $exception->getMessage()]);
@@ -358,11 +433,51 @@ class DegradationEvaluator
      */
     private function writeState(array $state): void
     {
+        $this->primeCache($state);
+        $this->writeDurable(self::DURABLE_STATE_KEY, $state);
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    private function primeCache(array $state): void
+    {
         try {
             Cache::put(LoadShedder::STATE_CACHE_KEY, $state, now()->addMinutes(self::STATE_TTL_MINUTES));
             Cache::put(LoadShedder::LEVEL_CACHE_KEY, (int) ($state['level'] ?? 0), now()->addMinutes(self::STATE_TTL_MINUTES));
         } catch (\Throwable $exception) {
-            Log::error('Unable to persist the degradation state.', ['error' => $exception->getMessage()]);
+            Log::error('Unable to cache the degradation state.', ['error' => $exception->getMessage()]);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function readDurable(string $key): array
+    {
+        try {
+            $value = $this->featureSettings->get($key, null);
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return is_array($value) ? $value : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $value
+     */
+    private function writeDurable(string $key, array $value): void
+    {
+        try {
+            $this->featureSettings->set($key, $value, null);
+        } catch (\Throwable $exception) {
+            // Losing the durable copy costs incident continuity across a cache
+            // eviction, not correctness of the current sample.
+            Log::warning('Unable to persist degradation runtime state.', [
+                'key' => $key,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 
@@ -371,15 +486,21 @@ class DegradationEvaluator
      */
     private function readStreak(): array
     {
+        $default = ['breach' => 0, 'breach_level' => null, 'clear' => 0];
+
         try {
             $streak = Cache::get(self::STREAK_CACHE_KEY);
+
+            if (is_array($streak)) {
+                return $streak + $default;
+            }
         } catch (\Throwable) {
-            $streak = null;
+            // Fall through to the durable copy.
         }
 
-        return is_array($streak)
-            ? $streak + ['breach' => 0, 'breach_level' => null, 'clear' => 0]
-            : ['breach' => 0, 'breach_level' => null, 'clear' => 0];
+        $streak = $this->readDurable(self::DURABLE_STREAK_KEY);
+
+        return $streak !== [] ? $streak + $default : $default;
     }
 
     /**
@@ -393,5 +514,7 @@ class DegradationEvaluator
             // A lost streak costs one extra sample before a transition, which
             // is the safe direction to fail in.
         }
+
+        $this->writeDurable(self::DURABLE_STREAK_KEY, $streak);
     }
 }

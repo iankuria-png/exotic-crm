@@ -199,4 +199,67 @@ class OperationsSettingsTest extends TestCase
 
         $this->assertSame(90, $this->service()->integer('ops.sync.slice_seconds'));
     }
+
+    public function test_a_shed_threshold_above_the_process_ceiling_is_rejected(): void
+    {
+        // Production was configured watch 26 / shed 100 / ceiling 60 on 4 Sep.
+        // The ceiling trips first, so Limp was unreachable on the platform's
+        // most important signal — and nothing said so.
+        $this->expectException(OperationsSettingValidationException::class);
+        $this->expectExceptionMessage('Limp could never be reached');
+
+        $this->service()->update(
+            [['key' => 'ops.threshold.php_processes.shed', 'value' => 100]],
+            null,
+            'admin'
+        );
+    }
+
+    public function test_a_ceiling_lowered_below_the_shed_threshold_is_rejected(): void
+    {
+        $this->expectException(OperationsSettingValidationException::class);
+        $this->expectExceptionMessage('Limp could never be reached');
+
+        $this->service()->update(
+            [['key' => 'ops.threshold.php_processes.ceiling', 'value' => 20]],
+            null,
+            'admin'
+        );
+    }
+
+    public function test_a_coherent_process_threshold_set_is_accepted(): void
+    {
+        $result = $this->service()->update([
+            ['key' => 'ops.threshold.php_processes.ceiling', 'value' => 120],
+            ['key' => 'ops.threshold.php_processes.shed', 'value' => 100],
+            ['key' => 'ops.threshold.php_processes.watch', 'value' => 60],
+        ], null, 'admin');
+
+        $this->assertSame(3, $result['updated']);
+        $this->assertSame([], array_values(array_filter(
+            $this->service()->configurationWarnings(),
+            fn (array $warning): bool => $warning['key'] !== 'ops.threshold.php_processes.ceiling_verified'
+        )));
+    }
+
+    public function test_a_conflict_already_in_the_database_is_reported_rather_than_hidden(): void
+    {
+        // Bypass validation the way an older release would have, then confirm
+        // the board is told about it.
+        $features = app(\App\Services\FeatureSettingsService::class);
+        $features->set('ops.threshold.php_processes.ceiling', 60);
+        $features->set('ops.threshold.php_processes.shed', 100);
+        Cache::flush();
+
+        $messages = array_column($this->service()->configurationWarnings(), 'message');
+
+        $this->assertNotEmpty(array_filter($messages, fn ($m) => str_contains($m, 'above the ceiling')));
+    }
+
+    public function test_an_unverified_ceiling_is_reported_as_unable_to_escalate(): void
+    {
+        $messages = array_column($this->service()->configurationWarnings(), 'message');
+
+        $this->assertNotEmpty(array_filter($messages, fn ($m) => str_contains($m, 'cannot escalate')));
+    }
 }

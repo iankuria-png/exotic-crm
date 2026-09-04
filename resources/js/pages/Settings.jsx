@@ -9501,7 +9501,15 @@ export default function Settings() {
                 />
             ) : null}
             {activeTab === 'operations' && ['admin', 'sub_admin'].includes(user?.role || '') ? (
-                <OperationsWorkspace canOverride={(user?.role || '') === 'admin'} />
+                <OperationsWorkspace
+                    canOverride={(user?.role || '') === 'admin'}
+                    onOpenMarket={() => {
+                        const params = new URLSearchParams(window.location.search);
+                        params.set('integrationArea', 'markets');
+                        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+                        setActiveTab('integrations');
+                    }}
+                />
             ) : null}
         </div>
     );

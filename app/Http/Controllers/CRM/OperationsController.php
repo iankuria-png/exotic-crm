@@ -7,6 +7,7 @@ use App\Models\SystemIncident;
 use App\Services\Ops\DegradationEvaluator;
 use App\Services\Ops\LoadShedder;
 use App\Services\Ops\OperationsSettingsRegistry;
+use App\Services\Ops\OperationsReportService;
 use App\Services\Ops\OperationsSettingsService;
 use App\Services\Ops\OperationsSettingValidationException;
 use App\Services\Ops\VitalsSampler;
@@ -26,6 +27,7 @@ class OperationsController extends Controller
         private readonly DegradationEvaluator $evaluator,
         private readonly OperationsSettingsRegistry $registry,
         private readonly OperationsSettingsService $settings,
+        private readonly OperationsReportService $reports,
         private readonly LoadShedder $shedder,
     ) {
     }
@@ -76,6 +78,14 @@ class OperationsController extends Controller
             'process_ceiling_verified' => $sample['process_ceiling_verified']
                 ?? $this->settings->boolean('ops.threshold.php_processes.ceiling_verified'),
             'scheduler' => $sample['scheduler'] ?? null,
+            // Conflicts in the stored thresholds. Rejecting a bad combination
+            // on save does nothing about one already in the database, so the
+            // board states it rather than rendering numbers that do not
+            // reconcile and leaving the reader to notice.
+            'configuration_warnings' => $this->settings->configurationWarnings(),
+            'process_breakdown' => $sample['process_breakdown'] ?? [],
+            'process_reason' => $sample['process_reason'] ?? null,
+            'history' => $sample['history'] ?? ['points' => [], 'series' => []],
         ]);
     }
 
@@ -123,6 +133,20 @@ class OperationsController extends Controller
             'level_label' => LoadShedder::label((int) $state['level']),
             'forced' => false,
         ]);
+    }
+
+    /**
+     * What the levels actually cost.
+     *
+     * Answers the question observe-only mode was shipped to answer: not "which
+     * capabilities would be paused" but "for how long, and how often" — which
+     * is what somebody needs before they are willing to turn enforcement on.
+     */
+    public function summary(Request $request): JsonResponse
+    {
+        $hours = (int) $request->query('hours', 24);
+
+        return response()->json($this->reports->summary($hours));
     }
 
     /**

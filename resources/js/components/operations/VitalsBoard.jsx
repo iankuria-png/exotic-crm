@@ -1,5 +1,7 @@
 import React from 'react';
 import SectionFrame from '../SectionFrame';
+import Sparkline from './Sparkline';
+import exportRowsToCsv from '../../utils/csvExport';
 import {
     LEVEL_TONE,
     SIGNAL_STATE_TONE,
@@ -15,12 +17,17 @@ import {
  * A tile shows its live value against the threshold that governs it, so a green
  * badge is a claim the reader can check rather than one they have to trust.
  */
-function SignalTile({ signal, ceilingVerified }) {
+function SignalTile({ signal, ceilingVerified, history }) {
     const tone = SIGNAL_STATE_TONE[signal.state] || SIGNAL_STATE_TONE.ok;
-    const ratioBase = signal.ceiling ?? signal.shed;
-    const ratio = signal.available && ratioBase
-        ? Math.min(100, Math.round((Number(signal.value) / Number(ratioBase)) * 100))
+    // Measure against the ceiling only when it is trustworthy. An unverified
+    // ceiling is context, not a denominator — rendering 69/60 as a full bar
+    // states a fact we have not established.
+    const ratioBase = (signal.ceiling && signal.ceiling_enforced) ? signal.ceiling : signal.shed;
+    const rawRatio = signal.available && ratioBase
+        ? Math.round((Number(signal.value) / Number(ratioBase)) * 100)
         : 0;
+    const ratio = Math.min(100, rawRatio);
+    const overflowing = rawRatio > 100;
 
     const barTone = signal.state === 'shed' ? 'bg-rose-500' : signal.state === 'watch' ? 'bg-amber-400' : 'bg-teal-500';
 
@@ -35,7 +42,7 @@ function SignalTile({ signal, ceilingVerified }) {
             </p>
 
             {signal.available ? (
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`mt-2 h-1.5 w-full overflow-hidden rounded-full ${overflowing ? 'bg-rose-200 ring-1 ring-rose-300' : 'bg-slate-100'}`}>
                     <div className={`h-full rounded-full ${barTone}`} style={{ width: `${Math.max(2, ratio)}%` }} />
                 </div>
             ) : (
@@ -44,20 +51,38 @@ function SignalTile({ signal, ceilingVerified }) {
                 </p>
             )}
 
+            <Sparkline
+                values={history}
+                tone={signal.state === 'shed' ? 'rose' : signal.state === 'watch' ? 'amber' : 'teal'}
+            />
+
             <p className="mt-2 text-[11px] text-slate-500">
                 Watch at {signal.watch} · shed at {signal.shed}
+                {signal.ceiling ? ` · ceiling ${signal.ceiling}` : ''}
             </p>
+
+            {overflowing ? (
+                <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                    {rawRatio}% of {ratioBase}
+                </p>
+            ) : null}
 
             {signal.key === 'php_processes' && signal.ceiling && !ceilingVerified ? (
                 <p className="mt-1 inline-flex rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                    Ceiling unverified
+                    Ceiling unverified · cannot trigger Critical
+                </p>
+            ) : null}
+
+            {signal.shed > (signal.ceiling ?? Infinity) ? (
+                <p className="mt-1 inline-flex rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                    Shed sits above the ceiling
                 </p>
             ) : null}
         </div>
     );
 }
 
-export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelease, canOverride, isMutating }) {
+export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelease, canOverride, isMutating, onOpenMarket }) {
     if (isLoading) {
         return (
             <SectionFrame title="System health" subtitle="Loading the last sample…">
@@ -96,6 +121,22 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
             }
             action={
                 <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => exportRowsToCsv('system-vitals', [
+                            { label: 'Signal', value: (row) => row.label },
+                            { label: 'Value', value: (row) => (row.available ? row.value : '') },
+                            { label: 'Unit', value: (row) => row.unit },
+                            { label: 'Watch', value: (row) => row.watch },
+                            { label: 'Shed', value: (row) => row.shed },
+                            { label: 'Ceiling', value: (row) => row.ceiling },
+                            { label: 'State', value: (row) => row.state },
+                        ], vitals?.signals || [])}
+                        disabled={(vitals?.signals || []).length === 0}
+                        className="crm-btn-secondary px-3 py-2 text-xs disabled:opacity-50"
+                    >
+                        Export CSV
+                    </button>
                     {!vitals?.enforcement_enabled ? (
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
                             Observe only
@@ -108,6 +149,17 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
             }
         >
             <div className="space-y-4">
+                {(vitals?.configuration_warnings || []).length > 0 ? (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                        <p className="text-sm font-semibold text-amber-900">Threshold configuration needs attention</p>
+                        <ul className="mt-1 space-y-1 text-[13px] text-amber-900">
+                            {vitals.configuration_warnings.map((warning) => (
+                                <li key={warning.key}>· {warning.message}</li>
+                            ))}
+                        </ul>
+                    </div>
+                ) : null}
+
                 {vitals?.sampler_stale ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                         <p className="font-semibold">The sampler has not reported recently.</p>
@@ -169,14 +221,49 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
                 ) : (
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
                         {signals.map((signal) => (
-                            <SignalTile key={signal.key} signal={signal} ceilingVerified={vitals?.process_ceiling_verified} />
+                            <SignalTile
+                                key={signal.key}
+                                signal={signal}
+                                ceilingVerified={vitals?.process_ceiling_verified}
+                                history={vitals?.history?.series?.[signal.key] || []}
+                            />
                         ))}
                     </div>
                 )}
 
+                {Object.keys(vitals?.process_breakdown || {}).length > 0 ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">What the PHP processes are</p>
+                        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-slate-700">
+                            {Object.entries(vitals.process_breakdown).map(([name, count]) => (
+                                <span key={name}>
+                                    <span className="font-semibold text-slate-900">{count}</span> <span className="font-mono text-[12px]">{name}</span>
+                                </span>
+                            ))}
+                        </div>
+                        <p className="mt-1.5 text-[11px] text-slate-500">
+                            A count is an alarm; this is the diagnosis. Read against the ceiling, not in isolation.
+                        </p>
+                    </div>
+                ) : vitals?.process_reason ? (
+                    <p className="text-xs text-slate-500">{vitals.process_reason}</p>
+                ) : null}
+
                 {(vitals?.markets_down_names || []).length > 0 ? (
                     <p className="text-xs text-slate-500">
-                        Markets reporting unhealthy: {vitals.markets_down_names.join(', ')}
+                        Markets reporting unhealthy:{' '}
+                        {vitals.markets_down_names.map((name, index) => (
+                            <React.Fragment key={name}>
+                                {index > 0 ? ', ' : ''}
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenMarket?.(name)}
+                                    className="font-medium text-teal-700 underline decoration-dotted underline-offset-2 hover:text-teal-800"
+                                >
+                                    {name}
+                                </button>
+                            </React.Fragment>
+                        ))}
                     </p>
                 ) : null}
 
@@ -195,20 +282,11 @@ export default function VitalsBoard({ vitals, isLoading, error, onForce, onRelea
                 ) : null}
 
                 {canOverride ? (
-                    <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                        <span className="text-xs font-semibold text-slate-600">Manual override</span>
-                        {[0, 1, 2, 3].map((candidate) => (
-                            <button
-                                key={candidate}
-                                type="button"
-                                disabled={isMutating}
-                                onClick={() => onForce(candidate)}
-                                className="rounded border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                            >
-                                Hold at {LEVEL_TONE[candidate] ? ['Normal', 'Cautious', 'Limp', 'Critical'][candidate] : candidate}
-                            </button>
-                        ))}
-                        <span className="text-[11px] text-slate-500">Overrides always expire — you will be asked for how long.</span>
+                    <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+                        <button type="button" disabled={isMutating} onClick={onForce} className="crm-btn-secondary px-3 py-2 text-xs disabled:opacity-60">
+                            Hold at a level…
+                        </button>
+                        <span className="text-[11px] text-slate-500">Overrides always expire, and expiry returns control to the sampler rather than to Normal.</span>
                     </div>
                 ) : null}
 

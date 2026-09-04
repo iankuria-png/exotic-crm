@@ -6,6 +6,8 @@ import VitalsBoard from './operations/VitalsBoard';
 import QueueLanesPanel from './operations/QueueLanesPanel';
 import IncidentTimeline from './operations/IncidentTimeline';
 import TuningPanel from './operations/TuningPanel';
+import LevelSummaryPanel from './operations/LevelSummaryPanel';
+import OverrideModal from './operations/OverrideModal';
 
 const LEVEL_NAMES = ['Normal', 'Cautious', 'Limp', 'Critical'];
 
@@ -20,10 +22,14 @@ const LEVEL_NAMES = ['Normal', 'Cautious', 'Limp', 'Critical'];
  * polling it — including several people opening this page because the site
  * feels slow — costs one cache read.
  */
-export default function OperationsWorkspace({ canOverride = false }) {
+export default function OperationsWorkspace({ canOverride = false, onOpenMarket }) {
     const toast = useToast();
     const queryClient = useQueryClient();
     const [fieldError, setFieldError] = useState(null);
+    const [summaryHours, setSummaryHours] = useState(24);
+    const [overrideOpen, setOverrideOpen] = useState(false);
+    const [tuningQuery, setTuningQuery] = useState('');
+    const [changedOnly, setChangedOnly] = useState(false);
 
     const vitalsQuery = useQuery({
         queryKey: ['ops-vitals'],
@@ -35,6 +41,12 @@ export default function OperationsWorkspace({ canOverride = false }) {
         queryKey: ['ops-incidents'],
         queryFn: async () => (await api.get('/crm/settings/system-health/incidents')).data,
         refetchInterval: 120000,
+    });
+
+    const summaryQuery = useQuery({
+        queryKey: ['ops-summary', summaryHours],
+        queryFn: async () => (await api.get('/crm/settings/system-health/operations-summary', { params: { hours: summaryHours } })).data,
+        refetchInterval: 300000,
     });
 
     const settingsQuery = useQuery({
@@ -80,32 +92,17 @@ export default function OperationsWorkspace({ canOverride = false }) {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['ops-vitals'] });
             queryClient.invalidateQueries({ queryKey: ['ops-incidents'] });
+            queryClient.invalidateQueries({ queryKey: ['ops-summary'] });
         },
         onError: (error) => toast.error(error?.response?.data?.message || 'The override could not be applied.'),
     });
 
-    const handleForce = (level) => {
-        // The expiry is asked for rather than defaulted: a forced level with no
-        // expiry is how a system ends up shed for a week after an incident
-        // nobody closed out.
-        const minutes = window.prompt(
-            `Hold the platform at ${LEVEL_NAMES[level]} for how many minutes? (5–1440)`,
-            '60'
-        );
-        if (minutes === null) return;
-
-        const reason = window.prompt('Why? This is recorded on the incident row.', '');
-        if (reason === null || reason.trim().length < 3) {
-            toast.error('A reason of at least 3 characters is required.');
-            return;
-        }
-
-        degradationMutation.mutate({
-            level,
-            reason: reason.trim(),
-            expires_in_minutes: Number(minutes),
-        }, {
-            onSuccess: () => toast.success(`Held at ${LEVEL_NAMES[level]}.`),
+    const handleForce = (payload) => {
+        degradationMutation.mutate(payload, {
+            onSuccess: () => {
+                setOverrideOpen(false);
+                toast.success(`Held at ${LEVEL_NAMES[payload.level]} — expires in ${payload.expires_in_minutes} minutes.`);
+            },
         });
     };
 
@@ -125,8 +122,17 @@ export default function OperationsWorkspace({ canOverride = false }) {
                 error={vitalsQuery.isError}
                 canOverride={canOverride}
                 isMutating={degradationMutation.isPending}
-                onForce={handleForce}
+                onForce={() => setOverrideOpen(true)}
                 onRelease={handleRelease}
+                onOpenMarket={onOpenMarket}
+            />
+
+            <LevelSummaryPanel
+                summary={summaryQuery.data}
+                isLoading={summaryQuery.isLoading}
+                error={summaryQuery.isError}
+                hours={summaryHours}
+                onHoursChange={setSummaryHours}
             />
 
             <QueueLanesPanel lanes={vitalsQuery.data?.lanes} isLoading={vitalsQuery.isLoading} />
@@ -144,17 +150,53 @@ export default function OperationsWorkspace({ canOverride = false }) {
                     The tuning settings could not be loaded.
                 </div>
             ) : (
-                groups.map((group) => (
-                    <TuningPanel
-                        key={group.key}
-                        group={group}
-                        fieldError={fieldError}
-                        isSaving={saveMutation.isPending}
-                        onSave={(updates) => saveMutation.mutate(updates)}
-                        onReset={(key) => resetMutation.mutate(key)}
-                    />
-                ))
+                <>
+                    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
+                        <input
+                            type="search"
+                            value={tuningQuery}
+                            onChange={(e) => setTuningQuery(e.target.value)}
+                            placeholder="Search settings…"
+                            aria-label="Search operations settings"
+                            className="crm-input w-64 px-3 py-2 text-sm"
+                        />
+                        <label className="inline-flex items-center gap-2 text-[13px] text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={changedOnly}
+                                onChange={(e) => setChangedOnly(e.target.checked)}
+                                className="h-4 w-4 rounded border-slate-300 text-teal-600"
+                            />
+                            Only settings changed from default
+                        </label>
+                        {tuningQuery || changedOnly ? (
+                            <button type="button" onClick={() => { setTuningQuery(''); setChangedOnly(false); }} className="text-[12px] font-medium text-teal-700 hover:underline">
+                                Clear
+                            </button>
+                        ) : null}
+                    </div>
+                    {groups.map((group) => (
+                        <TuningPanel
+                            key={group.key}
+                            group={group}
+                            fieldError={fieldError}
+                            isSaving={saveMutation.isPending}
+                            query={tuningQuery}
+                            changedOnly={changedOnly}
+                            onSave={(updates) => saveMutation.mutate(updates)}
+                            onReset={(key) => resetMutation.mutate(key)}
+                        />
+                    ))}
+                </>
             )}
+
+            <OverrideModal
+                open={overrideOpen}
+                onClose={() => setOverrideOpen(false)}
+                onSubmit={handleForce}
+                isSubmitting={degradationMutation.isPending}
+                pausedPreview={vitalsQuery.data?.paused_capabilities || []}
+            />
         </div>
     );
 }

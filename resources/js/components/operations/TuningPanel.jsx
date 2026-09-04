@@ -11,7 +11,7 @@ const RISK_TONE = {
  * One group of tunables. Bounds come from the server's registry and are shown
  * inline, so the form never offers a range the server would reject.
  */
-export default function TuningPanel({ group, onSave, onReset, isSaving, fieldError }) {
+export default function TuningPanel({ group, onSave, onReset, isSaving, fieldError, query = '', changedOnly = false }) {
     const [draft, setDraft] = useState({});
 
     const serverValues = useMemo(
@@ -25,6 +25,13 @@ export default function TuningPanel({ group, onSave, onReset, isSaving, fieldErr
 
     const valueOf = (setting) => (Object.prototype.hasOwnProperty.call(draft, setting.key) ? draft[setting.key] : setting.value);
 
+    const needle = query.trim().toLowerCase();
+    const visibleSettings = group.settings.filter((setting) => {
+        if (changedOnly && setting.is_default) return false;
+        if (needle === '') return true;
+        return `${setting.label} ${setting.description} ${setting.key}`.toLowerCase().includes(needle);
+    });
+
     const dirty = group.settings.filter((setting) => {
         if (!Object.prototype.hasOwnProperty.call(draft, setting.key)) return false;
         return String(draft[setting.key]) !== String(setting.value);
@@ -36,6 +43,13 @@ export default function TuningPanel({ group, onSave, onReset, isSaving, fieldErr
             value: setting.type === 'integer' ? Number(draft[setting.key]) : draft[setting.key],
         })));
     };
+
+    // A group with nothing to show under the current filter is noise; hide it
+    // rather than rendering an empty frame, unless the group has been narrowed
+    // to nothing by "changed only", which is itself worth stating once.
+    if (visibleSettings.length === 0 && needle !== '') {
+        return null;
+    }
 
     return (
         <SectionFrame
@@ -75,7 +89,12 @@ export default function TuningPanel({ group, onSave, onReset, isSaving, fieldErr
             }
         >
             <div className="grid gap-3 lg:grid-cols-2">
-                {group.settings.map((setting) => {
+                {visibleSettings.length === 0 ? (
+                    <p className="col-span-full py-4 text-center text-[13px] text-slate-500">
+                        {changedOnly ? 'Nothing in this group differs from its default.' : 'No setting here matches that search.'}
+                    </p>
+                ) : null}
+                {visibleSettings.map((setting) => {
                     const isDirty = dirty.some((entry) => entry.key === setting.key);
                     const error = fieldError?.key === setting.key ? fieldError.message : null;
 
