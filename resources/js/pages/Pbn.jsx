@@ -9,6 +9,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import PbnSeedWizard from '../components/settings/PbnSeedWizard';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../components/ToastProvider';
+import exportRowsToCsv from '../utils/csvExport';
 
 const tabDefs = [
     { id: 'overview', label: 'Overview' },
@@ -20,6 +21,52 @@ const tabDefs = [
 
 const batchStatuses = ['all', 'queued', 'running', 'completed', 'partial', 'failed', 'reverted', 'cancelled'];
 const itemStatuses = ['all', 'queued', 'provisioning', 'created', 'media_pending', 'failed', 'cancelled', 'reverted', 'skipped_duplicate'];
+
+const badgeTone = {
+    featured: 'border-amber-200 bg-amber-50 text-amber-800',
+    premium: 'border-violet-200 bg-violet-50 text-violet-800',
+    basic: 'border-slate-200 bg-slate-50 text-slate-600',
+};
+
+const badgeLabel = { featured: 'VIP', premium: 'Premium', basic: 'Basic' };
+
+// What actually happened to the bio, as opposed to what was asked for. A batch
+// configured to rewrite that quietly fell back everywhere is the failure worth
+// spotting at a glance.
+function bioOutcome(policy) {
+    if (!policy) return { label: '—', tone: 'text-slate-400', hint: null };
+    if (policy.bio_mode !== 'rewrite') return { label: 'Verbatim', tone: 'text-slate-500', hint: 'Copied from the source profile.' };
+
+    if (policy.bio_result === 'rewritten') {
+        return { label: 'Rewritten', tone: 'text-teal-700', hint: policy.bio_provider ? `via ${policy.bio_provider}` : null };
+    }
+    if (policy.bio_result === 'fallback') {
+        return { label: 'Fell back', tone: 'text-amber-700', hint: policy.bio_note };
+    }
+    if (policy.bio_result === 'skipped') {
+        return { label: 'Skipped', tone: 'text-slate-500', hint: 'The source profile had no bio to rewrite.' };
+    }
+
+    return { label: 'Pending', tone: 'text-slate-400', hint: 'Not provisioned yet.' };
+}
+
+function imageOutcome(policy) {
+    if (!policy) return { label: '—', tone: 'text-slate-400' };
+    if (policy.main_image_mode !== 'rotate') return { label: 'Source photo', tone: 'text-slate-500' };
+    if (policy.main_image_rotated) return { label: `Rotated · #${policy.main_image_index + 1}`, tone: 'text-teal-700' };
+
+    return { label: 'Not rotated', tone: 'text-slate-500' };
+}
+
+const itemPolicyFilters = [
+    { id: 'all', label: 'All' },
+    { id: 'featured', label: 'VIP', match: (item) => item.policy?.badge === 'featured' },
+    { id: 'premium', label: 'Premium', match: (item) => item.policy?.badge === 'premium' },
+    { id: 'basic', label: 'Basic', match: (item) => (item.policy?.badge || 'basic') === 'basic' },
+    { id: 'bio_fallback', label: 'Bio fell back', match: (item) => item.policy?.bio_result === 'fallback' },
+    { id: 'not_rotated', label: 'Photo not rotated', match: (item) => item.policy?.main_image_mode === 'rotate' && !item.policy?.main_image_rotated },
+    { id: 'awaiting', label: 'Awaiting release', match: (item) => item.policy?.awaiting_release },
+];
 
 function formatNumber(value) {
     return Number(value || 0).toLocaleString();
@@ -275,6 +322,7 @@ export default function Pbn() {
         enabled: activeTab === 'observability',
         refetchInterval: 20_000,
     });
+    const [itemPolicyFilter, setItemPolicyFilter] = useState('all');
     const batchDetailQuery = useQuery({
         queryKey: ['pbn-batch-detail', selectedBatch?.id],
         queryFn: () => api.get(`/crm/pbn/batches/${selectedBatch.id}`).then((response) => response.data),
@@ -350,13 +398,16 @@ export default function Pbn() {
     const itemRows = itemsQuery.data?.data || [];
     const eventRows = eventsQuery.data?.data || [];
     const batchDetail = batchDetailQuery.data?.batch || selectedBatch;
-    const batchItems = batchItemsQuery.data?.data || [];
+    const allBatchItems = batchItemsQuery.data?.data || [];
+    const activePolicyFilter = itemPolicyFilters.find((filter) => filter.id === itemPolicyFilter) || itemPolicyFilters[0];
+    const batchItems = activePolicyFilter.match ? allBatchItems.filter(activePolicyFilter.match) : allBatchItems;
+    const batchPolicySummary = batchDetailQuery.data?.summary?.policy || null;
     const batchEvents = batchEventsQuery.data?.data || [];
     const revertPreview = batchDetailQuery.data?.revert_preview || {};
     const isBatchActive = ['queued', 'running'].includes(batchDetail?.status);
     const mediaSummary = batchDetailQuery.data?.media_summary || {};
-    const pendingMediaCount = Number(mediaSummary.pending_count || batchItems.filter((item) => item.status === 'media_pending').length || 0);
-    const mediaAttentionCount = Number(mediaSummary.attention_count || batchItems.filter((item) => item.status === 'media_pending' && item.failure_reason).length || 0);
+    const pendingMediaCount = Number(mediaSummary.pending_count || allBatchItems.filter((item) => item.status === 'media_pending').length || 0);
+    const mediaAttentionCount = Number(mediaSummary.attention_count || allBatchItems.filter((item) => item.status === 'media_pending' && item.failure_reason).length || 0);
 
     const batchColumns = [
         {
@@ -795,10 +846,66 @@ export default function Pbn() {
                             <section className="rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-100 px-4 py-3">
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                        <p className="text-sm font-semibold text-slate-900">Seed Items</p>
-                                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchItemsQuery.refetch()} disabled={batchItemsQuery.isFetching}>
-                                            {batchItemsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
-                                        </button>
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">Seed Items</p>
+                                            {batchPolicySummary ? (
+                                                <p className="mt-0.5 text-xs text-slate-500">
+                                                    {batchPolicySummary.featured} VIP · {batchPolicySummary.premium} premium · {batchPolicySummary.verified} verified ·{' '}
+                                                    {batchPolicySummary.bio_rewritten} bios rewritten
+                                                    {batchPolicySummary.bio_fallback > 0 ? ` · ${batchPolicySummary.bio_fallback} fell back` : ''}
+                                                    {batchPolicySummary.bio_cost_usd > 0 ? ` · $${Number(batchPolicySummary.bio_cost_usd).toFixed(3)}` : ''}
+                                                    {batchPolicySummary.awaiting_release > 0
+                                                        ? ` · ${batchPolicySummary.awaiting_release} awaiting release${batchPolicySummary.next_release_at ? ` (next ${formatDateTime(batchPolicySummary.next_release_at)})` : ''}`
+                                                        : ''}
+                                                </p>
+                                            ) : null}
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                disabled={allBatchItems.length === 0}
+                                                onClick={() => exportRowsToCsv(`pbn-batch-${batchDetail?.id}-items`, [
+                                                    { label: 'Profile', value: (row) => row.source_client?.name || `Client #${row.source_client_id}` },
+                                                    { label: 'Source market', value: (row) => row.source_platform_name },
+                                                    { label: 'Source WP', value: (row) => row.source_wp_post_id },
+                                                    { label: 'Status', value: (row) => row.status },
+                                                    { label: 'Destination', value: (row) => row.destination_location },
+                                                    { label: 'Target WP', value: (row) => row.target_wp_post_id },
+                                                    { label: 'Profile URL', value: (row) => row.target_profile_url },
+                                                    { label: 'Badge', value: (row) => badgeLabel[row.policy?.badge] || '' },
+                                                    { label: 'Verified', value: (row) => (row.policy?.verified ? 'yes' : 'no') },
+                                                    { label: 'Bio', value: (row) => bioOutcome(row.policy).label },
+                                                    { label: 'Bio provider', value: (row) => row.policy?.bio_provider },
+                                                    { label: 'Bio note', value: (row) => row.policy?.bio_note },
+                                                    { label: 'Main image', value: (row) => imageOutcome(row.policy).label },
+                                                    { label: 'Expires', value: (row) => row.policy?.expires_at },
+                                                    { label: 'Release at', value: (row) => row.policy?.release_at },
+                                                    { label: 'Failure', value: (row) => row.failure_reason || row.revert_failure_reason },
+                                                ], allBatchItems)}
+                                            >
+                                                Export CSV
+                                            </button>
+                                            <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={() => batchItemsQuery.refetch()} disabled={batchItemsQuery.isFetching}>
+                                                {batchItemsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-1.5">
+                                        {itemPolicyFilters.map((filter) => {
+                                            const count = filter.match ? allBatchItems.filter(filter.match).length : allBatchItems.length;
+
+                                            return (
+                                                <button
+                                                    key={filter.id}
+                                                    type="button"
+                                                    onClick={() => setItemPolicyFilter(filter.id)}
+                                                    className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${itemPolicyFilter === filter.id ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
+                                                >
+                                                    {filter.label} · {count}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                                 {batchItemsQuery.isError ? (
@@ -817,13 +924,16 @@ export default function Pbn() {
                                             <tr>
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Profile</th>
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Status</th>
-                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Target WP</th>
-                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Updated</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Destination</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Badge</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Bio</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Main image</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Expires</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {batchItemsQuery.isLoading ? (
-                                                <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
+                                                <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
                                             ) : null}
                                             {batchItems.map((item) => (
                                                 <tr key={item.id} onClick={() => setSelectedItem(item)} className="cursor-pointer transition-colors hover:bg-slate-50" title="Open profile actions">
@@ -841,13 +951,54 @@ export default function Pbn() {
                                                             </p>
                                                         ) : null}
                                                     </td>
-                                                    <td className="px-3 py-2"><StatusBadge status={item.status} label={statusLabel(item.status)} /></td>
-                                                    <td className="px-3 py-2 text-sm text-slate-700">{item.target_wp_post_id || '-'}</td>
-                                                    <td className="px-3 py-2 text-sm text-slate-500">{formatDateTime(item.updated_at)}</td>
+                                                    <td className="px-3 py-2">
+                                                        <StatusBadge status={item.status} label={statusLabel(item.status)} />
+                                                        {item.policy?.awaiting_release ? (
+                                                            <p className="mt-1 whitespace-nowrap text-[11px] text-slate-500">Releases {formatDateTime(item.policy.release_at)}</p>
+                                                        ) : null}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm">
+                                                        <p className="text-slate-800">{item.destination_location || '—'}</p>
+                                                        {item.target_profile_url ? (
+                                                            <a
+                                                                href={item.target_profile_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                onClick={(event) => event.stopPropagation()}
+                                                                className="text-xs font-medium text-teal-700 hover:underline"
+                                                            >
+                                                                View on site ↗
+                                                            </a>
+                                                        ) : (
+                                                            <p className="text-xs text-slate-400">WP {item.target_wp_post_id || '—'}</p>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        {item.policy ? (
+                                                            <div className="flex flex-wrap items-center gap-1">
+                                                                <span className={`rounded-md border px-1.5 py-0.5 text-[11px] font-semibold ${badgeTone[item.policy.badge] || badgeTone.basic}`}>
+                                                                    {badgeLabel[item.policy.badge] || 'Basic'}
+                                                                </span>
+                                                                {item.policy.verified ? (
+                                                                    <span className="rounded-md border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[11px] font-semibold text-teal-800">Verified</span>
+                                                                ) : null}
+                                                            </div>
+                                                        ) : <span className="text-sm text-slate-400">—</span>}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm">
+                                                        <p className={`font-medium ${bioOutcome(item.policy).tone}`}>{bioOutcome(item.policy).label}</p>
+                                                        {bioOutcome(item.policy).hint ? (
+                                                            <p className="max-w-[200px] truncate text-[11px] text-slate-500" title={bioOutcome(item.policy).hint}>{bioOutcome(item.policy).hint}</p>
+                                                        ) : null}
+                                                    </td>
+                                                    <td className={`px-3 py-2 text-sm font-medium ${imageOutcome(item.policy).tone}`}>{imageOutcome(item.policy).label}</td>
+                                                    <td className="px-3 py-2 text-sm text-slate-500">{item.policy?.expires_at || '—'}</td>
                                                 </tr>
                                             ))}
                                             {!batchItemsQuery.isLoading && !batchItemsQuery.isError && batchItems.length === 0 ? (
-                                                <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-slate-500">No items for this batch.</td></tr>
+                                                <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
+                                                    {itemPolicyFilter === 'all' ? 'No items for this batch.' : 'No items match this filter.'}
+                                                </td></tr>
                                             ) : null}
                                         </tbody>
                                     </table>

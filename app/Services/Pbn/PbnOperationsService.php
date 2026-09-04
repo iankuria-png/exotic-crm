@@ -131,6 +131,7 @@ class PbnOperationsService
                 'sourcePlatform:id,name,country,domain',
                 'sourceClient:id,platform_id,wp_post_id,name,city,phone_normalized,display_image_url,main_image_url,wp_profile_permalink',
                 'sourceClient.platform:id,wp_api_url',
+                'target:id,region_name,city_name',
             ])
             ->whereIn('pbn_site_id', $this->visibleSiteIds($actor))
             ->latest('id');
@@ -502,6 +503,62 @@ class PbnOperationsService
         ];
     }
 
+    /**
+     * Where the profile actually landed on the destination site, as a reader
+     * would see it — the point of a seed batch is placement, so a row that only
+     * shows term ids cannot be evaluated without a second lookup.
+     */
+    private function destinationLocation(PbnSeedItem $item): ?string
+    {
+        $city = trim((string) ($item->target?->city_name ?? ''));
+        $region = trim((string) ($item->target?->region_name ?? ''));
+        $label = implode(', ', array_filter([$city, $region]));
+
+        if ($label !== '') {
+            return $label;
+        }
+
+        return $item->target_city_id || $item->target_region_id
+            ? 'Term ' . ($item->target_city_id ?: $item->target_region_id)
+            : null;
+    }
+
+    /**
+     * The content decisions this profile actually received, flattened for the
+     * batch table: what tier it landed on, whether its bio was really rewritten
+     * or quietly fell back, whether its lead photo was rotated, and when it
+     * expires.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function serializeAppliedPolicy(PbnSeedItem $item): ?array
+    {
+        $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
+        if ($policy === []) {
+            return null;
+        }
+
+        $expiresAt = $policy['expires_at'] ?? null;
+
+        return [
+            'badge' => (string) ($policy['badge'] ?? 'basic'),
+            'verified' => (bool) ($policy['verified'] ?? false),
+            'bio_mode' => (string) ($policy['bio_mode'] ?? 'verbatim'),
+            'bio_result' => $policy['bio_result'] ?? null,
+            'bio_provider' => $policy['bio_provider'] ?? null,
+            'bio_note' => $policy['bio_note'] ?? null,
+            'bio_cost_usd' => isset($policy['bio_cost_usd']) ? round((float) $policy['bio_cost_usd'], 4) : null,
+            'main_image_mode' => (string) ($policy['main_image_mode'] ?? 'source'),
+            'main_image_rotated' => array_key_exists('main_image_index', $policy) && (int) $policy['main_image_index'] > 0,
+            'main_image_index' => $policy['main_image_index'] ?? null,
+            'expires_at' => is_numeric($expiresAt) && (int) $expiresAt > 0
+                ? date('Y-m-d', (int) $expiresAt)
+                : null,
+            'release_at' => optional($item->release_at)->toDateTimeString(),
+            'awaiting_release' => (bool) ($item->release_at && $item->release_at->isFuture()),
+        ];
+    }
+
     private function serializeItem(PbnSeedItem $item): array
     {
         return [
@@ -533,6 +590,8 @@ class PbnOperationsService
                 'profile_url' => $item->sourceClient->wp_profile_permalink ?: $item->sourceClient->wp_profile_url,
                 'display_image_url' => $item->sourceClient->display_image_url ?: $item->sourceClient->main_image_url,
             ] : null,
+            'destination_location' => $this->destinationLocation($item),
+            'policy' => $this->serializeAppliedPolicy($item),
             'media_status' => $this->mediaService->itemMediaState($item),
             'batch_status' => $item->batch?->status,
             'provision_started_at' => optional($item->provision_started_at)->toDateTimeString(),
