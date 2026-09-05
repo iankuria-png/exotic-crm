@@ -192,8 +192,8 @@ export default function KycPanel({ client, canReview = true }) {
         onError: (error) => toast.error(error?.response?.data?.message || 'Could not delete this KYC document.'),
     });
 
-    const canEmergencyVerify = useMemo(() => (user?.role || '') === 'admin' && !client?.verified, [user?.role, client?.verified]);
     const canManagePublicBadge = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
+    const canEmergencyVerify = useMemo(() => canManagePublicBadge && !client?.verified, [canManagePublicBadge, client?.verified]);
     const canActOnSubject = canReview && Boolean(subjectId);
     const canStaffUpload = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || '')) && Boolean(subjectId);
     const lastReviewer = subject?.reviewer?.name;
@@ -523,7 +523,7 @@ export default function KycPanel({ client, canReview = true }) {
                                 onChange={(event) => setEmergencyReason(event.target.value)}
                                 rows={4}
                                 className="crm-textarea min-h-[120px] w-full"
-                                placeholder="Explain why this admin-only emergency verification is necessary."
+                                placeholder="Explain why this emergency verification is necessary."
                             />
                             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                                 <button

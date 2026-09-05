@@ -2220,13 +2220,24 @@ class ClientController extends Controller
         ]);
         $verified = (bool) $validated['verified'];
 
+        // Reviewer roles, matching the rest of the KYC review surface and the
+        // badge controls the panel already renders. Covers removal too, which
+        // previously relied on route middleware that still lets field_sales in.
+        // Market scope is enforced by authorizeClientAccess above, so a sales
+        // user can only reach their own clients.
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            ['admin', 'sub_admin', 'sales'],
+            'Only admin, sub-admin, or sales users can change the verified badge.'
+        );
+
         if ($verified) {
             $source = (string) ($validated['source'] ?? '');
             $reason = trim((string) ($validated['reason'] ?? ''));
 
-            if (($request->user()->role ?? '') !== 'admin' || $source !== 'manual_crm_emergency' || $reason === '') {
+            if ($source !== 'manual_crm_emergency' || $reason === '') {
                 return response()->json([
-                    'message' => 'Setting verified=true requires the admin-only manual_crm_emergency path with an explicit reason.',
+                    'message' => 'Setting verified=true requires the manual_crm_emergency path with an explicit reason.',
                 ], 422);
             }
         }

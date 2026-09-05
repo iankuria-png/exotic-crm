@@ -37,7 +37,57 @@ class VerifiedSourceTest extends TestCase
         $this->assertSame('approved', $client->kycSubject->status);
     }
 
-    public function test_non_admin_cannot_set_manual_crm_emergency_verified_true(): void
+    public function test_field_sales_cannot_set_manual_crm_emergency_verified_true(): void
+    {
+        $platform = $this->createPlatform([
+            'wp_api_url' => 'https://sync.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = $this->createClientForPlatform($platform);
+        Sanctum::actingAs($this->createKycUser('field_sales', [$platform->id]));
+
+        Http::fake(['*' => Http::response(['success' => true], 200)]);
+
+        $response = $this->postJson('/api/crm/clients/' . $client->id . '/verified-status', [
+            'verified' => true,
+            'source' => 'manual_crm_emergency',
+            'reason' => 'Field agent trying to self-serve a badge',
+        ]);
+
+        $response->assertStatus(403);
+        Http::assertNothingSent();
+        $this->assertSame(0, AuditLog::query()->where('action', 'client_verified_emergency_set')->count());
+    }
+
+    public function test_reviewer_roles_can_apply_emergency_verification(): void
+    {
+        $base = 'https://sync.example.test/wp-json/exotic-crm-sync/v1';
+
+        foreach (['sub_admin', 'sales'] as $role) {
+            $platform = $this->createPlatform([
+                'wp_api_url' => $base,
+                'wp_api_user' => 'crm-user',
+                'wp_api_password' => 'secret',
+            ]);
+            $client = $this->createClientForPlatform($platform, ['wp_post_id' => 4400]);
+            Sanctum::actingAs($this->createKycUser($role, [$platform->id]));
+
+            Http::fake(['*' => Http::response(['success' => true, 'verified' => true], 200)]);
+
+            $response = $this->postJson('/api/crm/clients/' . $client->id . '/verified-status', [
+                'verified' => true,
+                'source' => 'manual_crm_emergency',
+                'reason' => 'Verified in person at the branch office.',
+            ]);
+
+            $response->assertOk();
+            $this->assertTrue((bool) $client->fresh()->verified, "{$role} should be able to emergency verify");
+            $this->assertSame('manual_crm_emergency', $client->fresh()->verified_source);
+        }
+    }
+
+    public function test_emergency_verification_still_requires_an_explicit_reason(): void
     {
         $platform = $this->createPlatform([
             'wp_api_url' => 'https://sync.example.test/wp-json/exotic-crm-sync/v1',
@@ -47,14 +97,38 @@ class VerifiedSourceTest extends TestCase
         $client = $this->createClientForPlatform($platform);
         Sanctum::actingAs($this->createKycUser('sales', [$platform->id]));
 
+        Http::fake(['*' => Http::response(['success' => true], 200)]);
+
         $response = $this->postJson('/api/crm/clients/' . $client->id . '/verified-status', [
             'verified' => true,
             'source' => 'manual_crm_emergency',
-            'reason' => 'Trying to bypass admin-only flow',
+            'reason' => '   ',
         ]);
 
         $response->assertStatus(422);
+        Http::assertNothingSent();
         $this->assertSame(0, AuditLog::query()->where('action', 'client_verified_emergency_set')->count());
+    }
+
+    public function test_sales_cannot_emergency_verify_a_client_in_another_market(): void
+    {
+        $base = 'https://sync.example.test/wp-json/exotic-crm-sync/v1';
+        $ownMarket = $this->createPlatform(['wp_api_url' => $base, 'wp_api_user' => 'u', 'wp_api_password' => 'p']);
+        $otherMarket = $this->createPlatform(['wp_api_url' => $base, 'wp_api_user' => 'u', 'wp_api_password' => 'p']);
+        $client = $this->createClientForPlatform($otherMarket);
+        Sanctum::actingAs($this->createKycUser('sales', [$ownMarket->id]));
+
+        Http::fake(['*' => Http::response(['success' => true], 200)]);
+
+        $response = $this->postJson('/api/crm/clients/' . $client->id . '/verified-status', [
+            'verified' => true,
+            'source' => 'manual_crm_emergency',
+            'reason' => 'Reaching across markets',
+        ]);
+
+        $this->assertContains($response->status(), [403, 404]);
+        Http::assertNothingSent();
+        $this->assertFalse((bool) $client->fresh()->verified);
     }
 
     public function test_emergency_verify_writes_through_the_dedicated_wp_verified_route(): void
