@@ -25,6 +25,37 @@ const RATE_FIELD_KEYS = [
     'outcall',
     ...RATE_DURATION_OPTIONS.flatMap(([key]) => [`rate${key}_incall`, `rate${key}_outcall`]),
 ];
+const ESCORT_ONLY_CREATE_FIELDS = [
+    'birthday',
+    'gender',
+    'ethnicity',
+    'height',
+    'build',
+    'haircolor',
+    'hairlength',
+    'bustsize',
+    'weight',
+    'looks',
+    'smoker',
+    'availability',
+    'services',
+    'extraservices',
+    'incall',
+    'outcall',
+    ...RATE_DURATION_OPTIONS.flatMap(([key]) => [`rate${key}_incall`, `rate${key}_outcall`]),
+    'education',
+    'occupation',
+    'sports',
+    'hobbies',
+    'zodiacsign',
+    'sexualorientation',
+    'language1',
+    'language1level',
+    'language2',
+    'language2level',
+    'language3',
+    'language3level',
+];
 
 function generateProvisionRequestId() {
     if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -37,6 +68,7 @@ function generateProvisionRequestId() {
 function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
     return {
         platform_id: platformId,
+        client_type: 'escort',
         name: '',
         phone_normalized: '',
         email: '',
@@ -106,6 +138,15 @@ function defaultForm(platformId = '', onboardingMode = 'wp_provision') {
     };
 }
 
+function clearEscortOnlyProfileFields(form) {
+    const next = { ...form, full_profile: false };
+    ESCORT_ONLY_CREATE_FIELDS.forEach((field) => {
+        next[field] = Array.isArray(next[field]) ? [] : '';
+    });
+
+    return next;
+}
+
 function humanizeFieldName(field) {
     return String(field || '')
         .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -140,8 +181,8 @@ function resolveInitialPlatformId(lockedPlatformId, initialPlatformId) {
     return String(lockedPlatformId || initialPlatformId || '');
 }
 
-function buildFullProfilePayload(form) {
-    if (!form.full_profile) {
+function buildFullProfilePayload(form, clientType = 'escort') {
+    if (!form.full_profile || clientType === 'agency') {
         return {};
     }
 
@@ -193,9 +234,9 @@ function buildFullProfilePayload(form) {
     };
 }
 
-function buildQuickProfilePayload(form) {
+function buildQuickProfilePayload(form, clientType = 'escort') {
     const payload = {};
-    const services = parseProfileServices(form.services);
+    const services = clientType === 'agency' ? [] : parseProfileServices(form.services);
 
     if (services.length > 0) {
         payload.services = services;
@@ -209,16 +250,24 @@ function buildQuickProfilePayload(form) {
         payload.telegram = form.telegram.trim();
     }
 
-    if (form.birthday) {
+    if (clientType !== 'agency' && form.birthday) {
         payload.birthday = form.birthday;
     }
 
-    if (form.height.trim()) {
+    if (clientType !== 'agency' && form.height.trim()) {
         payload.height = form.height.trim();
     }
 
-    if (form.weight.trim()) {
+    if (clientType !== 'agency' && form.weight.trim()) {
         payload.weight = form.weight.trim();
+    }
+
+    if (clientType === 'agency' && form.website.trim()) {
+        payload.website = form.website.trim();
+    }
+
+    if (clientType === 'agency' && form.instagram.trim()) {
+        payload.instagram = form.instagram.trim();
     }
 
     if (form.bio.trim()) {
@@ -354,14 +403,25 @@ export default function ClientCreateModal({
 
     const owners = ownersQuery.data?.owners || [];
     const isWpProvision = form.onboarding_mode === 'wp_provision';
+    const agencyEnabled = Boolean(selectedPlatform?.client_sync?.include_agencies);
+    const isAgency = form.client_type === 'agency';
     const isLegacyLocationMode = isWpProvision && locationCatalogAvailable === false;
     const isLegacyCurrencyMode = isWpProvision && currencyCatalogAvailable === false;
     const requiresProvisionContact = isWpProvision && !form.email.trim() && !form.phone_normalized.trim();
     const requiresProvisionLocation = isWpProvision && !isLegacyLocationMode && (
         !form.region_id || (!form.city_id && !form.location_allows_region_only)
     );
-    const birthdayIsValid = isAdultBirthday(form.birthday);
-    const ratesNeedCurrency = form.full_profile && !isLegacyCurrencyMode && hasAnyRate(form) && !form.currency;
+    const birthdayIsValid = isAgency || isAdultBirthday(form.birthday);
+    const ratesNeedCurrency = !isAgency && form.full_profile && !isLegacyCurrencyMode && hasAnyRate(form) && !form.currency;
+
+    useEffect(() => {
+        if (!open || !isWpProvision || !isAgency || agencyEnabled) {
+            return;
+        }
+
+        setForm((current) => ({ ...current, client_type: 'escort' }));
+    }, [agencyEnabled, isAgency, isWpProvision, open]);
+
     const createMutation = useMutation({
         mutationFn: (payload) => {
             const requestPayload = { ...payload };
@@ -390,7 +450,8 @@ export default function ClientCreateModal({
                 });
             }
 
-            toast.success(isWpProvision ? 'Client provisioned.' : 'Client created.');
+            const provisionedLabel = variables?.client_type === 'agency' ? 'Agency provisioned.' : 'Client provisioned.';
+            toast.success(isWpProvision ? provisionedLabel : 'Client created.');
             onCreated?.(createdClient, {
                 duplicateMatches: matches,
                 onboardingMode: variables?.onboarding_mode || null,
@@ -421,12 +482,12 @@ export default function ClientCreateModal({
             : 'Choose a city within the selected region before provisioning this WordPress profile.';
 
     const bodySubtitle = subtitle || (isWpProvision
-        ? 'Provision a real WordPress profile and link it to CRM in one flow.'
+        ? `Provision a real WordPress ${isAgency ? 'agency' : 'profile'} and link it to CRM in one flow.`
         : 'Create a CRM client record for outreach and deal tracking.');
     const resolvedSubmitLabel = submitLabel || (createMutation.isPending
         ? (isWpProvision ? 'Provisioning...' : 'Creating...')
         : isWpProvision
-            ? 'Provision and create client'
+            ? `Provision and create ${isAgency ? 'agency' : 'client'}`
             : 'Create client');
 
     const fieldSourceBanner = useMemo(() => {
@@ -450,6 +511,7 @@ export default function ClientCreateModal({
         setForm((current) => ({
             ...current,
             platform_id: nextPlatformId,
+            client_type: 'escort',
             assigned_to: '',
             city: '',
             region_id: null,
@@ -554,6 +616,10 @@ export default function ClientCreateModal({
     };
 
     const applyDefaultRates = (direction) => {
+        if (isAgency) {
+            return;
+        }
+
         const sourceValue = String(form[direction] || '').trim();
         if (!sourceValue) {
             toast.warning(`Add a default ${direction} rate first.`);
@@ -582,6 +648,10 @@ export default function ClientCreateModal({
             return 'Add at least one contact channel to continue with WordPress provisioning.';
         }
 
+        if (isWpProvision && isAgency && !agencyEnabled) {
+            return 'Agency provisioning is not enabled for this market.';
+        }
+
         if (requiresProvisionLocation) {
             return locationRequirementMessage;
         }
@@ -604,13 +674,15 @@ export default function ClientCreateModal({
             return;
         }
 
-        const fullProfilePayload = buildFullProfilePayload(form);
+        const clientType = isWpProvision ? form.client_type : 'escort';
+        const fullProfilePayload = buildFullProfilePayload(form, clientType);
         if (isLegacyCurrencyMode) {
             delete fullProfilePayload.currency;
         }
 
         createMutation.mutate({
             platform_id: Number(form.platform_id),
+            client_type: clientType,
             name: form.name.trim(),
             phone_normalized: normalizePhone(form.phone_normalized.trim(), phonePrefix),
             email: form.email.trim() || null,
@@ -625,7 +697,7 @@ export default function ClientCreateModal({
             region_id: isWpProvision && !isLegacyLocationMode && form.region_id ? Number(form.region_id) : undefined,
             city_id: isWpProvision && !isLegacyLocationMode && form.city_id ? Number(form.city_id) : undefined,
             profile_images: isWpProvision ? [...form.profile_images] : [],
-            ...(isWpProvision ? buildQuickProfilePayload(form) : {}),
+            ...(isWpProvision ? buildQuickProfilePayload(form, clientType) : {}),
             ...fullProfilePayload,
             reason,
         });
@@ -704,6 +776,7 @@ export default function ClientCreateModal({
                                         onClick={() => setForm((current) => ({
                                             ...current,
                                             onboarding_mode: 'manual',
+                                            client_type: 'escort',
                                             full_profile: false,
                                             region_id: null,
                                             city_id: null,
@@ -731,8 +804,34 @@ export default function ClientCreateModal({
                             </div>
                         ) : null}
 
+                        {isWpProvision ? (
+                            <div className="md:col-span-2">
+                                <label className="mb-1 block text-sm font-medium text-slate-700">Profile type</label>
+                                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setForm((current) => ({ ...current, client_type: 'escort' }))}
+                                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${!isAgency ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                                    >
+                                        Escort
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={!agencyEnabled}
+                                        onClick={() => setForm((current) => ({ ...clearEscortOnlyProfileFields(current), client_type: 'agency' }))}
+                                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${isAgency ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                                    >
+                                        Agency
+                                    </button>
+                                </div>
+                                {!agencyEnabled ? (
+                                    <p className="mt-1 text-xs text-slate-500">Agency provisioning is available after this market advertises agency sync support in Settings.</p>
+                                ) : null}
+                            </div>
+                        ) : null}
+
                         <div>
-                            <label htmlFor="client-create-name" className="mb-1 block text-sm font-medium text-slate-700">Client name</label>
+                            <label htmlFor="client-create-name" className="mb-1 block text-sm font-medium text-slate-700">{isAgency ? 'Business name' : 'Client name'}</label>
                             <input
                                 id="client-create-name"
                                 ref={clientNameRef}
@@ -741,7 +840,7 @@ export default function ClientCreateModal({
                                 autoComplete="off"
                                 onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                                 className="crm-input"
-                                placeholder="Enter client name"
+                                placeholder={isAgency ? 'Enter agency name' : 'Enter client name'}
                             />
                         </div>
 
@@ -890,27 +989,29 @@ export default function ClientCreateModal({
                                         <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ring-1 ring-slate-200">Optional</span>
                                     </div>
 
-                                    <div className="space-y-2">
-                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services</span>
-                                            <span className="text-xs text-slate-500">{selectedServiceCodes.length} selected</span>
+                                    {!isAgency ? (
+                                        <div className="space-y-2">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services</span>
+                                                <span className="text-xs text-slate-500">{selectedServiceCodes.length} selected</span>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                                                {PROFILE_ENUM_OPTIONS.services.map((option) => {
+                                                    const selected = selectedServiceCodes.includes(option.value);
+                                                    return (
+                                                        <button
+                                                            key={option.value}
+                                                            type="button"
+                                                            onClick={() => toggleMultiValue('services', option.value)}
+                                                            className={`min-h-[36px] rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
-                                        <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-3">
-                                            {PROFILE_ENUM_OPTIONS.services.map((option) => {
-                                                const selected = selectedServiceCodes.includes(option.value);
-                                                return (
-                                                    <button
-                                                        key={option.value}
-                                                        type="button"
-                                                        onClick={() => toggleMultiValue('services', option.value)}
-                                                        className={`min-h-[36px] rounded-full border px-3 py-1.5 text-sm transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}
-                                                    >
-                                                        {option.label}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
+                                    ) : null}
 
                                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                                         <div>
@@ -937,6 +1038,34 @@ export default function ClientCreateModal({
                                                 placeholder="Telegram username or link"
                                             />
                                         </div>
+                                        {isAgency ? (
+                                            <>
+                                                <div>
+                                                    <label htmlFor="client-create-website" className="mb-1 block text-sm font-medium text-slate-700">Website</label>
+                                                    <input
+                                                        id="client-create-website"
+                                                        type="url"
+                                                        value={form.website}
+                                                        autoComplete="url"
+                                                        onChange={(event) => setForm((current) => ({ ...current, website: event.target.value }))}
+                                                        className="crm-input"
+                                                        placeholder="https://example.com"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label htmlFor="client-create-instagram" className="mb-1 block text-sm font-medium text-slate-700">Instagram</label>
+                                                    <input
+                                                        id="client-create-instagram"
+                                                        type="text"
+                                                        value={form.instagram}
+                                                        autoComplete="off"
+                                                        onChange={(event) => setForm((current) => ({ ...current, instagram: event.target.value }))}
+                                                        className="crm-input"
+                                                        placeholder="@agency"
+                                                    />
+                                                </div>
+                                            </>
+                                        ) : null}
                                     </div>
                                 </div>
 
@@ -954,48 +1083,50 @@ export default function ClientCreateModal({
                                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Optional</span>
                                     </div>
 
-                                    <div className="grid gap-3 md:grid-cols-3">
-                                        <div>
-                                            <label htmlFor="client-create-birthday" className="mb-1 block text-sm font-medium text-slate-700">Birthday</label>
-                                            <input
-                                                id="client-create-birthday"
-                                                type="date"
-                                                value={form.birthday}
-                                                onChange={(event) => setForm((current) => ({ ...current, birthday: event.target.value }))}
-                                                className="crm-input"
-                                            />
-                                            {!birthdayIsValid ? (
-                                                <p className="mt-1 text-xs font-medium text-rose-700">Birthday must be 18+.</p>
-                                            ) : null}
+                                    {!isAgency ? (
+                                        <div className="grid gap-3 md:grid-cols-3">
+                                            <div>
+                                                <label htmlFor="client-create-birthday" className="mb-1 block text-sm font-medium text-slate-700">Birthday</label>
+                                                <input
+                                                    id="client-create-birthday"
+                                                    type="date"
+                                                    value={form.birthday}
+                                                    onChange={(event) => setForm((current) => ({ ...current, birthday: event.target.value }))}
+                                                    className="crm-input"
+                                                />
+                                                {!birthdayIsValid ? (
+                                                    <p className="mt-1 text-xs font-medium text-rose-700">Birthday must be 18+.</p>
+                                                ) : null}
+                                            </div>
+                                            <div>
+                                                <label htmlFor="client-create-height" className="mb-1 block text-sm font-medium text-slate-700">Height</label>
+                                                <input
+                                                    id="client-create-height"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={form.height}
+                                                    onChange={(event) => setForm((current) => ({ ...current, height: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="e.g. 167"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="client-create-weight" className="mb-1 block text-sm font-medium text-slate-700">Weight</label>
+                                                <input
+                                                    id="client-create-weight"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={form.weight}
+                                                    onChange={(event) => setForm((current) => ({ ...current, weight: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="e.g. 55"
+                                                />
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label htmlFor="client-create-height" className="mb-1 block text-sm font-medium text-slate-700">Height</label>
-                                            <input
-                                                id="client-create-height"
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={form.height}
-                                                onChange={(event) => setForm((current) => ({ ...current, height: event.target.value }))}
-                                                className="crm-input"
-                                                placeholder="e.g. 167"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label htmlFor="client-create-weight" className="mb-1 block text-sm font-medium text-slate-700">Weight</label>
-                                            <input
-                                                id="client-create-weight"
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={form.weight}
-                                                onChange={(event) => setForm((current) => ({ ...current, weight: event.target.value }))}
-                                                className="crm-input"
-                                                placeholder="e.g. 55"
-                                            />
-                                        </div>
-                                    </div>
+                                    ) : null}
 
                                     <div className="mt-3">
-                                        <label htmlFor="client-create-bio" className="mb-1 block text-sm font-medium text-slate-700">Profile bio</label>
+                                        <label htmlFor="client-create-bio" className="mb-1 block text-sm font-medium text-slate-700">{isAgency ? 'Agency bio' : 'Profile bio'}</label>
                                         <textarea
                                             id="client-create-bio"
                                             value={form.bio}
@@ -1055,6 +1186,7 @@ export default function ClientCreateModal({
 
                                 </section>
 
+                                {!isAgency ? (
                                 <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                         <div>
@@ -1072,8 +1204,9 @@ export default function ClientCreateModal({
                                         </label>
                                     </div>
                                 </div>
+                                ) : null}
 
-                                {form.full_profile ? (
+                                {!isAgency && form.full_profile ? (
                                     <>
                                 <section className="border-t border-slate-100 pt-4 md:col-span-2">
                                     <div className="mb-3">

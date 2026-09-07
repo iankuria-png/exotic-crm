@@ -387,6 +387,20 @@ function ClientUnlockCell({ row }) {
     );
 }
 
+function ClientTypeBadge({ type }) {
+    const normalized = String(type || 'escort') === 'agency' ? 'agency' : 'escort';
+
+    return (
+        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+            normalized === 'agency'
+                ? 'bg-violet-50 text-violet-700 ring-violet-200'
+                : 'bg-slate-100 text-slate-600 ring-slate-200'
+        }`}>
+            {normalized === 'agency' ? 'Agency' : 'Escort'}
+        </span>
+    );
+}
+
 function formatRelativeFromUnix(unixTs) {
     const ts = Number(unixTs || 0);
     if (!ts) return '—';
@@ -513,6 +527,7 @@ export default function Clients() {
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedHighRiskFilters = new Set(['1']);
+    const allowedClientTypes = new Set(['escort', 'agency']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned', 'field']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
@@ -563,6 +578,10 @@ export default function Clients() {
     const [statusFilter, setStatusFilter] = useState(() => {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
+    });
+    const [clientTypeFilter, setClientTypeFilter] = useState(() => {
+        const requested = (searchParams.get('client_type') || '').trim();
+        return allowedClientTypes.has(requested) ? requested : '';
     });
     const [planFilter, setPlanFilter] = useState(() => (searchParams.get('plan') || '').trim());
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
@@ -689,6 +708,7 @@ export default function Clients() {
             perPage,
             search,
             statusFilter,
+            clientTypeFilter,
             planFilter,
             verifiedFilter,
             highRiskFilter,
@@ -714,6 +734,7 @@ export default function Clients() {
                     per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
+                    ...(clientTypeFilter && { client_type: clientTypeFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
                     ...(highRiskFilter === '1' && { high_risk: 1 }),
@@ -1475,6 +1496,7 @@ export default function Clients() {
     const activeMetric = useMemo(() => {
         if (
             statusFilter === 'publish'
+            && clientTypeFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1486,6 +1508,7 @@ export default function Clients() {
         if (
             newUsersFilter === '7d'
             && statusFilter === ''
+            && clientTypeFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1500,6 +1523,7 @@ export default function Clients() {
         if (
             verifiedFilter === '1'
             && statusFilter === ''
+            && clientTypeFilter === ''
             && planFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
@@ -1510,6 +1534,7 @@ export default function Clients() {
         if (
             retentionBandFilter === 'watch'
             && statusFilter === ''
+            && clientTypeFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1522,6 +1547,7 @@ export default function Clients() {
         return '';
     }, [
         behaviorTagFilter,
+        clientTypeFilter,
         contactUnlockFilter,
         hasChatFilter,
         newUsersFilter,
@@ -1537,6 +1563,7 @@ export default function Clients() {
     const applyMetricFilter = (metricKey) => {
         if (activeMetric === metricKey) {
             setStatusFilter('');
+            setClientTypeFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setOnlineFilter('');
@@ -1555,6 +1582,7 @@ export default function Clients() {
 
         if (metricKey === 'active') {
             setStatusFilter('publish');
+            setClientTypeFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('');
@@ -1565,6 +1593,7 @@ export default function Clients() {
             setContactUnlockFilter('');
         } else if (metricKey === 'new_users') {
             setStatusFilter('');
+            setClientTypeFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('7d');
@@ -1575,6 +1604,7 @@ export default function Clients() {
             setContactUnlockFilter('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
+            setClientTypeFilter('');
             setPlanFilter('');
             setVerifiedFilter('1');
             setNewUsersFilter('');
@@ -1588,6 +1618,7 @@ export default function Clients() {
             setContactUnlockFilter('');
         } else if (metricKey === 'retention_watch') {
             setStatusFilter('');
+            setClientTypeFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('');
@@ -1613,6 +1644,7 @@ export default function Clients() {
     const hasActiveFilters = Boolean(
         search
         || statusFilter
+        || clientTypeFilter
         || planFilter
         || verifiedFilter !== ''
         || highRiskFilter !== ''
@@ -1865,6 +1897,11 @@ export default function Clients() {
                     </div>
                 </div>
             ),
+        },
+        {
+            key: 'client_type',
+            label: 'Type',
+            render: (row) => <ClientTypeBadge type={row.client_type} />,
         },
         {
             key: 'phone_normalized',
@@ -2410,6 +2447,17 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Type"
+                        value={clientTypeFilter}
+                        onChange={(event) => { setClientTypeFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All types' },
+                            { value: 'escort', label: 'Escorts' },
+                            { value: 'agency', label: 'Agencies' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Plan"
                         value={planFilter}
                         onChange={(event) => { setPlanFilter(event.target.value); setPage(1); }}
@@ -2585,6 +2633,7 @@ export default function Clients() {
                                 setSearch('');
                                 setSearchInput('');
                                 setStatusFilter('');
+                                setClientTypeFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
                                 setHighRiskFilter('');

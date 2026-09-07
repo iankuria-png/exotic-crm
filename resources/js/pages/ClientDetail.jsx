@@ -566,6 +566,23 @@ function toDateString(date) {
 }
 
 const FOREVER_PLAN_TOOLTIP = 'Reference: This profile is intentionally kept active to avoid zero-escort locations, which protects search ranking.';
+const AGENCY_PROFILE_UPDATE_FIELDS = new Set([
+    'name',
+    'phone',
+    'email',
+    'city',
+    'region_id',
+    'city_id',
+    'currency',
+    'whatsapp',
+    'instagram',
+    'twitter',
+    'telegram',
+    'website',
+    'facebook',
+    'snapchat',
+    'content',
+]);
 
 function formatUnlockRevenue(summary) {
     const entries = Object.entries(summary?.revenue_native || {}).filter(([, value]) => Number(value || 0) > 0);
@@ -1162,6 +1179,8 @@ export default function ClientDetail() {
         queryKey: ['client', id],
         queryFn: () => api.get(`/crm/clients/${id}`).then((r) => r.data),
     });
+    const clientType = String(client?.client_type || 'escort') === 'agency' ? 'agency' : 'escort';
+    const isAgency = clientType === 'agency';
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
     const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
     const riskMarkerLabel = client?.risk_marked_by?.name || client?.risk_marked_by?.email || null;
@@ -1186,7 +1205,7 @@ export default function ClientDetail() {
     const currentUser = meData?.user || null;
     const isReadOnly = String(currentUser?.role || '') === 'marketing';
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
-    const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
+    const canDeleteClient = !isAgency && ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const boostLimit = client?.boost_limit || null;
     const boostLimitApplies = boostLimit?.applies_to_actor === true;
@@ -1214,7 +1233,7 @@ export default function ClientDetail() {
     const { data: contactUnlockData, isLoading: contactUnlockLoading } = useQuery({
         queryKey: ['client-contact-unlocks', id],
         queryFn: () => api.get(`/crm/clients/${id}/contact-unlocks`).then((r) => r.data),
-        enabled: activeTab === 'contact_unlocks',
+        enabled: !isAgency && activeTab === 'contact_unlocks',
     });
 
     const { data: products } = useQuery({
@@ -1286,7 +1305,7 @@ export default function ClientDetail() {
     const { data: healthData, isLoading: healthLoading } = useQuery({
         queryKey: ['client-health', id],
         queryFn: () => api.get(`/crm/clients/${id}/health`).then((r) => r.data),
-        enabled: activeTab === 'profile_health',
+        enabled: !isAgency && activeTab === 'profile_health',
     });
 
     const {
@@ -1297,7 +1316,7 @@ export default function ClientDetail() {
     } = useQuery({
         queryKey: ['client-wallet', id],
         queryFn: () => api.get(`/crm/clients/${id}/wallet`).then((r) => r.data),
-        enabled: activeTab === 'wallet',
+        enabled: !isAgency && activeTab === 'wallet',
     });
 
     const [analyticsPeriod, setAnalyticsPeriod] = useState('30d');
@@ -1321,7 +1340,7 @@ export default function ClientDetail() {
     } = useQuery({
         queryKey: ['client-analytics', id, analyticsRange],
         queryFn: () => api.get(`/crm/clients/${id}/analytics`, { params: analyticsRange }).then((response) => response.data),
-        enabled: activeTab === 'analytics' && Number(client?.wp_post_id || 0) > 0,
+        enabled: !isAgency && activeTab === 'analytics' && Number(client?.wp_post_id || 0) > 0,
         staleTime: 300_000,
     });
 
@@ -1833,7 +1852,7 @@ export default function ClientDetail() {
     const toursQuery = useQuery({
         queryKey: ['client-tours', id],
         queryFn: () => api.get(`/crm/clients/${id}/tours`).then((r) => r.data),
-        enabled: !!id && !!client,
+        enabled: !isAgency && !!id && !!client,
     });
 
     const addTourMutation = useMutation({
@@ -2138,11 +2157,18 @@ export default function ClientDetail() {
         ];
 
         if (!isReadOnly) {
-            return links;
+            return isAgency
+                ? links.filter((tab) => !['analytics', 'wallet', 'contact_unlocks', 'profile_health'].includes(tab.key))
+                : links;
         }
 
-        return links.filter((tab) => !['edit_profile', 'profile_health', 'chat'].includes(tab.key));
-    }, [client, healthData?.summary?.duplicate_count, isReadOnly]);
+        const hiddenTabs = ['edit_profile', 'profile_health', 'chat'];
+        if (isAgency) {
+            hiddenTabs.push('analytics', 'wallet', 'contact_unlocks');
+        }
+
+        return links.filter((tab) => !hiddenTabs.includes(tab.key));
+    }, [client, healthData?.summary?.duplicate_count, isAgency, isReadOnly]);
 
     useEffect(() => {
         const allowedTabs = tabLinks.filter((tab) => !tab.disabled).map((tab) => tab.key);
@@ -2297,15 +2323,25 @@ export default function ClientDetail() {
         initialProfileFieldsRef.current = initialFields;
     }, [wpProfileData?.wp_profile, client?.city, client?.email, client?.phone_normalized]);
 
-    const profileSections = [
-        { key: 'personal', label: 'Personal Info' },
-        { key: 'appearance', label: 'Appearance' },
-        { key: 'services', label: 'Services & Rates' },
+    const profileSections = useMemo(() => [
+        { key: 'personal', label: isAgency ? 'Agency Info' : 'Personal Info' },
+        ...(!isAgency ? [
+            { key: 'appearance', label: 'Appearance' },
+            { key: 'services', label: 'Services & Rates' },
+        ] : []),
         { key: 'contact', label: 'Social & Contact' },
-        { key: 'lifestyle', label: 'Lifestyle & Languages' },
+        ...(!isAgency ? [{ key: 'lifestyle', label: 'Lifestyle & Languages' }] : []),
         { key: 'subscription', label: 'Subscription & Status' },
         { key: 'media', label: 'Media' },
-    ];
+    ], [isAgency]);
+
+    useEffect(() => {
+        if (!isAgency || profileSections.some((section) => section.key === profileSection)) {
+            return;
+        }
+
+        setProfileSection('personal');
+    }, [isAgency, profileSection, profileSections]);
 
     const serviceOptions = useMemo(() => {
         const selectedServices = Array.isArray(profileForm?.services) ? profileForm.services : [];
@@ -2955,32 +2991,39 @@ export default function ClientDetail() {
         const invalidServiceValues = normalizedServices.filter((value) => !isKnownProfileEnumCode('services', value));
         const invalidAvailabilityValues = normalizedAvailability.filter((value) => !isKnownProfileEnumCode('availability', value));
 
-        if (normalizedGender && !isKnownProfileEnumCode('gender', normalizedGender)) {
+        if (!isAgency && normalizedGender && !isKnownProfileEnumCode('gender', normalizedGender)) {
             toast.error('Gender must be selected from the dropdown list (label + code).');
             return;
         }
 
-        if (normalizedEthnicity && !isKnownProfileEnumCode('ethnicity', normalizedEthnicity)) {
+        if (!isAgency && normalizedEthnicity && !isKnownProfileEnumCode('ethnicity', normalizedEthnicity)) {
             toast.error('Ethnicity must be selected from the dropdown list (label + code).');
             return;
         }
 
-        if (normalizedBuild && !isKnownProfileEnumCode('build', normalizedBuild)) {
+        if (!isAgency && normalizedBuild && !isKnownProfileEnumCode('build', normalizedBuild)) {
             toast.error('Build must be selected from the dropdown list (label + code).');
             return;
         }
 
-        if (invalidServiceValues.length > 0) {
+        if (!isAgency && invalidServiceValues.length > 0) {
             toast.error('Services include unknown text values. Re-select using listed service codes before saving.');
             return;
         }
 
-        if (invalidAvailabilityValues.length > 0) {
+        if (!isAgency && invalidAvailabilityValues.length > 0) {
             toast.error('Availability includes unknown values. Re-select incall or outcall before saving.');
             return;
         }
 
         const fields = diffProfileFields(initialProfileFieldsRef.current || {}, normalizedFields);
+        if (isAgency) {
+            Object.keys(fields).forEach((field) => {
+                if (!AGENCY_PROFILE_UPDATE_FIELDS.has(field)) {
+                    delete fields[field];
+                }
+            });
+        }
 
         if (isLegacyCurrencyMode) {
             delete fields.currency;
@@ -3190,7 +3233,10 @@ export default function ClientDetail() {
                             <h2 className="crm-page-title">{client.name || 'Unnamed'}</h2>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
                                 {client.is_high_risk ? <span className="inline-flex shrink-0 items-center rounded-md bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">High Risk</span> : null}
-                                {client.is_boosted ? (
+                                {isAgency ? (
+                                    <span className="inline-flex shrink-0 items-center rounded-md bg-violet-50 px-2.5 py-0.5 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">Agency</span>
+                                ) : null}
+                                {!isAgency && client.is_boosted ? (
                                     <span
                                         className="inline-flex shrink-0 items-center gap-1 rounded-md bg-fuchsia-50 px-2.5 py-0.5 text-xs font-semibold text-fuchsia-700 ring-1 ring-inset ring-fuchsia-200"
                                         title={`Prioritised for auto-push${client.boost_remaining_hours ? ` — ~${client.boost_remaining_hours}h left` : ''}`}
@@ -3273,6 +3319,7 @@ export default function ClientDetail() {
                                 </button>
 
                                 {/* Boost — prioritise this client for auto-push */}
+                                {!isAgency ? (
                                 <div className="relative">
                                     <button
                                         type="button"
@@ -3356,8 +3403,10 @@ export default function ClientDetail() {
                                         </>
                                     ) : null}
                                 </div>
+                                ) : null}
 
                                 {/* Online Now — refresh public WordPress presence */}
+                                {!isAgency ? (
                                 <button
                                     type="button"
                                     onClick={() => markOnlineNowMutation.mutate()}
@@ -3371,6 +3420,7 @@ export default function ClientDetail() {
                                     </span>
                                     {markOnlineNowMutation.isPending ? 'Marking…' : 'Online Now'}
                                 </button>
+                                ) : null}
 
                                 {/* Client access */}
                                 <button
@@ -3406,6 +3456,7 @@ export default function ClientDetail() {
                                 </button>
 
                                 {/* Lifecycle reminders */}
+                                {!isAgency ? (
                                 <button
                                     type="button"
                                     onClick={() => setShowRemindersDrawer(true)}
@@ -3425,6 +3476,7 @@ export default function ClientDetail() {
                                         <span className="ml-0.5 inline-flex items-center rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">paused</span>
                                     ) : null}
                                 </button>
+                                ) : null}
 
                                 {/* Payment Link */}
                                 <button
@@ -3440,6 +3492,7 @@ export default function ClientDetail() {
                                 </button>
 
                                 {/* Add Tour */}
+                                {!isAgency ? (
                                 <button
                                     type="button"
                                     onClick={() => setShowTourModal(true)}
@@ -3451,6 +3504,7 @@ export default function ClientDetail() {
                                     </svg>
                                     Add tour
                                 </button>
+                                ) : null}
 
                                 {/* NEW badge pin toggle */}
                                 <button
@@ -3869,6 +3923,52 @@ export default function ClientDetail() {
 
             {activeTab === 'overview' ? (
                 <>
+                {isAgency ? (
+                    <section className="crm-surface">
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Managed Profiles</h3>
+                                <p className="crm-panel-subtitle">Profiles linked to this agency owner in WordPress.</p>
+                            </div>
+                            <span className="rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
+                                {Number(client.managed_profiles_count || 0).toLocaleString()} total
+                            </span>
+                        </header>
+                        <div className="p-4">
+                            {Array.isArray(client.managed_profiles) && client.managed_profiles.length > 0 ? (
+                                <div className="overflow-hidden rounded-md border border-slate-200">
+                                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                                        <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left">Profile</th>
+                                                <th className="px-3 py-2 text-left">Status</th>
+                                                <th className="px-3 py-2 text-left">WP ID</th>
+                                                <th className="px-3 py-2 text-left">Phone</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                            {client.managed_profiles.map((profile) => (
+                                                <tr key={profile.id}>
+                                                    <td className="px-3 py-2">
+                                                        <Link to={`/clients/${profile.id}`} className="font-semibold text-teal-700 underline-offset-2 hover:underline">
+                                                            {profile.name || 'Unnamed'}
+                                                        </Link>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-slate-600">{titleize(profile.profile_status)}</td>
+                                                    <td className="crm-mono px-3 py-2 text-xs text-slate-600">{profile.wp_post_id || '-'}</td>
+                                                    <td className="crm-mono px-3 py-2 text-xs text-slate-600">{profile.phone_normalized || '-'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-500">No managed escort profiles are linked to this agency user yet.</p>
+                            )}
+                        </div>
+                    </section>
+                ) : null}
+
                 <section className="crm-surface">
                     <header className="crm-panel-header">
                         <div>
@@ -3922,6 +4022,7 @@ export default function ClientDetail() {
                     </div>
                 </section>
 
+                {!isAgency ? (
                 <ClientHealthSection
                     completenessData={completenessData}
                     retentionInsight={retentionInsight}
@@ -3936,8 +4037,10 @@ export default function ClientDetail() {
                     onOpenActivationDialog={openActivationDialog}
                     activeDeal={client?.deals?.find((d) => ['pending', 'awaiting_payment'].includes(d.status))}
                 />
+                ) : null}
 
                 {/* ── Tours Panel ────────────────────────────────────────── */}
+                {!isAgency ? (
                 <section className="crm-surface">
                     <header className="crm-panel-header">
                         <div>
@@ -3998,6 +4101,7 @@ export default function ClientDetail() {
                         )}
                     </div>
                 </section>
+                ) : null}
                 </>
             ) : null}
 
@@ -4866,57 +4970,63 @@ export default function ClientDetail() {
 
                             {profileSection === 'personal' ? (
                                 <div className="space-y-3">
-                                    <p className="text-xs text-slate-500">Use the dropdown options with visible codes. CRM saves the WordPress code value automatically.</p>
+                                    {!isAgency ? (
+                                        <p className="text-xs text-slate-500">Use the dropdown options with visible codes. CRM saves the WordPress code value automatically.</p>
+                                    ) : null}
                                     <div className="grid gap-3 md:grid-cols-2">
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Display Name</span>
                                             <input value={profileForm?.name || ''} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} className="crm-input" placeholder="e.g. Majesty" />
                                         </label>
-                                        <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Birthday</span>
-                                            <input type="date" value={profileForm?.birthday || ''} onChange={(event) => setProfileForm((current) => ({ ...current, birthday: event.target.value }))} className="crm-input" />
-                                        </label>
-                                        <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Gender (Code)</span>
-                                            <select value={profileForm?.gender || ''} onChange={(event) => setProfileForm((current) => ({ ...current, gender: event.target.value }))} className="crm-input">
-                                                <option value="">Select gender</option>
-                                                {PROFILE_ENUM_OPTIONS.gender.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                            {profileForm?.gender && !isKnownProfileEnumCode('gender', profileForm.gender) ? (
-                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.gender)}</p>
-                                            ) : null}
-                                        </label>
-                                        <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Ethnicity (Code)</span>
-                                            <select value={profileForm?.ethnicity || ''} onChange={(event) => setProfileForm((current) => ({ ...current, ethnicity: event.target.value }))} className="crm-input">
-                                                <option value="">Select ethnicity</option>
-                                                {PROFILE_ENUM_OPTIONS.ethnicity.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                            {profileForm?.ethnicity && !isKnownProfileEnumCode('ethnicity', profileForm.ethnicity) ? (
-                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.ethnicity)}</p>
-                                            ) : null}
-                                        </label>
-                                        <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Height (cm)</span>
-                                            <input type="text" value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder={`e.g. 167 or 5'6" (167.64)`} />
-                                            <p className="text-xs text-slate-500">You can enter cm or legacy formats. CRM auto-converts to centimeter value on save.</p>
-                                        </label>
-                                        <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Build (Code)</span>
-                                            <select value={profileForm?.build || ''} onChange={(event) => setProfileForm((current) => ({ ...current, build: event.target.value }))} className="crm-input">
-                                                <option value="">Select build</option>
-                                                {PROFILE_ENUM_OPTIONS.build.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                            {profileForm?.build && !isKnownProfileEnumCode('build', profileForm.build) ? (
-                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.build)}</p>
-                                            ) : null}
-                                        </label>
+                                        {!isAgency ? (
+                                            <>
+                                                <label className="space-y-1">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Birthday</span>
+                                                    <input type="date" value={profileForm?.birthday || ''} onChange={(event) => setProfileForm((current) => ({ ...current, birthday: event.target.value }))} className="crm-input" />
+                                                </label>
+                                                <label className="space-y-1">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Gender (Code)</span>
+                                                    <select value={profileForm?.gender || ''} onChange={(event) => setProfileForm((current) => ({ ...current, gender: event.target.value }))} className="crm-input">
+                                                        <option value="">Select gender</option>
+                                                        {PROFILE_ENUM_OPTIONS.gender.map((option) => (
+                                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    {profileForm?.gender && !isKnownProfileEnumCode('gender', profileForm.gender) ? (
+                                                        <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.gender)}</p>
+                                                    ) : null}
+                                                </label>
+                                                <label className="space-y-1">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Ethnicity (Code)</span>
+                                                    <select value={profileForm?.ethnicity || ''} onChange={(event) => setProfileForm((current) => ({ ...current, ethnicity: event.target.value }))} className="crm-input">
+                                                        <option value="">Select ethnicity</option>
+                                                        {PROFILE_ENUM_OPTIONS.ethnicity.map((option) => (
+                                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    {profileForm?.ethnicity && !isKnownProfileEnumCode('ethnicity', profileForm.ethnicity) ? (
+                                                        <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.ethnicity)}</p>
+                                                    ) : null}
+                                                </label>
+                                                <label className="space-y-1">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Height (cm)</span>
+                                                    <input type="text" value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder={`e.g. 167 or 5'6" (167.64)`} />
+                                                    <p className="text-xs text-slate-500">You can enter cm or legacy formats. CRM auto-converts to centimeter value on save.</p>
+                                                </label>
+                                                <label className="space-y-1">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Build (Code)</span>
+                                                    <select value={profileForm?.build || ''} onChange={(event) => setProfileForm((current) => ({ ...current, build: event.target.value }))} className="crm-input">
+                                                        <option value="">Select build</option>
+                                                        {PROFILE_ENUM_OPTIONS.build.map((option) => (
+                                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    {profileForm?.build && !isKnownProfileEnumCode('build', profileForm.build) ? (
+                                                        <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.build)}</p>
+                                                    ) : null}
+                                                </label>
+                                            </>
+                                        ) : null}
                                         <label className="space-y-1 md:col-span-2">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Profile Bio</span>
                                             <textarea
@@ -4936,6 +5046,7 @@ export default function ClientDetail() {
                                                 />
                                             </div>
                                         </label>
+                                        {!isAgency ? (
                                         <div className="md:col-span-2">
                                             <SeoQualityPanel
                                                 score={client?.seo_score ?? null}
@@ -4943,6 +5054,7 @@ export default function ClientDetail() {
                                                 stale={client?.seo_score_stale ?? false}
                                             />
                                         </div>
+                                        ) : null}
                                     </div>
                                 </div>
                             ) : null}

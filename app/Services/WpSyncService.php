@@ -2,27 +2,33 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use App\Models\Client;
 use App\Models\Platform;
-use App\Support\WordPressSiteConnection;
 use App\Support\BioContactScrubber;
+use App\Support\WordPressSiteConnection;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class WpSyncService
 {
     private string $baseUrl;
+
     private string $authHeader;
+
     private int $platformId;
+
     private WordPressSiteConnection $site;
+
     private bool $sharedKeyEnabled;
+
     private int $defaultTimeout;
+
     private int $mediaUploadTimeout;
 
     public function __construct(Platform|WordPressSiteConnection $site)
@@ -33,8 +39,8 @@ class WpSyncService
         $this->platformId = $this->site->siteType === 'platform' ? (int) $this->site->siteId : 0;
         $this->sharedKeyEnabled = (bool) $this->site->sharedKeyEnabled;
         $this->baseUrl = rtrim((string) $this->site->wpApiUrl, '/');
-        $this->authHeader = 'Basic ' . base64_encode(
-            (string) $this->site->wpApiUser . ':' . (string) $this->site->wpApiPassword
+        $this->authHeader = 'Basic '.base64_encode(
+            (string) $this->site->wpApiUser.':'.(string) $this->site->wpApiPassword
         );
         $isRemoteEndpoint = $this->isRemoteEndpoint($this->baseUrl);
         $this->defaultTimeout = $isRemoteEndpoint ? 60 : 30;
@@ -44,18 +50,23 @@ class WpSyncService
     public static function forPlatform(int $platformId): self
     {
         $platform = Platform::findOrFail($platformId);
+
         return new self($platform);
     }
 
     /**
      * Fetch paginated client profiles from WordPress
      */
-    public function getClients(int $page = 1, int $perPage = 100, ?string $modifiedAfter = null): array
+    public function getClients(int $page = 1, int $perPage = 100, ?string $modifiedAfter = null, array $types = []): array
     {
         $params = [
             'per_page' => $perPage,
-            'page'     => $page,
+            'page' => $page,
         ];
+
+        if ($types !== []) {
+            $params['types'] = implode(',', array_values(array_unique($types)));
+        }
 
         if ($modifiedAfter) {
             $params['modified_after'] = $modifiedAfter;
@@ -64,13 +75,19 @@ class WpSyncService
         return $this->get('/clients', $params);
     }
 
-    public function searchClients(string $search, int $perPage = 20): array
+    public function searchClients(string $search, int $perPage = 20, array $types = []): array
     {
-        return $this->get('/clients', [
+        $params = [
             'search' => $search,
             'per_page' => $perPage,
             'page' => 1,
-        ]);
+        ];
+
+        if ($types !== []) {
+            $params['types'] = implode(',', array_values(array_unique($types)));
+        }
+
+        return $this->get('/clients', $params);
     }
 
     /**
@@ -111,7 +128,7 @@ class WpSyncService
                     $pool->as((string) $postId)
                         ->withHeaders($this->headers())
                         ->timeout($this->defaultTimeout)
-                        ->get($this->baseUrl . "/clients/{$postId}");
+                        ->get($this->baseUrl."/clients/{$postId}");
                 }
             });
 
@@ -153,19 +170,23 @@ class WpSyncService
         }
 
         $json = $response->json();
-        if (!is_array($json) || !array_key_exists('supports_cursor_sync', $json)) {
+        if (! is_array($json) || ! array_key_exists('supports_cursor_sync', $json)) {
             throw new RuntimeException('WordPress sync capability probe returned a malformed response.');
         }
 
         return [
-            'status' => !empty($json['supports_cursor_sync']) ? 'v2' : 'legacy',
+            'status' => ! empty($json['supports_cursor_sync']) ? 'v2' : 'legacy',
             'http_status' => $status,
             'meta' => $json,
         ];
     }
 
-    public function getCursorClients(array $params = []): array
+    public function getCursorClients(array $params = [], array $types = []): array
     {
+        if ($types !== []) {
+            $params['types'] = implode(',', array_values(array_unique($types)));
+        }
+
         $params = array_filter(
             $params,
             fn ($value) => $value !== null && $value !== ''
@@ -174,8 +195,12 @@ class WpSyncService
         return $this->get('/clients/sync', $params);
     }
 
-    public function getClientTombstones(array $params = []): array
+    public function getClientTombstones(array $params = [], array $types = []): array
     {
+        if ($types !== []) {
+            $params['types'] = implode(',', array_values(array_unique($types)));
+        }
+
         $params = array_filter(
             $params,
             fn ($value) => $value !== null && $value !== ''
@@ -307,7 +332,7 @@ class WpSyncService
     public function writeSeoScore(int $postId, int $score, array $breakdown): array
     {
         return $this->post("/clients/{$postId}/seo-score", [
-            'score'     => $score,
+            'score' => $score,
             'breakdown' => $breakdown,
         ]);
     }
@@ -343,7 +368,7 @@ class WpSyncService
         $path = "/wp-json/exotic-kyc/v1/subjects/{$postId}/status";
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
-            ->post($this->apiRoot() . $path, $payload);
+            ->post($this->apiRoot().$path, $payload);
 
         return $this->decodeResponse($response, 'POST', $path);
     }
@@ -378,7 +403,7 @@ class WpSyncService
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array
     {
         $body = [
-            'product_type'  => $productType,
+            'product_type' => $productType,
             'duration_days' => $durationDays,
         ];
 
@@ -450,7 +475,7 @@ class WpSyncService
      * is already `false` pins the market to a value it never chose, and a later
      * change to the default would silently stop reaching it.
      *
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      */
     public function updateCustomerRollout(array $payload): array
     {
@@ -614,7 +639,7 @@ class WpSyncService
                 ->attach('file', $handle, $fileName, [
                     'Content-Type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
                 ])
-                ->post($this->baseUrl . "/clients/{$postId}/media", [
+                ->post($this->baseUrl."/clients/{$postId}/media", [
                     'set_main' => $setMain ? '1' : '0',
                 ]);
         } finally {
@@ -657,7 +682,7 @@ class WpSyncService
         try {
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->defaultTimeout)
-                ->get($this->baseUrl . $path, $params);
+                ->get($this->baseUrl.$path, $params);
         } catch (ConnectionException $exception) {
             if ($attempt < 3) {
                 usleep($this->retryDelayMicros($attempt));
@@ -681,7 +706,7 @@ class WpSyncService
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
-            ->post($this->baseUrl . $path, $body);
+            ->post($this->baseUrl.$path, $body);
 
         return $this->decodeResponse($response, 'POST', $path);
     }
@@ -692,7 +717,7 @@ class WpSyncService
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
-            ->patch($this->baseUrl . $path, $body);
+            ->patch($this->baseUrl.$path, $body);
 
         return $this->decodeResponse($response, 'PATCH', $path);
     }
@@ -703,7 +728,7 @@ class WpSyncService
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
-            ->delete($this->baseUrl . $path);
+            ->delete($this->baseUrl.$path);
 
         return $this->decodeResponse($response, 'DELETE', $path);
     }
@@ -737,7 +762,7 @@ class WpSyncService
         }
 
         $platformIds = $this->configuredSharedKeyPlatformIds();
-        if (!in_array($this->platformId, $platformIds, true)) {
+        if (! in_array($this->platformId, $platformIds, true)) {
             return null;
         }
 
@@ -767,11 +792,11 @@ class WpSyncService
     private function isRemoteEndpoint(string $url): bool
     {
         $host = parse_url($url, PHP_URL_HOST);
-        if (!is_string($host) || $host === '') {
+        if (! is_string($host) || $host === '') {
             return false;
         }
 
-        return !$this->isLocalHost($host);
+        return ! $this->isLocalHost($host);
     }
 
     private function isLocalHost(string $host): bool
@@ -786,7 +811,7 @@ class WpSyncService
 
     private function assertRemoteWriteAllowed(string $path): void
     {
-        if (!$this->isRemoteEndpoint($this->baseUrl)) {
+        if (! $this->isRemoteEndpoint($this->baseUrl)) {
             return;
         }
 
@@ -798,7 +823,7 @@ class WpSyncService
             return;
         }
 
-        $url = $this->baseUrl . $path;
+        $url = $this->baseUrl.$path;
         $message = sprintf(
             'Blocked remote WordPress write to [%s] from [%s] environment.',
             $url,
@@ -826,7 +851,7 @@ class WpSyncService
     private function logFailedResponse(Response $response, string $method, string $path): void
     {
         Log::error("WpSyncService {$method} failed", [
-            'url' => $this->baseUrl . $path,
+            'url' => $this->baseUrl.$path,
             'status' => $response->status(),
             'body' => $response->body(),
         ]);

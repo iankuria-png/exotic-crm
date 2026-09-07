@@ -5,15 +5,16 @@ namespace App\Services;
 use App\Models\Platform;
 use App\Support\WordPressSiteConnection;
 use App\Support\WpProfileFieldCatalog;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
-use Illuminate\Database\QueryException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class WpDirectProvisioningService
 {
     private WordPressSiteConnection $site;
+
     private string $connectionName;
 
     public function __construct(Platform|WordPressSiteConnection $site, ?array $connectionConfig = null)
@@ -21,7 +22,7 @@ class WpDirectProvisioningService
         $this->site = $site instanceof Platform
             ? WordPressSiteConnection::fromPlatform($site)
             : $site;
-        $this->connectionName = 'wp_provision_' . $this->site->siteType . '_' . $this->site->siteId;
+        $this->connectionName = 'wp_provision_'.$this->site->siteType.'_'.$this->site->siteId;
 
         DynamicDatabaseService::switchConnection(
             $this->connectionName,
@@ -59,7 +60,7 @@ class WpDirectProvisioningService
         $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
         $website = trim((string) ($payload['website'] ?? ''));
         $signupSource = trim((string) ($payload['signup_source'] ?? 'crm_provisioned'));
-        if (!in_array($signupSource, ['crm_provisioned', 'field'], true)) {
+        if (! in_array($signupSource, ['crm_provisioned', 'field'], true)) {
             $signupSource = 'crm_provisioned';
         }
 
@@ -68,7 +69,7 @@ class WpDirectProvisioningService
         $password = $providedPassword !== '' ? $providedPassword : Str::random(12);
 
         $postStatus = strtolower(trim((string) ($payload['post_status'] ?? 'private')));
-        if (!in_array($postStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+        if (! in_array($postStatus, ['publish', 'private', 'draft', 'pending'], true)) {
             $postStatus = 'private';
         }
 
@@ -77,7 +78,6 @@ class WpDirectProvisioningService
             $payloadHash,
             $name,
             $email,
-            $phone,
             $website,
             $requestedUsername,
             $password,
@@ -136,9 +136,134 @@ class WpDirectProvisioningService
                 isset($profilePayload['city_id']) ? (int) $profilePayload['city_id'] : null
             );
 
-            $this->upsertOption('escortid' . $userId, $postType);
-            $this->upsertOption('escortpostid' . $userId, (string) $postId);
+            $this->upsertOption('escortid'.$userId, $postType);
+            $this->upsertOption('escortpostid'.$userId, (string) $postId);
             $this->syncLegacySelfUploadSecretOption($postId, $userId, $profileMeta['secret'] ?? null);
+            $this->completeProvisionRequest($requestId, $payloadHash, $postId, $userId);
+
+            return [
+                'wp_user_id' => $userId,
+                'wp_post_id' => $postId,
+                'wp_username' => $username,
+                'wp_email' => $resolvedEmail,
+                'wp_post_status' => $postStatus,
+                'wp_post_type' => $postType,
+                'linked_existing_user' => $linkedExistingUser,
+                'placeholder_email_used' => $placeholderEmailUsed,
+            ];
+        });
+    }
+
+    /**
+     * Create a WordPress user + agency profile post using the agency-shaped
+     * registration contract.
+     *
+     * @return array{
+     *   wp_user_id:int,
+     *   wp_post_id:int,
+     *   wp_username:string,
+     *   wp_email:string,
+     *   wp_post_status:string,
+     *   wp_post_type:string,
+     *   linked_existing_user:bool,
+     *   placeholder_email_used:bool
+     * }
+     */
+    public function provisionAgency(array $payload): array
+    {
+        $requestId = $this->normalizeRequestId($payload['provision_request_id'] ?? null);
+        $payloadHash = $this->computePayloadHash(['client_type' => 'agency', ...$payload]);
+        $name = trim((string) ($payload['name'] ?? ''));
+        if ($name === '') {
+            throw new \InvalidArgumentException('Business name is required for agency provisioning.');
+        }
+
+        $email = strtolower(trim((string) ($payload['email'] ?? '')));
+        $phone = trim((string) ($payload['phone'] ?? ''));
+        $whatsappPayload = trim((string) ($payload['whatsapp'] ?? ''));
+        $whatsapp = $whatsappPayload !== '' ? $whatsappPayload : $phone;
+        $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
+        $website = trim((string) ($payload['website'] ?? ''));
+        $signupSource = trim((string) ($payload['signup_source'] ?? 'crm_provisioned'));
+        if (! in_array($signupSource, ['crm_provisioned', 'field'], true)) {
+            $signupSource = 'crm_provisioned';
+        }
+
+        $requestedUsername = trim((string) ($payload['username'] ?? ''));
+        $providedPassword = (string) ($payload['password'] ?? '');
+        $password = $providedPassword !== '' ? $providedPassword : Str::random(12);
+
+        $postStatus = strtolower(trim((string) ($payload['post_status'] ?? 'private')));
+        if (! in_array($postStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+            $postStatus = 'private';
+        }
+
+        return DB::connection($this->connectionName)->transaction(function () use (
+            $requestId,
+            $payloadHash,
+            $name,
+            $email,
+            $website,
+            $requestedUsername,
+            $password,
+            $postStatus,
+            $whatsapp,
+            $bio,
+            $signupSource,
+            $payload
+        ): array {
+            $agencyPayload = $payload;
+            if (($agencyPayload['whatsapp'] ?? null) === null || trim((string) $agencyPayload['whatsapp']) === '') {
+                $agencyPayload['whatsapp'] = $whatsapp;
+            }
+
+            $existing = $this->claimProvisionRequest($requestId, $payloadHash);
+            if ($existing !== null) {
+                return $this->hydrateExistingProvisionResult(
+                    (int) ($existing['wp_post_id'] ?? 0),
+                    (int) ($existing['wp_user_id'] ?? 0)
+                );
+            }
+
+            $postType = $this->resolveAgencyPostType();
+
+            [
+                $userId,
+                $username,
+                $linkedExistingUser,
+                $placeholderEmailUsed,
+                $resolvedEmail,
+            ] = $this->resolveOrCreateUser(
+                $name,
+                $email,
+                $requestedUsername,
+                $password,
+                $website
+            );
+
+            $postId = $this->createProfilePost(
+                userId: $userId,
+                name: $name,
+                postType: $postType,
+                postStatus: $postStatus,
+                content: $bio
+            );
+
+            $agencyMeta = $this->storeAgencyMeta(
+                postId: $postId,
+                payload: $agencyPayload,
+                postStatus: $postStatus,
+                signupSource: $signupSource
+            );
+            $this->assignLocationTaxonomy(
+                $postId,
+                isset($agencyPayload['region_id']) ? (int) $agencyPayload['region_id'] : null,
+                isset($agencyPayload['city_id']) ? (int) $agencyPayload['city_id'] : null
+            );
+
+            $this->upsertOption('escortid'.$userId, 'agency');
+            $this->upsertOption('agencypostid'.$userId, (string) $postId);
+            $this->syncLegacySelfUploadSecretOption($postId, $userId, $agencyMeta['secret'] ?? null);
             $this->completeProvisionRequest($requestId, $payloadHash, $postId, $userId);
 
             return [
@@ -175,18 +300,22 @@ class WpDirectProvisioningService
         }
 
         $existingByEmail = null;
-        if (!$placeholderEmailUsed) {
+        if (! $placeholderEmailUsed) {
             $existingByEmail = $users
                 ->whereRaw('LOWER(user_email) = ?', [mb_strtolower($resolvedEmail)])
                 ->first();
         }
 
         if ($existingByEmail) {
-            $existingProfileId = $options
-                ->where('option_name', 'escortpostid' . (int) $existingByEmail->ID)
+            $existingUserId = (int) $existingByEmail->ID;
+            $existingProfileId = DB::connection($this->connectionName)->table('options')
+                ->where('option_name', 'escortpostid'.$existingUserId)
+                ->value('option_value');
+            $existingAgencyId = DB::connection($this->connectionName)->table('options')
+                ->where('option_name', 'agencypostid'.$existingUserId)
                 ->value('option_value');
 
-            if ($existingProfileId) {
+            if ($existingProfileId || $existingAgencyId) {
                 throw new \InvalidArgumentException(
                     'This email is already linked to a WordPress profile. Use a different email.'
                 );
@@ -230,12 +359,12 @@ class WpDirectProvisioningService
         DB::connection($this->connectionName)->table('usermeta')->insert([
             [
                 'user_id' => $userId,
-                'meta_key' => $prefix . 'capabilities',
+                'meta_key' => $prefix.'capabilities',
                 'meta_value' => serialize(['subscriber' => true]),
             ],
             [
                 'user_id' => $userId,
-                'meta_key' => $prefix . 'user_level',
+                'meta_key' => $prefix.'user_level',
                 'meta_value' => '0',
             ],
             [
@@ -325,11 +454,63 @@ class WpDirectProvisioningService
         if (is_numeric($expiresAt) && (int) $expiresAt > 0) {
             $this->upsertPostMeta($postId, 'escort_expire', (string) (int) $expiresAt);
         }
-        $uploadFolder = (string) (time() . random_int(100, 999));
-        $secret = hash('sha256', trim((string) ($payload['name'] ?? '')) . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20));
+        $uploadFolder = (string) (time().random_int(100, 999));
+        $secret = hash('sha256', trim((string) ($payload['name'] ?? '')).'|'.$postId.'|'.now()->timestamp.'|'.Str::random(20));
         $this->upsertPostMeta($postId, 'upload_folder', $uploadFolder);
         $this->upsertPostMeta($postId, 'secret', $secret);
 
+        $this->upsertPostMeta($postId, 'signup_source', $signupSource);
+
+        if ($postStatus !== 'publish') {
+            $this->upsertPostMeta($postId, 'notactive', '1');
+        }
+
+        return [
+            'upload_folder' => $uploadFolder,
+            'secret' => $secret,
+        ];
+    }
+
+    private function storeAgencyMeta(
+        int $postId,
+        array $payload,
+        string $postStatus,
+        string $signupSource = 'crm_provisioned'
+    ): array {
+        $allowed = array_flip(WpProfileFieldCatalog::editableFields('agency'));
+        $excluded = array_flip(['name', 'email', 'bio', 'content', 'region_id', 'city_id']);
+
+        foreach ($allowed as $key => $_allowed) {
+            if (isset($excluded[$key]) || ! array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $value = $payload[$key];
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $this->upsertPostMeta($postId, $key, $value);
+        }
+
+        if (! empty($payload['whatsapp'])) {
+            $this->upsertPostMeta($postId, 'phone_available_on', ['1']);
+        }
+
+        $badges = $this->resolveBadgeMeta($payload['seed_policy'] ?? null);
+        $this->upsertPostMeta($postId, 'premium', $badges['premium']);
+        $this->upsertPostMeta($postId, 'featured', $badges['featured']);
+        $this->upsertPostMeta($postId, 'verified', $badges['verified']);
+
+        $expiresAt = $payload['seed_policy']['expires_at'] ?? null;
+        if (is_numeric($expiresAt) && (int) $expiresAt > 0) {
+            $this->upsertPostMeta($postId, 'agency_expire', (string) (int) $expiresAt);
+        }
+
+        $uploadFolder = (string) (time().random_int(100, 999));
+        $secret = hash('sha256', trim((string) ($payload['name'] ?? '')).'|'.$postId.'|'.now()->timestamp.'|'.Str::random(20));
+        $this->upsertPostMeta($postId, 'upload_folder', $uploadFolder);
+        $this->upsertPostMeta($postId, 'secret', $secret);
         $this->upsertPostMeta($postId, 'signup_source', $signupSource);
 
         if ($postStatus !== 'publish') {
@@ -352,7 +533,7 @@ class WpDirectProvisioningService
         return [
             'premium' => $badge === 'premium' ? '1' : '0',
             'featured' => $badge === 'featured' ? '1' : '0',
-            'verified' => !empty($seedPolicy['verified']) ? '1' : '0',
+            'verified' => ! empty($seedPolicy['verified']) ? '1' : '0',
         ];
     }
 
@@ -380,7 +561,7 @@ class WpDirectProvisioningService
 
     private function syncLegacySelfUploadSecretOption(int $postId, int $userId, ?string $secret = null): void
     {
-        if (!$this->site->writesLegacySelfUploadSecretOption) {
+        if (! $this->site->writesLegacySelfUploadSecretOption) {
             return;
         }
 
@@ -472,6 +653,20 @@ class WpDirectProvisioningService
         return preg_match('/^[A-Za-z0-9_-]+$/', $raw) === 1 ? strtolower($raw) : 'escort';
     }
 
+    private function resolveAgencyPostType(): string
+    {
+        $raw = (string) DB::connection($this->connectionName)->table('options')
+            ->where('option_name', 'taxonomy_agency_url')
+            ->value('option_value');
+
+        $raw = trim($raw);
+        if ($raw === '') {
+            return 'agency';
+        }
+
+        return preg_match('/^[A-Za-z0-9_-]+$/', $raw) === 1 ? strtolower($raw) : 'agency';
+    }
+
     private function resolveLocationTaxonomy(): string
     {
         $raw = (string) DB::connection($this->connectionName)->table('options')
@@ -506,13 +701,14 @@ class WpDirectProvisioningService
                 'username',
                 'password',
                 'website',
+                'client_type',
             ],
-            WpProfileFieldCatalog::createProvisioningFields()
+            WpProfileFieldCatalog::createProvisioningFields((string) ($payload['client_type'] ?? 'escort'))
         ));
 
         $canonical = [];
         foreach ($allowedKeys as $key) {
-            if (!array_key_exists($key, $payload)) {
+            if (! array_key_exists($key, $payload)) {
                 continue;
             }
 
@@ -568,7 +764,7 @@ class WpDirectProvisioningService
 
             return null;
         } catch (QueryException $exception) {
-            if (!$this->isUniqueConstraintViolation($exception)) {
+            if (! $this->isUniqueConstraintViolation($exception)) {
                 throw $exception;
             }
         }
@@ -646,7 +842,7 @@ class WpDirectProvisioningService
         $post = DB::connection($this->connectionName)->table('posts')->where('ID', $postId)->first();
         $user = DB::connection($this->connectionName)->table('users')->where('ID', $userId)->first();
 
-        if (!$post || !$user) {
+        if (! $post || ! $user) {
             throw new \RuntimeException('Provision request exists but the linked WordPress profile could not be recovered.');
         }
 
@@ -673,14 +869,14 @@ class WpDirectProvisioningService
         $excluded = array_flip(['name', 'email', 'bio', 'content', 'region_id', 'city_id', 'city', 'username', 'password', 'post_status', 'signup_source', 'provision_request_id']);
 
         foreach (array_merge(WpProfileFieldCatalog::editableFields(), ['phone', 'whatsapp', 'website', 'personal_phone']) as $key) {
-            if (isset($excluded[$key]) || !array_key_exists($key, $payload)) {
+            if (isset($excluded[$key]) || ! array_key_exists($key, $payload)) {
                 continue;
             }
 
             $meta[$key] = $payload[$key];
         }
 
-        if (!empty($payload['whatsapp'])) {
+        if (! empty($payload['whatsapp'])) {
             $meta['phone_available_on'] = ['1'];
         }
 
@@ -764,7 +960,7 @@ class WpDirectProvisioningService
         ) {
             $suffix++;
             $tail = (string) $suffix;
-            $candidate = substr($base, 0, max(1, 60 - strlen($tail))) . $tail;
+            $candidate = substr($base, 0, max(1, 60 - strlen($tail))).$tail;
         }
 
         return $candidate;
@@ -787,8 +983,8 @@ class WpDirectProvisioningService
                 ->exists()
         ) {
             $suffix++;
-            $tail = '-' . $suffix;
-            $candidate = Str::limit($base, max(1, 190 - strlen($tail)), '') . $tail;
+            $tail = '-'.$suffix;
+            $candidate = Str::limit($base, max(1, 190 - strlen($tail)), '').$tail;
         }
 
         return $candidate;
@@ -804,6 +1000,6 @@ class WpDirectProvisioningService
             $domain = 'onboard.local';
         }
 
-        return 'onboard+' . strtolower(Str::random(10)) . '@' . $domain;
+        return 'onboard+'.strtolower(Str::random(10)).'@'.$domain;
     }
 }

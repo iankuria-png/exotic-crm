@@ -2,57 +2,56 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\BillingPermissions;
 use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Diagnostics\BillingDiagnosticsPresenter;
 use App\Billing\Support\BillingSurface;
 use App\Billing\Support\ProviderCapability;
-use App\Billing\BillingPermissions;
 use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
 use App\Jobs\RollbackLifecycleProfilesJob;
-use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunClientSyncJob;
+use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
+use App\Models\BillingManualPaymentMethod;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
+use App\Models\BillingRoutingRule;
+use App\Models\BillingSubscriptionRule;
+use App\Models\BillingWalletRule;
 use App\Models\Client;
 use App\Models\ClientSyncRun;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
-use App\Models\SmsLog;
-use App\Models\SbLeadImportRun;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Models\ReportingFxRate;
+use App\Models\SbLeadImportRun;
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
+use App\Models\SmsLog;
 use App\Models\SupportBoardSyncRun;
 use App\Models\Template;
 use App\Models\User;
-use App\Models\BillingRoutingRule;
-use App\Models\BillingWalletRule;
-use App\Models\BillingSubscriptionRule;
-use App\Models\BillingManualPaymentMethod;
-use App\Models\ReportingFxRate;
-use App\Models\BillingProviderProfile;
-use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
 use App\Services\ClientSyncRunService;
-use App\Services\ClientSyncService;
 use App\Services\FeatureSettingsService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
-use App\Services\SbLeadImportRunService;
-use App\Services\SupportBoardLeadImportService;
 use App\Services\NotificationService;
 use App\Services\ProductCatalogService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ReportingCurrencyService;
+use App\Services\SbLeadImportRunService;
 use App\Services\ScraperSourceService;
-use App\Services\SupportBoardSyncRunService;
+use App\Services\SupportBoardLeadImportService;
 use App\Services\SupportBoardService;
-use App\Services\WalletSyncService;
+use App\Services\SupportBoardSyncRunService;
 use App\Services\WalletSettingsService;
+use App\Services\WalletSyncService;
 use App\Services\WordPressSyncKeyService;
 use App\Services\WpSyncService;
 use App\Support\ClientLifecycleState;
@@ -73,6 +72,7 @@ use Illuminate\Validation\ValidationException;
 class SettingsController extends Controller
 {
     private const SALES_DASHBOARD_WIDGETS_KEY = 'sales_dashboard_widgets';
+
     private const SALES_DASHBOARD_WIDGET_DEFAULTS = [
         'todos' => true,
         'goals' => true,
@@ -118,8 +118,7 @@ class SettingsController extends Controller
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
         private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry,
         private readonly ProviderProfileManager $providerProfileManager
-    ) {
-    }
+    ) {}
 
     public function integrations(Request $request)
     {
@@ -160,11 +159,11 @@ class SettingsController extends Controller
         }
 
         $scraperSources = $scraperSourcesQuery->get()
-            ->map(fn(ScraperSource $source) => $this->serializeScraperSource($source))
+            ->map(fn (ScraperSource $source) => $this->serializeScraperSource($source))
             ->values();
 
         $scraperRuns = $scraperRunsQuery->limit(15)->get()
-            ->map(fn(ScraperRun $run) => $this->serializeScraperRun($run))
+            ->map(fn (ScraperRun $run) => $this->serializeScraperRun($run))
             ->values();
 
         return response()->json([
@@ -446,7 +445,7 @@ class SettingsController extends Controller
 
     public function billingOverview(Request $request)
     {
-        if (!BillingPermissions::canAccessBillingWorkspace($request->user())) {
+        if (! BillingPermissions::canAccessBillingWorkspace($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -483,7 +482,7 @@ class SettingsController extends Controller
 
     public function billingSystem(Request $request)
     {
-        if (!BillingPermissions::canViewBillingSystem($request->user())) {
+        if (! BillingPermissions::canViewBillingSystem($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -549,15 +548,15 @@ class SettingsController extends Controller
 
     public function updateBillingKillSwitches(Request $request)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Forbidden'], 403);
         }
 
         $validated = $request->validate([
-            'market_ids'   => ['required', 'array'],
+            'market_ids' => ['required', 'array'],
             'market_ids.*' => ['integer', 'min:1'],
-            'surfaces'     => ['required', 'array'],
-            'surfaces.*'   => ['string', Rule::in(array_column(BillingSurface::cases(), 'value'))],
+            'surfaces' => ['required', 'array'],
+            'surfaces.*' => ['string', Rule::in(array_column(BillingSurface::cases(), 'value'))],
         ]);
 
         $this->walletSettingsService->saveKillSwitches(
@@ -566,14 +565,14 @@ class SettingsController extends Controller
         );
 
         return response()->json([
-            'ok'            => true,
+            'ok' => true,
             'kill_switches' => $this->walletSettingsService->currentKillSwitches(),
         ]);
     }
 
     public function billingDiagnosticsSummary(Request $request)
     {
-        if (!BillingPermissions::canViewBillingDiagnostics($request->user())) {
+        if (! BillingPermissions::canViewBillingDiagnostics($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -604,11 +603,11 @@ class SettingsController extends Controller
 
     public function billingDiagnosticsRouteSimulator(Request $request)
     {
-        if (!BillingPermissions::canViewBillingDiagnostics($request->user())) {
+        if (! BillingPermissions::canViewBillingDiagnostics($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        if (!BillingPermissions::canUseBillingRouteSimulator($request->user())) {
+        if (! BillingPermissions::canUseBillingRouteSimulator($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -640,7 +639,7 @@ class SettingsController extends Controller
         $results = collect($this->billingProviderRegistry->definitions())
             ->map(fn ($definition) => $definition)
             ->filter(function ($definition) use ($providerKey, $surface) {
-                if (!$definition->supportsSurface($surface)) {
+                if (! $definition->supportsSurface($surface)) {
                     return false;
                 }
 
@@ -652,7 +651,7 @@ class SettingsController extends Controller
             })
             ->sortBy(fn ($definition) => $definition->label)
             ->values()
-            ->map(function ($definition) use ($providerProfiles, $surface, $market, $activePaymentLinkProvider) {
+            ->map(function ($definition) use ($providerProfiles, $market, $activePaymentLinkProvider) {
                 $profiles = $providerProfiles
                     ->filter(fn (BillingProviderProfile $profile) => $definition->matches((string) $profile->provider_type_key))
                     ->values();
@@ -758,7 +757,7 @@ class SettingsController extends Controller
 
             foreach ($option['fields'] as $field) {
                 $key = $field['key'] ?? null;
-                if (!$key) {
+                if (! $key) {
                     continue;
                 }
 
@@ -774,7 +773,7 @@ class SettingsController extends Controller
         $validated = $request->validate($rules);
 
         if (
-            !empty($validated['fallback_provider'])
+            ! empty($validated['fallback_provider'])
             && $validated['fallback_provider'] !== 'none'
             && $validated['fallback_provider'] === $validated['active_provider']
         ) {
@@ -833,7 +832,7 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        $market = !empty($validated['market_id'])
+        $market = ! empty($validated['market_id'])
             ? Platform::query()->find((int) $validated['market_id'])
             : null;
 
@@ -847,7 +846,7 @@ class SettingsController extends Controller
 
         // When testing a specific provider, target it directly so the result
         // reflects that provider and not the market's active default.
-        if (!empty($validated['provider'])) {
+        if (! empty($validated['provider'])) {
             $context['sms_provider'] = $validated['provider'];
         }
 
@@ -919,7 +918,7 @@ class SettingsController extends Controller
 
         $filters = $this->validateSmsLogFilters($request);
         $labels = $this->smsProviderLabelMap();
-        $filename = 'sms-dispatches-' . now()->format('Ymd-His') . '.csv';
+        $filename = 'sms-dispatches-'.now()->format('Ymd-His').'.csv';
 
         return response()->streamDownload(function () use ($filters, $labels) {
             $handle = fopen('php://output', 'w');
@@ -965,13 +964,13 @@ class SettingsController extends Controller
     private function smsLogsQuery(array $filters)
     {
         return SmsLog::query()
-            ->when(!empty($filters['market_id']), fn ($q) => $q->where('platform_id', (int) $filters['market_id']))
-            ->when(!empty($filters['provider']), fn ($q) => $q->where('provider', $filters['provider']))
-            ->when(!empty($filters['status']), fn ($q) => $q->where('status', $filters['status']))
-            ->when(!empty($filters['from']), fn ($q) => $q->whereDate('created_at', '>=', $filters['from']))
-            ->when(!empty($filters['to']), fn ($q) => $q->whereDate('created_at', '<=', $filters['to']))
-            ->when(!empty($filters['search']), function ($q) use ($filters) {
-                $term = '%' . $filters['search'] . '%';
+            ->when(! empty($filters['market_id']), fn ($q) => $q->where('platform_id', (int) $filters['market_id']))
+            ->when(! empty($filters['provider']), fn ($q) => $q->where('provider', $filters['provider']))
+            ->when(! empty($filters['status']), fn ($q) => $q->where('status', $filters['status']))
+            ->when(! empty($filters['from']), fn ($q) => $q->whereDate('created_at', '>=', $filters['from']))
+            ->when(! empty($filters['to']), fn ($q) => $q->whereDate('created_at', '<=', $filters['to']))
+            ->when(! empty($filters['search']), function ($q) use ($filters) {
+                $term = '%'.$filters['search'].'%';
                 $q->where(fn ($sub) => $sub->where('phone', 'like', $term)->orWhere('message', 'like', $term));
             })
             ->orderByDesc('created_at');
@@ -995,7 +994,7 @@ class SettingsController extends Controller
             'id' => $log->id,
             'sent_at' => $timestamp ? $timestamp->toDateTimeString() : null,
             'platform_id' => $log->platform_id,
-            'market' => $log->platform?->name ?? ($log->platform_id ? 'Market #' . $log->platform_id : '—'),
+            'market' => $log->platform?->name ?? ($log->platform_id ? 'Market #'.$log->platform_id : '—'),
             'provider' => $log->provider,
             'provider_label' => $log->provider ? ($labels[$log->provider] ?? $log->provider) : '—',
             'phone' => $this->maskPhone((string) $log->phone),
@@ -1015,7 +1014,7 @@ class SettingsController extends Controller
             return $phone;
         }
 
-        return substr($phone, 0, 4) . str_repeat('*', $length - 6) . substr($phone, -2);
+        return substr($phone, 0, 4).str_repeat('*', $length - 6).substr($phone, -2);
     }
 
     public function pushProviderConfig(Request $request)
@@ -1062,7 +1061,7 @@ class SettingsController extends Controller
 
         $platformIds = [];
         foreach ($incomingPlatforms as $platformId => $platformConfig) {
-            if (!is_numeric((string) $platformId)) {
+            if (! is_numeric((string) $platformId)) {
                 return response()->json([
                     'message' => 'platforms must be keyed by platform id.',
                 ], 422);
@@ -1081,7 +1080,7 @@ class SettingsController extends Controller
                 'You do not have access to one or more selected markets.'
             );
 
-            if (!is_array($platformConfig)) {
+            if (! is_array($platformConfig)) {
                 return response()->json([
                     'message' => 'Each platforms entry must be an object.',
                 ], 422);
@@ -1217,7 +1216,7 @@ class SettingsController extends Controller
 
         $activationDeferred = false;
         $packageSetup = $this->platformPackageSetup($platform);
-        if ((bool) $platform->is_active && !$packageSetup['can_go_live']) {
+        if ((bool) $platform->is_active && ! $packageSetup['can_go_live']) {
             $platform->forceFill([
                 'is_active' => false,
             ])->save();
@@ -1251,7 +1250,7 @@ class SettingsController extends Controller
      */
     public function providersCatalog()
     {
-        if (!BillingPermissions::canViewProviderProfiles(auth()->user())) {
+        if (! BillingPermissions::canViewProviderProfiles(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1276,7 +1275,7 @@ class SettingsController extends Controller
      */
     public function providerProfiles()
     {
-        if (!BillingPermissions::canViewProviderProfiles(auth()->user())) {
+        if (! BillingPermissions::canViewProviderProfiles(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1316,7 +1315,7 @@ class SettingsController extends Controller
 
     public function storeProviderProfile(Request $request)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1342,7 +1341,7 @@ class SettingsController extends Controller
 
     public function updateProviderProfile(Request $request, BillingProviderProfile $profile)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1369,7 +1368,7 @@ class SettingsController extends Controller
     public function billingRoutingRules(int $marketId)
     {
         // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
-        if (!BillingPermissions::canViewRoutingRules(auth()->user())) {
+        if (! BillingPermissions::canViewRoutingRules(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1396,33 +1395,33 @@ class SettingsController extends Controller
             ->values();
 
         $rules = BillingRoutingRule::query()
-            ->with(["primaryBinding.providerProfile", "market:id,name,country"])
-            ->where("market_id", $marketId)
-            ->orderBy("billing_surface")
+            ->with(['primaryBinding.providerProfile', 'market:id,name,country'])
+            ->where('market_id', $marketId)
+            ->orderBy('billing_surface')
             ->get()
             ->map(fn (BillingRoutingRule $rule) => $this->serializeRoutingRule($rule))
             ->values();
 
         return response()->json([
-            "market" => $market,
-            "routing_rules" => $rules,
-            "bindings" => $bindings,
-            "profiles" => $profiles,
-            "surfaces" => array_map(
+            'market' => $market,
+            'routing_rules' => $rules,
+            'bindings' => $bindings,
+            'profiles' => $profiles,
+            'surfaces' => array_map(
                 static fn (BillingSurface $surface) => [
                     'key' => $surface->value,
                     'label' => Str::headline(str_replace('_', ' ', $surface->value)),
                 ],
                 BillingSurface::cases()
             ),
-            "editable" => BillingPermissions::canEditBillingConfig(auth()->user()),
-            "count" => count($rules),
+            'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
+            'count' => count($rules),
         ]);
     }
 
     public function storeBillingRoutingRules(Request $request, int $marketId)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1465,7 +1464,7 @@ class SettingsController extends Controller
         foreach ($referencedProfileIds as $profileId) {
             $profile = $profilesById->get($profileId);
 
-            if (!$profile) {
+            if (! $profile) {
                 continue;
             }
 
@@ -1588,7 +1587,7 @@ class SettingsController extends Controller
 
     public function billingWalletRules(int $marketId)
     {
-        if (!BillingPermissions::canViewWalletRules(auth()->user())) {
+        if (! BillingPermissions::canViewWalletRules(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1601,26 +1600,26 @@ class SettingsController extends Controller
             'multi_currency_wallet_enabled',
         ])->findOrFail($marketId);
         $rule = BillingWalletRule::query()
-            ->with(["market:id,name,country"])
-            ->where("market_id", $marketId)
+            ->with(['market:id,name,country'])
+            ->where('market_id', $marketId)
             ->first();
 
-        if (!$rule) {
+        if (! $rule) {
             $rule = [
-                "id" => null,
-                "market_id" => $marketId,
-                "enabled" => false,
-                "currency_code" => null,
-                "supported_currencies_json" => null,
-                "topup_preset_json" => null,
-                "topup_preset_by_currency_json" => null,
-                "limit_json" => null,
-                "limit_by_currency_json" => null,
-                "auto_renew_json" => null,
-                "ui_json" => null,
-                "fx_override_json" => null,
-                "created_at" => null,
-                "updated_at" => null,
+                'id' => null,
+                'market_id' => $marketId,
+                'enabled' => false,
+                'currency_code' => null,
+                'supported_currencies_json' => null,
+                'topup_preset_json' => null,
+                'topup_preset_by_currency_json' => null,
+                'limit_json' => null,
+                'limit_by_currency_json' => null,
+                'auto_renew_json' => null,
+                'ui_json' => null,
+                'fx_override_json' => null,
+                'created_at' => null,
+                'updated_at' => null,
             ];
         } else {
             $rule = $rule->toArray();
@@ -1628,14 +1627,14 @@ class SettingsController extends Controller
 
         return response()->json([
             'market' => $market,
-            "wallet_rule" => $rule,
+            'wallet_rule' => $rule,
             'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
         ]);
     }
 
     public function storeBillingWalletRules(Request $request, int $marketId)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1682,7 +1681,7 @@ class SettingsController extends Controller
 
         $presetsByCurrency = collect($validated['topup_preset_by_currency_json'] ?? [])
             ->mapWithKeys(function ($values, $currency) {
-                if (!is_array($values)) {
+                if (! is_array($values)) {
                     return [];
                 }
 
@@ -1708,7 +1707,7 @@ class SettingsController extends Controller
 
         $limitByCurrency = collect($validated['limit_by_currency_json'] ?? [])
             ->mapWithKeys(function ($values, $currency) {
-                if (!is_array($values)) {
+                if (! is_array($values)) {
                     return [];
                 }
 
@@ -1777,7 +1776,7 @@ class SettingsController extends Controller
 
     public function billingManualPaymentMethods(int $marketId)
     {
-        if (!BillingPermissions::canViewSubscriptionRules(auth()->user())) {
+        if (! BillingPermissions::canViewSubscriptionRules(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1815,7 +1814,7 @@ class SettingsController extends Controller
 
     public function storeBillingManualPaymentMethods(Request $request, int $marketId)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -1864,18 +1863,18 @@ class SettingsController extends Controller
     public function billingSubscriptionRules(int $marketId)
     {
         // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
-        if (!BillingPermissions::canViewSubscriptionRules(auth()->user())) {
+        if (! BillingPermissions::canViewSubscriptionRules(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
         $market = Platform::query()->select(['id', 'name', 'country', 'currency_code'])->findOrFail($marketId);
 
         $rule = BillingSubscriptionRule::query()
-            ->with(["market:id,name,country"])
-            ->where("market_id", $marketId)
+            ->with(['market:id,name,country'])
+            ->where('market_id', $marketId)
             ->first();
 
-        if (!$rule) {
+        if (! $rule) {
             $legacySystem = $this->walletSettingsService->currentSystemConfig(masked: false);
             $legacyDiscountMax = data_get($legacySystem, "discount_config.max_percentage_by_platform.{$marketId}");
             $seededDiscountJson = $legacyDiscountMax !== null
@@ -1887,15 +1886,15 @@ class SettingsController extends Controller
                 : null;
 
             $rule = [
-                "id" => null,
-                "market_id" => $marketId,
-                "activation_method_json" => null,
-                "renewal_method_json" => null,
-                "free_trial_json" => null,
-                "discount_json" => $seededDiscountJson,
-                "expiry_policy_json" => null,
-                "created_at" => null,
-                "updated_at" => null,
+                'id' => null,
+                'market_id' => $marketId,
+                'activation_method_json' => null,
+                'renewal_method_json' => null,
+                'free_trial_json' => null,
+                'discount_json' => $seededDiscountJson,
+                'expiry_policy_json' => null,
+                'created_at' => null,
+                'updated_at' => null,
             ];
         } else {
             $rule = $rule->toArray();
@@ -1903,14 +1902,14 @@ class SettingsController extends Controller
 
         return response()->json([
             'market' => $market,
-            "subscription_rule" => $rule,
+            'subscription_rule' => $rule,
             'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
         ]);
     }
 
     public function storeBillingSubscriptionRules(Request $request, int $marketId)
     {
-        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+        if (! BillingPermissions::canEditBillingConfig($request->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -2110,13 +2109,13 @@ class SettingsController extends Controller
     private function serializeRoutingRule(BillingRoutingRule $rule): array
     {
         return [
-            "id" => $rule->id,
-            "market_id" => $rule->market_id,
-            "billing_surface" => $rule->billing_surface,
-            "active" => $rule->active,
-            "fallback_strategy_json" => $rule->fallback_strategy_json,
-            "risk_policy_json" => $rule->risk_policy_json,
-            "primary_binding" => $rule->primaryBinding ? $this->serializeRoutingBinding($rule->primaryBinding) : null,
+            'id' => $rule->id,
+            'market_id' => $rule->market_id,
+            'billing_surface' => $rule->billing_surface,
+            'active' => $rule->active,
+            'fallback_strategy_json' => $rule->fallback_strategy_json,
+            'risk_policy_json' => $rule->risk_policy_json,
+            'primary_binding' => $rule->primaryBinding ? $this->serializeRoutingBinding($rule->primaryBinding) : null,
         ];
     }
 
@@ -2402,13 +2401,13 @@ class SettingsController extends Controller
             : [];
 
         foreach (array_keys($maxByPlatform) as $platformId) {
-            if (!is_numeric((string) $platformId) || (int) $platformId <= 0) {
+            if (! is_numeric((string) $platformId) || (int) $platformId <= 0) {
                 throw ValidationException::withMessages([
                     'discount_config.max_percentage_by_platform' => 'Discount config must be keyed by valid platform ids.',
                 ]);
             }
 
-            if (!Platform::query()->whereKey((int) $platformId)->exists()) {
+            if (! Platform::query()->whereKey((int) $platformId)->exists()) {
                 throw ValidationException::withMessages([
                     'discount_config.max_percentage_by_platform' => "Unknown platform id [{$platformId}] in discount config.",
                 ]);
@@ -2502,7 +2501,7 @@ class SettingsController extends Controller
         $topupPresetsByCurrency = collect($validated['topup_presets_by_currency'] ?? [])
             ->mapWithKeys(function ($values, $currency) use ($supportedCurrencies) {
                 $normalizedCurrency = strtoupper(trim((string) $currency));
-                if (!is_array($values) || !in_array($normalizedCurrency, $supportedCurrencies, true)) {
+                if (! is_array($values) || ! in_array($normalizedCurrency, $supportedCurrencies, true)) {
                     return [];
                 }
 
@@ -2521,7 +2520,7 @@ class SettingsController extends Controller
         $limitsByCurrency = collect($validated['limits_by_currency'] ?? [])
             ->mapWithKeys(function ($values, $currency) use ($supportedCurrencies) {
                 $normalizedCurrency = strtoupper(trim((string) $currency));
-                if (!is_array($values) || !in_array($normalizedCurrency, $supportedCurrencies, true)) {
+                if (! is_array($values) || ! in_array($normalizedCurrency, $supportedCurrencies, true)) {
                     return [];
                 }
 
@@ -2988,7 +2987,7 @@ class SettingsController extends Controller
         ]);
 
         $platforms = Platform::query()
-            ->when(!empty($validated['platform_id']), fn ($q) => $q->where('id', $validated['platform_id']))
+            ->when(! empty($validated['platform_id']), fn ($q) => $q->where('id', $validated['platform_id']))
             ->where('is_active', true)
             ->whereNotNull('wp_api_url')
             ->orderBy('name')
@@ -2998,9 +2997,9 @@ class SettingsController extends Controller
         foreach ($platforms as $platform) {
             $entry = [
                 'platform_id' => (int) $platform->id,
-                'name'        => (string) $platform->name,
-                'country'     => (string) $platform->country,
-                'domain'      => (string) $platform->domain,
+                'name' => (string) $platform->name,
+                'country' => (string) $platform->country,
+                'domain' => (string) $platform->domain,
             ];
 
             try {
@@ -3034,19 +3033,19 @@ class SettingsController extends Controller
         );
 
         $validated = $request->validate([
-            'platform_id'              => 'required|integer|exists:platforms,id',
-            'master_enabled'           => 'nullable|boolean',
-            'enabled_markets'          => 'nullable|array',
-            'enabled_markets.*'        => 'string|max:64',
-            'flags'                    => 'nullable|array',
-            'flags.*'                  => 'boolean',
-            'rollbacks'                => 'nullable|array',
-            'rollbacks.*'              => 'boolean',
-            'reset_flags'              => 'nullable|array',
-            'reset_flags.*'            => 'string|max:64',
-            'reset_rollbacks'          => 'nullable|array',
-            'reset_rollbacks.*'        => 'string|max:64',
-            'note'                     => 'nullable|string|max:500',
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'master_enabled' => 'nullable|boolean',
+            'enabled_markets' => 'nullable|array',
+            'enabled_markets.*' => 'string|max:64',
+            'flags' => 'nullable|array',
+            'flags.*' => 'boolean',
+            'rollbacks' => 'nullable|array',
+            'rollbacks.*' => 'boolean',
+            'reset_flags' => 'nullable|array',
+            'reset_flags.*' => 'string|max:64',
+            'reset_rollbacks' => 'nullable|array',
+            'reset_rollbacks.*' => 'string|max:64',
+            'note' => 'nullable|string|max:500',
         ]);
 
         $platformId = (int) $validated['platform_id'];
@@ -3074,10 +3073,10 @@ class SettingsController extends Controller
 
         \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::CUSTOMER_ROLLOUT_UPDATE, $request, [
             'platform_id' => $platformId,
-            'before'      => $this->summariseRollout($before),
-            'after'       => $this->summariseRollout($after),
-            'changed'     => $after['changed'] ?? [],
-            'reason'      => $validated['note'] ?? 'Updated My Exotic rollout from CRM settings',
+            'before' => $this->summariseRollout($before),
+            'after' => $this->summariseRollout($after),
+            'changed' => $after['changed'] ?? [],
+            'reason' => $validated['note'] ?? 'Updated My Exotic rollout from CRM settings',
         ]);
 
         return response()->json($after);
@@ -3108,8 +3107,8 @@ class SettingsController extends Controller
 
         \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::CUSTOMER_ROLLOUT_PROVISION, $request, [
             'platform_id' => $platformId,
-            'created'     => $result['created'] ?? [],
-            'reason'      => 'Provisioned My Exotic private pages from CRM settings',
+            'created' => $result['created'] ?? [],
+            'reason' => 'Provisioned My Exotic private pages from CRM settings',
         ]);
 
         return response()->json($result);
@@ -3118,12 +3117,12 @@ class SettingsController extends Controller
     /**
      * Flatten a rollout payload to the parts worth keeping in an audit row.
      *
-     * @param array<string,mixed>|null $rollout
+     * @param  array<string,mixed>|null  $rollout
      * @return array<string,mixed>
      */
     private function summariseRollout($rollout): array
     {
-        if (!is_array($rollout)) {
+        if (! is_array($rollout)) {
             return [];
         }
 
@@ -3133,16 +3132,16 @@ class SettingsController extends Controller
 
         $effective = [];
         foreach ($rollout['features'] ?? [] as $feature) {
-            if (!empty($feature['key'])) {
-                $effective[$feature['key']] = !empty($feature['effective']);
+            if (! empty($feature['key'])) {
+                $effective[$feature['key']] = ! empty($feature['effective']);
             }
         }
 
         return [
             'master_enabled' => $rollout['master_enabled'] ?? null,
             'market_enabled' => $rollout['market_enabled'] ?? null,
-            'effective'      => $effective,
-            'pages_ready'    => $rollout['pages']['ready'] ?? null,
+            'effective' => $effective,
+            'pages_ready' => $rollout['pages']['ready'] ?? null,
         ];
     }
 
@@ -3285,6 +3284,7 @@ class SettingsController extends Controller
             'is_active' => 'sometimes|boolean',
             'lifecycle_policy_enabled' => 'sometimes|boolean',
             'sync_shared_key_enabled' => 'sometimes|boolean',
+            'client_sync_include_agencies' => 'sometimes|boolean',
             'wp_api_url' => 'sometimes|nullable|url|max:255',
             'wp_api_user' => 'sometimes|nullable|string|max:100',
             'wp_api_password' => 'sometimes|nullable|string|max:255',
@@ -3308,6 +3308,18 @@ class SettingsController extends Controller
         $wasLifecycleFlagEnabled = (bool) $platform->lifecycle_policy_enabled;
         $beforeState = $this->platformAuditState($platform);
         $payload = $this->platformWritePayload($validated, true);
+        if (
+            array_key_exists('client_sync_include_agencies', $payload)
+            && (bool) $payload['client_sync_include_agencies']
+            && ! (bool) $platform->client_sync_include_agencies
+        ) {
+            $meta = $this->refreshClientSyncCapabilityForPlatform($platform);
+            if (! $this->clientSyncMetaSupportsAgency($meta)) {
+                throw ValidationException::withMessages([
+                    'client_sync_include_agencies' => 'This market plugin does not advertise agency profile sync yet. Upload the upgraded WordPress plugin, refresh capabilities, then enable agencies.',
+                ]);
+            }
+        }
         $activationRequested = array_key_exists('is_active', $payload) && (bool) $payload['is_active'];
         $currencyUpdated = array_key_exists('currency_code', $payload);
 
@@ -3321,7 +3333,7 @@ class SettingsController extends Controller
 
             $this->ensureDefaultPackagesForPlatform($platform);
             $packageSetup = $this->platformPackageSetup($platform);
-            if ($activationRequested && !$packageSetup['can_go_live']) {
+            if ($activationRequested && ! $packageSetup['can_go_live']) {
                 throw ValidationException::withMessages([
                     'is_active' => 'Package setup is incomplete. Configure at least one active priced package before activating this market.',
                 ]);
@@ -3445,7 +3457,7 @@ class SettingsController extends Controller
                 ->where('platform_id', (int) $platform->id)
                 ->with('prices')
                 ->get()
-                ->keyBy(fn(Product $product) => (int) $product->id);
+                ->keyBy(fn (Product $product) => (int) $product->id);
 
             $seen = [];
             $touchedProductIds = [];
@@ -3455,7 +3467,7 @@ class SettingsController extends Controller
                 $displayName = trim((string) ($row['display_name'] ?? ''));
                 $displayName = $displayName !== '' ? $displayName : Str::title(strtolower($name));
                 $isArchived = (bool) ($row['is_archived'] ?? false);
-                $isActive = !$isArchived && (bool) ($row['is_active'] ?? false);
+                $isActive = ! $isArchived && (bool) ($row['is_active'] ?? false);
                 $isPublic = (bool) ($row['is_public'] ?? true);
 
                 if (array_key_exists($name, $seen)) {
@@ -3466,7 +3478,7 @@ class SettingsController extends Controller
 
                 $priceRows = $this->normalizeSubmittedPriceRows($row, $platform, $isActive);
                 $activePricedDurations = collect($priceRows)
-                    ->filter(fn(array $price) => (bool) $price['is_active'] && (float) $price['price'] > 0);
+                    ->filter(fn (array $price) => (bool) $price['is_active'] && (float) $price['price'] > 0);
 
                 if ($isActive && $activePricedDurations->isEmpty()) {
                     throw ValidationException::withMessages([
@@ -3477,20 +3489,20 @@ class SettingsController extends Controller
                 $productId = (int) ($row['id'] ?? 0);
                 $product = $productId > 0 ? $existing->get($productId) : null;
 
-                if ($productId > 0 && !$product) {
+                if ($productId > 0 && ! $product) {
                     throw ValidationException::withMessages([
                         'packages' => "Package row id {$productId} does not belong to this market.",
                     ]);
                 }
 
-                if (!$product) {
+                if (! $product) {
                     $product = Product::query()
                         ->where('platform_id', (int) $platform->id)
                         ->whereRaw('UPPER(name) = ?', [$name])
                         ->first();
                 }
 
-                $product = $product ?? new Product();
+                $product = $product ?? new Product;
                 $rowSlug = trim((string) ($row['slug'] ?? ''));
                 $slug = ProductCatalogService::generateUniqueSlugForPlatform(
                     (int) $platform->id,
@@ -3522,15 +3534,15 @@ class SettingsController extends Controller
             Product::query()
                 ->where('platform_id', (int) $platform->id)
                 ->when(
-                    !empty($touchedProductIds),
-                    fn($query) => $query->whereNotIn('id', $touchedProductIds)
+                    ! empty($touchedProductIds),
+                    fn ($query) => $query->whereNotIn('id', $touchedProductIds)
                 )
                 ->update([
                     'is_active' => false,
                     'is_archived' => true,
                 ]);
 
-            if (!empty($touchedProductIds)) {
+            if (! empty($touchedProductIds)) {
                 ProductPrice::query()
                     ->whereIn('product_id', Product::query()
                         ->where('platform_id', (int) $platform->id)
@@ -3542,7 +3554,7 @@ class SettingsController extends Controller
 
             $platform->refresh();
             $packageSetup = $this->platformPackageSetup($platform);
-            if ((bool) $platform->is_active && !$packageSetup['can_go_live']) {
+            if ((bool) $platform->is_active && ! $packageSetup['can_go_live']) {
                 throw ValidationException::withMessages([
                     'packages' => 'Cannot keep market active with incomplete package setup. Configure at least one active priced package first.',
                 ]);
@@ -3588,7 +3600,7 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!$this->platformHasWpCredentials($platform)) {
+        if (! $this->platformHasWpCredentials($platform)) {
             return response()->json([
                 'message' => 'WordPress sync credentials are incomplete for this market.',
             ], 422);
@@ -3672,7 +3684,7 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!$this->platformHasWpCredentials($platform)) {
+        if (! $this->platformHasWpCredentials($platform)) {
             return response()->json([
                 'message' => 'WordPress sync credentials are incomplete for this market.',
             ], 422);
@@ -3711,7 +3723,7 @@ class SettingsController extends Controller
                 $result['leads'] = $this->leadImportService->importPlatform($platform, $dryRun, $perPage);
 
                 $syncStatus = 'success';
-                if (!empty($result['leads']['errors']) && count($result['leads']['errors']) > 0) {
+                if (! empty($result['leads']['errors']) && count($result['leads']['errors']) > 0) {
                     $syncStatus = 'partial';
                 }
 
@@ -3743,7 +3755,7 @@ class SettingsController extends Controller
             }
 
             $queue = $this->clientSyncRunService->queueReadiness();
-            if (!($queue['available'] ?? false)) {
+            if (! ($queue['available'] ?? false)) {
                 return response()->json([
                     'status' => 'error',
                     'message' => $queue['issues'][0] ?? 'Background client sync is not available.',
@@ -3778,7 +3790,7 @@ class SettingsController extends Controller
                 $validated['reason'] ?? ($runMode === 'reconcile' ? 'Manual full client sync queued' : 'Manual delta client sync queued')
             );
 
-            if (!$started['reused']) {
+            if (! $started['reused']) {
                 RunClientSyncJob::dispatch((int) $run->id, $perPage)
                     ->onQueue($runMode === 'reconcile' ? 'sync-clients-reconcile' : 'sync-clients');
             }
@@ -3826,7 +3838,7 @@ class SettingsController extends Controller
             'per_page' => 'nullable|integer|min:20|max:200',
         ]);
 
-        if (!$this->platformHasWpCredentials($platform)) {
+        if (! $this->platformHasWpCredentials($platform)) {
             return response()->json([
                 'message' => 'WordPress sync credentials are incomplete for this market.',
             ], 422);
@@ -3837,7 +3849,7 @@ class SettingsController extends Controller
 
         try {
             $queue = $this->clientSyncRunService->queueReadiness();
-            if (!($queue['available'] ?? false)) {
+            if (! ($queue['available'] ?? false)) {
                 return response()->json([
                     'status' => 'error',
                     'message' => $queue['issues'][0] ?? 'Background market sync is not available.',
@@ -3871,7 +3883,7 @@ class SettingsController extends Controller
                 $validated['reason'] ?? 'Sales delta sync queued'
             );
 
-            if (!$started['reused']) {
+            if (! $started['reused']) {
                 RunClientSyncJob::dispatch((int) $run->id, $perPage)->onQueue('sync-clients');
             }
 
@@ -3966,24 +3978,7 @@ class SettingsController extends Controller
         );
 
         try {
-            $probe = (new WpSyncService($platform))->probeClientSyncMeta();
-            $status = (string) ($probe['status'] ?? 'unknown');
-            $meta = is_array($probe['meta'] ?? null) ? $probe['meta'] : null;
-
-            if ($status === 'v2') {
-                $platform->forceFill([
-                    'client_sync_capability_checked_at' => now(),
-                    'client_sync_capability_status' => 'v2',
-                    'client_sync_protocol' => 'v2',
-                    'client_sync_contract_version' => (string) ($meta['sync_contract_version'] ?? '2'),
-                ])->save();
-            } elseif (in_array($status, ['legacy', 'legacy_not_found'], true)) {
-                $platform->forceFill([
-                    'client_sync_capability_checked_at' => now(),
-                    'client_sync_capability_status' => 'legacy_not_found',
-                    'client_sync_protocol' => 'v1',
-                ])->save();
-            }
+            $probe = $this->refreshClientSyncCapabilityForPlatform($platform);
 
             return response()->json([
                 'status' => 'success',
@@ -3994,6 +3989,7 @@ class SettingsController extends Controller
             $platform->forceFill([
                 'client_sync_capability_checked_at' => now(),
                 'client_sync_capability_status' => 'probe_error',
+                'client_sync_capability_meta' => null,
             ])->save();
 
             return response()->json([
@@ -4003,6 +3999,47 @@ class SettingsController extends Controller
                 'platform' => $this->serializePlatformIntegration($platform->fresh()),
             ], 422);
         }
+    }
+
+    private function refreshClientSyncCapabilityForPlatform(Platform $platform): array
+    {
+        $probe = (new WpSyncService($platform))->probeClientSyncMeta();
+        $status = (string) ($probe['status'] ?? 'unknown');
+        $meta = is_array($probe['meta'] ?? null) ? $probe['meta'] : null;
+
+        if ($status === 'v2') {
+            $platform->forceFill([
+                'client_sync_capability_checked_at' => now(),
+                'client_sync_capability_status' => 'v2',
+                'client_sync_protocol' => 'v2',
+                'client_sync_contract_version' => (string) ($meta['sync_contract_version'] ?? '2'),
+                'client_sync_capability_meta' => $meta,
+            ])->save();
+        } elseif (in_array($status, ['legacy', 'legacy_not_found'], true)) {
+            $platform->forceFill([
+                'client_sync_capability_checked_at' => now(),
+                'client_sync_capability_status' => 'legacy_not_found',
+                'client_sync_protocol' => 'v1',
+                'client_sync_capability_meta' => $meta,
+            ])->save();
+        }
+
+        return $probe;
+    }
+
+    private function clientSyncMetaSupportsAgency(?array $probe): bool
+    {
+        $meta = is_array($probe['meta'] ?? null) ? $probe['meta'] : null;
+        if (! $meta) {
+            return false;
+        }
+
+        $types = is_array($meta['supports_profile_types'] ?? null) ? $meta['supports_profile_types'] : [];
+
+        return in_array('agency', array_map(
+            static fn ($type) => strtolower(trim((string) $type)),
+            $types
+        ), true);
     }
 
     public function runPlatformSupportBoardSync(
@@ -4025,14 +4062,14 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!(new SupportBoardService($platform))->isConfigured()) {
+        if (! (new SupportBoardService($platform))->isConfigured()) {
             return response()->json([
                 'message' => 'Support Board is not configured for this market.',
             ], 422);
         }
 
         $queue = $this->supportBoardSyncRunService->queueReadiness();
-        if (!($queue['available'] ?? false)) {
+        if (! ($queue['available'] ?? false)) {
             return response()->json([
                 'status' => 'error',
                 'message' => $queue['issues'][0] ?? 'Support Board background sync is not available.',
@@ -4081,7 +4118,7 @@ class SettingsController extends Controller
                     : 'Manual Support Board link sync run')
             );
 
-            if (!$started['reused']) {
+            if (! $started['reused']) {
                 RunSupportBoardSyncJob::dispatch((int) $run->id);
             }
 
@@ -4132,7 +4169,7 @@ class SettingsController extends Controller
 
     public function updatePaymentLinkProviders(Request $request, Platform $platform)
     {
-        if (!Schema::hasColumn('platforms', 'payment_link_providers')) {
+        if (! Schema::hasColumn('platforms', 'payment_link_providers')) {
             return response()->json([
                 'message' => 'Sprint 6 migration is pending for payment link providers. Run `php artisan migrate` before updating provider configuration.',
                 'missing_column' => 'platforms.payment_link_providers',
@@ -4250,7 +4287,7 @@ class SettingsController extends Controller
             'is_active' => array_key_exists('is_active', $validated) ? (bool) $validated['is_active'] : true,
             'compliance_ack_robots' => (bool) ($validated['compliance_ack_robots'] ?? false),
             'compliance_ack_tos' => (bool) ($validated['compliance_ack_tos'] ?? false),
-            'compliance_notes' => !empty($validated['compliance_notes']) ? trim((string) $validated['compliance_notes']) : null,
+            'compliance_notes' => ! empty($validated['compliance_notes']) ? trim((string) $validated['compliance_notes']) : null,
             'parser_rules' => $this->normalizeParserRules($validated['parser_rules'] ?? []),
             'created_by' => (int) $request->user()->id,
             'updated_by' => (int) $request->user()->id,
@@ -4294,7 +4331,7 @@ class SettingsController extends Controller
                 'max:500',
                 Rule::unique('scraper_sources', 'source_url')->ignore($scraperSource->id)->where(function ($query) use ($scraperSource) {
                     return $query->where('platform_id', (int) $scraperSource->platform_id);
-                })
+                }),
             ],
             'parser_profile' => ['sometimes', Rule::in(ScraperSourceService::PARSER_PROFILES)],
             'fetch_schedule' => ['sometimes', Rule::in(ScraperSourceService::FETCH_SCHEDULES)],
@@ -4473,13 +4510,13 @@ class SettingsController extends Controller
                             'id' => null,
                             'name' => 'All markets',
                             'country' => 'Global',
-                        ]
+                        ],
                     ];
                 } else {
                     $assignedMarkets = collect($accessibleIds)
                         ->map(function ($marketId) use ($platformMap) {
                             $platform = $platformMap->get((int) $marketId);
-                            if (!$platform) {
+                            if (! $platform) {
                                 return null;
                             }
 
@@ -4526,7 +4563,7 @@ class SettingsController extends Controller
             'is_quick_reply' => 'sometimes|boolean',
         ]);
 
-        if (!empty($validated['platform_id']) && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $validated['platform_id'])) {
+        if (! empty($validated['platform_id']) && ! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $validated['platform_id'])) {
             return response()->json(['message' => 'You do not have access to this market.'], 403);
         }
 
@@ -4538,7 +4575,7 @@ class SettingsController extends Controller
 
     public function updateTemplate(Request $request, Template $template)
     {
-        if ($template->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $template->platform_id)) {
+        if ($template->platform_id && ! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $template->platform_id)) {
             return response()->json(['message' => 'You do not have access to this template market.'], 403);
         }
 
@@ -4561,7 +4598,7 @@ class SettingsController extends Controller
 
     public function destroyTemplate(Request $request, Template $template)
     {
-        if ($template->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $template->platform_id)) {
+        if ($template->platform_id && ! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $template->platform_id)) {
             return response()->json(['message' => 'You do not have access to this template market.'], 403);
         }
 
@@ -4644,6 +4681,7 @@ class SettingsController extends Controller
             $payload['severity'] = $incident['severity'];
             $payload['category'] = $incident['category'];
             $payload['suggested_action'] = $incident['suggested_action'];
+
             return $payload;
         });
 
@@ -4669,25 +4707,25 @@ class SettingsController extends Controller
         ]);
 
         $applyFilters = function ($query) use ($validated) {
-            if (!empty($validated['action'])) {
+            if (! empty($validated['action'])) {
                 $query->where('action', $validated['action']);
             }
 
-            if (!empty($validated['entity_type'])) {
+            if (! empty($validated['entity_type'])) {
                 $query->where('entity_type', $validated['entity_type']);
             }
 
-            if (!empty($validated['from'])) {
+            if (! empty($validated['from'])) {
                 $query->where('created_at', '>=', now()->parse($validated['from'])->startOfDay());
             }
 
-            if (!empty($validated['to'])) {
+            if (! empty($validated['to'])) {
                 $query->where('created_at', '<', now()->parse($validated['to'])->addDay()->startOfDay());
             }
 
-            if (!empty($validated['search'])) {
+            if (! empty($validated['search'])) {
                 $search = $validated['search'];
-                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search) . '%';
+                $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search).'%';
                 $query->where(function ($builder) use ($like, $search) {
                     $builder->where('action', 'like', $like)
                         ->orWhere('reason', 'like', $like)
@@ -4771,13 +4809,13 @@ class SettingsController extends Controller
                 $assignedMarketIds = $this->decodeMarketIds($user->assigned_market_ids);
 
                 if (empty($assignedMarketIds) && $user->relationLoaded('platforms')) {
-                    $assignedMarketIds = $user->platforms->pluck('id')->map(fn($id) => (int) $id)->all();
+                    $assignedMarketIds = $user->platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
                 }
 
                 $marketDetails = collect($assignedMarketIds)
                     ->map(function ($marketId) use ($platformMap) {
                         $platform = $platformMap->get((int) $marketId);
-                        if (!$platform) {
+                        if (! $platform) {
                             return null;
                         }
 
@@ -4819,7 +4857,7 @@ class SettingsController extends Controller
         return response()->json([
             'summary' => $summary,
             'users' => $users,
-            'available_markets' => $platformMap->values()->map(fn(Platform $platform) => [
+            'available_markets' => $platformMap->values()->map(fn (Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
@@ -4853,8 +4891,8 @@ class SettingsController extends Controller
         ]);
 
         $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->unique()
             ->values()
             ->all();
@@ -4907,7 +4945,7 @@ class SettingsController extends Controller
         $user->load('platforms:id,name,country');
 
         $assignedMarkets = $user->platforms
-            ->map(fn(Platform $platform) => [
+            ->map(fn (Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
@@ -4955,8 +4993,8 @@ class SettingsController extends Controller
         ]);
 
         $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->unique()
             ->values()
             ->all();
@@ -4982,7 +5020,7 @@ class SettingsController extends Controller
             'sb_agent_id' => $validated['sb_agent_id'] ?? null,
             'assigned_market_ids' => $assignedMarketIds,
         ];
-        if (!empty($validated['password'])) {
+        if (! empty($validated['password'])) {
             $updateData['password'] = Hash::make($validated['password']);
         }
         $user->update($updateData);
@@ -5008,7 +5046,7 @@ class SettingsController extends Controller
                     'notification_prefs' => $user->notification_prefs,
                     'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => $assignedMarketIds,
-                    ...(!empty($validated['password']) ? ['password_changed' => true] : []),
+                    ...(! empty($validated['password']) ? ['password_changed' => true] : []),
                 ],
                 $validated['reason'] ?? 'Role and permission update from CRM settings'
             );
@@ -5018,7 +5056,7 @@ class SettingsController extends Controller
         $user->load('platforms:id,name,country');
 
         $assignedMarkets = $user->platforms
-            ->map(fn(Platform $platform) => [
+            ->map(fn (Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
@@ -5071,7 +5109,7 @@ class SettingsController extends Controller
         }
 
         $bridge = Str::random(48);
-        Cache::put('crm_impersonation_bridge:' . $bridge, [
+        Cache::put('crm_impersonation_bridge:'.$bridge, [
             'user' => [
                 'id' => (int) $user->id,
                 'name' => $user->name,
@@ -5170,7 +5208,7 @@ class SettingsController extends Controller
     {
         $normalized = [];
         foreach (['row_selector', 'name_selector', 'phone_selector', 'email_selector', 'link_selector'] as $key) {
-            if (!array_key_exists($key, $rules)) {
+            if (! array_key_exists($key, $rules)) {
                 continue;
             }
 
@@ -5226,7 +5264,7 @@ class SettingsController extends Controller
         $primaryCurrency = strtoupper((string) ($platform->currency_code ?: 'KES'));
         $supportedCurrencies = $platform->supportedCurrencies();
 
-        if (!empty($row['prices']) && is_array($row['prices'])) {
+        if (! empty($row['prices']) && is_array($row['prices'])) {
             $normalized = [];
             foreach ($row['prices'] as $priceRow) {
                 $durationKey = trim((string) ($priceRow['duration_key'] ?? ''));
@@ -5235,7 +5273,7 @@ class SettingsController extends Controller
                 }
 
                 $rowCurrency = strtoupper(trim((string) ($priceRow['currency'] ?? $primaryCurrency)));
-                if (!in_array($rowCurrency, $supportedCurrencies, true)) {
+                if (! in_array($rowCurrency, $supportedCurrencies, true)) {
                     throw ValidationException::withMessages([
                         'packages' => "{$rowCurrency} is not enabled for this market.",
                     ]);
@@ -5303,12 +5341,12 @@ class SettingsController extends Controller
         $existingByKey = ProductPrice::query()
             ->where('product_id', (int) $product->id)
             ->get()
-            ->keyBy(fn (ProductPrice $price) => $price->duration_key . ':' . strtoupper((string) $price->currency));
+            ->keyBy(fn (ProductPrice $price) => $price->duration_key.':'.strtoupper((string) $price->currency));
 
         foreach ($priceRows as $priceRow) {
             $durationKey = (string) $priceRow['duration_key'];
             $currency = strtoupper((string) ($priceRow['currency'] ?? ''));
-            $existing = $existingByKey->get($durationKey . ':' . $currency);
+            $existing = $existingByKey->get($durationKey.':'.$currency);
 
             if ($existing) {
                 $existing->update([
@@ -5336,7 +5374,7 @@ class SettingsController extends Controller
         }
 
         // Remove price rows that were not submitted (soft-remove by deactivating, not deleting, to preserve history)
-        if (!empty($touchedIds)) {
+        if (! empty($touchedIds)) {
             ProductPrice::query()
                 ->where('product_id', (int) $product->id)
                 ->whereNotIn('id', $touchedIds)
@@ -5406,7 +5444,9 @@ class SettingsController extends Controller
                 'currency' => $currency,
                 'is_active' => false,
                 'is_public' => true,
-                'sort_order' => match ($name) { 'BASIC' => 30, 'PREMIUM' => 20, 'VIP' => 10, default => 40 },
+                'sort_order' => match ($name) {
+                    'BASIC' => 30, 'PREMIUM' => 20, 'VIP' => 10, default => 40
+                },
             ]);
         }
     }
@@ -5453,7 +5493,7 @@ class SettingsController extends Controller
             $prices = $product->prices
                 ->sortBy('sort_order')
                 ->values()
-                ->map(fn(ProductPrice $price) => [
+                ->map(fn (ProductPrice $price) => [
                     'id' => (int) $price->id,
                     'duration_key' => $price->duration_key,
                     'duration_label' => $price->duration_label,
@@ -5500,7 +5540,7 @@ class SettingsController extends Controller
         // Dynamic catalog rule: market can go live if it has at least one active package
         // with at least one active duration price > 0
         $hasActivePricedPackage = $rows->contains(function (array $row): bool {
-            if (!(bool) ($row['is_active'] ?? false)) {
+            if (! (bool) ($row['is_active'] ?? false)) {
                 return false;
             }
 
@@ -5512,22 +5552,22 @@ class SettingsController extends Controller
                     || (float) ($row['monthly_price'] ?? 0) > 0;
             }
 
-            return collect($prices)->contains(fn(array $price) => (bool) ($price['is_active'] ?? false) && (float) ($price['price'] ?? 0) > 0);
+            return collect($prices)->contains(fn (array $price) => (bool) ($price['is_active'] ?? false) && (float) ($price['price'] ?? 0) > 0);
         });
 
         $warnings = [];
         foreach ($rows as $row) {
             $isActive = (bool) ($row['is_active'] ?? false);
-            if (!$isActive) {
+            if (! $isActive) {
                 continue;
             }
 
             $prices = $row['prices'] ?? [];
-            $hasActivePrice = !empty($prices)
-                ? collect($prices)->contains(fn(array $p) => (bool) ($p['is_active'] ?? false) && (float) ($p['price'] ?? 0) > 0)
+            $hasActivePrice = ! empty($prices)
+                ? collect($prices)->contains(fn (array $p) => (bool) ($p['is_active'] ?? false) && (float) ($p['price'] ?? 0) > 0)
                 : ((float) ($row['weekly_price'] ?? 0) > 0 || (float) ($row['biweekly_price'] ?? 0) > 0 || (float) ($row['monthly_price'] ?? 0) > 0);
 
-            if (!$hasActivePrice) {
+            if (! $hasActivePrice) {
                 $warnings[] = [
                     'name' => $row['name'],
                     'label' => $row['display_name'] ?? ucfirst(strtolower((string) $row['name'])),
@@ -5549,8 +5589,7 @@ class SettingsController extends Controller
         Platform $platform,
         ?SupportBoardSyncRun $supportBoardSyncRun = null,
         ?ClientSyncRun $clientSyncRun = null
-    ): array
-    {
+    ): array {
         $packageRows = $this->platformPackageRows($platform);
         $packageSetup = $this->platformPackageSetup($platform, $packageRows);
         $hasWpCredentials = $this->platformHasWpCredentials($platform);
@@ -5559,6 +5598,11 @@ class SettingsController extends Controller
         $supportBoardSyncRun = $supportBoardSyncRun ?: $this->supportBoardSyncRunService->latestRunForPlatform((int) $platform->id);
         $clientSyncRun = $clientSyncRun ?: $this->clientSyncRunService->latestRunForPlatform((int) $platform->id);
         $clientSyncCapabilityStatus = (string) ($platform->client_sync_capability_status ?? '');
+        $clientSyncCapabilityMeta = is_array($platform->client_sync_capability_meta) ? $platform->client_sync_capability_meta : [];
+        $supportedProfileTypes = array_values(array_filter(array_map(
+            static fn ($type) => strtolower(trim((string) $type)),
+            is_array($clientSyncCapabilityMeta['supports_profile_types'] ?? null) ? $clientSyncCapabilityMeta['supports_profile_types'] : []
+        )));
         $legacyCorrectnessRisk = ($platform->client_sync_protocol ?? null) === 'v1'
             || $clientSyncCapabilityStatus === 'legacy_not_found';
 
@@ -5604,7 +5648,7 @@ class SettingsController extends Controller
             'phone_prefix' => $platform->phone_prefix ?: '254',
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,
-            'support_board_token_configured' => !empty($platform->support_board_token),
+            'support_board_token_configured' => ! empty($platform->support_board_token),
             'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'support_board_sync' => [
                 'queue' => $this->supportBoardSyncRunService->queueReadiness(),
@@ -5617,6 +5661,11 @@ class SettingsController extends Controller
                 'contract_version' => $platform->client_sync_contract_version,
                 'capability_status' => $clientSyncCapabilityStatus ?: null,
                 'capability_checked_at' => optional($platform->client_sync_capability_checked_at)->toDateTimeString(),
+                'include_agencies' => (bool) $platform->client_sync_include_agencies,
+                'supports_profile_types' => $supportedProfileTypes,
+                'profile_type_map' => is_array($clientSyncCapabilityMeta['profile_type_map'] ?? null)
+                    ? $clientSyncCapabilityMeta['profile_type_map']
+                    : [],
                 'checkpoint_at' => optional($platform->client_sync_checkpoint_at)->toDateTimeString(),
                 'tombstone_checkpoint_at' => optional($platform->client_sync_tombstone_checkpoint_at)->toDateTimeString(),
                 'last_reconciled_at' => optional($platform->client_sync_last_reconciled_at)->toDateTimeString(),
@@ -5637,7 +5686,7 @@ class SettingsController extends Controller
                 'db_name' => $platform->db_name,
                 'db_user' => $platform->db_user,
                 'db_prefix' => $platform->db_prefix,
-                'db_pass_configured' => !empty($platform->db_pass),
+                'db_pass_configured' => ! empty($platform->db_pass),
             ],
             'wp_compatibility' => $platform->wpCompatibilitySettings(),
             'sync' => [
@@ -5679,7 +5728,7 @@ class SettingsController extends Controller
             unset($payload['support_board_token']);
         }
 
-        if (!$isPatch) {
+        if (! $isPatch) {
             $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : false;
             $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
             $payload['currency_code'] = $payload['currency_code'] ?? 'KES';
@@ -5693,7 +5742,7 @@ class SettingsController extends Controller
             $payload['wp_compatibility_settings'] = array_merge(Platform::defaultWpCompatibilitySettings(), [
                 'legacy_self_upload_secret_option' => (bool) ($settings['legacy_self_upload_secret_option'] ?? false),
             ]);
-        } elseif (!$isPatch) {
+        } elseif (! $isPatch) {
             $payload['wp_compatibility_settings'] = Platform::defaultWpCompatibilitySettings();
         }
 
@@ -5708,7 +5757,7 @@ class SettingsController extends Controller
             }
 
             $payload['timezone'] = $normalizedTimezone;
-        } elseif (!$isPatch) {
+        } elseif (! $isPatch) {
             throw ValidationException::withMessages([
                 'timezone' => MarketTimezone::requiredValidationMessage(),
             ]);
@@ -5734,7 +5783,7 @@ class SettingsController extends Controller
             'currency_code' => $platform->currency_code,
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,
-            'support_board_token_configured' => !empty($platform->support_board_token),
+            'support_board_token_configured' => ! empty($platform->support_board_token),
             'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'sync_last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
             'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
@@ -5881,7 +5930,7 @@ class SettingsController extends Controller
         $activeProvider = trim((string) ($config['active_provider'] ?? ''));
         $providers = $config['providers'] ?? null;
 
-        if ($activeProvider === '' || !is_array($providers) || empty($providers)) {
+        if ($activeProvider === '' || ! is_array($providers) || empty($providers)) {
             return null;
         }
 
@@ -5889,7 +5938,7 @@ class SettingsController extends Controller
         $enabledProviderKeys = [];
         $errors = [];
         foreach ($providers as $key => $provider) {
-            if (!is_array($provider)) {
+            if (! is_array($provider)) {
                 continue;
             }
 
@@ -5915,18 +5964,19 @@ class SettingsController extends Controller
                 ? round((float) $selfCheckoutFxRateRaw, 6)
                 : null;
 
-            if (!in_array($mode, ['static_url', 'proxy_hosted_checkout'], true)) {
+            if (! in_array($mode, ['static_url', 'proxy_hosted_checkout'], true)) {
                 $errors["payment_link_providers.providers.{$providerKey}.mode"] = 'Provider mode must be static_url or proxy_hosted_checkout.';
+
                 continue;
             }
 
             if ($mode === 'proxy_hosted_checkout') {
                 $proxyCapableKeys = $this->billingProviderRegistry->keysForSurface(BillingSurface::ProxyHostedCheckout);
-                if (!in_array($walletProviderKey, $proxyCapableKeys, true)) {
+                if (! in_array($walletProviderKey, $proxyCapableKeys, true)) {
                     $errors["payment_link_providers.providers.{$providerKey}.wallet_provider_key"] = 'Proxy providers require a hosted-checkout-capable wallet_provider_key.';
                 }
 
-                if (!in_array($environment, ['sandbox', 'production'], true)) {
+                if (! in_array($environment, ['sandbox', 'production'], true)) {
                     $errors["payment_link_providers.providers.{$providerKey}.environment"] = 'Proxy providers require environment of sandbox or production.';
                 }
 
@@ -5967,6 +6017,7 @@ class SettingsController extends Controller
             } else {
                 if ($url === '' && $baseUrl === '') {
                     $errors["payment_link_providers.providers.{$providerKey}.url"] = 'Static URL providers require either url or base_url.';
+
                     continue;
                 }
 
@@ -5985,7 +6036,7 @@ class SettingsController extends Controller
             }
         }
 
-        if (!empty($errors)) {
+        if (! empty($errors)) {
             throw ValidationException::withMessages($errors);
         }
 
@@ -6012,17 +6063,17 @@ class SettingsController extends Controller
 
     private function platformHasWpCredentials(Platform $platform): bool
     {
-        return !empty($platform->wp_api_url)
-            && !empty($platform->wp_api_user)
-            && !empty($platform->wp_api_password);
+        return ! empty($platform->wp_api_url)
+            && ! empty($platform->wp_api_user)
+            && ! empty($platform->wp_api_password);
     }
 
     private function platformHasWpDatabaseCredentials(Platform $platform): bool
     {
-        return !empty($platform->db_host)
-            && !empty($platform->db_name)
-            && !empty($platform->db_user)
-            && !empty($platform->db_pass);
+        return ! empty($platform->db_host)
+            && ! empty($platform->db_name)
+            && ! empty($platform->db_user)
+            && ! empty($platform->db_pass);
     }
 
     private function decodeMarketIds($value): array
@@ -6122,7 +6173,7 @@ class SettingsController extends Controller
                     ? 'Review unmatched payments in the queue and resolve manually.'
                     : 'No immediate action required.';
             }
-        } elseif (str_contains($action, '_failed') && !array_key_exists($action, $catalog)) {
+        } elseif (str_contains($action, '_failed') && ! array_key_exists($action, $catalog)) {
             $severity = 'high';
             $summary = sprintf('%s failed and may require intervention.', ucwords(str_replace('_', ' ', $action)));
             $suggestedAction = 'Open incident details, verify provider/integration status, and retry the operation.';
@@ -6445,7 +6496,7 @@ class SettingsController extends Controller
         }
 
         $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($user);
-        if (!is_array($allowedPlatformIds)) {
+        if (! is_array($allowedPlatformIds)) {
             return $config;
         }
 
@@ -6477,7 +6528,7 @@ class SettingsController extends Controller
         }
 
         $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($user);
-        if (!is_array($allowedPlatformIds)) {
+        if (! is_array($allowedPlatformIds)) {
             return $config;
         }
 
@@ -6518,14 +6569,14 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!(new SupportBoardService($platform))->isConfigured()) {
+        if (! (new SupportBoardService($platform))->isConfigured()) {
             return response()->json([
                 'message' => 'Support Board is not configured for this market.',
             ], 422);
         }
 
         $queue = $this->sbLeadImportRunService->queueReadiness();
-        if (!($queue['available'] ?? false)) {
+        if (! ($queue['available'] ?? false)) {
             return response()->json([
                 'status' => 'error',
                 'message' => $queue['issues'][0] ?? 'Background lead import is not available.',
@@ -6574,7 +6625,7 @@ class SettingsController extends Controller
                 $validated['reason'] ?? 'Manual Support Board lead import run'
             );
 
-            if (!$started['reused']) {
+            if (! $started['reused']) {
                 RunSbLeadImportJob::dispatch((int) $run->id);
             }
 
@@ -6622,11 +6673,12 @@ class SettingsController extends Controller
 
     private function resolveAuditPlatformId(array $assignedMarketIds): ?int
     {
-        if (!empty($assignedMarketIds)) {
+        if (! empty($assignedMarketIds)) {
             return (int) $assignedMarketIds[0];
         }
 
         $fallback = Platform::query()->orderBy('id')->value('id');
+
         return $fallback ? (int) $fallback : null;
     }
 

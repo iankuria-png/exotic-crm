@@ -4,6 +4,7 @@ namespace App\Http\Controllers\CRM;
 
 use App\Exceptions\ClientCaseClosureException;
 use App\Http\Controllers\Controller;
+use App\Jobs\ConvertClientVideoUploadJob;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\ClientNote;
@@ -30,11 +31,11 @@ use App\Services\ClientProfileUrlSearchService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSegmentService;
 use App\Services\ClientSeoPlaceholderService;
+use App\Services\ClientSessionDiagnosticsService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientSyncService;
 use App\Services\ClientWpLinkRepairService;
-use App\Services\ClientSessionDiagnosticsService;
 use App\Services\CredentialDeliveryService;
 use App\Services\DealPaymentService;
 use App\Services\ExpiredSubscriptionReconciler;
@@ -49,7 +50,6 @@ use App\Services\VideoTranscodeService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
-use App\Jobs\ConvertClientVideoUploadJob;
 use App\Support\CityNormalizer;
 use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
@@ -123,6 +123,7 @@ class ClientController extends Controller
             'city_key' => 'nullable|string|max:120',
             'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
             'per_page' => 'nullable|integer|in:25,50,100,150',
+            'client_type' => 'nullable|string|in:escort,agency',
         ]);
 
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -184,6 +185,10 @@ class ClientController extends Controller
 
         if ($request->filled('platform_id')) {
             $query->where('platform_id', $request->platform_id);
+        }
+
+        if (! empty($validated['client_type'])) {
+            $query->where('client_type', $validated['client_type']);
         }
 
         $view = strtolower((string) $request->input('view', 'all'));
@@ -611,6 +616,7 @@ class ClientController extends Controller
             'profile_status' => 'nullable|in:publish,private,draft,pending',
             'assigned_to' => 'nullable|exists:users,id',
             'wp_user_id' => 'nullable|integer|min:1',
+            'client_type' => 'nullable|in:escort,agency',
             'onboarding_mode' => 'nullable|in:manual,wp_provision',
             'wp_username' => ['nullable', 'string', 'max:60', 'regex:/^[A-Za-z0-9._-]+$/'],
             'wp_password' => 'nullable|string|min:8|max:100',
@@ -623,6 +629,7 @@ class ClientController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
+        $validated['client_type'] = $this->normalizeClientType($validated['client_type'] ?? 'escort');
         $onboardingMode = (string) ($validated['onboarding_mode'] ?? 'manual');
         if (($request->user()?->role ?? null) === MarketAuthorizationService::ROLE_FIELD_SALES) {
             $validated['signup_source'] = 'field';
@@ -657,7 +664,7 @@ class ClientController extends Controller
             $platform = Platform::query()->findOrFail((int) $validated['platform_id']);
             $validated = array_merge(
                 $validated,
-                $this->prepareProvisioningProfilePayload($request, $platform)
+                $this->prepareProvisioningProfilePayload($request, $platform, $validated['client_type'])
             );
         }
 
@@ -796,6 +803,7 @@ class ClientController extends Controller
         ]);
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);
+        $this->appendAgencyManagedProfiles($client);
         $client->setAttribute('whatsapp_inbound_count', \App\Models\WhatsAppMessage::query()
             ->where('client_id', $client->id)
             ->where('direction', 'inbound')
@@ -1326,6 +1334,45 @@ class ClientController extends Controller
         foreach ($subscriptionAction as $key => $value) {
             $client->setAttribute($key, $value);
         }
+    }
+
+    private function appendAgencyManagedProfiles(Client $client): void
+    {
+        if ($this->normalizeClientType($client->client_type) !== 'agency' || (int) ($client->wp_user_id ?? 0) <= 0) {
+            $client->setAttribute('managed_profiles', []);
+            $client->setAttribute('managed_profiles_count', 0);
+
+            return;
+        }
+
+        $profiles = Client::query()
+            ->where('platform_id', (int) $client->platform_id)
+            ->where('wp_user_id', (int) $client->wp_user_id)
+            ->where('client_type', 'escort')
+            ->whereKeyNot((int) $client->id)
+            ->orderBy('name')
+            ->limit(50)
+            ->get(['id', 'name', 'wp_post_id', 'profile_status', 'escort_expire', 'premium', 'featured', 'phone_normalized'])
+            ->map(fn (Client $profile) => [
+                'id' => (int) $profile->id,
+                'name' => (string) ($profile->name ?? 'Unnamed'),
+                'wp_post_id' => (int) ($profile->wp_post_id ?? 0),
+                'profile_status' => (string) ($profile->profile_status ?? ''),
+                'escort_expire' => $profile->escort_expire,
+                'premium' => (bool) $profile->premium,
+                'featured' => (bool) $profile->featured,
+                'phone_normalized' => $profile->phone_normalized,
+            ])
+            ->values()
+            ->all();
+
+        $client->setAttribute('managed_profiles', $profiles);
+        $client->setAttribute('managed_profiles_count', count($profiles));
+    }
+
+    private function normalizeClientType(mixed $value): string
+    {
+        return strtolower(trim((string) $value)) === 'agency' ? 'agency' : 'escort';
     }
 
     private function decorateClientListRows($clients): void
@@ -3028,6 +3075,7 @@ class ClientController extends Controller
             'featured',
             'featured_expire',
             'escort_expire',
+            'agency_expire',
             'profile_status',
             'crm_lifecycle_state',
             'lifecycle_state',
@@ -3047,7 +3095,7 @@ class ClientController extends Controller
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             $currentProfile = $wpSync->getClientProfile((int) $client->wp_post_id);
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
-            $fields = $this->prepareWpProfileFields($platform, $requestedFields, $currentProfile);
+            $fields = $this->prepareWpProfileFields($platform, $requestedFields, $currentProfile, (string) $client->client_type);
 
             $wpModifiedAt = $this->extractWpModifiedAt($currentProfile);
             $crmLastSyncedAt = $client->last_synced_at ? Carbon::parse($client->last_synced_at) : null;
@@ -4674,6 +4722,10 @@ class ClientController extends Controller
         );
 
         $platform = Platform::query()->findOrFail($platformId);
+        $clientType = $this->normalizeClientType($payload['client_type'] ?? 'escort');
+        if ($clientType === 'agency' && ! (bool) $platform->client_sync_include_agencies) {
+            throw new \InvalidArgumentException('Agency profile creation is not enabled for this market yet.');
+        }
         if (! $this->platformHasWpDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
@@ -4694,7 +4746,7 @@ class ClientController extends Controller
         $duplicatePhoneMatches = $this->duplicatePhoneMatches($platformId, $normalizedPhone);
         $signupSource = $this->resolveSignupSource($request, $payload, 'crm_provisioned');
 
-        $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
+        $provisionPayload = [
             'name' => $name,
             'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : '',
             'phone' => $normalizedPhone,
@@ -4707,8 +4759,13 @@ class ClientController extends Controller
             'provision_request_id' => ! empty($payload['provision_request_id'])
                 ? trim((string) $payload['provision_request_id'])
                 : (string) \Illuminate\Support\Str::uuid(),
-            ...$this->extractProvisioningFields($payload),
-        ]);
+            ...$this->extractProvisioningFields($payload, $clientType),
+        ];
+
+        $provisioner = new WpDirectProvisioningService($platform);
+        $provisioningResult = $clientType === 'agency'
+            ? $provisioner->provisionAgency($provisionPayload)
+            : $provisioner->provisionEscort($provisionPayload);
 
         $wpPostId = (int) ($provisioningResult['wp_post_id'] ?? 0);
         $wpUserId = (int) ($provisioningResult['wp_user_id'] ?? 0);
@@ -4725,7 +4782,7 @@ class ClientController extends Controller
             ],
             [
                 'wp_user_id' => $wpUserId,
-                'client_type' => 'escort',
+                'client_type' => $clientType,
                 'name' => $name,
                 'phone_normalized' => $normalizedPhone !== '' ? $normalizedPhone : null,
                 'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : null,
@@ -4780,6 +4837,7 @@ class ClientController extends Controller
                 'profile_finalize_status' => $profileFinalizeStatus,
                 'sync_status' => $syncStatus,
                 'duplicate_phone_matches' => $duplicatePhoneMatches,
+                'client_type' => $clientType,
             ],
             'created_at' => now(),
         ]);
@@ -4806,6 +4864,7 @@ class ClientController extends Controller
                 'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
                 'sync_status' => $syncStatus,
                 'duplicate_phone_matches' => $duplicatePhoneMatches,
+                'client_type' => $clientType,
             ],
             $reason
         );
@@ -4844,8 +4903,14 @@ class ClientController extends Controller
             $profileStatus = 'private';
         }
 
+        $platform = Platform::query()->findOrFail($platformId);
+        $clientType = $this->normalizeClientType($payload['client_type'] ?? 'escort');
+        if ($clientType === 'agency' && ! (bool) $platform->client_sync_include_agencies) {
+            throw new \InvalidArgumentException('Agency profile creation is not enabled for this market yet.');
+        }
+
         $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
-        $phonePrefix = (string) (Platform::query()->whereKey($platformId)->value('phone_prefix') ?: '254');
+        $phonePrefix = (string) ($platform->phone_prefix ?: '254');
         $normalizedPhone = PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix);
         $duplicatePhoneMatches = $this->duplicatePhoneMatches($platformId, $normalizedPhone);
         $signupSource = $this->resolveSignupSource($request, $payload, 'crm_manual');
@@ -4856,7 +4921,7 @@ class ClientController extends Controller
             'platform_id' => $platformId,
             'wp_post_id' => $manualWpPostId,
             'wp_user_id' => ! empty($payload['wp_user_id']) ? (int) $payload['wp_user_id'] : null,
-            'client_type' => 'escort',
+            'client_type' => $clientType,
             'name' => $name,
             'phone_normalized' => $normalizedPhone,
             'email' => ! empty($payload['email']) ? trim((string) $payload['email']) : null,
@@ -4883,6 +4948,7 @@ class ClientController extends Controller
                 'assigned_to' => $client->assigned_to,
                 'profile_status' => $client->profile_status,
                 'duplicate_phone_matches' => $duplicatePhoneMatches,
+                'client_type' => $clientType,
             ],
             'created_at' => now(),
         ]);
@@ -4904,6 +4970,7 @@ class ClientController extends Controller
                 'wp_post_id' => $client->wp_post_id,
                 'signup_source' => $signupSource,
                 'duplicate_phone_matches' => $duplicatePhoneMatches,
+                'client_type' => $clientType,
             ],
             $reason
         );
@@ -5195,8 +5262,10 @@ class ClientController extends Controller
 
     private function guardStorePayloadKeys(Request $request): void
     {
+        $clientType = $this->normalizeClientType($request->input('client_type', 'escort'));
         $allowed = array_flip(array_merge([
             'platform_id',
+            'client_type',
             'name',
             'phone_normalized',
             'email',
@@ -5214,7 +5283,7 @@ class ClientController extends Controller
             'provision_request_id',
             'signup_source',
             'reason',
-        ], WpProfileFieldCatalog::editableFields()));
+        ], WpProfileFieldCatalog::editableFields($clientType)));
 
         $unknown = array_diff_key($request->all(), $allowed);
 
@@ -5233,11 +5302,11 @@ class ClientController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function prepareProvisioningProfilePayload(Request $request, Platform $platform): array
+    private function prepareProvisioningProfilePayload(Request $request, Platform $platform, string $clientType = 'escort'): array
     {
         $input = array_intersect_key(
             $request->all(),
-            array_flip(array_merge(WpProfileFieldCatalog::editableFields(), ['bio']))
+            array_flip(array_merge(WpProfileFieldCatalog::editableFields($clientType), ['bio']))
         );
 
         if ($input === []) {
@@ -5257,6 +5326,7 @@ class ClientController extends Controller
 
         $validated = WpProfileFieldValidator::validate($fields, [
             'currency_catalog_ids' => $currencyCatalogIds,
+            'client_type' => $clientType,
         ]);
 
         if (! $this->profileFieldsIncludeLocation($validated)) {
@@ -5270,10 +5340,10 @@ class ClientController extends Controller
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
-    private function extractProvisioningFields(array $payload): array
+    private function extractProvisioningFields(array $payload, string $clientType = 'escort'): array
     {
         $fields = [];
-        foreach (array_merge(WpProfileFieldCatalog::editableFields(), ['bio', 'content']) as $key) {
+        foreach (array_merge(WpProfileFieldCatalog::editableFields($clientType), ['bio', 'content']) as $key) {
             if (! array_key_exists($key, $payload)) {
                 continue;
             }
@@ -5289,11 +5359,13 @@ class ClientController extends Controller
      * @param  array<string, mixed>  $currentProfile
      * @return array<string, mixed>
      */
-    private function prepareWpProfileFields(Platform $platform, array $fields, array $currentProfile): array
+    private function prepareWpProfileFields(Platform $platform, array $fields, array $currentProfile, string $clientType = 'escort'): array
     {
         $normalized = $this->normalizeWpProfileFields($fields);
+        $clientType = $this->normalizeClientType($clientType);
         $context = [
             'current_currency_id' => data_get($currentProfile, 'meta.currency'),
+            'client_type' => $clientType,
         ];
 
         if (array_key_exists('currency', $normalized)) {

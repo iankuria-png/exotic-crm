@@ -68,6 +68,7 @@ class ExpiredSubscriptionReconciler
     {
         $query = Client::query()
             ->with('platform')
+            ->where('client_type', 'escort')
             ->active() // profile_status=publish AND not needs_payment AND not notactive
             ->whereNotNull('escort_expire')
             ->where('escort_expire', '>', 0)

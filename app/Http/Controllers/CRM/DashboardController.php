@@ -166,8 +166,8 @@ class DashboardController extends Controller
             }
             $upcomingFollowUps = $upcomingFollowUpsQuery->limit(10)->get();
 
-            $activeClientsQuery = Client::active();
-            $totalClientsQuery = Client::query();
+            $activeClientsQuery = Client::active()->where('client_type', 'escort');
+            $totalClientsQuery = Client::query()->where('client_type', 'escort');
             $pendingLeadsQuery = Lead::new();
             $totalLeadsQuery = Lead::query();
             $activeDealsQuery = Deal::active();

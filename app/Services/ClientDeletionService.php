@@ -8,6 +8,7 @@ use App\Models\TimelineEvent;
 use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class ClientDeletionService
 {
@@ -33,11 +34,17 @@ class ClientDeletionService
                 ->count(),
             'has_active_deal' => $client->deals()->where('status', 'active')->exists(),
             'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+            'can_delete' => (string) ($client->client_type ?? 'escort') !== 'agency',
+            'delete_blocked_reason' => (string) ($client->client_type ?? 'escort') === 'agency'
+                ? 'Agency profiles cannot be deleted from the CRM. Delete or reassign them in WordPress, then let tombstone sync prune the CRM row.'
+                : null,
         ];
     }
 
     public function deleteClient(Client $client, int $actorId, string $reason): array
     {
+        $this->assertOperatorDeleteAllowed($client);
+
         return $this->deleteClientInternal(
             $client,
             $actorId,
@@ -259,6 +266,11 @@ class ClientDeletionService
                 'timeline_events_count' => (int) ($client->timeline_events_count ?? 0),
                 'has_active_deal' => (int) ($client->active_deals_count ?? 0) > 0,
                 'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'client_type' => (string) ($client->client_type ?? 'escort'),
+                'can_delete' => (string) ($client->client_type ?? 'escort') !== 'agency',
+                'delete_blocked_reason' => (string) ($client->client_type ?? 'escort') === 'agency'
+                    ? 'Agency profiles cannot be deleted from the CRM. Delete or reassign them in WordPress, then let tombstone sync prune the CRM row.'
+                    : null,
             ])->values()->all(),
         ];
     }
@@ -267,6 +279,7 @@ class ClientDeletionService
     {
         $deletedCount = 0;
         $failed = [];
+        $skipped = [];
         $deletedByPlatform = [];
 
         $clients = Client::query()
@@ -276,6 +289,16 @@ class ClientDeletionService
             ->get();
 
         foreach ($clients as $client) {
+            if ((string) ($client->client_type ?? 'escort') === 'agency') {
+                $skipped[] = [
+                    'id' => (int) $client->id,
+                    'name' => (string) $client->name,
+                    'reason' => 'Agency profiles cannot be deleted from the CRM. Delete or reassign them in WordPress, then let tombstone sync prune the CRM row.',
+                ];
+
+                continue;
+            }
+
             try {
                 $result = $this->deleteClient($client, $actorId, $reason);
                 $deletedCount++;
@@ -306,6 +329,7 @@ class ClientDeletionService
                     'deleted_count' => count($entries),
                     'clients' => $entries,
                     'failed_count' => count($failed),
+                    'skipped_count' => count($skipped),
                 ],
                 'reason' => $reason,
             ]);
@@ -314,6 +338,18 @@ class ClientDeletionService
         return [
             'deleted_count' => $deletedCount,
             'failed' => $failed,
+            'skipped' => $skipped,
         ];
+    }
+
+    private function assertOperatorDeleteAllowed(Client $client): void
+    {
+        if ((string) ($client->client_type ?? 'escort') !== 'agency') {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'client_type' => 'Agency profiles cannot be deleted from the CRM. Delete or reassign them in WordPress, then let tombstone sync prune the CRM row.',
+        ]);
     }
 }

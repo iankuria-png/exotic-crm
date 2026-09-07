@@ -110,4 +110,29 @@ class WpProfileFieldValidatorTest extends TestCase
         $this->assertSame(10, $validated['region_id']);
         $this->assertNull($validated['city_id']);
     }
+
+    public function test_it_accepts_agency_safe_fields_and_rejects_escort_fields_for_agencies(): void
+    {
+        $validated = WpProfileFieldValidator::validate([
+            'name' => 'Nairobi Stars Agency',
+            'website' => 'https://agency.example',
+            'whatsapp' => '254700000000',
+            'content' => 'Agency profile copy',
+        ], [
+            'client_type' => 'agency',
+            'currency_catalog_ids' => [50],
+        ]);
+
+        $this->assertSame('Nairobi Stars Agency', $validated['name']);
+        $this->assertSame('https://agency.example', $validated['website']);
+
+        $this->expectException(ValidationException::class);
+
+        WpProfileFieldValidator::validate([
+            'services' => ['1'],
+        ], [
+            'client_type' => 'agency',
+            'currency_catalog_ids' => [50],
+        ]);
+    }
 }

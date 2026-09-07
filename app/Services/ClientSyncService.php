@@ -43,7 +43,7 @@ class ClientSyncService
         $total = 0;
 
         do {
-            $response = $this->wpSync->getClients($page, $perPage);
+            $response = $this->wpSync->getClients($page, $perPage, types: $this->syncProfileTypes());
             $clients = $response['data'] ?? [];
             $totalPages = $response['pages'] ?? 1;
             $chunk = $this->applyBulkClients($clients, $syncMode);
@@ -84,7 +84,7 @@ class ClientSyncService
         $total = 0;
 
         do {
-            $response = $this->wpSync->getClients($page, $perPage, $modifiedAfter);
+            $response = $this->wpSync->getClients($page, $perPage, $modifiedAfter, $this->syncProfileTypes());
             $clients = $response['data'] ?? [];
             $totalPages = $response['pages'] ?? 1;
             $chunk = $this->applyBulkClients($clients, 'legacy_delta');
@@ -168,7 +168,8 @@ class ClientSyncService
         $profileSlug = mb_substr((string) ($wpClient['wp_profile_slug'] ?? ''), 0, 255);
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
-        $escortExpire = $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire);
+        $clientType = $this->normalizeClientType($wpClient['client_type'] ?? 'escort');
+        $escortExpire = $this->resolveProfileExpiry($wpClient, $premiumExpire, $featuredExpire, $clientType);
 
         $client = Client::firstOrNew([
             'platform_id' => $this->platform->id,
@@ -185,7 +186,7 @@ class ClientSyncService
             'wp_user_id' => $wpClient['wp_user_id'] ?? null,
             'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
             'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
-            'client_type' => 'escort',
+            'client_type' => $clientType,
             'name' => $name ?: null,
             'phone_normalized' => $phone ?: null,
             'email' => $email ?: null,
@@ -420,7 +421,7 @@ class ClientSyncService
         ];
 
         if ($run->phase === ClientSyncRun::PHASE_CLIENTS) {
-            $phase = $this->syncV2ClientPages($run, $perPage, $mode, $budget);
+            $phase = $this->syncV2ClientPages($run, $perPage, $mode, $capability, $budget);
 
             foreach (['created', 'updated', 'skipped', 'processed'] as $key) {
                 $summary[$key] += (int) ($phase[$key] ?? 0);
@@ -438,7 +439,7 @@ class ClientSyncService
         }
 
         if ($run->phase === ClientSyncRun::PHASE_TOMBSTONES) {
-            $phase = $this->processV2Tombstones($run, $perPage, $budget);
+            $phase = $this->processV2Tombstones($run, $perPage, $capability, $budget);
             $summary['tombstones_processed'] += (int) $phase['processed'];
 
             if (! $phase['complete']) {
@@ -462,6 +463,7 @@ class ClientSyncService
         ClientSyncRun $run,
         int $perPage,
         string $mode,
+        array $capability,
         SyncSliceBudget $budget
     ): array {
         $runService = app(ClientSyncRunService::class);
@@ -487,7 +489,7 @@ class ClientSyncService
                 'cursor_modified_at' => $cursorModifiedAt,
                 'cursor_post_id' => $cursorPostId,
                 'mode' => $mode,
-            ], static fn ($value) => $value !== null && $value !== ''));
+            ], static fn ($value) => $value !== null && $value !== ''), $this->syncProfileTypes($capability));
 
             $pages++;
 
@@ -547,7 +549,7 @@ class ClientSyncService
     /**
      * @return array{processed:int,complete:bool}
      */
-    private function processV2Tombstones(ClientSyncRun $run, int $perPage, SyncSliceBudget $budget): array
+    private function processV2Tombstones(ClientSyncRun $run, int $perPage, array $capability, SyncSliceBudget $budget): array
     {
         $runService = app(ClientSyncRunService::class);
         $removedAfter = $this->platform->client_sync_tombstone_checkpoint_at
@@ -568,7 +570,7 @@ class ClientSyncService
                 'removed_before' => $removedUpperBound,
                 'cursor_removed_at' => $cursorRemovedAt,
                 'cursor_post_id' => $cursorPostId,
-            ], static fn ($value) => $value !== null && $value !== ''));
+            ], static fn ($value) => $value !== null && $value !== ''), $this->syncProfileTypes($capability));
 
             $pages++;
 
@@ -845,6 +847,7 @@ class ClientSyncService
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $newBadgeMode = $this->resolveNewBadgeMode($wpClient);
+        $clientType = $this->normalizeClientType($wpClient['client_type'] ?? 'escort');
         // Preserve 'field' attribution against WP overrides (WP only knows 'crm_provisioned').
         $signupSource = ($existing?->signup_source === 'field')
             ? 'field'
@@ -856,7 +859,7 @@ class ClientSyncService
             'wp_user_id' => $wpClient['wp_user_id'] ?? null,
             'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
             'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
-            'client_type' => 'escort',
+            'client_type' => $clientType,
             'name' => $name !== '' ? $name : null,
             'phone_normalized' => $phone !== '' ? $phone : null,
             'email' => $email !== '' ? $email : null,
@@ -881,7 +884,7 @@ class ClientSyncService
             'premium_expire' => $premiumExpire,
             'featured' => (bool) ($wpClient['featured'] ?? false),
             'featured_expire' => $featuredExpire,
-            'escort_expire' => $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire),
+            'escort_expire' => $this->resolveProfileExpiry($wpClient, $premiumExpire, $featuredExpire, $clientType),
             'verified' => (bool) ($wpClient['verified'] ?? false),
             'force_new' => $newBadgeMode === 'force_on',
             'new_badge_mode' => $newBadgeMode,
@@ -973,10 +976,9 @@ class ClientSyncService
 
     /**
      * @param  SyncSliceBudget|null  $budget  when supplied, pruning stops once
-     *         the slice budget is spent. The query is inherently resumable —
-     *         it selects clients not seen since the run started — so the next
-     *         slice simply picks up the remainder.
-     *
+     *                                        the slice budget is spent. The query is inherently resumable —
+     *                                        it selects clients not seen since the run started — so the next
+     *                                        slice simply picks up the remainder.
      * @return array{deleted:int,complete:bool}
      */
     private function pruneClientsNotSeenInReconcile(ClientSyncRun $run, ?SyncSliceBudget $budget = null): array
@@ -1034,9 +1036,11 @@ class ClientSyncService
                 return [
                     'protocol' => 'v2',
                     'status' => 'v2',
-                    'meta' => [
-                        'sync_contract_version' => $this->platform->client_sync_contract_version ?: '2',
-                    ],
+                    'meta' => is_array($this->platform->client_sync_capability_meta)
+                        ? $this->platform->client_sync_capability_meta
+                        : [
+                            'sync_contract_version' => $this->platform->client_sync_contract_version ?: '2',
+                        ],
                 ];
             }
 
@@ -1060,6 +1064,7 @@ class ClientSyncService
                 'client_sync_capability_status' => 'v2',
                 'client_sync_protocol' => 'v2',
                 'client_sync_contract_version' => (string) ($meta['sync_contract_version'] ?? '2'),
+                'client_sync_capability_meta' => $meta,
             ])->save();
 
             return [
@@ -1074,6 +1079,7 @@ class ClientSyncService
                 'client_sync_capability_checked_at' => now(),
                 'client_sync_capability_status' => 'legacy_not_found',
                 'client_sync_protocol' => 'v1',
+                'client_sync_capability_meta' => $meta,
             ])->save();
 
             return [
@@ -1138,7 +1144,13 @@ class ClientSyncService
 
     private function resolveEscortExpiry(array $wpClient, ?int $premiumExpire, ?int $featuredExpire): ?int
     {
-        $directExpiry = $this->ensureUnixTimestamp($wpClient['escort_expire'] ?? null);
+        return $this->resolveProfileExpiry($wpClient, $premiumExpire, $featuredExpire, 'escort');
+    }
+
+    private function resolveProfileExpiry(array $wpClient, ?int $premiumExpire, ?int $featuredExpire, string $clientType): ?int
+    {
+        $expiryKey = $this->normalizeClientType($clientType) === 'agency' ? 'agency_expire' : 'escort_expire';
+        $directExpiry = $this->ensureUnixTimestamp($wpClient[$expiryKey] ?? null);
         if ($directExpiry !== null) {
             return $directExpiry;
         }
@@ -1153,6 +1165,29 @@ class ClientSyncService
         }
 
         return max($fallbacks);
+    }
+
+    private function normalizeClientType(mixed $value): string
+    {
+        return strtolower(trim((string) $value)) === 'agency' ? 'agency' : 'escort';
+    }
+
+    private function syncProfileTypes(array $capability = []): array
+    {
+        $meta = is_array($capability['meta'] ?? null)
+            ? $capability['meta']
+            : (is_array($this->platform->client_sync_capability_meta) ? $this->platform->client_sync_capability_meta : []);
+
+        $supportedTypes = array_map(
+            static fn ($type) => strtolower(trim((string) $type)),
+            is_array($meta['supports_profile_types'] ?? null) ? $meta['supports_profile_types'] : []
+        );
+
+        if ((bool) $this->platform->client_sync_include_agencies && in_array('agency', $supportedTypes, true)) {
+            return ['escort', 'agency'];
+        }
+
+        return [];
     }
 
     /**

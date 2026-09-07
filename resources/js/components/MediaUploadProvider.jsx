@@ -362,7 +362,7 @@ export function MediaUploadProvider({ children }) {
                 updateUpload(uploadId, (upload) => ({
                     ...upload,
                     status: 'uploading',
-                    message: `Uploading ${index + 1} of ${uploadItems.length}: ${item.name}`,
+                    message: `Uploading ${index + 1} of ${uploadItems.length} files`,
                     items: upload.items.map((currentItem) => (
                         currentItem.id === item.id
                             ? { ...currentItem, status: 'uploading', percent: 0, message: 'Uploading' }

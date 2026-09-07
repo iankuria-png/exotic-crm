@@ -11,7 +11,8 @@ class WpProfileFieldValidator
      * @param  array<string, mixed>  $fields
      * @param  array{
      *   currency_catalog_ids?: array<int, int|string>,
-     *   current_currency_id?: int|string|null
+     *   current_currency_id?: int|string|null,
+     *   client_type?: string|null
      * }  $context
      * @return array<string, mixed>
      */
@@ -19,42 +20,49 @@ class WpProfileFieldValidator
     {
         $normalized = [];
         $errors = [];
-        $allowed = array_flip(WpProfileFieldCatalog::editableFields());
+        $clientType = strtolower(trim((string) ($context['client_type'] ?? 'escort')));
+        $allowed = array_flip(WpProfileFieldCatalog::editableFields($clientType));
         $enumMaps = WpProfileFieldCatalog::enumMaps();
 
         foreach ($fields as $key => $value) {
-            if (!is_string($key) || $key === '') {
+            if (! is_string($key) || $key === '') {
                 continue;
             }
 
-            if (!array_key_exists($key, $allowed)) {
+            if (! array_key_exists($key, $allowed)) {
                 $errors[$key] = 'This field is not editable via CRM.';
+
                 continue;
             }
 
             if (in_array($key, WpProfileFieldCatalog::RATE_FIELDS, true)) {
                 if ($value === null || $value === '') {
                     $normalized[$key] = null;
+
                     continue;
                 }
 
-                if (!is_numeric($value)) {
+                if (! is_numeric($value)) {
                     $errors[$key] = 'Rates must be numeric.';
+
                     continue;
                 }
 
                 $normalized[$key] = (string) $value;
+
                 continue;
             }
 
             if (in_array($key, WpProfileFieldCatalog::ARRAY_FIELDS, true)) {
                 if ($value === null || $value === '') {
                     $normalized[$key] = null;
+
                     continue;
                 }
 
-                if (!is_array($value)) {
+                if (! is_array($value)) {
                     $errors[$key] = 'This field must be an array.';
+
                     continue;
                 }
 
@@ -68,34 +76,39 @@ class WpProfileFieldValidator
                         continue;
                     }
 
-                    if (!in_array($candidate, $validCodes, true)) {
+                    if (! in_array($candidate, $validCodes, true)) {
                         $errors[$key] = 'One or more selected values are invalid.';
+
                         continue 2;
                     }
 
-                    if (!in_array($candidate, $items, true)) {
+                    if (! in_array($candidate, $items, true)) {
                         $items[] = $candidate;
                     }
                 }
 
                 $normalized[$key] = $items === [] ? null : $items;
+
                 continue;
             }
 
             if (in_array($key, WpProfileFieldCatalog::ENUM_FIELDS, true)) {
                 if ($value === null || $value === '') {
                     $normalized[$key] = null;
+
                     continue;
                 }
 
                 $candidate = trim((string) $value);
                 $lookupKey = str_starts_with($key, 'language') ? 'languagelevel' : $key;
-                if (!array_key_exists($candidate, $enumMaps[$lookupKey] ?? [])) {
+                if (! array_key_exists($candidate, $enumMaps[$lookupKey] ?? [])) {
                     $errors[$key] = 'This field must be selected from the approved list.';
+
                     continue;
                 }
 
                 $normalized[$key] = $candidate;
+
                 continue;
             }
 
@@ -106,7 +119,7 @@ class WpProfileFieldValidator
                         break;
                     }
 
-                    if (!is_numeric($value) || (int) $value <= 0) {
+                    if (! is_numeric($value) || (int) $value <= 0) {
                         $errors[$key] = 'Currency must be a valid numeric identifier.';
                         break;
                     }
@@ -117,7 +130,7 @@ class WpProfileFieldValidator
                         ? (int) $context['current_currency_id']
                         : null;
 
-                    if (!in_array($currencyId, $catalogIds, true) && $currencyId !== $currentCurrencyId) {
+                    if (! in_array($currencyId, $catalogIds, true) && $currencyId !== $currentCurrencyId) {
                         $errors[$key] = 'Currency must be selected from the approved list.';
                         break;
                     }
@@ -192,11 +205,11 @@ class WpProfileFieldValidator
         $hasRegion = array_key_exists('region_id', $fields);
         $hasCity = array_key_exists('city_id', $fields);
 
-        if (!$hasRegion && !$hasCity) {
+        if (! $hasRegion && ! $hasCity) {
             return;
         }
 
-        if (!$hasRegion || !$hasCity) {
+        if (! $hasRegion || ! $hasCity) {
             $errors['location'] = 'Region and city must be provided together.';
             unset($fields['region_id'], $fields['city_id']);
 
@@ -213,7 +226,7 @@ class WpProfileFieldValidator
             return;
         }
 
-        if (!is_numeric($region) || (int) $region <= 0) {
+        if (! is_numeric($region) || (int) $region <= 0) {
             $errors['location'] = 'Region and city must be valid identifiers or both null.';
             unset($fields['region_id'], $fields['city_id']);
 
@@ -228,7 +241,7 @@ class WpProfileFieldValidator
             return;
         }
 
-        if (!is_numeric($city) || (int) $city <= 0) {
+        if (! is_numeric($city) || (int) $city <= 0) {
             $errors['location'] = 'Region and city must be valid identifiers or both null.';
             unset($fields['region_id'], $fields['city_id']);
 

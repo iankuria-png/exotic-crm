@@ -15,13 +15,11 @@ use App\Models\RenewalRun;
 use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\User;
-use App\Services\MarketAuthorizationService;
 use App\Services\Messaging\DispatchResult;
 use App\Services\Messaging\MessageRecipient;
 use App\Services\Messaging\MessagingDispatcher;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -42,8 +40,7 @@ class RenewalService
         private readonly MessagingDispatcher $messagingDispatcher,
         private readonly LifecycleSmsService $lifecycleSmsService,
         private readonly ClientProfileMetricsService $profileMetricsService
-    ) {
-    }
+    ) {}
 
     /**
      * Renewal template variables: base client vars + freshness-gated profile
@@ -89,6 +86,7 @@ class RenewalService
                 'deals.cancellation_notes as deal_cancellation_notes',
                 'deals.cancelled_payment_id as deal_cancelled_payment_id'
             )
+            ->where('clients.client_type', 'escort')
             ->where(function ($q) use ($includeUntracked) {
                 $q->whereNotNull('deals.id')
                     ->orWhereNotNull('clients.escort_expire')
@@ -107,13 +105,13 @@ class RenewalService
                 }
             });
 
-        if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+        if (! empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
             $query->whereIn('clients.platform_id', $filters['platform_ids']);
-        } elseif (!empty($filters['platform_id'])) {
+        } elseif (! empty($filters['platform_id'])) {
             $query->where('clients.platform_id', (int) $filters['platform_id']);
         }
 
-        if (!empty($filters['search'])) {
+        if (! empty($filters['search'])) {
             $search = trim((string) $filters['search']);
             $query->where(function ($q) use ($search) {
                 $q->where('clients.name', 'like', "%{$search}%")
@@ -121,18 +119,18 @@ class RenewalService
             });
         }
 
-        if (!empty($filters['high_risk'])) {
+        if (! empty($filters['high_risk'])) {
             $query->where('clients.is_high_risk', true);
         }
 
-        if (!empty($filters['cancellation_reason_code'])) {
+        if (! empty($filters['cancellation_reason_code'])) {
             $query->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
         }
 
         $bucket = (string) ($filters['bucket'] ?? 'all');
         $this->applyBucketFilter($query, $bucket);
 
-        if (!empty($filters['status'])) {
+        if (! empty($filters['status'])) {
             $this->applyStatusFilter($query, (string) $filters['status']);
         }
 
@@ -143,20 +141,20 @@ class RenewalService
             ->paginate($perPage);
 
         $targetRows = $targets->getCollection();
-        $dealIds = $targetRows->pluck('deal_id')->filter()->map(fn($id) => (int) $id)->values();
-        $clientIds = $targetRows->pluck('id')->filter()->map(fn($id) => (int) $id)->values();
+        $dealIds = $targetRows->pluck('deal_id')->filter()->map(fn ($id) => (int) $id)->values();
+        $clientIds = $targetRows->pluck('id')->filter()->map(fn ($id) => (int) $id)->values();
 
         $paidDealIds = Payment::query()
             ->reportableSuccessful()
             ->whereIn('deal_id', $dealIds)
             ->pluck('deal_id')
-            ->map(fn($id) => (int) $id)
+            ->map(fn ($id) => (int) $id)
             ->flip();
 
         $telemetryByKey = $this->buildTelemetryMap($dealIds, $clientIds);
         $platformIdsForCatalog = $targetRows->pluck('platform_id')
-            ->filter(fn($id) => !empty($id))
-            ->map(fn($id) => (int) $id)
+            ->filter(fn ($id) => ! empty($id))
+            ->map(fn ($id) => (int) $id)
             ->unique()
             ->values();
 
@@ -164,11 +162,11 @@ class RenewalService
             ->where('is_active', true)
             ->when(
                 $platformIdsForCatalog->isNotEmpty(),
-                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIdsForCatalog->all())
+                fn (Builder $builder) => $builder->whereIn('platform_id', $platformIdsForCatalog->all())
             )
             ->get(['id', 'platform_id', 'name', 'monthly_price', 'biweekly_price', 'weekly_price', 'currency'])
-            ->groupBy(fn(Product $product) => (int) $product->platform_id)
-            ->map(fn(Collection $products) => $products->keyBy(fn(Product $product) => strtolower((string) $product->name)));
+            ->groupBy(fn (Product $product) => (int) $product->platform_id)
+            ->map(fn (Collection $products) => $products->keyBy(fn (Product $product) => strtolower((string) $product->name)));
 
         $targets->setCollection(
             $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey, $activeProductCatalogByPlatform) {
@@ -180,14 +178,14 @@ class RenewalService
                 );
                 $daysLeft = $this->daysUntil($expiryDate);
 
-                $hasWpStateConflict = !$client->deal_id
-                    && !$expiryDate
+                $hasWpStateConflict = ! $client->deal_id
+                    && ! $expiryDate
                     && $client->profile_status === 'publish'
                     && ((bool) $client->needs_payment || (bool) $client->notactive);
-                $isUntracked = !$client->deal_id
-                    && !$expiryDate
+                $isUntracked = ! $client->deal_id
+                    && ! $expiryDate
                     && $client->profile_status === 'publish'
-                    && !$hasWpStateConflict;
+                    && ! $hasWpStateConflict;
                 $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
                 $remindersPaused = $client->activeDeal ? $this->isReminderPaused($client->activeDeal) : false;
 
@@ -197,7 +195,7 @@ class RenewalService
                         ? $this->bucketForDaysExpired($daysLeft)
                         : $this->bucketForDays($daysLeft));
 
-                if (!$expiryDate && $client->profile_status === 'private') {
+                if (! $expiryDate && $client->profile_status === 'private') {
                     $renewalBucket = 'lapsed';
                     $status = 'expired';
                 }
@@ -212,7 +210,7 @@ class RenewalService
                     : ($client->deal_id
                         ? ($client->deal_origin === 'mpesa_import' ? 'mpesa_import' : 'modern')
                         : 'legacy');
-                $clientDeactivation = !$client->deal_id
+                $clientDeactivation = ! $client->deal_id
                     ? $this->clientSubscriptionActionResolver->resolveNoDealDeactivation($client, [
                         'has_active_deal' => false,
                         'has_tracked_deal_history' => false,
@@ -224,7 +222,7 @@ class RenewalService
                         'deactivation_disabled_reason' => null,
                     ];
                 $paymentStatus = $client->deal_id && $paidDealIds->has((int) $client->deal_id) ? 'verified' : 'unlinked';
-                $telemetryKey = $client->deal_id ? 'deal_' . $client->deal_id : 'client_' . $client->id;
+                $telemetryKey = $client->deal_id ? 'deal_'.$client->deal_id : 'client_'.$client->id;
                 $telemetry = $telemetryByKey->get($telemetryKey, [
                     'reminders_sent_count' => 0,
                     'reminders_failed_count' => 0,
@@ -244,7 +242,7 @@ class RenewalService
                 $inferredProductName = null;
                 $platformProductCatalog = $activeProductCatalogByPlatform->get((int) $client->platform_id, collect());
 
-                if (!$client->deal_id) {
+                if (! $client->deal_id) {
                     if ((bool) $client->featured) {
                         $inferredPlanType = 'vip';
                         $inferredProductName = 'VIP';
@@ -257,7 +255,7 @@ class RenewalService
                     }
                 }
 
-                $legacyEstimate = !$client->deal_id
+                $legacyEstimate = ! $client->deal_id
                     ? $this->estimateLegacySubscription(
                         $inferredPlanType,
                         $platformProductCatalog,
@@ -270,10 +268,10 @@ class RenewalService
                     ];
 
                 return array_merge($record, [
-                    'id' => $client->deal_id ? (int) $client->deal_id : ('virtual_' . $client->id),
+                    'id' => $client->deal_id ? (int) $client->deal_id : ('virtual_'.$client->id),
                     'client_id' => $client->id,
                     'client' => $record,
-                    'is_virtual' => !$client->deal_id,
+                    'is_virtual' => ! $client->deal_id,
                     'is_untracked' => $isUntracked,
                     'has_wp_state_conflict' => $hasWpStateConflict,
                     'wp_profile_state_label' => $hasWpStateConflict ? 'WP state conflict' : null,
@@ -305,8 +303,8 @@ class RenewalService
                     'product_id' => $client->deal_product_id,
                     'inferred_plan_type' => $inferredPlanType,
                     'inferred_product_name' => $inferredProductName,
-                    'amount_is_estimate' => !$isUntracked && !$client->deal_id && $client->deal_amount === null && $legacyEstimate['amount'] !== null,
-                    'duration_is_estimate' => !$isUntracked && !$client->deal_id && $client->deal_duration === null && !empty($legacyEstimate['duration']),
+                    'amount_is_estimate' => ! $isUntracked && ! $client->deal_id && $client->deal_amount === null && $legacyEstimate['amount'] !== null,
+                    'duration_is_estimate' => ! $isUntracked && ! $client->deal_id && $client->deal_duration === null && ! empty($legacyEstimate['duration']),
                     'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
                     'status' => $status,
                     'days_left' => $daysLeft,
@@ -348,13 +346,13 @@ class RenewalService
                 }
             });
 
-        if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+        if (! empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
             $summaryBase->whereIn('clients.platform_id', $filters['platform_ids']);
-        } elseif (!empty($filters['platform_id'])) {
+        } elseif (! empty($filters['platform_id'])) {
             $summaryBase->where('clients.platform_id', (int) $filters['platform_id']);
         }
 
-        if (!empty($filters['search'])) {
+        if (! empty($filters['search'])) {
             $search = trim((string) $filters['search']);
             $summaryBase->where(function ($q) use ($search) {
                 $q->where('clients.name', 'like', "%{$search}%")
@@ -362,11 +360,11 @@ class RenewalService
             });
         }
 
-        if (!empty($filters['high_risk'])) {
+        if (! empty($filters['high_risk'])) {
             $summaryBase->where('clients.is_high_risk', true);
         }
 
-        if (!empty($filters['cancellation_reason_code'])) {
+        if (! empty($filters['cancellation_reason_code'])) {
             $summaryBase->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
         }
 
@@ -416,12 +414,12 @@ class RenewalService
                 ->whereNotNull('activated_at')
                 ->where('activated_at', '>=', now()->startOfMonth())
                 ->when(
-                    !empty($filters['platform_ids']) && is_array($filters['platform_ids']),
-                    fn($q) => $q->whereIn('platform_id', $filters['platform_ids'])
+                    ! empty($filters['platform_ids']) && is_array($filters['platform_ids']),
+                    fn ($q) => $q->whereIn('platform_id', $filters['platform_ids'])
                 )
                 ->when(
-                    empty($filters['platform_ids']) && !empty($filters['platform_id']),
-                    fn($q) => $q->where('platform_id', (int) $filters['platform_id'])
+                    empty($filters['platform_ids']) && ! empty($filters['platform_id']),
+                    fn ($q) => $q->where('platform_id', (int) $filters['platform_id'])
                 )
                 ->count(),
             'untracked_active' => (int) ($summaryRow->untracked_active ?? 0),
@@ -441,7 +439,7 @@ class RenewalService
             ->with(['campaign.template:id,title', 'runner:id,name'])
             ->when(
                 $viewer && $viewer->role !== MarketAuthorizationService::ROLE_ADMIN,
-                fn(Builder $builder) => $builder->where('run_by', $viewer->id)
+                fn (Builder $builder) => $builder->where('run_by', $viewer->id)
             )
             ->orderByDesc('run_at')
             ->limit(10)
@@ -481,13 +479,13 @@ class RenewalService
                 }
             });
 
-        if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+        if (! empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
             $summaryBase->whereIn('clients.platform_id', $filters['platform_ids']);
-        } elseif (!empty($filters['platform_id'])) {
+        } elseif (! empty($filters['platform_id'])) {
             $summaryBase->where('clients.platform_id', (int) $filters['platform_id']);
         }
 
-        if (!empty($filters['search'])) {
+        if (! empty($filters['search'])) {
             $search = trim((string) $filters['search']);
             $summaryBase->where(function ($q) use ($search) {
                 $q->where('clients.name', 'like', "%{$search}%")
@@ -495,11 +493,11 @@ class RenewalService
             });
         }
 
-        if (!empty($filters['high_risk'])) {
+        if (! empty($filters['high_risk'])) {
             $summaryBase->where('clients.is_high_risk', true);
         }
 
-        if (!empty($filters['cancellation_reason_code'])) {
+        if (! empty($filters['cancellation_reason_code'])) {
             $summaryBase->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
         }
 
@@ -583,10 +581,10 @@ class RenewalService
             ->where('status', 'active')
             ->when(
                 $platformId !== null,
-                fn(Builder $q) => $q->where(
-                    fn(Builder $qq) => $qq->whereNull('platform_id')->orWhere('platform_id', $platformId)
+                fn (Builder $q) => $q->where(
+                    fn (Builder $qq) => $qq->whereNull('platform_id')->orWhere('platform_id', $platformId)
                 ),
-                fn(Builder $q) => $q->whereNull('platform_id')
+                fn (Builder $q) => $q->whereNull('platform_id')
             )
             ->orderByDesc('id')
             ->get(['id', 'title', 'channel', 'platform_id']);
@@ -622,7 +620,7 @@ class RenewalService
         /** @var Product|null $product */
         $product = $activeProductCatalog->get(strtolower($planType));
 
-        if (!$product) {
+        if (! $product) {
             return [
                 'amount' => null,
                 'duration' => 'monthly',
@@ -666,13 +664,13 @@ class RenewalService
                         ->orWhere('clients.profile_status', 'private');
                 });
 
-            if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+            if (! empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
                 $query->whereIn('clients.platform_id', $filters['platform_ids']);
-            } elseif (!empty($filters['platform_id'])) {
+            } elseif (! empty($filters['platform_id'])) {
                 $query->where('clients.platform_id', (int) $filters['platform_id']);
             }
 
-            if (!empty($filters['search'])) {
+            if (! empty($filters['search'])) {
                 $search = trim((string) $filters['search']);
                 $query->where(function ($q) use ($search) {
                     $q->where('clients.name', 'like', "%{$search}%")
@@ -680,21 +678,21 @@ class RenewalService
                 });
             }
 
-            if (!empty($filters['high_risk'])) {
+            if (! empty($filters['high_risk'])) {
                 $query->where('clients.is_high_risk', true);
             }
 
-            if (!empty($filters['cancellation_reason_code'])) {
+            if (! empty($filters['cancellation_reason_code'])) {
                 $query->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
             }
 
-            if (!empty($filters['bucket'])) {
+            if (! empty($filters['bucket'])) {
                 $this->applyBucketFilter($query, (string) $filters['bucket']);
             } else {
                 $this->applyBucketFilter($query, 'all');
             }
 
-            if (!empty($filters['status'])) {
+            if (! empty($filters['status'])) {
                 $this->applyStatusFilter($query, (string) $filters['status']);
             }
 
@@ -705,10 +703,11 @@ class RenewalService
                     $row->premium_expire,
                     $row->featured_expire
                 );
+
                 return [
                     'deal_id' => $row->deal_id,
                     'client_id' => $row->client_id,
-                    'is_virtual' => !$row->deal_id,
+                    'is_virtual' => ! $row->deal_id,
                     'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
                 ];
             })->toArray();
@@ -723,11 +722,11 @@ class RenewalService
 
         foreach ($targets as $target) {
             try {
-                if (!empty($target['deal_id'])) {
+                if (! empty($target['deal_id'])) {
                     $deal = Deal::query()->with('client.platform')->findOrFail((int) $target['deal_id']);
                 } else {
                     $client = Client::query()->with('platform')->findOrFail((int) $target['client_id']);
-                    $deal = new Deal();
+                    $deal = new Deal;
                     $deal->client_id = $client->id;
                     $deal->platform_id = $client->platform_id;
                     $deal->client = $client;
@@ -741,8 +740,8 @@ class RenewalService
                         ? Template::query()->where('id', $templateId)->where('channel', $channel)->first()
                         : $this->resolveDefaultRenewalTemplate($deal, $channel);
                     $hasClient = $deal->client !== null;
-                    $canSend = $hasClient && $template !== null && !$paused;
-                    $skipReason = $paused ? 'paused' : (!$hasClient ? 'no_client' : ($template === null ? 'no_template' : null));
+                    $canSend = $hasClient && $template !== null && ! $paused;
+                    $skipReason = $paused ? 'paused' : (! $hasClient ? 'no_client' : ($template === null ? 'no_template' : null));
 
                     $preview[] = [
                         'deal_id' => $deal->id ?: null,
@@ -752,11 +751,12 @@ class RenewalService
                         'can_send' => $canSend,
                         'skip_reason' => $skipReason,
                     ];
+
                     continue;
                 }
 
                 $res = $this->sendManualReminder($deal, $templateId, $actorId, $channel);
-                if (!empty($res['success'])) {
+                if (! empty($res['success'])) {
                     $sent++;
                 } else {
                     $failed++;
@@ -777,7 +777,8 @@ class RenewalService
         }
 
         if ($dryRun) {
-            $sendable = count(array_filter($preview, fn($p) => $p['can_send']));
+            $sendable = count(array_filter($preview, fn ($p) => $p['can_send']));
+
             return [
                 'dry_run' => true,
                 'total' => count($preview),
@@ -799,7 +800,7 @@ class RenewalService
     {
         if (is_int($campaignIds)) {
             $campaignIds = [$campaignIds];
-        } elseif (!is_array($campaignIds)) {
+        } elseif (! is_array($campaignIds)) {
             $campaignIds = null;
         }
 
@@ -851,26 +852,26 @@ class RenewalService
      */
     private function buildCampaignRunPlan(?array $campaignIds, ?array $platformIds, string $channel, array $options): array
     {
-        $applyChannel = fn(Builder $builder) => $builder->when(
+        $applyChannel = fn (Builder $builder) => $builder->when(
             $channel !== '',
-            fn(Builder $q) => $q->whereHas('template', fn(Builder $t) => $t->where('channel', $channel))
+            fn (Builder $q) => $q->whereHas('template', fn (Builder $t) => $t->where('channel', $channel))
         );
 
         // Operator-driven path: explicit campaign selection or a manual target list.
-        if ((is_array($campaignIds) && !empty($campaignIds)) || !empty($options['targets'])) {
+        if ((is_array($campaignIds) && ! empty($campaignIds)) || ! empty($options['targets'])) {
             $campaigns = $applyChannel(
                 RenewalCampaign::query()
                     ->with('template')
                     ->where('enabled', true)
                     ->when(
-                        is_array($campaignIds) && !empty($campaignIds),
-                        fn(Builder $builder) => $builder->whereIn('id', $campaignIds)
+                        is_array($campaignIds) && ! empty($campaignIds),
+                        fn (Builder $builder) => $builder->whereIn('id', $campaignIds)
                     )
             )
                 ->orderBy('trigger_days')
                 ->get();
 
-            return $campaigns->map(fn(RenewalCampaign $campaign) => [
+            return $campaigns->map(fn (RenewalCampaign $campaign) => [
                 'campaign' => $campaign,
                 'platform_ids' => $platformIds,
             ])->all();
@@ -890,7 +891,7 @@ class RenewalService
         // No market has its own cadence yet -> preserve the exact legacy behaviour of
         // running the global set across the requested scope in a single pass.
         if ($marketCampaigns->isEmpty()) {
-            return $globalCampaigns->map(fn(RenewalCampaign $campaign) => [
+            return $globalCampaigns->map(fn (RenewalCampaign $campaign) => [
                 'campaign' => $campaign,
                 'platform_ids' => $platformIds,
             ])->all();
@@ -898,14 +899,14 @@ class RenewalService
 
         $scopePlatformIds = is_array($platformIds)
             ? array_values(array_unique(array_map('intval', $platformIds)))
-            : Platform::query()->pluck('id')->map(fn($id) => (int) $id)->all();
+            : Platform::query()->pluck('id')->map(fn ($id) => (int) $id)->all();
 
         $plan = [];
         $marketsWithOwn = [];
 
         foreach ($marketCampaigns as $platformId => $campaigns) {
             $platformId = (int) $platformId;
-            if (!in_array($platformId, $scopePlatformIds, true)) {
+            if (! in_array($platformId, $scopePlatformIds, true)) {
                 continue;
             }
             $marketsWithOwn[] = $platformId;
@@ -915,7 +916,7 @@ class RenewalService
         }
 
         $marketsUsingGlobal = array_values(array_diff($scopePlatformIds, $marketsWithOwn));
-        if (!empty($marketsUsingGlobal) && $globalCampaigns->isNotEmpty()) {
+        if (! empty($marketsUsingGlobal) && $globalCampaigns->isNotEmpty()) {
             foreach ($globalCampaigns as $campaign) {
                 $plan[] = ['campaign' => $campaign, 'platform_ids' => $marketsUsingGlobal];
             }
@@ -926,7 +927,7 @@ class RenewalService
 
     public function runAutomatedRenewals(?int $actorId = null, ?array $platformIds = null, array $options = []): array
     {
-        $deals = !empty($options['targets']) && is_array($options['targets'])
+        $deals = ! empty($options['targets']) && is_array($options['targets'])
             ? $this->targetWalletAutoRenewDealsFromTargets(collect($options['targets']), $platformIds)
             : $this->targetDealsForWalletAutoRenew($platformIds);
 
@@ -958,7 +959,7 @@ class RenewalService
             $outcome = $this->handleWalletAutoRenewDeal($deal, $actorId);
             $results[] = $outcome;
 
-            if (!empty($outcome['attempted_charge'])) {
+            if (! empty($outcome['attempted_charge'])) {
                 $totals['attempted_count']++;
             }
 
@@ -990,11 +991,11 @@ class RenewalService
             return [
                 'success' => false,
                 'status' => 'paused',
-                'reason' => 'Renewal reminders are paused for this subscription until ' . $resumeOn . '.',
+                'reason' => 'Renewal reminders are paused for this subscription until '.$resumeOn.'.',
             ];
         }
 
-        if (!$deal->client) {
+        if (! $deal->client) {
             return [
                 'success' => false,
                 'status' => 'failed',
@@ -1015,7 +1016,7 @@ class RenewalService
             ? Template::query()->where('id', $templateId)->where('channel', $channel)->first()
             : $this->resolveDefaultRenewalTemplate($deal, $channel);
 
-        if (!$template) {
+        if (! $template) {
             return [
                 'success' => false,
                 'status' => 'failed',
@@ -1030,11 +1031,11 @@ class RenewalService
 
         $rendered = $this->templateService->renderTemplate($template, $variables);
         $rendered['body'] = rtrim((string) $rendered['body']);
-        if (!empty($rendered['missing'])) {
+        if (! empty($rendered['missing'])) {
             return [
                 'success' => false,
                 'status' => 'failed',
-                'reason' => 'Template rendering missing variables: ' . implode(', ', $rendered['missing']),
+                'reason' => 'Template rendering missing variables: '.implode(', ', $rendered['missing']),
                 'missing' => $rendered['missing'],
             ];
         }
@@ -1229,7 +1230,7 @@ class RenewalService
         $channel = $this->normalizeMessageChannel((string) ($campaign->template?->channel ?: $campaign->channel ?: 'sms'));
         $channelLabel = $this->channelLabel($channel);
 
-        $deals = !empty($options['targets']) && is_array($options['targets'])
+        $deals = ! empty($options['targets']) && is_array($options['targets'])
             ? $this->targetDealsFromOverviewTargets(collect($options['targets']), $platformIds)
             : $this->targetDealsForCampaign($campaign, $platformIds);
 
@@ -1249,7 +1250,7 @@ class RenewalService
                 }
 
                 $shortCycle = $this->shouldSuppressForShortCycle($deal, $campaign);
-                $renewed = !$shortCycle && $this->clientHasRenewedBeyond($deal);
+                $renewed = ! $shortCycle && $this->clientHasRenewedBeyond($deal);
                 $suppressed = $shortCycle || $renewed;
 
                 return [
@@ -1285,6 +1286,7 @@ class RenewalService
         $runnerId = $this->resolveActorId($actorId);
         $runCurrencies = $deals->map(function ($deal) {
             $currency = strtoupper(trim((string) ($deal->currency ?? $deal->deal_currency ?? '')));
+
             return $currency !== '' ? $currency : null;
         })->filter()->unique()->values();
 
@@ -1310,11 +1312,13 @@ class RenewalService
             $entityId = (int) ($deal->id ?: $deal->client_id);
             if ($entityId <= 0) {
                 $failed++;
+
                 continue;
             }
 
             if ($this->alreadyAttemptedToday($entityType, $entityId, $campaign->id)) {
                 $skipped++;
+
                 continue;
             }
 
@@ -1323,13 +1327,15 @@ class RenewalService
             // 7-day plan). Suppressed targets are counted as skipped, not sent.
             if ($this->shouldSuppressForShortCycle($deal, $campaign)) {
                 $skipped++;
+
                 continue;
             }
 
             $deal->loadMissing(['client.platform', 'product']);
-            if (!$deal->client || !$campaign->template) {
+            if (! $deal->client || ! $campaign->template) {
                 $failed++;
                 $this->writeRenewalTimeline($deal, $campaign, $run, false, 'Missing client or template', $channel);
+
                 continue;
             }
 
@@ -1339,6 +1345,7 @@ class RenewalService
             // "expired" win-back on a stale old deal while a newer one is active.
             if ($this->clientHasRenewedBeyond($deal)) {
                 $skipped++;
+
                 continue;
             }
 
@@ -1353,16 +1360,17 @@ class RenewalService
             // trim so the copy doesn't end on a dangling space.
             $rendered['body'] = rtrim((string) $rendered['body']);
 
-            if (!empty($rendered['missing'])) {
+            if (! empty($rendered['missing'])) {
                 $failed++;
                 $this->writeRenewalTimeline(
                     $deal,
                     $campaign,
                     $run,
                     false,
-                    'Missing variables: ' . implode(', ', $rendered['missing']),
+                    'Missing variables: '.implode(', ', $rendered['missing']),
                     $channel
                 );
+
                 continue;
             }
 
@@ -1394,7 +1402,7 @@ class RenewalService
                     (bool) $delivery['success'],
                     $linkInfo['variables']['payment_link'] ?? null,
                     [
-                        'reference' => 'renewal:c' . $campaign->id . ':' . $campaign->trigger_days,
+                        'reference' => 'renewal:c'.$campaign->id.':'.$campaign->trigger_days,
                         'source' => 'automated',
                         'channel' => $channel,
                         'actor_id' => $runnerId,
@@ -1403,7 +1411,7 @@ class RenewalService
             }
 
             DB::transaction(function () use ($deal, $campaign, $run, $rendered, $delivery, $runnerId, $channel, $channelLabel) {
-                $notePrefix = $delivery['success'] ? '[RC' . $campaign->id . "] Renewal {$channelLabel}" : '[RC' . $campaign->id . "] Renewal {$channelLabel} Failed";
+                $notePrefix = $delivery['success'] ? '[RC'.$campaign->id."] Renewal {$channelLabel}" : '[RC'.$campaign->id."] Renewal {$channelLabel} Failed";
 
                 ClientNote::create([
                     'client_id' => $deal->client_id,
@@ -1474,21 +1482,21 @@ class RenewalService
         }
 
         $normalizedTargets = $targets
-            ->filter(fn($row) => is_array($row))
-            ->reject(fn($row) => (!empty($row['is_untracked'])) || (($row['status'] ?? null) === 'untracked'))
+            ->filter(fn ($row) => is_array($row))
+            ->reject(fn ($row) => (! empty($row['is_untracked'])) || (($row['status'] ?? null) === 'untracked'))
             ->values();
 
         $dealIds = $normalizedTargets
-            ->filter(fn($row) => empty($row['is_virtual']) && !empty($row['id']) && is_numeric($row['id']))
+            ->filter(fn ($row) => empty($row['is_virtual']) && ! empty($row['id']) && is_numeric($row['id']))
             ->pluck('id')
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->values();
         $clientIds = $normalizedTargets
-            ->filter(fn($row) => !empty($row['is_virtual']) && !empty($row['client_id']))
+            ->filter(fn ($row) => ! empty($row['is_virtual']) && ! empty($row['client_id']))
             ->pluck('client_id')
-            ->map(fn($id) => (int) $id)
-            ->filter(fn($id) => $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
             ->values();
 
         $dealsById = $dealIds->isEmpty()
@@ -1497,7 +1505,7 @@ class RenewalService
                 ->with(['client.platform', 'product'])
                 ->when(
                     is_array($platformIds),
-                    fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+                    fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
                 )
                 ->whereIn('id', $dealIds->all())
                 ->get()
@@ -1509,21 +1517,21 @@ class RenewalService
                 ->with('platform')
                 ->when(
                     is_array($platformIds),
-                    fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+                    fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
                 )
                 ->whereIn('id', $clientIds->all())
                 ->get()
                 ->keyBy('id');
 
         return $normalizedTargets->map(function (array $row) use ($dealsById, $clientsById) {
-            if (!empty($row['is_virtual'])) {
+            if (! empty($row['is_virtual'])) {
                 $clientId = (int) ($row['client_id'] ?? 0);
                 $client = $clientsById->get($clientId);
-                if (!$client) {
+                if (! $client) {
                     return null;
                 }
 
-                $virtualDeal = new Deal();
+                $virtualDeal = new Deal;
                 $virtualDeal->id = null;
                 $virtualDeal->client_id = (int) $client->id;
                 $virtualDeal->platform_id = (int) $client->platform_id;
@@ -1531,10 +1539,12 @@ class RenewalService
                 $virtualDeal->product = null;
                 $virtualDeal->expires_at = $row['expires_at']
                     ?? $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
+
                 return $virtualDeal;
             }
 
             $dealId = (int) ($row['id'] ?? 0);
+
             return $dealId > 0 ? $dealsById->get($dealId) : null;
         })->filter()->values();
     }
@@ -1561,9 +1571,9 @@ class RenewalService
                 ->where('reminders_paused_until', '>', now()))
             ->when(
                 is_array($platformIds),
-                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+                fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
             )
-            ->when($campaign->product_id, fn(Builder $builder) => $builder->where('product_id', $campaign->product_id))
+            ->when($campaign->product_id, fn (Builder $builder) => $builder->where('product_id', $campaign->product_id))
             ->with(['client.platform', 'product'])
             ->get();
 
@@ -1586,18 +1596,19 @@ class RenewalService
             })
             ->when(
                 is_array($platformIds),
-                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+                fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
             )
             ->with(['platform'])
             ->get()
             ->map(function ($client) {
-                $virtualDeal = new Deal();
+                $virtualDeal = new Deal;
                 $virtualDeal->id = null;
                 $virtualDeal->client_id = (int) $client->id;
                 $virtualDeal->platform_id = (int) $client->platform_id;
                 $virtualDeal->setRelation('client', $client);
                 $virtualDeal->setRelation('product', null);
                 $virtualDeal->expires_at = $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
+
                 return $virtualDeal;
             });
 
@@ -1656,9 +1667,9 @@ class RenewalService
             ->orderByDesc('id')
             ->get(['id', 'entity_type', 'entity_id', 'event_type', 'content', 'created_at']);
 
-        $groupedRows = $rows->groupBy(fn ($row) => $row->entity_type . '_' . $row->entity_id);
+        $groupedRows = $rows->groupBy(fn ($row) => $row->entity_type.'_'.$row->entity_id);
         $walletStates = $walletRows
-            ->groupBy(fn ($row) => $row->entity_type . '_' . $row->entity_id)
+            ->groupBy(fn ($row) => $row->entity_type.'_'.$row->entity_id)
             ->map(fn (Collection $events) => $this->serializeWalletAutoRenewState($events->first()));
 
         return $groupedRows
@@ -1701,9 +1712,9 @@ class RenewalService
             $this->toUnixTimestamp($premiumExpiry),
             $this->toUnixTimestamp($featuredExpiry),
         ];
-        $candidates = array_values(array_filter($candidates, static fn($value) => $value !== null));
+        $candidates = array_values(array_filter($candidates, static fn ($value) => $value !== null));
 
-        $ts = !empty($candidates) ? max($candidates) : null;
+        $ts = ! empty($candidates) ? max($candidates) : null;
         if ($ts === null) {
             return null;
         }
@@ -1746,11 +1757,13 @@ class RenewalService
                         ->orWhereNotNull('clients.featured_expire');
                 });
             });
+
             return;
         }
 
         if ($bucket === 'active') {
             $query->where(DB::raw($dateExpr), '>=', $nowTs);
+
             return;
         }
 
@@ -1760,6 +1773,7 @@ class RenewalService
                     $builder->whereNull('deals.renewal_paused_until')
                         ->orWhere('deals.renewal_paused_until', '>=', now());
                 });
+
             return;
         }
 
@@ -1773,31 +1787,37 @@ class RenewalService
                     $builder->whereNull('clients.notactive')->orWhere('clients.notactive', false);
                 })
                 ->whereRaw("{$dateExpr} IS NULL");
+
             return;
         }
 
         if ($bucket === 'risk') {
             $query->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (3 * 86400)]);
+
             return;
         }
 
         if ($bucket === 'pending') {
             $query->whereBetween(DB::raw($dateExpr), [$nowTs + (4 * 86400), $nowTs + (14 * 86400)]);
+
             return;
         }
 
         if ($bucket === 'workload') {
             $query->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (14 * 86400)]);
+
             return;
         }
 
         if ($bucket === 'stable') {
             $query->where(DB::raw($dateExpr), '>', $nowTs + (14 * 86400));
+
             return;
         }
 
         if ($bucket === 'expired') {
             $query->whereBetween(DB::raw($dateExpr), [$nowTs - (14 * 86400), $nowTs - 1]);
+
             return;
         }
 
@@ -1812,6 +1832,7 @@ class RenewalService
                             ->whereNull('clients.featured_expire');
                     });
             });
+
             return;
         }
 
@@ -1838,6 +1859,7 @@ class RenewalService
                             ->where(DB::raw($dateExpr), '>=', $nowTs);
                     });
             });
+
             return;
         }
 
@@ -1849,6 +1871,7 @@ class RenewalService
                             ->where(DB::raw($dateExpr), '<', $nowTs);
                     });
             });
+
             return;
         }
 
@@ -1862,6 +1885,7 @@ class RenewalService
                     $builder->whereNull('clients.notactive')->orWhere('clients.notactive', false);
                 })
                 ->whereRaw("{$dateExpr} IS NULL");
+
             return;
         }
 
@@ -1888,7 +1912,7 @@ class RenewalService
             ->where('entity_id', $entityId)
             ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed', 'renewal_whatsapp_sent', 'renewal_whatsapp_failed'])
             ->whereDate('created_at', now()->toDateString())
-            ->where('content', 'like', '%"campaign_id":' . $campaignId . '%')
+            ->where('content', 'like', '%"campaign_id":'.$campaignId.'%')
             ->exists();
     }
 
@@ -1907,7 +1931,7 @@ class RenewalService
         $dispatch = $this->messagingDispatcher->dispatch($recipient, $body, 'whatsapp', array_merge($context, [
             'message_type' => 'renewal',
             'suppress_gateway_timeline' => true,
-            'idempotency_key' => 'renewal-' . ($context['campaign_id'] ?? 'manual') . '-' . ($deal->id ?: $deal->client_id) . '-' . sha1($body . '|' . ($context['run_id'] ?? '') . '|' . microtime(true)),
+            'idempotency_key' => 'renewal-'.($context['campaign_id'] ?? 'manual').'-'.($deal->id ?: $deal->client_id).'-'.sha1($body.'|'.($context['run_id'] ?? '').'|'.microtime(true)),
         ]));
 
         return $this->serializeDispatchResult($dispatch);
@@ -2010,7 +2034,7 @@ class RenewalService
         }
 
         $platformId = $deal->platform_id !== null ? (int) $deal->platform_id : null;
-        if (!$this->guardEnabledForPlatform($platformId)) {
+        if (! $this->guardEnabledForPlatform($platformId)) {
             return false;
         }
 
@@ -2032,12 +2056,12 @@ class RenewalService
     private function clientHasRenewedBeyond(Deal $deal): bool
     {
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             return false;
         }
 
         $dealExpiry = $this->normalizeExpiryCarbon($deal->expires_at);
-        if (!$dealExpiry) {
+        if (! $dealExpiry) {
             return false;
         }
 
@@ -2059,7 +2083,7 @@ class RenewalService
 
     private function normalizeExpiryCarbon($value): ?Carbon
     {
-        if (!$value) {
+        if (! $value) {
             return null;
         }
         if ($value instanceof Carbon) {
@@ -2082,7 +2106,7 @@ class RenewalService
             return true;
         }
 
-        if (!array_key_exists($platformId, $this->guardEnabledCache)) {
+        if (! array_key_exists($platformId, $this->guardEnabledCache)) {
             $flag = Platform::query()->whereKey($platformId)->value('renewal_reminder_guard_enabled');
             // Default ON when the market row or column value is absent.
             $this->guardEnabledCache[$platformId] = $flag === null ? true : (bool) $flag;
@@ -2155,7 +2179,7 @@ class RenewalService
 
     private function daysUntil($dateValue): ?int
     {
-        if (!$dateValue) {
+        if (! $dateValue) {
             return null;
         }
 
@@ -2206,11 +2230,11 @@ class RenewalService
 
     private function isReminderPaused(Deal $deal): bool
     {
-        if (!(bool) $deal->renewal_reminders_paused) {
+        if (! (bool) $deal->renewal_reminders_paused) {
             return false;
         }
 
-        if (!$deal->renewal_paused_until) {
+        if (! $deal->renewal_paused_until) {
             return true;
         }
 
@@ -2274,7 +2298,7 @@ class RenewalService
             ->filter(fn ($deal) => $deal instanceof Deal && $deal->id)
             ->filter(fn (Deal $deal) => (string) $deal->status === 'active')
             ->filter(function (Deal $deal) use ($windowStart, $windowEnd) {
-                if (!$deal->expires_at) {
+                if (! $deal->expires_at) {
                     return false;
                 }
 
@@ -2294,7 +2318,7 @@ class RenewalService
             ? $deal->expires_at->copy()
             : ($deal->expires_at ? Carbon::parse($deal->expires_at) : null);
 
-        if (!$cycleExpiresAt) {
+        if (! $cycleExpiresAt) {
             return [
                 'deal_id' => (int) $deal->id,
                 'client_id' => (int) ($deal->client_id ?? 0),
@@ -2418,7 +2442,7 @@ class RenewalService
                 'idempotency_key' => $idempotencyKey,
             ]);
 
-            if (!empty($decision['fallback_method'])) {
+            if (! empty($decision['fallback_method'])) {
                 return $this->sendWalletAutoRenewFallback(
                     $deal,
                     array_merge($decision, [
@@ -2505,7 +2529,7 @@ class RenewalService
 
     private function walletAutoRenewIdempotencyKey(Deal $deal, Carbon $cycleExpiresAt): string
     {
-        return 'wallet-auto-renew:' . $deal->id . ':' . $cycleExpiresAt->format('YmdHis');
+        return 'wallet-auto-renew:'.$deal->id.':'.$cycleExpiresAt->format('YmdHis');
     }
 
     private function recordWalletAutoRenewEvent(Deal $deal, string $eventType, ?int $actorId = null, array $content = []): void
@@ -2523,7 +2547,7 @@ class RenewalService
 
     private function serializeWalletAutoRenewState(?TimelineEvent $event): ?array
     {
-        if (!$event) {
+        if (! $event) {
             return null;
         }
 

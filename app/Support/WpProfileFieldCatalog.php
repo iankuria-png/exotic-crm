@@ -71,6 +71,24 @@ class WpProfileFieldCatalog
         'personal_phone',
     ];
 
+    public const AGENCY_FIELDS = [
+        'name',
+        'phone',
+        'email',
+        'website',
+        'region_id',
+        'city_id',
+        'currency',
+        'content',
+        'bio',
+        'whatsapp',
+        'instagram',
+        'twitter',
+        'telegram',
+        'facebook',
+        'snapchat',
+    ];
+
     public static function enumMaps(): array
     {
         return [
@@ -162,8 +180,12 @@ class WpProfileFieldCatalog
         ];
     }
 
-    public static function editableFields(): array
+    public static function editableFields(?string $clientType = null): array
     {
+        if (self::normalizeClientType($clientType) === 'agency') {
+            return self::AGENCY_FIELDS;
+        }
+
         return array_values(array_unique(array_merge(
             [
                 'region_id',
@@ -177,8 +199,21 @@ class WpProfileFieldCatalog
         )));
     }
 
-    public static function createProvisioningFields(): array
+    public static function createProvisioningFields(?string $clientType = null): array
     {
+        if (self::normalizeClientType($clientType) === 'agency') {
+            return array_values(array_unique(array_merge(
+                [
+                    'post_status',
+                    'username',
+                    'password',
+                    'signup_source',
+                    'provision_request_id',
+                ],
+                self::AGENCY_FIELDS
+            )));
+        }
+
         return array_values(array_unique(array_merge(
             [
                 'region_id',
@@ -196,6 +231,13 @@ class WpProfileFieldCatalog
             self::ARRAY_FIELDS,
             self::RATE_FIELDS
         )));
+    }
+
+    private static function normalizeClientType(?string $clientType): string
+    {
+        return strtolower(trim((string) ($clientType ?: 'escort'))) === 'agency'
+            ? 'agency'
+            : 'escort';
     }
 
     public static function legacyHeightCodeToCm(): array

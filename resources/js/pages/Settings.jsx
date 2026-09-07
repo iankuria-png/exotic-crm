@@ -178,6 +178,7 @@ function buildPlatformEditor(platform) {
         country: platform.country || '',
         is_active: Boolean(platform.is_active),
         lifecycle_policy_enabled: Boolean(platform.lifecycle_policy_enabled),
+        client_sync_include_agencies: Boolean(platform.client_sync?.include_agencies),
         sync_shared_key_enabled: Boolean(platform.sync_shared_key_enabled),
         wp_api_url: platform.wp_sync?.api_url || '',
         wp_api_user: platform.wp_sync?.api_user || '',
@@ -208,6 +209,7 @@ function defaultPlatformForm() {
         domain: '',
         country: '',
         is_active: false,
+        client_sync_include_agencies: false,
         wp_api_url: '',
         wp_api_user: '',
         wp_api_password: '',
@@ -5276,6 +5278,25 @@ function IntegrationsWorkspace({
                                                 ) : null}
                                             </span>
                                         </label>
+                                        <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(editor.client_sync_include_agencies)}
+                                                onChange={(event) => setEditor((current) => ({ ...current, client_sync_include_agencies: event.target.checked }))}
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span>
+                                                <span className="font-medium">Include agency profiles in CRM sync</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    Enables agency profile import and provisioning for this market after the WordPress sync plugin advertises agency support.
+                                                </span>
+                                                {selectedPlatform?.client_sync?.supports_profile_types?.includes?.('agency') ? (
+                                                    <span className="mt-1 block text-xs font-medium text-emerald-700">Agency support detected in the latest sync capability check.</span>
+                                                ) : (
+                                                    <span className="mt-1 block text-xs font-medium text-amber-700">Saving this toggle on will probe WordPress first and fail if agency support is missing.</span>
+                                                )}
+                                            </span>
+                                        </label>
                                         {selectedPlatform?.lifecycle_policy_effective ? (
                                             <div className="md:col-span-2 rounded-lg border border-slate-200 bg-white p-3">
                                                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -5761,6 +5782,11 @@ function IntegrationsWorkspace({
                                                         Deleted stale: <span className="font-medium text-slate-900">{latestClientPruned.toLocaleString()}</span>
                                                     </>
                                                 ) : null}
+                                            </p>
+                                            <p className="mt-1">
+                                                Profile types: <span className="font-medium text-slate-900">{(selectedPlatform?.client_sync?.supports_profile_types || ['escort']).join(', ')}</span>
+                                                {' • '}
+                                                Agency sync: <span className="font-medium text-slate-900">{selectedPlatform?.client_sync?.include_agencies ? 'enabled' : 'disabled'}</span>
                                             </p>
                                             <p className="mt-1">
                                                 Started: <span className="font-medium text-slate-900">{formatDateTime(latestClientSyncRun.started_at || latestClientSyncRun.created_at)}</span>

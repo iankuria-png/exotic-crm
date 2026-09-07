@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\ClientNote;
-use App\Models\ClientSyncExclusion;
 use App\Models\Deal;
 use App\Models\Lead;
 use App\Models\Payment;
@@ -158,6 +157,27 @@ class ClientDeletionFlowTest extends TestCase
             && $request->url() === 'https://example.test/wp-json/exotic-crm-sync/v1/clients/9302/delete');
     }
 
+    public function test_destroy_rejects_agency_clients(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $client = $this->createClient($platform, 9401);
+        $client->update(['client_type' => 'agency']);
+
+        Sanctum::actingAs($manager);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Agency deletion attempt',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('client_type');
+
+        $this->assertDatabaseHas('clients', [
+            'id' => $client->id,
+            'client_type' => 'agency',
+        ]);
+    }
+
     public function test_bulk_delete_preview_applies_filters_and_caps_batches(): void
     {
         $platform = $this->createPlatform();
@@ -224,6 +244,32 @@ class ClientDeletionFlowTest extends TestCase
         ]);
     }
 
+    public function test_bulk_delete_skips_agency_clients(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $escort = $this->createClient($platform, -2);
+        $agency = $this->createClient($platform, 9402);
+        $agency->update(['client_type' => 'agency']);
+
+        Sanctum::actingAs($manager);
+
+        $this->postJson('/api/crm/clients/bulk-delete', [
+            'client_ids' => [$escort->id, $agency->id],
+            'confirm' => 'DELETE',
+            'reason' => 'Clear dormant profiles',
+        ])->assertOk()
+            ->assertJsonPath('deleted_count', 1)
+            ->assertJsonCount(1, 'skipped')
+            ->assertJsonPath('skipped.0.id', $agency->id);
+
+        $this->assertDatabaseMissing('clients', ['id' => $escort->id]);
+        $this->assertDatabaseHas('clients', [
+            'id' => $agency->id,
+            'client_type' => 'agency',
+        ]);
+    }
+
     private function createPlatform(): Platform
     {
         return Platform::factory()->create([
@@ -243,7 +289,7 @@ class ClientDeletionFlowTest extends TestCase
             'platform_id' => $platform->id,
             'name' => 'Premium Plan',
             'display_name' => 'Premium Plan',
-            'slug' => 'premium-plan-' . $platform->id,
+            'slug' => 'premium-plan-'.$platform->id,
             'tier' => 'premium',
             'weekly_price' => 800,
             'biweekly_price' => 1600,

@@ -27,6 +27,7 @@ class ClientSeoPlaceholderService
     public static function applyCandidateScope(Builder $query): Builder
     {
         return $query
+            ->where('client_type', 'escort')
             ->where('profile_status', 'publish')
             ->where(function (Builder $builder): void {
                 $builder->whereNull('needs_payment')->orWhere('needs_payment', false);

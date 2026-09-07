@@ -12,16 +12,16 @@ use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\RenewalRun;
-use App\Services\MarketAuthorizationService;
 use App\Services\ClientFunnelService;
+use App\Services\MarketAuthorizationService;
 use App\Services\ReportingCurrencyService;
 use App\Services\ScorecardDataService;
 use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ReportController extends Controller
 {
@@ -30,8 +30,7 @@ class ReportController extends Controller
         private readonly ClientFunnelService $clientFunnelService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly ScorecardDataService $scorecardDataService
-    ) {
-    }
+    ) {}
 
     public function summary(Request $request)
     {
@@ -46,10 +45,10 @@ class ReportController extends Controller
         $hasExplicitFrom = $request->filled('from');
         $hasExplicitTo = $request->filled('to');
 
-        $from = !empty($validated['from'])
+        $from = ! empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
             : now()->subMonths(5)->startOfMonth();
-        $to = !empty($validated['to'])
+        $to = ! empty($validated['to'])
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
 
@@ -79,7 +78,9 @@ class ReportController extends Controller
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
 
-        $clientsQuery = Client::query()->where('created_at', '>=', $from);
+        $clientsQuery = Client::query()
+            ->where('client_type', 'escort')
+            ->where('created_at', '>=', $from);
         $leadsQuery = Lead::query()
             ->whereBetween('created_at', [$from, $to])
             ->whereNull('archived_at');
@@ -165,13 +166,13 @@ class ReportController extends Controller
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
 
         // Per-currency breakdowns for all KPI revenue fields.
-        $totalRevenueBreakdown   = CurrencyBreakdown::fromPaymentQuery(clone $paymentsQuery);
-        $revenueMtdBreakdown     = CurrencyBreakdown::fromPaymentQuery(clone $revenueMtdQuery);
-        $walletTopupBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsQuery);
+        $totalRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $paymentsQuery);
+        $revenueMtdBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $revenueMtdQuery);
+        $walletTopupBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsQuery);
         $walletTopupMtdBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupMtdQuery);
-        $totalRevenueNormalized   = $this->reportingCurrencyService->normalizePaymentQuery(clone $paymentsQuery, $targetCurrency);
-        $revenueMtdNormalized     = $this->reportingCurrencyService->normalizePaymentQuery(clone $revenueMtdQuery, $targetCurrency);
-        $walletTopupNormalized    = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupsQuery, $targetCurrency);
+        $totalRevenueNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $paymentsQuery, $targetCurrency);
+        $revenueMtdNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $revenueMtdQuery, $targetCurrency);
+        $walletTopupNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupsQuery, $targetCurrency);
         $walletTopupMtdNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupMtdQuery, $targetCurrency);
 
         $kpis = [
@@ -210,10 +211,10 @@ class ReportController extends Controller
         $packageNameExpression = $this->paymentPackageExpression();
         $ownerNameExpression = $this->paymentOwnerExpression();
         $paymentDateExpression = DB::connection()->getDriverName() === 'sqlite'
-            ? "date(COALESCE(payments.completed_at, payments.created_at))"
-            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
-        $platformCountryExpression = "(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
-        $platformNameExpression = "(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
+            ? 'date(COALESCE(payments.completed_at, payments.created_at))'
+            : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
+        $platformCountryExpression = '(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)';
+        $platformNameExpression = '(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)';
 
         $revenueTrendRows = Payment::query()
             ->reportableSuccessful()
@@ -252,9 +253,9 @@ class ReportController extends Controller
         unset($currencyMap);
 
         $revenueTrendRows = $revenueTrendRows->map(fn ($row) => [
-            'month_key'         => $row->month_key,
-            'label'             => $this->formatMonthLabel($row->month_key),
-            'value'             => count($breakdownByMonth[$row->month_key] ?? []) === 1
+            'month_key' => $row->month_key,
+            'label' => $this->formatMonthLabel($row->month_key),
+            'value' => count($breakdownByMonth[$row->month_key] ?? []) === 1
                                        ? array_values($breakdownByMonth[$row->month_key])[0]
                                        : null,
             'revenue_breakdown' => $breakdownByMonth[$row->month_key] ?? [],
@@ -484,7 +485,7 @@ class ReportController extends Controller
             'You do not have access to this report market.'
         );
 
-        if (!$selectedPlatformId) {
+        if (! $selectedPlatformId) {
             $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
             if (is_array($accessiblePlatformIds) && count($accessiblePlatformIds) === 1) {
@@ -492,7 +493,7 @@ class ReportController extends Controller
             }
         }
 
-        if (!$selectedPlatformId) {
+        if (! $selectedPlatformId) {
             return response()->json([
                 'message' => 'Select a market to view profile engagement analytics.',
             ], 422);
@@ -541,12 +542,12 @@ class ReportController extends Controller
         } catch (\Throwable) {
             return null;
         }
-        if (!is_array($value)) {
+        if (! is_array($value)) {
             return null;
         }
         $mode = $value['mode'] ?? 'fresh_start';
         $cutoffDate = $value['cutoff_date'] ?? null;
-        if ($mode !== 'fresh_start' || !$cutoffDate) {
+        if ($mode !== 'fresh_start' || ! $cutoffDate) {
             return null;
         }
         try {
