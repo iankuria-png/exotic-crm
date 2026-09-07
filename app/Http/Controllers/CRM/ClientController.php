@@ -824,6 +824,238 @@ class ClientController extends Controller
         return response()->json($client);
     }
 
+    public function storeManagedProfile(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ($this->normalizeClientType($client->client_type) !== 'agency') {
+            return response()->json([
+                'message' => 'Managed profiles can only be created from an agency client.',
+            ], 422);
+        }
+
+        if ((int) ($client->wp_user_id ?? 0) <= 0) {
+            return response()->json([
+                'message' => 'This agency is missing a WordPress user ID. Sync the agency from WordPress before adding providers.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'phone_normalized' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'city' => 'nullable|string|max:100',
+            'profile_status' => 'nullable|in:publish,private,draft,pending',
+            'birthday' => 'nullable|date_format:Y-m-d',
+            'height' => 'nullable|string|max:50',
+            'weight' => 'nullable|string|max:50',
+            'bio' => 'nullable|string|max:5000',
+            'provision_request_id' => 'nullable|string|max:64',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (empty($validated['phone_normalized'])) {
+            return response()->json([
+                'message' => 'Phone is required when adding an agency-managed provider.',
+            ], 422);
+        }
+
+        $platform = $client->platform ?: Platform::query()->findOrFail((int) $client->platform_id);
+        if (! (bool) $platform->client_sync_include_agencies) {
+            return response()->json([
+                'message' => 'Agency profile operations are not enabled for this market yet.',
+            ], 422);
+        }
+
+        if (! $this->platformHasWpDatabaseCredentials($platform)) {
+            return response()->json([
+                'message' => 'WordPress database credentials are incomplete for this market.',
+            ], 422);
+        }
+
+        $profileStatus = strtolower(trim((string) ($validated['profile_status'] ?? 'private')));
+        if (! in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+            $profileStatus = 'private';
+        }
+
+        $phonePrefix = (string) ($platform->phone_prefix ?: '254');
+        $normalizedPhone = PhoneNormalizer::normalize($validated['phone_normalized'] ?? null, $phonePrefix) ?? '';
+        $name = trim((string) $validated['name']);
+        $assignedTo = (int) ($client->assigned_to ?? 0) > 0
+            ? (int) $client->assigned_to
+            : $this->resolveAssignedOwner((int) $platform->id, $validated, $name);
+        $signupSource = 'crm_provisioned';
+
+        $provisionPayload = [
+            'name' => $name,
+            'email' => ! empty($validated['email']) ? trim((string) $validated['email']) : '',
+            'phone' => $normalizedPhone,
+            'whatsapp' => $normalizedPhone,
+            'city' => ! empty($validated['city']) ? trim((string) $validated['city']) : '',
+            'post_status' => $profileStatus,
+            'signup_source' => $signupSource,
+            'provision_request_id' => ! empty($validated['provision_request_id'])
+                ? trim((string) $validated['provision_request_id'])
+                : (string) Str::uuid(),
+            ...$this->extractProvisioningFields($validated, 'escort'),
+        ];
+
+        try {
+            $provisioningResult = (new WpDirectProvisioningService($platform))
+                ->provisionAgencyManagedEscort($provisionPayload, (int) $client->wp_user_id);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (ConflictHttpException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 409);
+        } catch (\Throwable $exception) {
+            Log::error('Agency managed profile create failed', [
+                'agency_client_id' => (int) $client->id,
+                'platform_id' => (int) $platform->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Managed provider creation failed: '.$exception->getMessage(),
+            ], 500);
+        }
+
+        $wpPostId = (int) ($provisioningResult['wp_post_id'] ?? 0);
+        $wpUserId = (int) ($provisioningResult['wp_user_id'] ?? 0);
+        if ($wpPostId <= 0 || $wpUserId <= 0) {
+            return response()->json([
+                'message' => 'WordPress provisioning did not return valid profile IDs.',
+            ], 500);
+        }
+
+        $managedProfile = Client::updateOrCreate(
+            [
+                'platform_id' => (int) $platform->id,
+                'wp_post_id' => $wpPostId,
+            ],
+            [
+                'wp_user_id' => $wpUserId,
+                'client_type' => 'escort',
+                'name' => $name,
+                'phone_normalized' => $normalizedPhone !== '' ? $normalizedPhone : null,
+                'email' => ! empty($validated['email']) ? trim((string) $validated['email']) : null,
+                'city' => ! empty($validated['city']) ? trim((string) $validated['city']) : null,
+                'region' => $client->region,
+                'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
+                'assigned_to' => $assignedTo,
+                'created_by' => (int) $request->user()->id,
+                'signup_source' => $signupSource,
+                'premium' => false,
+                'featured' => false,
+                'verified' => false,
+                'last_synced_at' => now(),
+                'source_presence_status' => 'present',
+            ]
+        );
+
+        $syncStatus = 'skipped';
+        try {
+            $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+            if ($assignedTo && (int) ($syncedClient->assigned_to ?? 0) !== $assignedTo) {
+                $syncedClient->assigned_to = $assignedTo;
+            }
+            $syncedClient->created_by = $syncedClient->created_by ?: (int) $request->user()->id;
+            $syncedClient->signup_source = $signupSource;
+            $syncedClient->save();
+            $managedProfile = $syncedClient;
+            $syncStatus = 'success';
+        } catch (\Throwable $exception) {
+            $syncStatus = 'failed';
+            Log::warning('Agency managed profile created but syncOne failed', [
+                'agency_client_id' => (int) $client->id,
+                'platform_id' => (int) $platform->id,
+                'wp_post_id' => $wpPostId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        TimelineEvent::create([
+            'platform_id' => (int) $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $managedProfile->id,
+            'event_type' => 'client_created',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'source' => 'agency_managed_profile',
+                'agency_client_id' => (int) $client->id,
+                'agency_name' => $client->name,
+                'wp_post_id' => $wpPostId,
+                'wp_user_id' => $wpUserId,
+                'profile_status' => $managedProfile->profile_status,
+                'sync_status' => $syncStatus,
+                'client_type' => 'escort',
+            ],
+            'created_at' => now(),
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => (int) $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'agency_managed_profile_created',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'managed_client_id' => (int) $managedProfile->id,
+                'managed_profile_name' => $managedProfile->name,
+                'wp_post_id' => $wpPostId,
+                'profile_status' => $managedProfile->profile_status,
+                'sync_status' => $syncStatus,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::CLIENT_CREATE,
+            'client',
+            (int) $managedProfile->id,
+            null,
+            [
+                'source' => 'agency_managed_profile',
+                'agency_client_id' => (int) $client->id,
+                'agency_wp_user_id' => (int) $client->wp_user_id,
+                'name' => $managedProfile->name,
+                'phone_normalized' => $managedProfile->phone_normalized,
+                'email' => $managedProfile->email,
+                'city' => $managedProfile->city,
+                'profile_status' => $managedProfile->profile_status,
+                'assigned_to' => $managedProfile->assigned_to,
+                'wp_post_id' => $managedProfile->wp_post_id,
+                'wp_user_id' => $managedProfile->wp_user_id,
+                'sync_status' => $syncStatus,
+                'client_type' => 'escort',
+            ],
+            $validated['reason'] ?? 'Agency managed provider created from CRM'
+        );
+
+        $managedProfile->load(['platform', 'assignedAgent', 'creator:id,name,email,role', 'activeDeal.product']);
+        $this->decorateExpiryState($managedProfile);
+        $this->decorateLifetimeValue(collect([$managedProfile]));
+
+        $agency = $client->fresh(['platform', 'assignedAgent', 'creator:id,name,email,role']);
+        $this->hydrateBillingPlatformState($agency);
+        $this->appendSubscriptionActionMetadata($agency);
+        $this->appendAgencyManagedProfiles($agency);
+        $this->decorateExpiryState($agency);
+        $this->decorateLifetimeValue(collect([$agency]));
+
+        return response()->json([
+            'message' => 'Managed provider created under this agency.',
+            'client' => $managedProfile,
+            'agency' => $agency,
+            'sync_status' => $syncStatus,
+        ], 201);
+    }
+
     public function contactUnlocks(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);
@@ -1346,23 +1578,57 @@ class ClientController extends Controller
         }
 
         $profiles = Client::query()
+            ->with(['activeDeal.product:id,name,display_name,slug,tier'])
             ->where('platform_id', (int) $client->platform_id)
             ->where('wp_user_id', (int) $client->wp_user_id)
             ->where('client_type', 'escort')
             ->whereKeyNot((int) $client->id)
             ->orderBy('name')
             ->limit(50)
-            ->get(['id', 'name', 'wp_post_id', 'profile_status', 'escort_expire', 'premium', 'featured', 'phone_normalized'])
-            ->map(fn (Client $profile) => [
-                'id' => (int) $profile->id,
-                'name' => (string) ($profile->name ?? 'Unnamed'),
-                'wp_post_id' => (int) ($profile->wp_post_id ?? 0),
-                'profile_status' => (string) ($profile->profile_status ?? ''),
-                'escort_expire' => $profile->escort_expire,
-                'premium' => (bool) $profile->premium,
-                'featured' => (bool) $profile->featured,
-                'phone_normalized' => $profile->phone_normalized,
+            ->get([
+                'id',
+                'name',
+                'wp_post_id',
+                'profile_status',
+                'lifecycle_state',
+                'escort_expire',
+                'premium',
+                'featured',
+                'verified',
+                'phone_normalized',
+                'city',
+                'last_synced_at',
+                'created_at',
+                'updated_at',
             ])
+            ->map(function (Client $profile): array {
+                $activeDeal = $profile->activeDeal;
+
+                return [
+                    'id' => (int) $profile->id,
+                    'name' => (string) ($profile->name ?? 'Unnamed'),
+                    'wp_post_id' => (int) ($profile->wp_post_id ?? 0),
+                    'profile_status' => (string) ($profile->profile_status ?? ''),
+                    'lifecycle_state' => (string) ($profile->lifecycle_state ?? ClientLifecycleState::ACTIVE),
+                    'escort_expire' => $profile->escort_expire,
+                    'premium' => (bool) $profile->premium,
+                    'featured' => (bool) $profile->featured,
+                    'verified' => (bool) $profile->verified,
+                    'phone_normalized' => $profile->phone_normalized,
+                    'city' => $profile->city,
+                    'last_synced_at' => $profile->last_synced_at,
+                    'created_at' => $profile->created_at,
+                    'updated_at' => $profile->updated_at,
+                    'active_deal' => $activeDeal ? [
+                        'id' => (int) $activeDeal->id,
+                        'status' => (string) $activeDeal->status,
+                        'expires_at' => $activeDeal->expires_at,
+                        'product_name' => $activeDeal->product?->display_name
+                            ?: $activeDeal->product?->name
+                            ?: $activeDeal->plan_type,
+                    ] : null,
+                ];
+            })
             ->values()
             ->all();
 

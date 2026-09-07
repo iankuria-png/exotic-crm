@@ -280,6 +280,128 @@ class WpDirectProvisioningService
     }
 
     /**
+     * Create an escort profile owned by an existing agency WordPress user.
+     *
+     * Agency-managed profiles are not independent advertiser accounts in the
+     * WordPress theme. Ownership is expressed by posts.post_author, and media
+     * uploads use the legacy agency{secret} option shape.
+     *
+     * @return array{
+     *   wp_user_id:int,
+     *   wp_post_id:int,
+     *   wp_username:string,
+     *   wp_email:string,
+     *   wp_post_status:string,
+     *   wp_post_type:string,
+     *   linked_existing_user:bool,
+     *   placeholder_email_used:bool,
+     *   managed_by_agency:bool
+     * }
+     */
+    public function provisionAgencyManagedEscort(array $payload, int $agencyUserId): array
+    {
+        if ($agencyUserId <= 0) {
+            throw new \InvalidArgumentException('Agency WordPress user ID is required.');
+        }
+
+        $requestId = $this->normalizeRequestId($payload['provision_request_id'] ?? null);
+        $payloadHash = $this->computePayloadHash([
+            'client_type' => 'escort',
+            'agency_wp_user_id' => $agencyUserId,
+            ...$payload,
+        ]);
+        $name = trim((string) ($payload['name'] ?? ''));
+        if ($name === '') {
+            throw new \InvalidArgumentException('Name is required for agency-managed profile provisioning.');
+        }
+
+        $phone = trim((string) ($payload['phone'] ?? ''));
+        $whatsappPayload = trim((string) ($payload['whatsapp'] ?? ''));
+        $whatsapp = $whatsappPayload !== '' ? $whatsappPayload : $phone;
+        $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
+        $signupSource = trim((string) ($payload['signup_source'] ?? 'crm_provisioned'));
+        if (! in_array($signupSource, ['crm_provisioned', 'field'], true)) {
+            $signupSource = 'crm_provisioned';
+        }
+
+        $postStatus = strtolower(trim((string) ($payload['post_status'] ?? 'private')));
+        if (! in_array($postStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+            $postStatus = 'private';
+        }
+
+        return DB::connection($this->connectionName)->transaction(function () use (
+            $requestId,
+            $payloadHash,
+            $agencyUserId,
+            $name,
+            $postStatus,
+            $whatsapp,
+            $bio,
+            $signupSource,
+            $payload
+        ): array {
+            $agencyUser = DB::connection($this->connectionName)
+                ->table('users')
+                ->where('ID', $agencyUserId)
+                ->first();
+
+            if (! $agencyUser) {
+                throw new \InvalidArgumentException('Agency WordPress user could not be found.');
+            }
+
+            $profilePayload = $payload;
+            if (($profilePayload['whatsapp'] ?? null) === null || trim((string) $profilePayload['whatsapp']) === '') {
+                $profilePayload['whatsapp'] = $whatsapp;
+            }
+
+            $existing = $this->claimProvisionRequest($requestId, $payloadHash);
+            if ($existing !== null) {
+                return $this->hydrateExistingAgencyManagedProvisionResult(
+                    (int) ($existing['wp_post_id'] ?? 0),
+                    $agencyUserId
+                );
+            }
+
+            $postType = $this->resolveProfilePostType();
+            $postId = $this->createProfilePost(
+                userId: $agencyUserId,
+                name: $name,
+                postType: $postType,
+                postStatus: $postStatus,
+                content: $bio
+            );
+
+            $profileMeta = $this->storeProfileMeta(
+                postId: $postId,
+                payload: $profilePayload,
+                postStatus: $postStatus,
+                signupSource: $signupSource,
+                markIndependent: false
+            );
+            $this->assignLocationTaxonomy(
+                $postId,
+                isset($profilePayload['region_id']) ? (int) $profilePayload['region_id'] : null,
+                isset($profilePayload['city_id']) ? (int) $profilePayload['city_id'] : null
+            );
+
+            $this->syncLegacyAgencyUploadSecretOption($postId, $profileMeta['secret'] ?? null);
+            $this->completeProvisionRequest($requestId, $payloadHash, $postId, $agencyUserId);
+
+            return [
+                'wp_user_id' => $agencyUserId,
+                'wp_post_id' => $postId,
+                'wp_username' => (string) $agencyUser->user_login,
+                'wp_email' => (string) $agencyUser->user_email,
+                'wp_post_status' => $postStatus,
+                'wp_post_type' => $postType,
+                'linked_existing_user' => true,
+                'placeholder_email_used' => false,
+                'managed_by_agency' => true,
+            ];
+        });
+    }
+
+    /**
      * @return array{0:int,1:string,2:bool,3:bool,4:string}
      */
     private function resolveOrCreateUser(
@@ -426,7 +548,8 @@ class WpDirectProvisioningService
         int $postId,
         array $payload,
         string $postStatus,
-        string $signupSource = 'crm_provisioned'
+        string $signupSource = 'crm_provisioned',
+        bool $markIndependent = true
     ): array {
         foreach ($this->profileMetaPayload($payload) as $key => $value) {
             if ($value === null || $value === '') {
@@ -444,7 +567,9 @@ class WpDirectProvisioningService
         $this->upsertPostMeta($postId, 'premium', $badges['premium']);
         $this->upsertPostMeta($postId, 'featured', $badges['featured']);
         $this->upsertPostMeta($postId, 'verified', $badges['verified']);
-        $this->upsertPostMeta($postId, 'independent', 'yes');
+        if ($markIndependent) {
+            $this->upsertPostMeta($postId, 'independent', 'yes');
+        }
 
         // WordPress stores profile expiry as a Unix timestamp in
         // `escort_expire`. Nothing is written when the policy sets no expiry,
@@ -578,6 +703,25 @@ class WpDirectProvisioningService
         $this->upsertOption($secret, (string) $userId);
     }
 
+    private function syncLegacyAgencyUploadSecretOption(int $postId, ?string $secret = null): void
+    {
+        if (! $this->site->writesLegacySelfUploadSecretOption) {
+            return;
+        }
+
+        $secret = trim((string) ($secret ?: DB::connection($this->connectionName)
+            ->table('postmeta')
+            ->where('post_id', $postId)
+            ->where('meta_key', 'secret')
+            ->value('meta_value')));
+
+        if ($secret === '') {
+            return;
+        }
+
+        $this->upsertOption('agency'.$secret, (string) $postId);
+    }
+
     private function assignLocationTaxonomy(int $postId, ?int $regionId, ?int $cityId): void
     {
         if ($regionId === null) {
@@ -702,6 +846,7 @@ class WpDirectProvisioningService
                 'password',
                 'website',
                 'client_type',
+                'agency_wp_user_id',
             ],
             WpProfileFieldCatalog::createProvisioningFields((string) ($payload['client_type'] ?? 'escort'))
         ));
@@ -857,6 +1002,47 @@ class WpDirectProvisioningService
             'wp_post_type' => (string) $post->post_type,
             'linked_existing_user' => false,
             'placeholder_email_used' => false,
+        ];
+    }
+
+    /**
+     * @return array{
+     *   wp_user_id:int,
+     *   wp_post_id:int,
+     *   wp_username:string,
+     *   wp_email:string,
+     *   wp_post_status:string,
+     *   wp_post_type:string,
+     *   linked_existing_user:bool,
+     *   placeholder_email_used:bool,
+     *   managed_by_agency:bool
+     * }
+     */
+    private function hydrateExistingAgencyManagedProvisionResult(int $postId, int $agencyUserId): array
+    {
+        $post = DB::connection($this->connectionName)->table('posts')->where('ID', $postId)->first();
+        $user = DB::connection($this->connectionName)->table('users')->where('ID', $agencyUserId)->first();
+
+        if (! $post || ! $user) {
+            throw new \RuntimeException('Provision request exists but the linked agency-managed WordPress profile could not be recovered.');
+        }
+
+        if ((int) $post->post_author !== $agencyUserId) {
+            throw new ConflictHttpException('This provisioning request resolved to a profile owned by a different WordPress user.');
+        }
+
+        $this->syncLegacyAgencyUploadSecretOption((int) $post->ID);
+
+        return [
+            'wp_user_id' => (int) $user->ID,
+            'wp_post_id' => (int) $post->ID,
+            'wp_username' => (string) $user->user_login,
+            'wp_email' => (string) $user->user_email,
+            'wp_post_status' => (string) $post->post_status,
+            'wp_post_type' => (string) $post->post_type,
+            'linked_existing_user' => true,
+            'placeholder_email_used' => false,
+            'managed_by_agency' => true,
         ];
     }
 

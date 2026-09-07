@@ -760,6 +760,162 @@ function SummaryMetric({ label, value, detail, title, tone = 'slate' }) {
     );
 }
 
+function agencyRosterStats(profiles) {
+    return profiles.reduce((stats, profile) => {
+        const status = String(profile.profile_status || '').toLowerCase();
+        const lifecycle = String(profile.lifecycle_state || '').toLowerCase();
+        if (profile.active_deal) stats.subscribed += 1;
+        if (status === 'publish') stats.published += 1;
+        if (status !== 'publish' || lifecycle === 'expired' || lifecycle === 'archived') stats.needsAttention += 1;
+        if (profile.verified) stats.verified += 1;
+
+        return stats;
+    }, {
+        subscribed: 0,
+        published: 0,
+        needsAttention: 0,
+        verified: 0,
+    });
+}
+
+function agencyProfileStatusBadge(profile) {
+    const status = String(profile?.profile_status || '').toLowerCase();
+    const lifecycle = String(profile?.lifecycle_state || '').toLowerCase();
+
+    if (lifecycle === 'archived') {
+        return { label: 'Archived', className: 'bg-orange-50 text-orange-700 ring-orange-200' };
+    }
+
+    if (lifecycle === 'expired') {
+        return { label: 'Expired', className: 'bg-amber-50 text-amber-700 ring-amber-200' };
+    }
+
+    if (status === 'publish') {
+        return { label: 'Published', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' };
+    }
+
+    if (status === 'pending') {
+        return { label: 'Pending', className: 'bg-sky-50 text-sky-700 ring-sky-200' };
+    }
+
+    return { label: titleize(status || 'private'), className: 'bg-slate-100 text-slate-600 ring-slate-200' };
+}
+
+function AgencyRosterPanel({ profiles, total, isReadOnly, onAddProfile }) {
+    const stats = agencyRosterStats(profiles);
+
+    return (
+        <section className="crm-surface">
+            <header className="crm-panel-header">
+                <div>
+                    <h3 className="crm-panel-title">Agency Roster</h3>
+                    <p className="crm-panel-subtitle">Provider profiles owned by this agency account in WordPress.</p>
+                </div>
+                {!isReadOnly ? (
+                    <button type="button" onClick={onAddProfile} className="crm-btn-primary shrink-0">
+                        Add provider
+                    </button>
+                ) : (
+                    <span className="rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
+                        {Number(total || 0).toLocaleString()} total
+                    </span>
+                )}
+            </header>
+
+            <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-md border border-slate-200 bg-white px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Total providers</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-950">{Number(total || 0).toLocaleString()}</p>
+                </div>
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/70">Published</p>
+                    <p className="mt-1 text-2xl font-semibold text-emerald-800">{stats.published.toLocaleString()}</p>
+                </div>
+                <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-700/70">Subscribed</p>
+                    <p className="mt-1 text-2xl font-semibold text-teal-800">{stats.subscribed.toLocaleString()}</p>
+                </div>
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700/70">Needs attention</p>
+                    <p className="mt-1 text-2xl font-semibold text-amber-800">{stats.needsAttention.toLocaleString()}</p>
+                </div>
+            </div>
+
+            <div className="p-4">
+                {profiles.length > 0 ? (
+                    <div className="overflow-hidden rounded-md border border-slate-200">
+                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                <tr>
+                                    <th className="px-3 py-2 text-left">Provider</th>
+                                    <th className="px-3 py-2 text-left">Visibility</th>
+                                    <th className="px-3 py-2 text-left">Subscription</th>
+                                    <th className="px-3 py-2 text-left">Location</th>
+                                    <th className="px-3 py-2 text-left">Sync</th>
+                                    <th className="px-3 py-2 text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                                {profiles.map((profile) => {
+                                    const statusBadge = agencyProfileStatusBadge(profile);
+                                    return (
+                                        <tr key={profile.id} className="align-top">
+                                            <td className="px-3 py-3">
+                                                <div className="font-semibold text-slate-900">{profile.name || 'Unnamed'}</div>
+                                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                                                    <span className="crm-mono">WP {profile.wp_post_id || '-'}</span>
+                                                    {profile.phone_normalized ? <span className="crm-mono">{profile.phone_normalized}</span> : null}
+                                                    {profile.verified ? <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
+                                                </div>
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${statusBadge.className}`}>
+                                                    {statusBadge.label}
+                                                </span>
+                                            </td>
+                                            <td className="px-3 py-3 text-slate-600">
+                                                {profile.active_deal ? (
+                                                    <div>
+                                                        <div className="font-medium text-slate-900">{profile.active_deal.product_name || 'Active subscription'}</div>
+                                                        <div className="mt-1 text-xs text-slate-500">{profile.active_deal.expires_at ? `Expires ${formatDateTime(profile.active_deal.expires_at)}` : 'Active'}</div>
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-slate-400">None</span>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-3 text-slate-600">{profile.city || '-'}</td>
+                                            <td className="px-3 py-3 text-xs text-slate-500">{formatDateTime(profile.last_synced_at)}</td>
+                                            <td className="px-3 py-3 text-right">
+                                                <Link to={`/clients/${profile.id}`} className="crm-btn-secondary inline-flex px-3 py-1.5 text-xs">
+                                                    Open
+                                                </Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-800">No providers linked yet</p>
+                                <p className="mt-1 text-sm text-slate-500">Roster rows appear after WordPress sync or CRM provider creation.</p>
+                            </div>
+                            {!isReadOnly ? (
+                                <button type="button" onClick={onAddProfile} className="crm-btn-primary shrink-0">
+                                    Add first provider
+                                </button>
+                            ) : null}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
 function formatLifetimeBreakdown(breakdown = {}) {
     return Object.entries(breakdown || {})
         .map(([currency, amount]) => formatCurrency(amount, currency))
@@ -1049,7 +1205,7 @@ export default function ClientDetail() {
     } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'agency_roster', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -1057,6 +1213,7 @@ export default function ClientDetail() {
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
     const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
+    const [showManagedProfileModal, setShowManagedProfileModal] = useState(false);
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
     const [closeCaseDialogOpen, setCloseCaseDialogOpen] = useState(false);
     const [closeCaseError, setCloseCaseError] = useState(null);
@@ -1149,6 +1306,15 @@ export default function ClientDetail() {
     const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
     const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
+    const [managedProfileForm, setManagedProfileForm] = useState({
+        name: '',
+        phone_normalized: '',
+        email: '',
+        city: '',
+        profile_status: 'private',
+        bio: '',
+        reason: 'Agency managed provider created from CRM',
+    });
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
     const [walletTopupForm, setWalletTopupForm] = useState({
@@ -1181,6 +1347,10 @@ export default function ClientDetail() {
     });
     const clientType = String(client?.client_type || 'escort') === 'agency' ? 'agency' : 'escort';
     const isAgency = clientType === 'agency';
+    const agencyManagedProfiles = useMemo(
+        () => Array.isArray(client?.managed_profiles) ? client.managed_profiles : [],
+        [client?.managed_profiles],
+    );
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
     const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
     const riskMarkerLabel = client?.risk_marked_by?.name || client?.risk_marked_by?.email || null;
@@ -1443,6 +1613,35 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to mark client online.');
+        },
+    });
+
+    const createManagedProfileMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${id}/managed-profiles`, payload).then((r) => r.data),
+        onSuccess: (payload) => {
+            if (payload?.agency) {
+                queryClient.setQueryData(['client', id], payload.agency);
+            }
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            if (payload?.client?.id) {
+                queryClient.invalidateQueries({ queryKey: ['client', String(payload.client.id)] });
+            }
+            setShowManagedProfileModal(false);
+            setManagedProfileForm({
+                name: '',
+                phone_normalized: '',
+                email: '',
+                city: '',
+                profile_status: 'private',
+                bio: '',
+                reason: 'Agency managed provider created from CRM',
+            });
+            toast.success(payload?.message || 'Managed provider created.');
+        },
+        onError: (error) => {
+            toast.error(firstProfileErrorMessage(error?.response?.data) || 'Could not create managed provider.');
         },
     });
 
@@ -2139,6 +2338,14 @@ export default function ClientDetail() {
 
         const links = [
             { key: 'overview', label: 'Overview' },
+            ...(isAgency ? [{
+                key: 'agency_roster',
+                label: 'Roster',
+                badge: {
+                    text: Number(client?.managed_profiles_count || 0).toLocaleString(),
+                    className: 'bg-violet-50 text-violet-700 ring-violet-200',
+                },
+            }] : []),
             { key: 'kyc', label: 'KYC', badge: kycBadge },
             { key: 'compliance', label: 'Compliance' },
             { key: 'analytics', label: 'Analytics' },
@@ -3318,6 +3525,24 @@ export default function ClientDetail() {
                                     {syncMutation.isPending ? 'Syncing…' : 'Sync from WP'}
                                 </button>
 
+                                {isAgency ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowManagedProfileModal(true);
+                                            navigateToTab('agency_roster');
+                                        }}
+                                        disabled={createManagedProfileMutation.isPending || !Number(client.wp_user_id || 0)}
+                                        title={!Number(client.wp_user_id || 0) ? 'Sync the agency from WordPress before adding providers' : 'Add a provider owned by this agency account'}
+                                        className="inline-flex items-center gap-1.5 rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M12 4v16m8-8H4" />
+                                        </svg>
+                                        Add provider
+                                    </button>
+                                ) : null}
+
                                 {/* Boost — prioritise this client for auto-push */}
                                 {!isAgency ? (
                                 <div className="relative">
@@ -3924,49 +4149,12 @@ export default function ClientDetail() {
             {activeTab === 'overview' ? (
                 <>
                 {isAgency ? (
-                    <section className="crm-surface">
-                        <header className="crm-panel-header">
-                            <div>
-                                <h3 className="crm-panel-title">Managed Profiles</h3>
-                                <p className="crm-panel-subtitle">Profiles linked to this agency owner in WordPress.</p>
-                            </div>
-                            <span className="rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
-                                {Number(client.managed_profiles_count || 0).toLocaleString()} total
-                            </span>
-                        </header>
-                        <div className="p-4">
-                            {Array.isArray(client.managed_profiles) && client.managed_profiles.length > 0 ? (
-                                <div className="overflow-hidden rounded-md border border-slate-200">
-                                    <table className="min-w-full divide-y divide-slate-200 text-sm">
-                                        <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                            <tr>
-                                                <th className="px-3 py-2 text-left">Profile</th>
-                                                <th className="px-3 py-2 text-left">Status</th>
-                                                <th className="px-3 py-2 text-left">WP ID</th>
-                                                <th className="px-3 py-2 text-left">Phone</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 bg-white">
-                                            {client.managed_profiles.map((profile) => (
-                                                <tr key={profile.id}>
-                                                    <td className="px-3 py-2">
-                                                        <Link to={`/clients/${profile.id}`} className="font-semibold text-teal-700 underline-offset-2 hover:underline">
-                                                            {profile.name || 'Unnamed'}
-                                                        </Link>
-                                                    </td>
-                                                    <td className="px-3 py-2 text-slate-600">{titleize(profile.profile_status)}</td>
-                                                    <td className="crm-mono px-3 py-2 text-xs text-slate-600">{profile.wp_post_id || '-'}</td>
-                                                    <td className="crm-mono px-3 py-2 text-xs text-slate-600">{profile.phone_normalized || '-'}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            ) : (
-                                <p className="text-sm text-slate-500">No managed escort profiles are linked to this agency user yet.</p>
-                            )}
-                        </div>
-                    </section>
+                    <AgencyRosterPanel
+                        profiles={agencyManagedProfiles}
+                        total={client.managed_profiles_count || agencyManagedProfiles.length}
+                        isReadOnly={isReadOnly}
+                        onAddProfile={() => setShowManagedProfileModal(true)}
+                    />
                 ) : null}
 
                 <section className="crm-surface">
@@ -4103,6 +4291,15 @@ export default function ClientDetail() {
                 </section>
                 ) : null}
                 </>
+            ) : null}
+
+            {activeTab === 'agency_roster' && isAgency ? (
+                <AgencyRosterPanel
+                    profiles={agencyManagedProfiles}
+                    total={client.managed_profiles_count || agencyManagedProfiles.length}
+                    isReadOnly={isReadOnly}
+                    onAddProfile={() => setShowManagedProfileModal(true)}
+                />
             ) : null}
 
             {activeTab === 'analytics' ? (
@@ -6230,6 +6427,30 @@ export default function ClientDetail() {
                 />
             ) : null}
 
+            {!isReadOnly && showManagedProfileModal ? (
+                <ManagedProfileModal
+                    agency={client}
+                    form={managedProfileForm}
+                    isPending={createManagedProfileMutation.isPending}
+                    error={createManagedProfileMutation.error}
+                    onChange={(patch) => setManagedProfileForm((current) => ({ ...current, ...patch }))}
+                    onClose={() => {
+                        if (createManagedProfileMutation.isPending) return;
+                        setShowManagedProfileModal(false);
+                        createManagedProfileMutation.reset();
+                    }}
+                    onSubmit={() => createManagedProfileMutation.mutate({
+                        ...managedProfileForm,
+                        phone_normalized: managedProfileForm.phone_normalized.trim(),
+                        email: managedProfileForm.email.trim(),
+                        city: managedProfileForm.city.trim(),
+                        name: managedProfileForm.name.trim(),
+                        bio: managedProfileForm.bio.trim(),
+                        reason: managedProfileForm.reason.trim() || 'Agency managed provider created from CRM',
+                    })}
+                />
+            ) : null}
+
             {!isReadOnly && showDealModal ? (
                 <DealModal
                     client={client}
@@ -6539,6 +6760,130 @@ export default function ClientDetail() {
                 onCancel={() => { if (!reopenCaseMutation.isPending) setShowReopenConfirm(false); }}
                 onConfirm={() => reopenCaseMutation.mutate()}
             />
+        </div>
+    );
+}
+
+function ManagedProfileModal({ agency, form, isPending, error, onChange, onClose, onSubmit }) {
+    const hasPhone = form.phone_normalized.trim() !== '';
+    const canSubmit = form.name.trim() !== '' && hasPhone && !isPending;
+    const errorMessage = firstProfileErrorMessage(error?.response?.data);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-xl">
+                <div className="border-b border-slate-200 px-6 py-4">
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <h2 className="text-base font-semibold text-slate-900">Add agency provider</h2>
+                            <p className="mt-1 text-sm text-slate-500">{agency?.name || 'Agency'} roster profile</p>
+                        </div>
+                        <span className="rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
+                            Agency owned
+                        </span>
+                    </div>
+                </div>
+
+                <div className="space-y-4 px-6 py-5">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="block space-y-1.5 sm:col-span-2">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Provider name <span className="text-rose-500">*</span></span>
+                            <input
+                                type="text"
+                                value={form.name}
+                                onChange={(event) => onChange({ name: event.target.value })}
+                                disabled={isPending}
+                                className="crm-input"
+                                placeholder="e.g. Jane Nairobi"
+                            />
+                        </label>
+
+                        <label className="block space-y-1.5">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Phone <span className="text-rose-500">*</span></span>
+                            <input
+                                type="tel"
+                                value={form.phone_normalized}
+                                onChange={(event) => onChange({ phone_normalized: event.target.value })}
+                                disabled={isPending}
+                                className="crm-input"
+                                placeholder={agency?.phone_normalized || '254712345678'}
+                            />
+                        </label>
+
+                        <label className="block space-y-1.5">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">City</span>
+                            <input
+                                type="text"
+                                value={form.city}
+                                onChange={(event) => onChange({ city: event.target.value })}
+                                disabled={isPending}
+                                className="crm-input"
+                                placeholder={agency?.city || 'Nairobi'}
+                            />
+                        </label>
+
+                        <label className="block space-y-1.5">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Visibility</span>
+                            <select
+                                value={form.profile_status}
+                                onChange={(event) => onChange({ profile_status: event.target.value })}
+                                disabled={isPending}
+                                className="crm-input"
+                            >
+                                <option value="private">Private</option>
+                                <option value="pending">Pending</option>
+                                <option value="draft">Draft</option>
+                                <option value="publish">Published</option>
+                            </select>
+                        </label>
+
+                        <label className="block space-y-1.5 sm:col-span-2">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bio</span>
+                            <textarea
+                                value={form.bio}
+                                onChange={(event) => onChange({ bio: event.target.value })}
+                                disabled={isPending}
+                                rows={4}
+                                className="crm-input min-h-[112px]"
+                                placeholder="Short first profile bio"
+                            />
+                        </label>
+
+                        <label className="block space-y-1.5 sm:col-span-2">
+                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Audit reason</span>
+                            <input
+                                type="text"
+                                value={form.reason}
+                                onChange={(event) => onChange({ reason: event.target.value })}
+                                disabled={isPending}
+                                className="crm-input"
+                            />
+                        </label>
+                    </div>
+
+                    {!hasPhone ? (
+                        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Phone is required.</p>
+                    ) : null}
+
+                    {errorMessage ? (
+                        <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{errorMessage}</p>
+                    ) : null}
+                </div>
+
+                <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+                    <button type="button" onClick={onClose} disabled={isPending} className="crm-btn-secondary">
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onSubmit}
+                        disabled={!canSubmit}
+                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {isPending ? 'Creating...' : 'Create provider'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }

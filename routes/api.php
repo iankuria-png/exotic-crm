@@ -444,6 +444,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/managed-profiles', [ClientController::class, 'storeManagedProfile'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/archive', [ClientController::class, 'archive'])->middleware('role:admin,sub_admin,sales,field_sales');

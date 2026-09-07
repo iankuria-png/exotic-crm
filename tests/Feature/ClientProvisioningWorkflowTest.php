@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\CRM\ClientController;
 use App\Models\Platform;
 use App\Models\User;
-use App\Http\Controllers\CRM\ClientController;
 use App\Services\DynamicDatabaseService;
 use App\Services\WpDirectProvisioningService;
 use Illuminate\Database\Schema\Blueprint;
@@ -134,6 +134,69 @@ class ClientProvisioningWorkflowTest extends TestCase
             ->table('options')
             ->where('option_name', $secret)
             ->value('option_value'));
+    }
+
+    public function test_direct_provisioning_creates_agency_managed_profile_owned_by_agency_user(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        $platform->forceFill([
+            'wp_compatibility_settings' => [
+                'legacy_self_upload_secret_option' => true,
+            ],
+        ])->save();
+
+        $agencyUserId = $this->seedWordPressUser($connectionName, 'agency-owner', 'agency@example.test', 'Agency Owner');
+
+        $result = (new WpDirectProvisioningService($platform->fresh(), $connectionConfig))
+            ->provisionAgencyManagedEscort([
+                'name' => 'Agency Provider Demo',
+                'email' => 'provider@example.test',
+                'phone' => '254755111222',
+                'whatsapp' => '254755111222',
+                'post_status' => 'private',
+                'bio' => 'First provider profile created by the agency owner.',
+                'provision_request_id' => 'req-agency-managed-1',
+            ], $agencyUserId);
+
+        $this->assertSame($agencyUserId, $result['wp_user_id']);
+        $this->assertTrue($result['managed_by_agency']);
+        $this->assertSame(1, DB::connection($connectionName)->table('users')->count());
+
+        $post = DB::connection($connectionName)
+            ->table('posts')
+            ->where('ID', $result['wp_post_id'])
+            ->first();
+
+        $this->assertSame($agencyUserId, (int) $post->post_author);
+        $this->assertSame('escort', $post->post_type);
+        $this->assertSame('private', $post->post_status);
+        $this->assertSame('First provider profile created by the agency owner.', $post->post_content);
+
+        $meta = DB::connection($connectionName)
+            ->table('postmeta')
+            ->where('post_id', $result['wp_post_id'])
+            ->pluck('meta_value', 'meta_key')
+            ->all();
+
+        $this->assertSame('254755111222', $meta['phone'] ?? null);
+        $this->assertSame('254755111222', $meta['whatsapp'] ?? null);
+        $this->assertSame('crm_provisioned', $meta['signup_source'] ?? null);
+        $this->assertSame('1', $meta['notactive'] ?? null);
+        $this->assertArrayNotHasKey('independent', $meta);
+        $this->assertNotEmpty($meta['secret'] ?? '');
+
+        $this->assertFalse(DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', 'escortpostid'.$agencyUserId)
+            ->exists());
+        $this->assertSame((string) $result['wp_post_id'], DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', 'agency'.$meta['secret'])
+            ->value('option_value'));
+        $this->assertFalse(DB::connection($connectionName)
+            ->table('options')
+            ->where('option_name', $meta['secret'])
+            ->exists());
     }
 
     public function test_direct_provisioning_reuses_the_same_wordpress_profile_for_retries_with_matching_request_id(): void
@@ -351,6 +414,35 @@ class ClientProvisioningWorkflowTest extends TestCase
             ->assertJsonPath('message', 'Email or phone is required when provisioning a WordPress profile.');
     }
 
+    public function test_managed_profile_endpoint_rejects_non_agency_clients_before_wordpress_work(): void
+    {
+        $platform = Platform::factory()->create([
+            'client_sync_include_agencies' => true,
+        ]);
+        $user = User::query()->create([
+            'name' => 'Sales User',
+            'email' => 'sales@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'assigned_market_ids' => [$platform->id],
+            'status' => 'active',
+        ]);
+        $client = \App\Models\Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_user_id' => 123,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/clients/{$client->id}/managed-profiles", [
+            'name' => 'Blocked Provider',
+            'phone_normalized' => '254700000111',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Managed profiles can only be created from an agency client.');
+    }
+
     public function test_provisioned_profile_finalization_is_owned_by_the_direct_writer(): void
     {
         $platform = Platform::factory()->create();
@@ -377,7 +469,7 @@ class ClientProvisioningWorkflowTest extends TestCase
         $databasePath = tempnam(sys_get_temp_dir(), 'wp_provision_');
         $this->temporaryDatabases[] = $databasePath;
 
-        $connectionName = 'wp_provision_' . $platform->id;
+        $connectionName = 'wp_provision_'.$platform->id;
         $connectionConfig = [
             'driver' => 'sqlite',
             'database' => $databasePath,
@@ -389,6 +481,21 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->createWordPressTables($connectionName);
 
         return [$platform, $connectionName, $connectionConfig];
+    }
+
+    private function seedWordPressUser(string $connectionName, string $username, string $email, string $displayName): int
+    {
+        return (int) DB::connection($connectionName)->table('users')->insertGetId([
+            'user_login' => $username,
+            'user_pass' => bcrypt('password'),
+            'user_nicename' => $username,
+            'user_email' => $email,
+            'user_url' => '',
+            'user_registered' => now()->format('Y-m-d H:i:s'),
+            'user_activation_key' => '',
+            'user_status' => 0,
+            'display_name' => $displayName,
+        ]);
     }
 
     private function createWordPressTables(string $connectionName): void
