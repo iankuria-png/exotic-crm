@@ -15,6 +15,7 @@ import { useToast } from '../components/ToastProvider';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
+import { normalizePhone } from '../utils/phone';
 import ClientHealthSection from '../components/ClientHealthSection';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
 import SeoQualityPanel from '../components/seo/SeoQualityPanel';
@@ -23,7 +24,8 @@ import KycPanel from '../components/kyc/KycPanel';
 import CompliancePanel from '../components/compliance/CompliancePanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
-import { getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
+import { MEDIA_UPLOAD_LIMITS, getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
+import AgencyManagedProfileModal from '../components/clients/AgencyManagedProfileModal';
 import {
     PROFILE_ENUM_OPTIONS,
     RATE_DURATION_OPTIONS,
@@ -48,6 +50,106 @@ const RISK_REASON_OPTIONS = [
     { value: 'manual_crm_review', label: 'Manual CRM review' },
     { value: 'other', label: 'Other' },
 ];
+
+const MANAGED_PROFILE_IMAGE_LIMIT = 6;
+const MANAGED_PROFILE_VIDEO_LIMIT = 5;
+const MANAGED_PROFILE_RATE_FIELDS = [
+    'incall',
+    'outcall',
+    ...RATE_DURATION_OPTIONS.flatMap(([key]) => [`rate${key}_incall`, `rate${key}_outcall`]),
+];
+
+function generateManagedProfileRequestId() {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+
+    return `agency-profile-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function defaultManagedProfileForm() {
+    return {
+        name: '',
+        phone_normalized: '',
+        email: '',
+        region_id: null,
+        city_id: null,
+        location_allows_region_only: false,
+        profile_status: 'private',
+        provision_request_id: generateManagedProfileRequestId(),
+        full_profile: false,
+        birthday: '',
+        gender: '',
+        ethnicity: '',
+        height: '',
+        build: '',
+        haircolor: '',
+        hairlength: '',
+        bustsize: '',
+        weight: '',
+        looks: '',
+        smoker: '',
+        availability: [],
+        services: [],
+        extraservices: '',
+        incall: '',
+        outcall: '',
+        currency: null,
+        rate30min_incall: '',
+        rate30min_outcall: '',
+        rate1h_incall: '',
+        rate1h_outcall: '',
+        rate2h_incall: '',
+        rate2h_outcall: '',
+        rate3h_incall: '',
+        rate3h_outcall: '',
+        rate6h_incall: '',
+        rate6h_outcall: '',
+        rate12h_incall: '',
+        rate12h_outcall: '',
+        rate24h_incall: '',
+        rate24h_outcall: '',
+        whatsapp: '',
+        instagram: '',
+        twitter: '',
+        telegram: '',
+        website: '',
+        facebook: '',
+        snapchat: '',
+        bio: '',
+        education: '',
+        occupation: '',
+        sports: '',
+        hobbies: '',
+        zodiacsign: '',
+        sexualorientation: '',
+        language1: '',
+        language1level: '',
+        language2: '',
+        language2level: '',
+        language3: '',
+        language3level: '',
+        profile_images: [],
+        reason: 'Agency managed provider created from CRM',
+    };
+}
+
+function isAdultBirthday(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return true;
+
+    const birthday = new Date(raw);
+    if (Number.isNaN(birthday.getTime())) return false;
+
+    const adultDate = new Date(birthday);
+    adultDate.setFullYear(adultDate.getFullYear() + 18);
+
+    return adultDate <= new Date();
+}
+
+function managedProfileHasAnyRate(form) {
+    return MANAGED_PROFILE_RATE_FIELDS.some((field) => String(form[field] || '').trim() !== '');
+}
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -1306,15 +1408,9 @@ export default function ClientDetail() {
     const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
     const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
-    const [managedProfileForm, setManagedProfileForm] = useState({
-        name: '',
-        phone_normalized: '',
-        email: '',
-        city: '',
-        profile_status: 'private',
-        bio: '',
-        reason: 'Agency managed provider created from CRM',
-    });
+    const [managedProfileForm, setManagedProfileForm] = useState(() => defaultManagedProfileForm());
+    const [managedProfileLocationCatalogAvailable, setManagedProfileLocationCatalogAvailable] = useState(null);
+    const [managedProfileCurrencyCatalogAvailable, setManagedProfileCurrencyCatalogAvailable] = useState(null);
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
     const [walletTopupForm, setWalletTopupForm] = useState({
@@ -1351,9 +1447,229 @@ export default function ClientDetail() {
         () => Array.isArray(client?.managed_profiles) ? client.managed_profiles : [],
         [client?.managed_profiles],
     );
+    const managedAgencyContext = !isAgency && client?.managed_by_agency?.id ? client.managed_by_agency : null;
+    const isAgencyManagedProfile = Boolean(managedAgencyContext?.id);
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
     const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
     const riskMarkerLabel = client?.risk_marked_by?.name || client?.risk_marked_by?.email || null;
+    const managedProfileSelectedServiceCodes = useMemo(
+        () => parseProfileServices(managedProfileForm.services),
+        [managedProfileForm.services],
+    );
+    const managedProfileImageCount = managedProfileForm.profile_images.filter((file) => isImageUploadFile(file)).length;
+    const managedProfileVideoCount = managedProfileForm.profile_images.filter((file) => isVideoUploadFile(file)).length;
+    const managedProfileMediaSelectionLabel = `${managedProfileImageCount}/${MANAGED_PROFILE_IMAGE_LIMIT} images, ${managedProfileVideoCount}/${MANAGED_PROFILE_VIDEO_LIMIT} videos selected`;
+    const managedProfileRequiresLocation = !managedProfileForm.region_id
+        || (!managedProfileForm.city_id && !managedProfileForm.location_allows_region_only);
+    const managedProfileBirthdayIsValid = isAdultBirthday(managedProfileForm.birthday);
+    const managedProfileRatesNeedCurrency = managedProfileForm.full_profile
+        && managedProfileCurrencyCatalogAvailable !== false
+        && managedProfileHasAnyRate(managedProfileForm)
+        && !managedProfileForm.currency;
+    const managedProfileLocationMessage = managedProfileLocationCatalogAvailable === false
+        ? 'WordPress locations could not be loaded for this market. Retry after the catalog endpoint is available.'
+        : !managedProfileForm.region_id
+        ? 'Choose a region before creating this provider.'
+        : managedProfileForm.location_allows_region_only
+            ? 'This region does not require a child city.'
+            : 'Choose a city within the selected region before creating this provider.';
+
+    const toggleManagedProfileMultiValue = useCallback((field, value) => {
+        setManagedProfileForm((current) => {
+            const currentValues = field === 'services'
+                ? parseProfileServices(current[field], field)
+                : Array.isArray(current[field]) ? [...current[field]] : [];
+
+            return {
+                ...current,
+                [field]: currentValues.includes(value)
+                    ? currentValues.filter((currentValue) => currentValue !== value)
+                    : [...currentValues, value],
+            };
+        });
+    }, []);
+
+    const handleManagedProfileImageSelect = useCallback((event) => {
+        const files = Array.from(event.target.files || []);
+        if (files.length === 0) return;
+
+        setManagedProfileForm((current) => {
+            const accepted = [...current.profile_images];
+            let imageCount = accepted.filter((file) => isImageUploadFile(file)).length;
+            let videoCount = accepted.filter((file) => isVideoUploadFile(file)).length;
+            let skipped = false;
+            let imageLimitReached = false;
+            let videoLimitReached = false;
+
+            files.forEach((file) => {
+                const isImage = isImageUploadFile(file);
+                const isVideo = isVideoUploadFile(file);
+                const validSize = isImage
+                    ? file.size <= MEDIA_UPLOAD_LIMITS.imageMaxBytes
+                    : isVideo && file.size <= MEDIA_UPLOAD_LIMITS.videoMaxBytes;
+
+                if ((!isImage && !isVideo) || !validSize) {
+                    skipped = true;
+                    return;
+                }
+
+                if (isImage) {
+                    if (imageCount >= MANAGED_PROFILE_IMAGE_LIMIT) {
+                        imageLimitReached = true;
+                        return;
+                    }
+                    imageCount += 1;
+                }
+
+                if (isVideo) {
+                    if (videoCount >= MANAGED_PROFILE_VIDEO_LIMIT) {
+                        videoLimitReached = true;
+                        return;
+                    }
+                    videoCount += 1;
+                }
+
+                accepted.push(file);
+            });
+
+            if (skipped) {
+                toast.warning('Some media was skipped. Use JPG, PNG, WEBP up to 5MB or MP4 up to 50MB.');
+            }
+
+            if (imageLimitReached) {
+                toast.warning(`Only ${MANAGED_PROFILE_IMAGE_LIMIT} images can be attached during creation.`);
+            }
+
+            if (videoLimitReached) {
+                toast.warning(`Only ${MANAGED_PROFILE_VIDEO_LIMIT} videos can be attached during creation.`);
+            }
+
+            return { ...current, profile_images: accepted };
+        });
+
+        event.target.value = '';
+    }, [toast]);
+
+    const removeManagedProfileImage = useCallback((index) => {
+        setManagedProfileForm((current) => ({
+            ...current,
+            profile_images: current.profile_images.filter((_, currentIndex) => currentIndex !== index),
+        }));
+    }, []);
+
+    const applyManagedProfileDefaultRates = useCallback((direction) => {
+        const sourceValue = String(managedProfileForm[direction] || '').trim();
+        if (!sourceValue) {
+            toast.warning(`Add a default ${direction} rate first.`);
+            return;
+        }
+
+        setManagedProfileForm((current) => {
+            const next = { ...current };
+            RATE_DURATION_OPTIONS.forEach(([key]) => {
+                next[`rate${key}_${direction}`] = sourceValue;
+            });
+            return next;
+        });
+    }, [managedProfileForm, toast]);
+
+    function submitManagedProfile() {
+        if (managedProfileForm.name.trim().length < 2) {
+            toast.warning('Add a provider name before creating this profile.');
+            return;
+        }
+
+        if (!managedProfileForm.phone_normalized.trim()) {
+            toast.warning('Add a phone number before creating this provider.');
+            return;
+        }
+
+        if (managedProfileRequiresLocation) {
+            toast.warning(managedProfileLocationMessage);
+            return;
+        }
+
+        if (!managedProfileBirthdayIsValid) {
+            toast.warning('Birthday must belong to an adult profile owner.');
+            return;
+        }
+
+        if (managedProfileRatesNeedCurrency) {
+            toast.warning('Choose a currency before saving rates.');
+            return;
+        }
+
+        const fullProfileFields = managedProfileForm.full_profile ? {
+            gender: managedProfileForm.gender || null,
+            ethnicity: managedProfileForm.ethnicity || null,
+            build: managedProfileForm.build || null,
+            haircolor: managedProfileForm.haircolor || null,
+            hairlength: managedProfileForm.hairlength || null,
+            bustsize: managedProfileForm.bustsize || null,
+            looks: managedProfileForm.looks || null,
+            smoker: managedProfileForm.smoker || null,
+            availability: managedProfileForm.availability?.length ? managedProfileForm.availability : null,
+            extraservices: managedProfileForm.extraservices.trim() || null,
+            incall: managedProfileForm.incall.trim() || null,
+            outcall: managedProfileForm.outcall.trim() || null,
+            currency: managedProfileForm.currency ? Number(managedProfileForm.currency) : null,
+            rate30min_incall: managedProfileForm.rate30min_incall.trim() || null,
+            rate30min_outcall: managedProfileForm.rate30min_outcall.trim() || null,
+            rate1h_incall: managedProfileForm.rate1h_incall.trim() || null,
+            rate1h_outcall: managedProfileForm.rate1h_outcall.trim() || null,
+            rate2h_incall: managedProfileForm.rate2h_incall.trim() || null,
+            rate2h_outcall: managedProfileForm.rate2h_outcall.trim() || null,
+            rate3h_incall: managedProfileForm.rate3h_incall.trim() || null,
+            rate3h_outcall: managedProfileForm.rate3h_outcall.trim() || null,
+            rate6h_incall: managedProfileForm.rate6h_incall.trim() || null,
+            rate6h_outcall: managedProfileForm.rate6h_outcall.trim() || null,
+            rate12h_incall: managedProfileForm.rate12h_incall.trim() || null,
+            rate12h_outcall: managedProfileForm.rate12h_outcall.trim() || null,
+            rate24h_incall: managedProfileForm.rate24h_incall.trim() || null,
+            rate24h_outcall: managedProfileForm.rate24h_outcall.trim() || null,
+            instagram: managedProfileForm.instagram.trim() || null,
+            twitter: managedProfileForm.twitter.trim() || null,
+            website: managedProfileForm.website.trim() || null,
+            facebook: managedProfileForm.facebook.trim() || null,
+            snapchat: managedProfileForm.snapchat.trim() || null,
+            education: managedProfileForm.education.trim() || null,
+            occupation: managedProfileForm.occupation.trim() || null,
+            sports: managedProfileForm.sports.trim() || null,
+            hobbies: managedProfileForm.hobbies.trim() || null,
+            zodiacsign: managedProfileForm.zodiacsign.trim() || null,
+            sexualorientation: managedProfileForm.sexualorientation.trim() || null,
+            language1: managedProfileForm.language1.trim() || null,
+            language1level: managedProfileForm.language1level || null,
+            language2: managedProfileForm.language2.trim() || null,
+            language2level: managedProfileForm.language2level || null,
+            language3: managedProfileForm.language3.trim() || null,
+            language3level: managedProfileForm.language3level || null,
+        } : {};
+
+        if (managedProfileCurrencyCatalogAvailable === false) {
+            delete fullProfileFields.currency;
+        }
+
+        createManagedProfileMutation.mutate({
+            name: managedProfileForm.name.trim(),
+            phone_normalized: normalizePhone(managedProfileForm.phone_normalized.trim(), platformPhonePrefix),
+            email: managedProfileForm.email.trim() || null,
+            profile_status: managedProfileForm.profile_status,
+            provision_request_id: managedProfileForm.provision_request_id,
+            region_id: managedProfileForm.region_id ? Number(managedProfileForm.region_id) : undefined,
+            city_id: managedProfileForm.city_id ? Number(managedProfileForm.city_id) : undefined,
+            birthday: managedProfileForm.birthday || null,
+            height: managedProfileForm.height.trim() || null,
+            weight: managedProfileForm.weight.trim() || null,
+            services: managedProfileSelectedServiceCodes.length ? managedProfileSelectedServiceCodes : null,
+            whatsapp: managedProfileForm.whatsapp.trim() || normalizePhone(managedProfileForm.phone_normalized.trim(), platformPhonePrefix),
+            telegram: managedProfileForm.telegram.trim() || null,
+            bio: managedProfileForm.bio.trim(),
+            profile_images: [...managedProfileForm.profile_images],
+            ...fullProfileFields,
+            reason: managedProfileForm.reason.trim() || 'Agency managed provider created from CRM',
+        });
+    }
 
     useEffect(() => {
         const failedDeal = (client?.deals || []).find((deal) => deal?.pending_subsidiary_trial?.status === 'failed');
@@ -1617,8 +1933,13 @@ export default function ClientDetail() {
     });
 
     const createManagedProfileMutation = useMutation({
-        mutationFn: (payload) => api.post(`/crm/clients/${id}/managed-profiles`, payload).then((r) => r.data),
-        onSuccess: (payload) => {
+        mutationFn: (payload) => {
+            const requestPayload = { ...payload };
+            delete requestPayload.profile_images;
+
+            return api.post(`/crm/clients/${id}/managed-profiles`, requestPayload).then((r) => r.data);
+        },
+        onSuccess: (payload, variables) => {
             if (payload?.agency) {
                 queryClient.setQueryData(['client', id], payload.agency);
             }
@@ -1628,16 +1949,20 @@ export default function ClientDetail() {
             if (payload?.client?.id) {
                 queryClient.invalidateQueries({ queryKey: ['client', String(payload.client.id)] });
             }
+            const mediaFiles = Array.isArray(variables?.profile_images) ? variables.profile_images : [];
+            if (payload?.client?.id && mediaFiles.length > 0) {
+                const setMain = mediaFiles.length === 1 && isImageUploadFile(mediaFiles[0]);
+                startClientMediaUpload({
+                    clientId: payload.client.id,
+                    clientName: payload.client.name || '',
+                    files: mediaFiles,
+                    setMain,
+                });
+            }
             setShowManagedProfileModal(false);
-            setManagedProfileForm({
-                name: '',
-                phone_normalized: '',
-                email: '',
-                city: '',
-                profile_status: 'private',
-                bio: '',
-                reason: 'Agency managed provider created from CRM',
-            });
+            setManagedProfileForm(defaultManagedProfileForm());
+            setManagedProfileLocationCatalogAvailable(null);
+            setManagedProfileCurrencyCatalogAvailable(null);
             toast.success(payload?.message || 'Managed provider created.');
         },
         onError: (error) => {
@@ -3443,6 +3768,18 @@ export default function ClientDetail() {
                                 {isAgency ? (
                                     <span className="inline-flex shrink-0 items-center rounded-md bg-violet-50 px-2.5 py-0.5 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">Agency</span>
                                 ) : null}
+                                {isAgencyManagedProfile ? (
+                                    <Link
+                                        to={`/clients/${managedAgencyContext.id}`}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-md bg-violet-50 px-2.5 py-0.5 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200 transition hover:bg-violet-100"
+                                        title={`WordPress owner account: ${managedAgencyContext.name}`}
+                                    >
+                                        <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a5.971 5.971 0 00-.941 3.197m0 0a9.094 9.094 0 01-3.741-.479 3 3 0 014.682-2.72M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                                        </svg>
+                                        Managed by {managedAgencyContext.name}
+                                    </Link>
+                                ) : null}
                                 {!isAgency && client.is_boosted ? (
                                     <span
                                         className="inline-flex shrink-0 items-center gap-1 rounded-md bg-fuchsia-50 px-2.5 py-0.5 text-xs font-semibold text-fuchsia-700 ring-1 ring-inset ring-fuchsia-200"
@@ -3863,6 +4200,25 @@ export default function ClientDetail() {
                 </div>
             </section>
 
+            {isAgencyManagedProfile ? (
+                <section className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p className="text-sm font-semibold text-violet-900">Agency-managed provider</p>
+                            <p className="mt-0.5 text-xs text-violet-700">
+                                This profile is linked through the same WordPress owner account as the agency.
+                            </p>
+                        </div>
+                        <Link
+                            to={`/clients/${managedAgencyContext.id}`}
+                            className="inline-flex w-fit items-center gap-1.5 rounded-md border border-violet-200 bg-white px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"
+                        >
+                            Open {managedAgencyContext.name}
+                        </Link>
+                    </div>
+                </section>
+            ) : null}
+
             <section className="grid gap-4 lg:grid-cols-3">
                 <ProfileInfoCard title="Contact Info">
                     <dl className="space-y-2.5">
@@ -3921,6 +4277,19 @@ export default function ClientDetail() {
                         />
                         <DefinitionRow label="WP Post ID" value={client.wp_post_id || '—'} mono />
                         <DefinitionRow label="WP User ID" value={client.wp_user_id || '—'} mono />
+                        {isAgencyManagedProfile ? (
+                            <DefinitionRow
+                                label="Agency"
+                                value={(
+                                    <Link
+                                        to={`/clients/${managedAgencyContext.id}`}
+                                        className="font-semibold text-violet-700 underline-offset-2 hover:underline"
+                                    >
+                                        {managedAgencyContext.name}
+                                    </Link>
+                                )}
+                            />
+                        ) : null}
                         <DefinitionRow
                             label="Profile link"
                             value={(
@@ -6428,26 +6797,34 @@ export default function ClientDetail() {
             ) : null}
 
             {!isReadOnly && showManagedProfileModal ? (
-                <ManagedProfileModal
+                <AgencyManagedProfileModal
                     agency={client}
                     form={managedProfileForm}
+                    platformId={clientPlatformId}
                     isPending={createManagedProfileMutation.isPending}
-                    error={createManagedProfileMutation.error}
+                    errorMessage={firstProfileErrorMessage(createManagedProfileMutation.error?.response?.data)}
+                    selectedServiceCodes={managedProfileSelectedServiceCodes}
+                    mediaSelectionLabel={managedProfileMediaSelectionLabel}
+                    requiresLocation={managedProfileRequiresLocation}
+                    locationMessage={managedProfileLocationMessage}
+                    birthdayIsValid={managedProfileBirthdayIsValid}
+                    ratesNeedCurrency={managedProfileRatesNeedCurrency}
                     onChange={(patch) => setManagedProfileForm((current) => ({ ...current, ...patch }))}
+                    onToggleMultiValue={toggleManagedProfileMultiValue}
+                    onProfileImageSelect={handleManagedProfileImageSelect}
+                    onRemoveProfileImage={removeManagedProfileImage}
+                    onApplyDefaultRates={applyManagedProfileDefaultRates}
+                    onLocationCatalogStatusChange={setManagedProfileLocationCatalogAvailable}
+                    onCurrencyCatalogStatusChange={setManagedProfileCurrencyCatalogAvailable}
                     onClose={() => {
                         if (createManagedProfileMutation.isPending) return;
                         setShowManagedProfileModal(false);
+                        setManagedProfileForm(defaultManagedProfileForm());
+                        setManagedProfileLocationCatalogAvailable(null);
+                        setManagedProfileCurrencyCatalogAvailable(null);
                         createManagedProfileMutation.reset();
                     }}
-                    onSubmit={() => createManagedProfileMutation.mutate({
-                        ...managedProfileForm,
-                        phone_normalized: managedProfileForm.phone_normalized.trim(),
-                        email: managedProfileForm.email.trim(),
-                        city: managedProfileForm.city.trim(),
-                        name: managedProfileForm.name.trim(),
-                        bio: managedProfileForm.bio.trim(),
-                        reason: managedProfileForm.reason.trim() || 'Agency managed provider created from CRM',
-                    })}
+                    onSubmit={submitManagedProfile}
                 />
             ) : null}
 
@@ -6760,130 +7137,6 @@ export default function ClientDetail() {
                 onCancel={() => { if (!reopenCaseMutation.isPending) setShowReopenConfirm(false); }}
                 onConfirm={() => reopenCaseMutation.mutate()}
             />
-        </div>
-    );
-}
-
-function ManagedProfileModal({ agency, form, isPending, error, onChange, onClose, onSubmit }) {
-    const hasPhone = form.phone_normalized.trim() !== '';
-    const canSubmit = form.name.trim() !== '' && hasPhone && !isPending;
-    const errorMessage = firstProfileErrorMessage(error?.response?.data);
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-            <div className="w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-xl">
-                <div className="border-b border-slate-200 px-6 py-4">
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <h2 className="text-base font-semibold text-slate-900">Add agency provider</h2>
-                            <p className="mt-1 text-sm text-slate-500">{agency?.name || 'Agency'} roster profile</p>
-                        </div>
-                        <span className="rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
-                            Agency owned
-                        </span>
-                    </div>
-                </div>
-
-                <div className="space-y-4 px-6 py-5">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="block space-y-1.5 sm:col-span-2">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Provider name <span className="text-rose-500">*</span></span>
-                            <input
-                                type="text"
-                                value={form.name}
-                                onChange={(event) => onChange({ name: event.target.value })}
-                                disabled={isPending}
-                                className="crm-input"
-                                placeholder="e.g. Jane Nairobi"
-                            />
-                        </label>
-
-                        <label className="block space-y-1.5">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Phone <span className="text-rose-500">*</span></span>
-                            <input
-                                type="tel"
-                                value={form.phone_normalized}
-                                onChange={(event) => onChange({ phone_normalized: event.target.value })}
-                                disabled={isPending}
-                                className="crm-input"
-                                placeholder={agency?.phone_normalized || '254712345678'}
-                            />
-                        </label>
-
-                        <label className="block space-y-1.5">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">City</span>
-                            <input
-                                type="text"
-                                value={form.city}
-                                onChange={(event) => onChange({ city: event.target.value })}
-                                disabled={isPending}
-                                className="crm-input"
-                                placeholder={agency?.city || 'Nairobi'}
-                            />
-                        </label>
-
-                        <label className="block space-y-1.5">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Visibility</span>
-                            <select
-                                value={form.profile_status}
-                                onChange={(event) => onChange({ profile_status: event.target.value })}
-                                disabled={isPending}
-                                className="crm-input"
-                            >
-                                <option value="private">Private</option>
-                                <option value="pending">Pending</option>
-                                <option value="draft">Draft</option>
-                                <option value="publish">Published</option>
-                            </select>
-                        </label>
-
-                        <label className="block space-y-1.5 sm:col-span-2">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bio</span>
-                            <textarea
-                                value={form.bio}
-                                onChange={(event) => onChange({ bio: event.target.value })}
-                                disabled={isPending}
-                                rows={4}
-                                className="crm-input min-h-[112px]"
-                                placeholder="Short first profile bio"
-                            />
-                        </label>
-
-                        <label className="block space-y-1.5 sm:col-span-2">
-                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Audit reason</span>
-                            <input
-                                type="text"
-                                value={form.reason}
-                                onChange={(event) => onChange({ reason: event.target.value })}
-                                disabled={isPending}
-                                className="crm-input"
-                            />
-                        </label>
-                    </div>
-
-                    {!hasPhone ? (
-                        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Phone is required.</p>
-                    ) : null}
-
-                    {errorMessage ? (
-                        <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{errorMessage}</p>
-                    ) : null}
-                </div>
-
-                <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
-                    <button type="button" onClick={onClose} disabled={isPending} className="crm-btn-secondary">
-                        Cancel
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onSubmit}
-                        disabled={!canSubmit}
-                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {isPending ? 'Creating...' : 'Create provider'}
-                    </button>
-                </div>
-            </div>
         </div>
     );
 }

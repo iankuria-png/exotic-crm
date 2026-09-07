@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\CRM\ClientController;
+use App\Models\Client;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\DynamicDatabaseService;
@@ -441,6 +442,47 @@ class ClientProvisioningWorkflowTest extends TestCase
         ])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Managed profiles can only be created from an agency client.');
+    }
+
+    public function test_client_detail_marks_provider_with_parent_agency_context(): void
+    {
+        $platform = Platform::factory()->create([
+            'client_sync_include_agencies' => true,
+        ]);
+        $user = User::query()->create([
+            'name' => 'Sales User',
+            'email' => 'sales@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'sales',
+            'assigned_market_ids' => [$platform->id],
+            'status' => 'active',
+        ]);
+        $agency = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'agency',
+            'name' => 'Massage Kenya',
+            'wp_post_id' => 110983,
+            'wp_user_id' => 36372,
+            'profile_status' => 'private',
+            'wp_profile_permalink' => 'https://kenya.example.test/agency/massage-kenya/',
+        ]);
+        $provider = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'name' => 'Daniella Muli',
+            'wp_post_id' => 111004,
+            'wp_user_id' => 36372,
+            'profile_status' => 'private',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/crm/clients/{$provider->id}")
+            ->assertOk()
+            ->assertJsonPath('managed_by_agency.id', $agency->id)
+            ->assertJsonPath('managed_by_agency.name', 'Massage Kenya')
+            ->assertJsonPath('managed_by_agency.wp_post_id', 110983)
+            ->assertJsonPath('managed_by_agency.profile_status', 'private');
     }
 
     public function test_provisioned_profile_finalization_is_owned_by_the_direct_writer(): void

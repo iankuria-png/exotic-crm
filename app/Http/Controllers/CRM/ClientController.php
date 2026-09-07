@@ -804,6 +804,7 @@ class ClientController extends Controller
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);
         $this->appendAgencyManagedProfiles($client);
+        $this->appendAgencyOwnershipContext($client);
         $client->setAttribute('whatsapp_inbound_count', \App\Models\WhatsAppMessage::query()
             ->where('client_id', $client->id)
             ->where('direction', 'inbound')
@@ -873,6 +874,35 @@ class ClientController extends Controller
             ], 422);
         }
 
+        try {
+            $profileFields = $this->prepareProvisioningProfilePayload($request, $platform, 'escort');
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::warning('Agency managed profile field validation failed', [
+                'agency_client_id' => (int) $client->id,
+                'platform_id' => (int) $platform->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Could not validate WordPress profile fields for this market.',
+            ], 502);
+        }
+
+        if (! array_key_exists('region_id', $profileFields) || (int) ($profileFields['region_id'] ?? 0) <= 0) {
+            return response()->json([
+                'message' => 'Select a WordPress region before adding an agency-managed provider.',
+                'errors' => [
+                    'region_id' => ['Select a WordPress region before adding an agency-managed provider.'],
+                ],
+            ], 422);
+        }
+
         $profileStatus = strtolower(trim((string) ($validated['profile_status'] ?? 'private')));
         if (! in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
             $profileStatus = 'private';
@@ -897,7 +927,7 @@ class ClientController extends Controller
             'provision_request_id' => ! empty($validated['provision_request_id'])
                 ? trim((string) $validated['provision_request_id'])
                 : (string) Str::uuid(),
-            ...$this->extractProvisioningFields($validated, 'escort'),
+            ...$this->extractProvisioningFields($profileFields, 'escort'),
         ];
 
         try {
@@ -1045,6 +1075,7 @@ class ClientController extends Controller
         $this->hydrateBillingPlatformState($agency);
         $this->appendSubscriptionActionMetadata($agency);
         $this->appendAgencyManagedProfiles($agency);
+        $this->appendAgencyOwnershipContext($managedProfile);
         $this->decorateExpiryState($agency);
         $this->decorateLifetimeValue(collect([$agency]));
 
@@ -1634,6 +1665,35 @@ class ClientController extends Controller
 
         $client->setAttribute('managed_profiles', $profiles);
         $client->setAttribute('managed_profiles_count', count($profiles));
+    }
+
+    private function appendAgencyOwnershipContext(Client $client): void
+    {
+        $client->setAttribute('managed_by_agency', null);
+
+        if ($this->normalizeClientType($client->client_type) !== 'escort' || (int) ($client->wp_user_id ?? 0) <= 0) {
+            return;
+        }
+
+        $agency = Client::query()
+            ->where('platform_id', (int) $client->platform_id)
+            ->where('wp_user_id', (int) $client->wp_user_id)
+            ->where('client_type', 'agency')
+            ->whereKeyNot((int) $client->id)
+            ->orderBy('name')
+            ->first(['id', 'name', 'wp_post_id', 'profile_status', 'wp_profile_permalink']);
+
+        if (! $agency) {
+            return;
+        }
+
+        $client->setAttribute('managed_by_agency', [
+            'id' => (int) $agency->id,
+            'name' => (string) ($agency->name ?? 'Agency'),
+            'wp_post_id' => (int) ($agency->wp_post_id ?? 0),
+            'profile_status' => (string) ($agency->profile_status ?? ''),
+            'wp_profile_permalink' => $agency->wp_profile_permalink,
+        ]);
     }
 
     private function normalizeClientType(mixed $value): string
