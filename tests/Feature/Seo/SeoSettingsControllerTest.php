@@ -64,6 +64,29 @@ class SeoSettingsControllerTest extends TestCase
         $this->assertStringNotContainsString('real-secret-key-xyz789', $response->getContent());
     }
 
+    public function test_show_appends_new_providers_to_legacy_saved_order(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        IntegrationSetting::create([
+            'key' => 'seo_engine',
+            'value' => [
+                'enabled' => true,
+                'providers_order' => ['deepseek', 'gemini', 'claude', 'openai'],
+                'providers' => [
+                    'openrouter' => ['api_key' => 'sk-or-test', 'model' => 'google/gemini-3.8-flash'],
+                    'deepseek' => ['api_key' => 'sk-deepseek-test', 'model' => 'deepseek-v4-pro'],
+                ],
+            ],
+        ]);
+
+        $this->getJson('/api/crm/settings/seo-engine')
+            ->assertOk()
+            ->assertJsonPath('config.providers_order.0', 'deepseek')
+            ->assertJsonPath('config.providers_order.4', 'openrouter')
+            ->assertJsonPath('config.providers.openrouter.has_key', true);
+    }
+
     public function test_update_persists_settings(): void
     {
         Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));

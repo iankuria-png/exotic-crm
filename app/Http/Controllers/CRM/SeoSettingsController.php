@@ -192,7 +192,7 @@ class SeoSettingsController extends Controller
         $payload = [
             'enabled' => (bool) $data['enabled'],
             'platform_allowlist' => array_values(array_unique(array_map('intval', $data['platform_allowlist'] ?? []))),
-            'providers_order' => array_values(array_unique($providersOrder)),
+            'providers_order' => $this->normalizeProvidersOrder($providersOrder),
             'providers' => $providers,
             'generation' => $this->normalizeGeneration($data['generation'] ?? $previous['generation'] ?? []),
         ];
@@ -398,10 +398,30 @@ class SeoSettingsController extends Controller
         return [
             'enabled' => (bool) ($stored['enabled'] ?? false),
             'platform_allowlist' => array_values(array_map('intval', $stored['platform_allowlist'] ?? [])),
-            'providers_order' => array_values(array_unique($stored['providers_order'] ?? self::SUPPORTED_PROVIDERS)),
+            'providers_order' => $this->normalizeProvidersOrder($stored['providers_order'] ?? self::SUPPORTED_PROVIDERS),
             'providers' => $providers,
             'generation' => $this->normalizeGeneration($stored['generation'] ?? []),
         ];
+    }
+
+    /**
+     * Legacy settings may predate newer providers such as OpenRouter. Always
+     * return the full supported list so configured keys can participate in the
+     * waterfall and the UI has a row users can reorder.
+     */
+    private function normalizeProvidersOrder(mixed $providersOrder): array
+    {
+        $order = collect(is_array($providersOrder) ? $providersOrder : [])
+            ->map(fn ($provider) => trim((string) $provider))
+            ->filter(fn ($provider): bool => in_array($provider, self::SUPPORTED_PROVIDERS, true))
+            ->unique()
+            ->values()
+            ->all();
+
+        return collect([...$order, ...self::SUPPORTED_PROVIDERS])
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function normalizeGeneration(array $incoming): array

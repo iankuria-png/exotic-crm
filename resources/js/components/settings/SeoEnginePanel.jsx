@@ -15,6 +15,8 @@ const PROVIDER_DISPLAY = {
     deepseek: { label: 'DeepSeek',         help: 'Lowest cost. Get a key at platform.deepseek.com.' },
 };
 
+const PROVIDER_ORDER = ['openrouter', 'deepseek', 'gemini', 'claude', 'openai'];
+
 const MODEL_PRESETS = {
     openrouter: [
         { value: 'google/gemini-3.8-flash', label: 'Gemini 3.8 Flash', hint: 'Balanced quality and cost' },
@@ -70,7 +72,7 @@ function formFromConfig(config = {}) {
     return {
         enabled: !!config.enabled,
         platformAllowlist: config.platform_allowlist || [],
-        providersOrder: config.providers_order || ['openrouter', 'deepseek', 'gemini', 'claude', 'openai'],
+        providersOrder: normalizeProviderOrder(config.providers_order),
         providers: {
             openrouter: hydrateProvider(config.providers?.openrouter),
             claude:   hydrateProvider(config.providers?.claude),
@@ -80,6 +82,11 @@ function formFromConfig(config = {}) {
         },
         generation: { ...DEFAULT_GENERATION, ...(config.generation || {}) },
     };
+}
+
+function normalizeProviderOrder(order = []) {
+    const known = Array.isArray(order) ? order.filter((provider) => PROVIDER_ORDER.includes(provider)) : [];
+    return [...new Set([...known, ...PROVIDER_ORDER])];
 }
 
 /**
