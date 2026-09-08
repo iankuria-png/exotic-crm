@@ -4,11 +4,11 @@ namespace Tests\Feature\Seo;
 
 use App\Models\Platform;
 use App\Services\Seo\BioGenerationService;
+use App\Services\Seo\LinkCatalogService;
 use App\Services\Seo\Llm\Adapters\GeminiAdapter;
 use App\Services\Seo\Llm\Adapters\OpenAiAdapter;
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
-use App\Services\Seo\LinkCatalogService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -98,15 +98,46 @@ class BioGenerationOverridesTest extends TestCase
         $this->assertTrue($withoutOverrides['fallback_used']);
     }
 
+    public function test_force_model_is_passed_to_selected_provider(): void
+    {
+        $platform = Platform::factory()->create();
+        config(['services.seo_engine.providers' => ['gemini']]);
+
+        $adapter = \Mockery::mock(GeminiAdapter::class);
+        $adapter->shouldReceive('isAvailable')->andReturnTrue();
+        $adapter->shouldReceive('name')->andReturn('gemini');
+        $adapter->shouldReceive('generate')
+            ->once()
+            ->with(
+                \Mockery::type('string'),
+                \Mockery::type('string'),
+                \Mockery::on(fn (array $opts): bool => ($opts['model'] ?? null) === 'gemini-2.5-flash')
+            )
+            ->andReturn(new LlmResponse(text: str_repeat('rafiki ', 60), inputTokens: 24, outputTokens: 18));
+        $this->app->instance(GeminiAdapter::class, $adapter);
+
+        $result = app(BioGenerationService::class)->generate([
+            'platform_id' => $platform->id,
+            'force_provider' => 'gemini',
+            'force_model' => 'gemini-2.5-flash',
+            'profile_snapshot' => [
+                'name' => 'Amina',
+                'city' => 'Nairobi',
+            ],
+        ]);
+
+        $this->assertSame('gemini', $result['provider_used']);
+    }
+
     private function fakeAdapter(string $name, bool $shouldFail = false, string $text = ''): LlmClient
     {
-        return new class($name, $shouldFail, $text) implements LlmClient {
+        return new class($name, $shouldFail, $text) implements LlmClient
+        {
             public function __construct(
                 private readonly string $name,
                 private readonly bool $shouldFail,
                 private readonly string $text,
-            ) {
-            }
+            ) {}
 
             public function name(): string
             {

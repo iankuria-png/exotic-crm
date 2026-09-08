@@ -224,6 +224,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
     // SEO Profile Optimization Engine
     Route::prefix('seo')->group(function () {
+        Route::get('/provider-options', [SeoController::class, 'providerOptions']);
         Route::post('/generate-bio', [SeoController::class, 'generateBio']);
         Route::post('/translate-bio', [SeoController::class, 'translateBio']);
         Route::post('/feedback', [SeoController::class, 'feedback']);

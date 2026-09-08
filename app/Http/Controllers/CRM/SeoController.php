@@ -21,6 +21,14 @@ use Illuminate\Validation\ValidationException;
 
 class SeoController extends Controller
 {
+    private const PROVIDER_LABELS = [
+        'openrouter' => 'OpenRouter',
+        'deepseek' => 'DeepSeek',
+        'gemini' => 'Google Gemini',
+        'claude' => 'Anthropic Claude',
+        'openai' => 'OpenAI',
+    ];
+
     public function __construct(
         private readonly BioGenerationService $generator,
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
@@ -29,6 +37,25 @@ class SeoController extends Controller
         private readonly BioTranslationService $translator,
         private readonly BioQualityAuditService $qualityAudit,
     ) {}
+
+    /**
+     * GET /api/crm/seo/provider-options
+     * Read-only model choices for the CRM generate-bio UI. No secrets leave
+     * the server; sales users only see providers/models that are configured.
+     */
+    public function providerOptions(): JsonResponse
+    {
+        $providers = $this->configuredProviderChoices();
+
+        return response()->json([
+            'enabled' => (bool) config('services.seo_engine.enabled', false),
+            'providers' => array_values($providers),
+            'options' => collect($providers)
+                ->flatMap(fn (array $provider): array => $provider['models'])
+                ->values()
+                ->all(),
+        ]);
+    }
 
     /**
      * POST /api/crm/seo/generate-bio
@@ -47,6 +74,7 @@ class SeoController extends Controller
             'profile_snapshot' => 'nullable|array',
             'save' => 'nullable|boolean',
             'force_provider' => 'nullable|string|in:openrouter,claude,openai,gemini,deepseek',
+            'force_model' => 'nullable|string|max:140',
             'generation_options' => 'nullable|array',
             'generation_options.tone' => 'nullable|string|max:180',
             'generation_options.temperament' => 'nullable|string|max:180',
@@ -77,6 +105,7 @@ class SeoController extends Controller
         ]);
 
         $this->validateGenerationRequest($data);
+        $this->validateConfiguredModelChoice($data);
 
         $platformId = $this->resolvePlatformId($data);
 
@@ -106,6 +135,96 @@ class SeoController extends Controller
         }
 
         return response()->json($result);
+    }
+
+    private function validateConfiguredModelChoice(array $data): void
+    {
+        $forceProvider = trim((string) ($data['force_provider'] ?? ''));
+        $forceModel = trim((string) ($data['force_model'] ?? ''));
+
+        if ($forceModel === '') {
+            return;
+        }
+
+        if ($forceProvider === '') {
+            throw ValidationException::withMessages([
+                'force_provider' => 'Choose an AI provider before choosing a specific model.',
+            ]);
+        }
+
+        $provider = $this->configuredProviderChoices()[$forceProvider] ?? null;
+        $configuredModels = collect($provider['models'] ?? [])
+            ->pluck('model')
+            ->all();
+
+        if (! in_array($forceModel, $configuredModels, true)) {
+            throw ValidationException::withMessages([
+                'force_model' => 'Choose a model that is already configured for this SEO provider.',
+            ]);
+        }
+    }
+
+    /**
+     * @return array<string, array{provider: string, label: string, model: string, models: array<int, array<string, mixed>>}>
+     */
+    private function configuredProviderChoices(): array
+    {
+        $order = $this->normalizeProvidersOrder((array) config('services.seo_engine.providers', []));
+
+        return collect($order)
+            ->mapWithKeys(function (string $provider): array {
+                $key = trim((string) config("services.seo_engine.{$provider}.api_key", ''));
+                $model = trim((string) config("services.seo_engine.{$provider}.model", ''));
+
+                if ($key === '' || $model === '') {
+                    return [];
+                }
+
+                $fallbackModels = collect((array) config("services.seo_engine.{$provider}.fallback_models", []))
+                    ->map(fn ($fallback) => trim((string) $fallback))
+                    ->filter()
+                    ->all();
+
+                $models = collect([$model, ...$fallbackModels])
+                    ->unique()
+                    ->values()
+                    ->map(fn (string $model, int $index): array => [
+                        'provider' => $provider,
+                        'provider_label' => self::PROVIDER_LABELS[$provider] ?? ucfirst($provider),
+                        'model' => $model,
+                        'label' => $index === 0 ? 'Primary' : 'Fallback '.$index,
+                        'primary' => $index === 0,
+                    ])
+                    ->all();
+
+                return [$provider => [
+                    'provider' => $provider,
+                    'label' => self::PROVIDER_LABELS[$provider] ?? ucfirst($provider),
+                    'model' => $model,
+                    'models' => $models,
+                ]];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  array<int, string>  $providersOrder
+     * @return array<int, string>
+     */
+    private function normalizeProvidersOrder(array $providersOrder): array
+    {
+        $supported = array_keys(self::PROVIDER_LABELS);
+        $order = collect($providersOrder)
+            ->map(fn ($provider) => trim((string) $provider))
+            ->filter(fn ($provider): bool => in_array($provider, $supported, true))
+            ->unique()
+            ->values()
+            ->all();
+
+        return collect([...$order, ...$supported])
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

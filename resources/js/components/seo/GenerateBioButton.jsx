@@ -28,6 +28,9 @@ export default function GenerateBioButton({
     const [error, setError] = useState(null);
     const [preview, setPreview] = useState(null);
     const [showOptions, setShowOptions] = useState(false);
+    const [providerOptions, setProviderOptions] = useState([]);
+    const [providerOptionsLoading, setProviderOptionsLoading] = useState(false);
+    const [selectedModelKey, setSelectedModelKey] = useState('');
     const [generationOptions, setGenerationOptions] = useState({
         tone: '',
         temperament: '',
@@ -42,6 +45,40 @@ export default function GenerateBioButton({
     });
     const [lastFeedback, setLastFeedback] = useState(null);
 
+    React.useEffect(() => {
+        let cancelled = false;
+
+        const loadProviderOptions = async () => {
+            setProviderOptionsLoading(true);
+            try {
+                const resp = await fetch('/api/crm/seo/provider-options', {
+                    method: 'GET',
+                    headers: authHeaders(),
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!cancelled && resp.ok) {
+                    setProviderOptions(Array.isArray(data.options) ? data.options : []);
+                }
+            } catch {
+                if (!cancelled) setProviderOptions([]);
+            } finally {
+                if (!cancelled) setProviderOptionsLoading(false);
+            }
+        };
+
+        loadProviderOptions();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const selectedModel = React.useMemo(() => {
+        if (!selectedModelKey) return null;
+        return providerOptions.find((option) => modelOptionKey(option) === selectedModelKey) || null;
+    }, [providerOptions, selectedModelKey]);
+
     const buildOverrides = () => Object.fromEntries(
         Object.entries(generationOptions).filter(([, v]) => v !== '' && v !== null && v !== undefined),
     );
@@ -54,7 +91,12 @@ export default function GenerateBioButton({
         if (clientId) body.client_id = clientId;
         if (platformId) body.platform_id = platformId;
         if (wpPostId) body.wp_post_id = wpPostId;
-        if (forceProvider) body.force_provider = forceProvider;
+        if (selectedModel) {
+            body.force_provider = selectedModel.provider;
+            body.force_model = selectedModel.model;
+        } else if (forceProvider) {
+            body.force_provider = forceProvider;
+        }
 
         const overrides = buildOverrides();
         if (Object.keys(overrides).length > 0) body.generation_options = overrides;
@@ -89,13 +131,13 @@ export default function GenerateBioButton({
         }
     };
 
-    const handleRegenerate = async (refinements, feedbackContext = null) => {
+    const handleRegenerate = async (refinements, feedbackContext = null, previousBioHtml = '') => {
         if (!preview) return;
         setRegenerating(true);
         try {
             const data = await callGenerate({
                 refinements,
-                previousBio: preview.bio_html || '',
+                previousBio: previousBioHtml || preview.bio_html || '',
                 feedbackContext: feedbackContext || lastFeedback,
             });
             // Preserve the modal — just swap the content.
@@ -139,7 +181,7 @@ export default function GenerateBioButton({
             accepted: !!feedback.accepted,
             score: preview?.score ?? undefined,
             generation_options: preview?.generation_options ?? undefined,
-            bio_html: preview?.bio_html ?? undefined,
+            bio_html: feedback.bio_html ?? preview?.bio_html ?? undefined,
         };
         fetch('/api/crm/seo/feedback', {
             method: 'POST',
@@ -173,6 +215,24 @@ export default function GenerateBioButton({
                     <span aria-hidden="true">✨</span>
                     <span>{loading ? 'Generating bio…' : 'Generate SEO Bio'}</span>
                 </button>
+
+                <select
+                    value={selectedModelKey}
+                    onChange={(event) => setSelectedModelKey(event.target.value)}
+                    disabled={loading || providerOptionsLoading || providerOptions.length === 0 || !!forceProvider}
+                    className="max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition focus:border-teal-500 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    aria-label="AI model"
+                    title={forceProvider ? `Using ${forceProvider}` : 'Choose a configured AI model for this draft'}
+                >
+                    <option value="">
+                        {providerOptionsLoading ? 'Loading AI models...' : 'AI: default waterfall'}
+                    </option>
+                    {providerOptions.map((option) => (
+                        <option key={modelOptionKey(option)} value={modelOptionKey(option)}>
+                            {option.provider_label} · {option.label}: {option.model}
+                        </option>
+                    ))}
+                </select>
 
                 <button
                     type="button"
@@ -322,4 +382,8 @@ function authHeaders() {
         'X-XSRF-TOKEN': getCsrfToken(),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
+}
+
+function modelOptionKey(option) {
+    return `${option?.provider || ''}|||${option?.model || ''}`;
 }

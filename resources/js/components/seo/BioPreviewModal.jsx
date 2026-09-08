@@ -50,6 +50,8 @@ export default function BioPreviewModal({
     const [comment, setComment] = useState('');
     const [feedbackSent, setFeedbackSent] = useState(false);
     const [activeRefinements, setActiveRefinements] = useState([]);
+    const [editableText, setEditableText] = useState('');
+    const [acceptAttempted, setAcceptAttempted] = useState(false);
 
     // Translation peek state
     const [showTranslation, setShowTranslation] = useState(false);
@@ -59,21 +61,40 @@ export default function BioPreviewModal({
     const [translationError, setTranslationError] = useState(null);
 
     const isNonEnglish = language && language !== 'en';
+    const protectedLinks = useMemo(() => extractProtectedLinks(bioHtml), [bioHtml]);
+    const missingProtectedLinks = useMemo(
+        () => protectedLinks.filter((link) => !includesText(editableText, link.text)),
+        [editableText, protectedLinks],
+    );
+    const editedBioHtml = useMemo(
+        () => plainTextToSeoHtml(editableText, protectedLinks),
+        [editableText, protectedLinks],
+    );
 
     // Reset feedback + translation state when a new bio arrives
     useEffect(() => {
         if (open && bioHtml) {
+            setEditableText(htmlToPlainText(bioHtml));
             setRating(null);
             setTag(null);
             setComment('');
             setFeedbackSent(false);
             setActiveRefinements([]);
+            setAcceptAttempted(false);
             setShowTranslation(false);
             setTranslationHtml(null);
             setTranslationCached(false);
             setTranslationError(null);
         }
     }, [open, bioHtml]);
+
+    useEffect(() => {
+        setAcceptAttempted(false);
+        setShowTranslation(false);
+        setTranslationHtml(null);
+        setTranslationCached(false);
+        setTranslationError(null);
+    }, [editableText]);
 
     const handleToggleTranslation = async () => {
         if (!onTranslate || !isNonEnglish) return;
@@ -85,7 +106,7 @@ export default function BioPreviewModal({
         setTranslating(true);
         setTranslationError(null);
         try {
-            const data = await onTranslate(bioHtml);
+            const data = await onTranslate(editedBioHtml);
             setTranslationHtml(data?.translation_html || '<p><em>Translation came back empty.</em></p>');
             setTranslationCached(!!data?.cached);
             setShowTranslation(true);
@@ -112,6 +133,7 @@ export default function BioPreviewModal({
             tag: overrides.tag !== undefined ? overrides.tag : tag,
             comment: overrides.comment !== undefined ? overrides.comment : comment.trim(),
             accepted: !!overrides.accepted,
+            bio_html: editedBioHtml,
         };
         // Skip if there's literally nothing to send
         if (payload.rating === null && !payload.tag && !payload.comment && !payload.accepted) {
@@ -122,9 +144,14 @@ export default function BioPreviewModal({
     };
 
     const handleAccept = () => {
+        if (missingProtectedLinks.length > 0 && !acceptAttempted) {
+            setAcceptAttempted(true);
+            return;
+        }
+
         // Send acceptance feedback before propagating (best-effort, fire-and-forget)
         sendFeedback({ accepted: true });
-        onAccept?.(bioHtml);
+        onAccept?.(editedBioHtml);
     };
 
     const handleRegenerate = (refinementKey) => {
@@ -140,7 +167,7 @@ export default function BioPreviewModal({
         // Auto-tag negative feedback if user is iterating on the bio
         const feedbackContext = { rating: -1, tag: REFINEMENT_TAG_HINT[refinementKey] || tag, comment: comment.trim() };
         sendFeedback(feedbackContext);
-        onRegenerate(next, feedbackContext);
+        onRegenerate(next, feedbackContext, editedBioHtml);
     };
 
     const handleRegenerateAndClear = () => {
@@ -148,7 +175,7 @@ export default function BioPreviewModal({
         const feedbackContext = { rating: -1, comment: comment.trim() };
         sendFeedback(feedbackContext);
         setActiveRefinements([]);
-        onRegenerate([], feedbackContext);
+        onRegenerate([], feedbackContext, editedBioHtml);
     };
 
     return (
@@ -231,12 +258,32 @@ export default function BioPreviewModal({
 
                     {/* Bio body — fade overlay when regenerating */}
                     <div className="relative">
-                        <div
-                            className={`prose prose-sm max-w-none rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-slate-800 transition ${
+                        <div className={`rounded-xl border border-slate-200 bg-white transition ${
                                 regenerating ? 'opacity-40' : ''
-                            }`}
-                            dangerouslySetInnerHTML={{ __html: bioHtml }}
-                        />
+                            }`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                                <div>
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Draft editor</p>
+                                    <p className="mt-0.5 text-xs text-slate-500">Edits stay in this review step until you use the bio.</p>
+                                </div>
+                                {protectedLinks.length > 0 ? (
+                                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                        missingProtectedLinks.length > 0
+                                            ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                                            : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
+                                    }`}>
+                                        {protectedLinks.length - missingProtectedLinks.length}/{protectedLinks.length} SEO links kept
+                                    </span>
+                                ) : null}
+                            </div>
+                            <textarea
+                                value={editableText}
+                                onChange={(event) => setEditableText(event.target.value)}
+                                rows={8}
+                                className="block min-h-[190px] w-full resize-y border-0 bg-slate-50/60 p-4 text-[15px] leading-7 text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0"
+                                placeholder="Generated bio copy"
+                            />
+                        </div>
                         {regenerating ? (
                             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                                 <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 shadow ring-1 ring-teal-200">
@@ -245,6 +292,46 @@ export default function BioPreviewModal({
                             </div>
                         ) : null}
                     </div>
+
+                    {protectedLinks.length > 0 ? (
+                        <div className={`mt-3 rounded-xl border px-3 py-3 ${
+                            missingProtectedLinks.length > 0
+                                ? 'border-amber-200 bg-amber-50'
+                                : 'border-emerald-100 bg-emerald-50/60'
+                        }`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${
+                                    missingProtectedLinks.length > 0 ? 'text-amber-800' : 'text-emerald-800'
+                                }`}>
+                                    Protected SEO links
+                                </p>
+                                {missingProtectedLinks.length > 0 ? (
+                                    <span className="text-xs font-medium text-amber-800">
+                                        Restore the missing anchor text or click Use again to continue.
+                                    </span>
+                                ) : null}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                {protectedLinks.map((link) => {
+                                    const missing = missingProtectedLinks.some((item) => item.key === link.key);
+                                    return (
+                                        <span
+                                            key={link.key}
+                                            title={link.href}
+                                            className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                                missing
+                                                    ? 'bg-white text-amber-800 ring-1 ring-amber-300'
+                                                    : 'bg-white text-emerald-800 ring-1 ring-emerald-200'
+                                            }`}
+                                        >
+                                            <span aria-hidden="true">{missing ? '!' : '✓'}</span>
+                                            <span className="max-w-[190px] truncate">{link.text}</span>
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ) : null}
 
                     {/* English translation peek — slides in under the original */}
                     {isNonEnglish && showTranslation && translationHtml ? (
@@ -265,7 +352,7 @@ export default function BioPreviewModal({
                     {/* Usage line */}
                     {usage ? (
                         <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                            Estimated cost: <strong>{usage.estimated_cost_label}</strong> · Tokens: {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out
+                            Estimated cost: <strong>{usage.estimated_cost_label}</strong> · Tokens: {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out · Score before edits
                         </div>
                     ) : null}
 
@@ -410,24 +497,122 @@ export default function BioPreviewModal({
 
                 {/* ── Footer ── */}
                 <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4">
-                    <p className="text-xs text-slate-500">Tip: you can edit the copy before saving.</p>
+                    <p className="text-xs text-slate-500">
+                        {missingProtectedLinks.length > 0
+                            ? `${missingProtectedLinks.length} protected SEO link${missingProtectedLinks.length === 1 ? '' : 's'} missing from the edited draft.`
+                            : 'Tip: you can edit the copy before saving.'}
+                    </p>
                     <div className="flex items-center gap-2">
                         <button type="button" className="crm-btn-secondary" onClick={onDiscard} disabled={regenerating}>
                             Discard
                         </button>
                         <button
                             type="button"
-                            className="crm-btn-primary"
+                            className={missingProtectedLinks.length > 0 && !acceptAttempted ? 'crm-btn-secondary' : 'crm-btn-primary'}
                             onClick={handleAccept}
                             disabled={regenerating}
                         >
-                            Use this bio
+                            {missingProtectedLinks.length > 0 && acceptAttempted ? 'Use anyway' : 'Use this bio'}
                         </button>
                     </div>
                 </footer>
             </div>
         </div>
     );
+}
+
+function extractProtectedLinks(html = '') {
+    if (typeof window === 'undefined' || !html) return [];
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const seen = new Set();
+
+    return Array.from(doc.querySelectorAll('a[href]'))
+        .map((anchor) => ({
+            text: normalizeWhitespace(anchor.textContent || ''),
+            href: anchor.getAttribute('href') || '',
+        }))
+        .filter((link) => link.text && link.href)
+        .filter((link) => {
+            const key = link.text.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .map((link, index) => ({ ...link, key: `${index}-${link.href}-${link.text}` }));
+}
+
+function htmlToPlainText(html = '') {
+    if (typeof window === 'undefined' || !html) return '';
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const blocks = Array.from(doc.body.querySelectorAll('p, li, div'))
+        .map((node) => normalizeWhitespace(node.textContent || ''))
+        .filter(Boolean);
+
+    if (blocks.length > 0) {
+        return blocks.join('\n\n');
+    }
+
+    return normalizeWhitespace(doc.body.textContent || '');
+}
+
+function plainTextToSeoHtml(text = '', protectedLinks = []) {
+    const paragraphs = String(text || '')
+        .split(/\n{2,}/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+    if (paragraphs.length === 0) {
+        return '';
+    }
+
+    const remainingLinks = protectedLinks.map((link) => ({ ...link }));
+
+    return paragraphs
+        .map((paragraph) => `<p>${applyProtectedLinks(escapeHtml(paragraph), remainingLinks)}</p>`)
+        .join('');
+}
+
+function applyProtectedLinks(html, remainingLinks) {
+    let output = html;
+
+    remainingLinks.forEach((link) => {
+        if (link.used) return;
+
+        const anchorText = escapeHtml(link.text);
+        const index = output.toLowerCase().indexOf(anchorText.toLowerCase());
+        if (index === -1) return;
+
+        const matchedText = output.slice(index, index + anchorText.length);
+        output = `${output.slice(0, index)}<a href="${escapeAttribute(link.href)}">${matchedText}</a>${output.slice(index + anchorText.length)}`;
+        link.used = true;
+    });
+
+    return output;
+}
+
+function includesText(haystack = '', needle = '') {
+    return normalizeWhitespace(haystack)
+        .toLowerCase()
+        .includes(normalizeWhitespace(needle).toLowerCase());
+}
+
+function normalizeWhitespace(value = '') {
+    return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function escapeHtml(value = '') {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function escapeAttribute(value = '') {
+    return escapeHtml(value).replace(/`/g, '&#096;');
 }
 
 /** Inline spinner — minimal, no library dep. */

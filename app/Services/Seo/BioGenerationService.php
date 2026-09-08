@@ -150,6 +150,7 @@ TEXT;
         $platformId = (int) ($params['platform_id'] ?? 0);
         $overlay = is_array($params['profile_snapshot'] ?? null) ? $params['profile_snapshot'] : null;
         $forceProvider = isset($params['force_provider']) ? (string) $params['force_provider'] : null;
+        $forceModel = isset($params['force_model']) ? trim((string) $params['force_model']) : null;
         $rawOverrides = is_array($params['generation_options'] ?? null) ? $params['generation_options'] : [];
         $refinements = is_array($params['refinements'] ?? null) ? $params['refinements'] : [];
         $previousBio = isset($params['previous_bio']) ? (string) $params['previous_bio'] : '';
@@ -199,6 +200,7 @@ TEXT;
         [$rawText, $providerUsed, $usage, $fallbackUsed] = $this->generateText(
             $snapshot,
             $forceProvider,
+            $forceModel,
             $generationOptions,
             $overlay ?? [],
             $providersOrder,
@@ -217,6 +219,7 @@ TEXT;
             [$rewriteText, $rewriteProvider, $rewriteUsage, $rewriteFallback] = $this->generateText(
                 $snapshot,
                 $forceProvider,
+                $forceModel,
                 $rewriteOptions,
                 $overlay ?? [],
                 $providersOrder,
@@ -297,6 +300,7 @@ TEXT;
     private function generateText(
         ProfileSnapshot $snapshot,
         ?string $forceProvider,
+        ?string $forceModel,
         array $options,
         array $overlay,
         ?array $providersOrder = null,
@@ -310,6 +314,7 @@ TEXT;
                 [
                     'max_tokens' => $this->maxTokensForOptions($options),
                     'temperature' => (float) ($options['creativity'] ?? self::DEFAULT_GENERATION['creativity']),
+                    'model' => $forceModel,
                 ],
             );
 

@@ -48,7 +48,7 @@ class SeoEngineConfigProvider extends ServiceProvider
         }
 
         if (! empty($stored['providers_order']) && is_array($stored['providers_order'])) {
-            config(['services.seo_engine.providers' => array_values($stored['providers_order'])]);
+            config(['services.seo_engine.providers' => $this->normalizeProvidersOrder($stored['providers_order'])]);
         }
 
         if (! empty($stored['generation']) && is_array($stored['generation'])) {
@@ -104,6 +104,22 @@ class SeoEngineConfigProvider extends ServiceProvider
             ->map(fn ($model) => $this->normalizeProviderModel($provider, (string) $model))
             ->map(fn ($model) => trim($model))
             ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function normalizeProvidersOrder(array $providersOrder): array
+    {
+        $supported = ['openrouter', 'deepseek', 'gemini', 'claude', 'openai'];
+        $order = collect($providersOrder)
+            ->map(fn ($provider) => trim((string) $provider))
+            ->filter(fn ($provider): bool => in_array($provider, $supported, true))
+            ->unique()
+            ->values()
+            ->all();
+
+        return collect([...$order, ...$supported])
             ->unique()
             ->values()
             ->all();
