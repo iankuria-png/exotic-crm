@@ -207,7 +207,7 @@ return [
         'enabled' => filter_var(env('SEO_ENGINE_ENABLED', false), FILTER_VALIDATE_BOOL),
         'providers' => array_filter(array_map(
             'trim',
-            explode(',', env('SEO_PROVIDERS', 'claude,openai,gemini,deepseek'))
+            explode(',', env('SEO_PROVIDERS', 'openrouter,deepseek,gemini,claude,openai'))
         )),
         'platform_allowlist' => array_values(array_filter(array_map(
             'intval',
@@ -215,29 +215,42 @@ return [
         ))),
         'claude' => [
             'api_key' => env('ANTHROPIC_API_KEY'),
-            'model'   => env('SEO_CLAUDE_MODEL'),
+            'model' => env('SEO_CLAUDE_MODEL'),
         ],
         'openai' => [
             'api_key' => env('OPENAI_API_KEY'),
-            'model'   => env('SEO_OPENAI_MODEL'),
+            'model' => env('SEO_OPENAI_MODEL'),
         ],
         'gemini' => [
             'api_key' => env('GEMINI_API_KEY'),
-            'model'   => env('SEO_GEMINI_MODEL'),
+            'model' => env('SEO_GEMINI_MODEL'),
         ],
         'deepseek' => [
             'api_key' => env('DEEPSEEK_API_KEY'),
-            'model'   => env('SEO_DEEPSEEK_MODEL', 'deepseek-v4-pro'),
+            'model' => env('SEO_DEEPSEEK_MODEL', 'deepseek-v4-pro'),
             'fallback_models' => array_filter(array_map(
                 'trim',
                 explode(',', env('SEO_DEEPSEEK_FALLBACK_MODELS', 'deepseek-v4-flash'))
             )),
         ],
+        'openrouter' => [
+            'api_key' => env('OPENROUTER_API_KEY'),
+            'model' => env('SEO_OPENROUTER_MODEL', 'google/gemini-3.7-flash'),
+            'fallback_models' => array_filter(array_map(
+                'trim',
+                explode(',', env('SEO_OPENROUTER_FALLBACK_MODELS', 'deepseek/deepseek-v4-flash-0731,qwen/qwen3.7-flash,openai/gpt-5-mini'))
+            )),
+            'site_url' => env('OPENROUTER_SITE_URL', env('APP_URL')),
+            'app_name' => env('OPENROUTER_APP_NAME', env('APP_NAME', 'Exotic CRM')),
+            'provider_sort' => env('SEO_OPENROUTER_PROVIDER_SORT'),
+            'allow_fallbacks' => filter_var(env('SEO_OPENROUTER_ALLOW_FALLBACKS', true), FILTER_VALIDATE_BOOL),
+            'data_collection' => env('SEO_OPENROUTER_DATA_COLLECTION', 'deny'),
+        ],
         'scorer_weights' => [
-            'word_count'   => (int) env('SEO_WEIGHT_WORD_COUNT', 25),
-            'links'        => (int) env('SEO_WEIGHT_LINKS', 25),
+            'word_count' => (int) env('SEO_WEIGHT_WORD_COUNT', 25),
+            'links' => (int) env('SEO_WEIGHT_LINKS', 25),
             'completeness' => (int) env('SEO_WEIGHT_COMPLETENESS', 25),
-            'media'        => (int) env('SEO_WEIGHT_MEDIA', 25),
+            'media' => (int) env('SEO_WEIGHT_MEDIA', 25),
         ],
     ],
 
@@ -253,7 +266,7 @@ return [
 
     'nominatim' => [
         'base_url' => env('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org/search'),
-        'user_agent' => env('NOMINATIM_USER_AGENT', trim(env('APP_NAME', 'Exotic CRM')) . '/1.0'),
+        'user_agent' => env('NOMINATIM_USER_AGENT', trim(env('APP_NAME', 'Exotic CRM')).'/1.0'),
         'rate_per_minute' => (int) env('NOMINATIM_RATE_PER_MINUTE', 60),
         'scheduled_rate_per_minute' => (int) env('NOMINATIM_SCHEDULED_RATE_PER_MINUTE', 4),
         'batch_limit' => (int) env('NOMINATIM_BATCH_LIMIT', 50),

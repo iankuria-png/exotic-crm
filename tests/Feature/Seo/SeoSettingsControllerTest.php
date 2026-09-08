@@ -5,6 +5,8 @@ namespace Tests\Feature\Seo;
 use App\Models\IntegrationSetting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -29,10 +31,12 @@ class SeoSettingsControllerTest extends TestCase
             ->assertJsonPath('config.providers.claude.has_key', false)
             ->assertJsonPath('config.providers.gemini.has_key', false)
             ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash')
+            ->assertJsonPath('config.providers.openrouter.model', 'google/gemini-3.7-flash')
+            ->assertJsonPath('config.providers.openrouter.fallback_models.0', 'deepseek/deepseek-v4-flash-0731')
             ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
             ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
 
-        $this->assertSame(['claude', 'openai', 'gemini', 'deepseek'], $response->json('available_providers'));
+        $this->assertSame(['openrouter', 'deepseek', 'gemini', 'claude', 'openai'], $response->json('available_providers'));
     }
 
     public function test_show_masks_api_keys(): void
@@ -67,8 +71,13 @@ class SeoSettingsControllerTest extends TestCase
         $this->patchJson('/api/crm/settings/seo-engine', [
             'enabled' => true,
             'platform_allowlist' => [1, 2],
-            'providers_order' => ['gemini', 'claude', 'openai', 'deepseek'],
+            'providers_order' => ['openrouter', 'gemini', 'claude', 'openai', 'deepseek'],
             'providers' => [
+                'openrouter' => [
+                    'api_key' => 'sk-or-test',
+                    'model' => 'google/gemini-3.7-flash',
+                    'fallback_models' => ['deepseek/deepseek-v4-flash-0731', 'google/gemini-3.7-flash'],
+                ],
                 'gemini' => ['api_key' => 'my-gemini-key', 'model' => 'gemini-1.5-flash'],
                 'claude' => ['api_key' => '__keep__', 'model' => 'claude-3-5-sonnet-20241022'],
                 'openai' => ['api_key' => '__keep__', 'model' => 'gpt-4o-mini'],
@@ -83,7 +92,11 @@ class SeoSettingsControllerTest extends TestCase
         $stored = IntegrationSetting::where('key', 'seo_engine')->first()->value;
         $this->assertTrue($stored['enabled']);
         $this->assertSame([1, 2], $stored['platform_allowlist']);
-        $this->assertSame('my-gemini-key', $stored['providers']['gemini']['api_key']);
+        $this->assertArrayNotHasKey('api_key', $stored['providers']['gemini']);
+        $this->assertSame('my-gemini-key', Crypt::decryptString($stored['providers']['gemini']['api_key_encrypted']));
+        $this->assertSame('sk-or-test', Crypt::decryptString($stored['providers']['openrouter']['api_key_encrypted']));
+        $this->assertSame('google/gemini-3.7-flash', $stored['providers']['openrouter']['model']);
+        $this->assertSame(['deepseek/deepseek-v4-flash-0731'], $stored['providers']['openrouter']['fallback_models']);
         $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
         $this->assertSame('deepseek-chat', $stored['providers']['deepseek']['model']);
         $this->assertSame(['deepseek-v4-pro', 'deepseek-custom-creative'], $stored['providers']['deepseek']['fallback_models']);
@@ -98,8 +111,9 @@ class SeoSettingsControllerTest extends TestCase
         $this->patchJson('/api/crm/settings/seo-engine', [
             'enabled' => true,
             'platform_allowlist' => [],
-            'providers_order' => ['deepseek', 'gemini', 'claude', 'openai'],
+            'providers_order' => ['openrouter', 'deepseek', 'gemini', 'claude', 'openai'],
             'providers' => [
+                'openrouter' => ['api_key' => '__keep__', 'model' => 'google/gemini-3.7-flash', 'fallback_models' => ['qwen/qwen3.7-flash']],
                 'deepseek' => ['api_key' => 'sk-deepseek-test', 'model' => 'deepseek-v4-pro', 'fallback_models' => ['deepseek-v4-flash']],
                 'gemini' => ['api_key' => '__keep__', 'model' => 'gemini-2.5-flash'],
                 'claude' => ['api_key' => '__keep__', 'model' => 'claude-3-5-sonnet-20241022'],
@@ -123,6 +137,8 @@ class SeoSettingsControllerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('config.generation.custom_prompt', $customPrompt)
             ->assertJsonPath('config.generation.previous_bio_reference_min_uniqueness_score', 85)
+            ->assertJsonPath('config.providers.openrouter.model', 'google/gemini-3.7-flash')
+            ->assertJsonPath('config.providers.openrouter.fallback_models.0', 'qwen/qwen3.7-flash')
             ->assertJsonPath('config.providers.deepseek.model', 'deepseek-v4-pro')
             ->assertJsonPath('config.providers.deepseek.fallback_models.0', 'deepseek-v4-flash');
     }
@@ -172,7 +188,8 @@ class SeoSettingsControllerTest extends TestCase
         ])->assertOk();
 
         $stored = IntegrationSetting::where('key', 'seo_engine')->first()->value;
-        $this->assertSame('original-key', $stored['providers']['gemini']['api_key']);
+        $this->assertArrayNotHasKey('api_key', $stored['providers']['gemini']);
+        $this->assertSame('original-key', Crypt::decryptString($stored['providers']['gemini']['api_key_encrypted']));
         $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
     }
 
@@ -211,5 +228,34 @@ class SeoSettingsControllerTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('success', false);
+    }
+
+    public function test_model_catalog_returns_cached_openrouter_models(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        Http::fake([
+            'openrouter.ai/api/v1/models*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'google/gemini-3.7-flash',
+                        'name' => 'Google: Gemini 3.7 Flash',
+                        'context_length' => 1048576,
+                        'pricing' => ['prompt' => '0.00000075', 'completion' => '0.00000375'],
+                        'supported_parameters' => ['max_tokens', 'temperature'],
+                    ],
+                    [
+                        'id' => 'google/gemini-3.7-flash:batch',
+                        'name' => 'Google: Gemini 3.7 Flash (batch)',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->getJson('/api/crm/settings/seo-engine/models?q=gemini&sort=most-popular')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('models.0.id', 'google/gemini-3.7-flash')
+            ->assertJsonMissing(['id' => 'google/gemini-3.7-flash:batch']);
     }
 }

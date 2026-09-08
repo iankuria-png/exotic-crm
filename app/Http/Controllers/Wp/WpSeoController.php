@@ -21,7 +21,7 @@ class WpSeoController extends Controller
      */
     public function generateBio(Request $request): JsonResponse
     {
-        if (!config('services.seo_engine.enabled', false)) {
+        if (! config('services.seo_engine.enabled', false)) {
             return response()->json(['message' => 'SEO Engine is disabled in CRM settings.'], 403);
         }
 
@@ -29,12 +29,12 @@ class WpSeoController extends Controller
         $platformId = (int) $request->attributes->get('platform_id', 0);
 
         $data = $request->validate([
-            'client_id'        => 'nullable|integer|min:1',
-            'wp_post_id'       => 'nullable|integer|min:1',
-            'platform_id'      => 'nullable|integer|min:1',
+            'client_id' => 'nullable|integer|min:1',
+            'wp_post_id' => 'nullable|integer|min:1',
+            'platform_id' => 'nullable|integer|min:1',
             'profile_snapshot' => 'nullable|array',
-            'save'             => 'nullable|boolean',
-            'force_provider'   => 'nullable|string|in:claude,openai,gemini,deepseek',
+            'save' => 'nullable|boolean',
+            'force_provider' => 'nullable|string|in:openrouter,claude,openai,gemini,deepseek',
             'generation_options' => 'nullable|array',
             'generation_options.tone' => 'nullable|string|max:180',
             'generation_options.temperament' => 'nullable|string|max:180',
@@ -66,17 +66,17 @@ class WpSeoController extends Controller
             ]);
         }
 
-        $hasClient   = !empty($data['client_id']);
-        $hasPost     = !empty($data['wp_post_id']);
-        $hasSnapshot = !empty($data['profile_snapshot']);
+        $hasClient = ! empty($data['client_id']);
+        $hasPost = ! empty($data['wp_post_id']);
+        $hasSnapshot = ! empty($data['profile_snapshot']);
 
-        if (!$hasClient && !$hasPost && !$hasSnapshot) {
+        if (! $hasClient && ! $hasPost && ! $hasSnapshot) {
             throw ValidationException::withMessages([
                 'request' => 'At least one of client_id, wp_post_id, or profile_snapshot is required.',
             ]);
         }
 
-        if (!empty($data['save']) && !$hasClient && !$hasPost) {
+        if (! empty($data['save']) && ! $hasClient && ! $hasPost) {
             throw ValidationException::withMessages([
                 'save' => 'save=true requires client_id or wp_post_id.',
             ]);
@@ -101,10 +101,10 @@ class WpSeoController extends Controller
         }
 
         Log::info('wp-svc.seo.bio_generated', [
-            'platform_id'   => $data['platform_id'],
-            'wp_post_id'    => $data['wp_post_id'] ?? null,
+            'platform_id' => $data['platform_id'],
+            'wp_post_id' => $data['wp_post_id'] ?? null,
             'provider_used' => $result['provider_used'],
-            'score'         => $result['score'],
+            'score' => $result['score'],
         ]);
 
         return response()->json($result);

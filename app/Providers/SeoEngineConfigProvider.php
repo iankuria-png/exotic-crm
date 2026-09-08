@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\IntegrationSetting;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 
@@ -23,16 +24,17 @@ class SeoEngineConfigProvider extends ServiceProvider
         try {
             // Cache for 5 minutes so we don't hit DB on every request
             $stored = Cache::remember('seo_engine_config', 300, function () {
-                if (!Schema::hasTable('integration_settings')) {
+                if (! Schema::hasTable('integration_settings')) {
                     return null;
                 }
+
                 return IntegrationSetting::query()->where('key', self::KEY)->value('value');
             });
         } catch (\Throwable $e) {
             return; // DB not ready / down — fall back to env
         }
 
-        if (!is_array($stored) || empty($stored)) {
+        if (! is_array($stored) || empty($stored)) {
             return;
         }
 
@@ -41,33 +43,48 @@ class SeoEngineConfigProvider extends ServiceProvider
             config(['services.seo_engine.enabled' => (bool) $stored['enabled']]);
         }
 
-        if (!empty($stored['platform_allowlist']) && is_array($stored['platform_allowlist'])) {
+        if (! empty($stored['platform_allowlist']) && is_array($stored['platform_allowlist'])) {
             config(['services.seo_engine.platform_allowlist' => array_values(array_map('intval', $stored['platform_allowlist']))]);
         }
 
-        if (!empty($stored['providers_order']) && is_array($stored['providers_order'])) {
+        if (! empty($stored['providers_order']) && is_array($stored['providers_order'])) {
             config(['services.seo_engine.providers' => array_values($stored['providers_order'])]);
         }
 
-        if (!empty($stored['generation']) && is_array($stored['generation'])) {
+        if (! empty($stored['generation']) && is_array($stored['generation'])) {
             config(['services.seo_engine.generation' => $stored['generation']]);
         }
 
-        foreach (['claude', 'openai', 'gemini', 'deepseek'] as $provider) {
+        foreach (['openrouter', 'claude', 'openai', 'gemini', 'deepseek'] as $provider) {
             $cfg = $stored['providers'][$provider] ?? null;
-            if (!is_array($cfg)) {
+            if (! is_array($cfg)) {
                 continue;
             }
-            if (!empty($cfg['api_key'])) {
-                config(["services.seo_engine.{$provider}.api_key" => (string) $cfg['api_key']]);
+            $apiKey = $this->providerApiKey($cfg);
+            if ($apiKey !== '') {
+                config(["services.seo_engine.{$provider}.api_key" => $apiKey]);
             }
-            if (!empty($cfg['model'])) {
+            if (! empty($cfg['model'])) {
                 config(["services.seo_engine.{$provider}.model" => $this->normalizeProviderModel($provider, (string) $cfg['model'])]);
             }
             if (array_key_exists('fallback_models', $cfg)) {
                 config(["services.seo_engine.{$provider}.fallback_models" => $this->normalizeFallbackModels($provider, (array) $cfg['fallback_models'])]);
             }
         }
+    }
+
+    private function providerApiKey(array $config): string
+    {
+        $encrypted = (string) ($config['api_key_encrypted'] ?? '');
+        if ($encrypted !== '') {
+            try {
+                return Crypt::decryptString($encrypted);
+            } catch (\Throwable) {
+                return '';
+            }
+        }
+
+        return trim((string) ($config['api_key'] ?? ''));
     }
 
     private function normalizeProviderModel(string $provider, string $model): string

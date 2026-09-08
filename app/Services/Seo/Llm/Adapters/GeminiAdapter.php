@@ -10,6 +10,7 @@ use RuntimeException;
 class GeminiAdapter implements LlmClient
 {
     private string $apiKey;
+
     private string $model;
 
     public function __construct()
@@ -31,17 +32,22 @@ class GeminiAdapter implements LlmClient
 
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
-        if (!$this->isAvailable()) {
+        if (! $this->isAvailable()) {
             throw new RuntimeException('Gemini adapter not configured (missing API key or model).');
         }
 
-        $url = "https://generativelanguage.googleapis.com/v1beta/models/" . rawurlencode($this->model) . ":generateContent?key=" . rawurlencode($this->apiKey);
+        $requestedModel = is_string($opts['model'] ?? null) ? trim((string) $opts['model']) : '';
+        $model = $this->isGeminiModel($requestedModel)
+            ? $requestedModel
+            : $this->model;
+
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/'.rawurlencode($model).':generateContent?key='.rawurlencode($this->apiKey);
 
         $payload = [
             'contents' => [
                 [
-                    'role'  => 'user',
-                    'parts' => [['text' => $system . "\n\n" . $user]],
+                    'role' => 'user',
+                    'parts' => [['text' => $system."\n\n".$user]],
                 ],
             ],
             'generationConfig' => [
@@ -55,7 +61,7 @@ class GeminiAdapter implements LlmClient
             ->post($url, $payload);
 
         if ($response->failed()) {
-            throw new RuntimeException('Gemini API error: ' . $response->status() . ' ' . $response->body());
+            throw new RuntimeException('Gemini API error: '.$response->status().' '.$response->body());
         }
 
         $json = $response->json();
@@ -65,13 +71,20 @@ class GeminiAdapter implements LlmClient
             throw new RuntimeException('Gemini API returned empty content.');
         }
 
-        $inputTokens  = (int) ($json['usageMetadata']['promptTokenCount'] ?? 0);
+        $inputTokens = (int) ($json['usageMetadata']['promptTokenCount'] ?? 0);
         $outputTokens = (int) ($json['usageMetadata']['candidatesTokenCount'] ?? 0);
 
         return new LlmResponse(
-            text:         $text,
-            inputTokens:  $inputTokens,
+            text: $text,
+            inputTokens: $inputTokens,
             outputTokens: $outputTokens,
         );
+    }
+
+    private function isGeminiModel(string $model): bool
+    {
+        return $model !== ''
+            && ! str_contains($model, '/')
+            && str_starts_with($model, 'gemini-');
     }
 }

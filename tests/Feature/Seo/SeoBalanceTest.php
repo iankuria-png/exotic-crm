@@ -36,10 +36,10 @@ class SeoBalanceTest extends TestCase
             'api.deepseek.com/user/balance' => Http::response([
                 'is_available' => true,
                 'balance_infos' => [[
-                    'currency'           => 'USD',
-                    'total_balance'      => '12.34',
-                    'granted_balance'    => '0.00',
-                    'topped_up_balance'  => '12.34',
+                    'currency' => 'USD',
+                    'total_balance' => '12.34',
+                    'granted_balance' => '0.00',
+                    'topped_up_balance' => '12.34',
                 ]],
             ], 200),
         ]);
@@ -53,6 +53,39 @@ class SeoBalanceTest extends TestCase
             ->assertJsonPath('supported', true)
             ->assertJsonPath('balance', '12.34')
             ->assertJsonPath('currency', 'USD');
+    }
+
+    public function test_openrouter_credits_are_returned_when_api_responds(): void
+    {
+        IntegrationSetting::create([
+            'key' => 'seo_engine',
+            'value' => [
+                'enabled' => true,
+                'providers' => [
+                    'openrouter' => ['api_key' => 'sk-or-test', 'model' => 'google/gemini-3.7-flash'],
+                ],
+            ],
+        ]);
+
+        Http::fake([
+            'openrouter.ai/api/v1/credits' => Http::response([
+                'data' => [
+                    'total_credits' => 25.00,
+                    'total_usage' => 3.25,
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $response = $this->getJson('/api/crm/settings/seo-engine/balance?provider=openrouter');
+
+        $response->assertOk()
+            ->assertJsonPath('provider', 'openrouter')
+            ->assertJsonPath('supported', true)
+            ->assertJsonPath('balance', '21.75')
+            ->assertJsonPath('currency', 'USD')
+            ->assertJsonPath('usage', '3.25');
     }
 
     public function test_balance_endpoint_marks_claude_as_unsupported(): void

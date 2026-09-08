@@ -59,19 +59,19 @@ TEXT;
      */
     public const SUPPORTED_LANGUAGES = [
         'en' => [
-            'label'     => 'English',
+            'label' => 'English',
             'directive' => 'Write the entire bio in natural, idiomatic English.',
         ],
         'fr' => [
-            'label'     => 'French',
+            'label' => 'French',
             'directive' => 'Write the entire bio in natural, idiomatic French (français). Use standard punctuation. No mixed languages.',
         ],
         'pt' => [
-            'label'     => 'Portuguese',
+            'label' => 'Portuguese',
             'directive' => 'Write the entire bio in natural, idiomatic Portuguese (português). Use standard punctuation. No mixed languages.',
         ],
         'sw' => [
-            'label'     => 'Swahili',
+            'label' => 'Swahili',
             'directive' => 'Write the entire bio in natural, conversational Swahili (Kiswahili) that local readers will understand. Avoid Sheng/slang. No mixed languages.',
         ],
     ];
@@ -119,6 +119,7 @@ TEXT;
 
     /** USD per 1M tokens. DeepSeek defaults use cache-miss input pricing. */
     private const PROVIDER_PRICING = [
+        'openrouter' => ['input' => 0.75, 'output' => 3.75],
         'deepseek' => ['input' => 0.27, 'output' => 1.10],
         'gemini' => ['input' => 0.10, 'output' => 0.40],
         'openai' => ['input' => 0.15, 'output' => 0.60],
@@ -129,11 +130,11 @@ TEXT;
     public function __construct(
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
         private readonly TemplateFallbackEngine $fallback,
-        private readonly LinkInjector           $injector,
-        private readonly LinkCatalogService     $catalogService,
-        private readonly SeoScorer              $scorer,
+        private readonly LinkInjector $injector,
+        private readonly LinkCatalogService $catalogService,
+        private readonly SeoScorer $scorer,
         private readonly FeedbackInsightService $feedback,
-        private readonly BioUniquenessAnalyzer  $uniqueness,
+        private readonly BioUniquenessAnalyzer $uniqueness,
     ) {}
 
     /**
@@ -144,14 +145,14 @@ TEXT;
      */
     public function generate(array $params): array
     {
-        $clientId      = isset($params['client_id']) ? (int) $params['client_id'] : null;
-        $wpPostId      = isset($params['wp_post_id']) ? (int) $params['wp_post_id'] : null;
-        $platformId    = (int) ($params['platform_id'] ?? 0);
-        $overlay       = is_array($params['profile_snapshot'] ?? null) ? $params['profile_snapshot'] : null;
+        $clientId = isset($params['client_id']) ? (int) $params['client_id'] : null;
+        $wpPostId = isset($params['wp_post_id']) ? (int) $params['wp_post_id'] : null;
+        $platformId = (int) ($params['platform_id'] ?? 0);
+        $overlay = is_array($params['profile_snapshot'] ?? null) ? $params['profile_snapshot'] : null;
         $forceProvider = isset($params['force_provider']) ? (string) $params['force_provider'] : null;
-        $rawOverrides  = is_array($params['generation_options'] ?? null) ? $params['generation_options'] : [];
-        $refinements   = is_array($params['refinements'] ?? null) ? $params['refinements'] : [];
-        $previousBio   = isset($params['previous_bio']) ? (string) $params['previous_bio'] : '';
+        $rawOverrides = is_array($params['generation_options'] ?? null) ? $params['generation_options'] : [];
+        $refinements = is_array($params['refinements'] ?? null) ? $params['refinements'] : [];
+        $previousBio = isset($params['previous_bio']) ? (string) $params['previous_bio'] : '';
         $feedbackContext = is_array($params['feedback_context'] ?? null) ? $params['feedback_context'] : [];
 
         // Apply quick-action refinement presets on top of any explicit overrides
@@ -208,7 +209,7 @@ TEXT;
         $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
         $rewrittenForUniqueness = false;
 
-        if (!$fallbackUsed && $this->uniqueness->shouldRewrite($analysis, $generationOptions)) {
+        if (! $fallbackUsed && $this->uniqueness->shouldRewrite($analysis, $generationOptions)) {
             $rewriteOptions = $generationOptions;
             $rewriteOptions['rewrite_draft'] = $rawText;
             $rewriteOptions['rewrite_instruction'] = $this->uniqueness->rewriteInstruction($analysis);
@@ -221,7 +222,7 @@ TEXT;
                 $providersOrder,
             );
 
-            if (!$rewriteFallback) {
+            if (! $rewriteFallback) {
                 $rawText = $this->sanitizeOutput($rewriteText);
                 $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
                 $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
@@ -259,22 +260,22 @@ TEXT;
         $usage = $this->withCostEstimate($providerUsed, $usage);
 
         Log::info('seo.bio_generated', [
-            'client_id'     => $clientId,
-            'wp_post_id'    => $wpPostId,
-            'platform_id'   => $snapshot->platformId,
+            'client_id' => $clientId,
+            'wp_post_id' => $wpPostId,
+            'platform_id' => $snapshot->platformId,
             'provider_used' => $providerUsed,
-            'score'         => $scoreResult['total'],
+            'score' => $scoreResult['total'],
             'estimated_cost_usd' => $usage['estimated_cost_usd'],
         ]);
 
         return [
-            'bio_html'      => $bioHtml,
-            'score'         => $scoreResult['total'],
-            'breakdown'     => $scoreResult['breakdown'],
+            'bio_html' => $bioHtml,
+            'score' => $scoreResult['total'],
+            'breakdown' => $scoreResult['breakdown'],
             'provider_used' => $providerUsed,
             'language_used' => (string) ($generationOptions['language'] ?? 'en'),
             'fallback_used' => $fallbackUsed,
-            'usage'         => $usage,
+            'usage' => $usage,
             'generation_options' => $generationOptions,
             'overuse_score' => $analysis['overuse_score'],
             'overuse_flags' => $analysis['overuse_flags'],
@@ -299,8 +300,7 @@ TEXT;
         array $options,
         array $overlay,
         ?array $providersOrder = null,
-    ): array
-    {
+    ): array {
         $waterfall = ProviderWaterfall::fromConfig($forceProvider, $providersOrder);
 
         try {
@@ -321,7 +321,7 @@ TEXT;
         } catch (AllProvidersFailedException $e) {
             Log::notice('seo.all_providers_failed', [
                 'platform_id' => $snapshot->platformId,
-                'reason'      => $e->getMessage(),
+                'reason' => $e->getMessage(),
             ]);
         }
 
@@ -335,7 +335,7 @@ TEXT;
     private function buildSystemPrompt(ProfileSnapshot $snapshot, array $options): string
     {
         $platform = Platform::find($snapshot->platformId);
-        $country  = $platform?->country ?? 'Kenya';
+        $country = $platform?->country ?? 'Kenya';
         $minWords = (int) $options['min_words'];
         $maxWords = (int) $options['max_words'];
         $maxChars = (int) $options['max_characters'];
@@ -386,11 +386,11 @@ PROMPT;
     {
         $data = [
             'Name' => $snapshot->name ?: '(not provided)',
-            'Age' => $snapshot->age !== null ? $snapshot->age . ' years old' : '(not provided)',
+            'Age' => $snapshot->age !== null ? $snapshot->age.' years old' : '(not provided)',
             'Gender' => $snapshot->gender ?: 'female',
             'Build' => $snapshot->build ?? '(not specified)',
             'Hair color' => $snapshot->hairColor ?? '(not specified)',
-            'Languages' => !empty($snapshot->languages) ? implode(', ', $snapshot->languages) : 'English',
+            'Languages' => ! empty($snapshot->languages) ? implode(', ', $snapshot->languages) : 'English',
             'Availability' => $snapshot->availabilityText(),
         ];
 
@@ -407,11 +407,11 @@ PROMPT;
             $data['Services to mention'] = $services !== [] ? implode(', ', $services) : '(not specified)';
         }
 
-        if (!empty($snapshot->rates)) {
+        if (! empty($snapshot->rates)) {
             $rateBits = [];
             foreach (array_slice($snapshot->rates, 0, 6, true) as $key => $value) {
                 if (is_scalar($value) && trim((string) $value) !== '') {
-                    $rateBits[] = str_replace('_', ' ', (string) $key) . ': ' . trim((string) $value);
+                    $rateBits[] = str_replace('_', ' ', (string) $key).': '.trim((string) $value);
                 }
             }
             if ($rateBits !== []) {
@@ -419,7 +419,7 @@ PROMPT;
             }
         }
 
-        if (!empty($snapshot->extraFacts)) {
+        if (! empty($snapshot->extraFacts)) {
             $data['Human details to use only if natural'] = implode('; ', array_slice($snapshot->extraFacts, 0, 10));
         }
 
@@ -428,7 +428,7 @@ PROMPT;
             $data['Contact instruction'] = $contact;
         }
 
-        if (!empty($options['rewrite_draft'])) {
+        if (! empty($options['rewrite_draft'])) {
             $data['Draft to rewrite'] = mb_substr(trim(strip_tags((string) $options['rewrite_draft'])), 0, 900);
         }
 
@@ -459,24 +459,24 @@ PROMPT;
         $minWords = (int) $base['min_words'];
         $maxWords = (int) $base['max_words'];
         $maxChars = (int) $base['max_characters'];
-        $prompt   = trim((string) $base['custom_prompt']);
-        $addenda  = [];
+        $prompt = trim((string) $base['custom_prompt']);
+        $addenda = [];
 
         foreach ($refinements as $name) {
             $preset = self::REFINEMENT_PRESETS[$name] ?? null;
-            if (!$preset) {
+            if (! $preset) {
                 continue;
             }
             $minWords += (int) ($preset['min_words_delta'] ?? 0);
             $maxWords += (int) ($preset['max_words_delta'] ?? 0);
             $maxChars += (int) ($preset['max_chars_delta'] ?? 0);
-            if (!empty($preset['prompt_addendum'])) {
+            if (! empty($preset['prompt_addendum'])) {
                 $addenda[] = $preset['prompt_addendum'];
             }
         }
 
-        if (!empty($addenda)) {
-            $prompt = trim($prompt . "\n" . implode("\n", $addenda));
+        if (! empty($addenda)) {
+            $prompt = trim($prompt."\n".implode("\n", $addenda));
             $overrides['custom_prompt'] = $prompt;
         }
 
@@ -580,7 +580,7 @@ PROMPT;
 
     private function addReferenceBioContext(array &$data, mixed $context): void
     {
-        if (!is_array($context)) {
+        if (! is_array($context)) {
             return;
         }
 
@@ -588,14 +588,15 @@ PROMPT;
         $score = $context['score'] ?? null;
         $threshold = (int) ($context['threshold'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']);
 
-        if (!empty($context['use']) && trim((string) ($context['text'] ?? '')) !== '') {
-            $data[$label . ' context'] = trim((string) $context['text']) . ' — use only for human voice and useful continuity; do not copy phrasing or structure.';
+        if (! empty($context['use']) && trim((string) ($context['text'] ?? '')) !== '') {
+            $data[$label.' context'] = trim((string) $context['text']).' — use only for human voice and useful continuity; do not copy phrasing or structure.';
+
             return;
         }
 
         if ($score !== null) {
-            $flags = !empty($context['flags']) ? ' Flags: ' . implode(', ', (array) $context['flags']) . '.' : '';
-            $data[$label . ' quality note'] = "{$label} scored {$score}/100, below the reference threshold {$threshold}. Do not copy its wording, structure, opening, or angle. Use profile facts instead.{$flags}";
+            $flags = ! empty($context['flags']) ? ' Flags: '.implode(', ', (array) $context['flags']).'.' : '';
+            $data[$label.' quality note'] = "{$label} scored {$score}/100, below the reference threshold {$threshold}. Do not copy its wording, structure, opening, or angle. Use profile facts instead.{$flags}";
         }
     }
 
@@ -660,21 +661,21 @@ PROMPT;
         if (isset($context['rating']) && (int) $context['rating'] < 0) {
             $bits[] = 'the editor rejected the current direction';
         }
-        if (!empty($context['tag'])) {
-            $bits[] = 'tag: ' . $context['tag'];
+        if (! empty($context['tag'])) {
+            $bits[] = 'tag: '.$context['tag'];
         }
-        if (!empty($context['comment'])) {
-            $bits[] = 'comment: "' . $context['comment'] . '"';
+        if (! empty($context['comment'])) {
+            $bits[] = 'comment: "'.$context['comment'].'"';
         }
 
         return $bits === []
             ? ''
-            : "\nImmediate editor feedback for this regeneration: " . implode('; ', $bits) . '.';
+            : "\nImmediate editor feedback for this regeneration: ".implode('; ', $bits).'.';
     }
 
     private function contactText(array $overlay, array $options): ?string
     {
-        if (!$options['include_contact'] || $options['contact_channel'] === 'none') {
+        if (! $options['include_contact'] || $options['contact_channel'] === 'none') {
             return null;
         }
 
@@ -693,7 +694,7 @@ PROMPT;
     private function firstString(array $data, array $keys): string
     {
         foreach ($keys as $key) {
-            if (!empty($data[$key]) && !is_array($data[$key])) {
+            if (! empty($data[$key]) && ! is_array($data[$key])) {
                 return trim((string) $data[$key]);
             }
         }
@@ -729,22 +730,22 @@ PROMPT;
 
         // 2) Strip emoji & pictographic characters (broad ranges).
         $emojiPattern = '/['
-            . '\x{1F300}-\x{1F5FF}'  // misc symbols & pictographs
-            . '\x{1F600}-\x{1F64F}'  // emoticons
-            . '\x{1F680}-\x{1F6FF}'  // transport & map
-            . '\x{1F700}-\x{1F77F}'  // alchemical
-            . '\x{1F780}-\x{1F7FF}'  // geometric shapes ext
-            . '\x{1F800}-\x{1F8FF}'  // supplemental arrows-C
-            . '\x{1F900}-\x{1F9FF}'  // supplemental symbols & pictographs
-            . '\x{1FA00}-\x{1FA6F}'  // chess symbols
-            . '\x{1FA70}-\x{1FAFF}'  // symbols & pictographs ext-A
-            . '\x{2600}-\x{26FF}'    // misc symbols (☀ ☂ ★)
-            . '\x{2700}-\x{27BF}'    // dingbats (✂ ✈ ✨)
-            . '\x{FE00}-\x{FE0F}'    // variation selectors
-            . '\x{1F1E6}-\x{1F1FF}'  // regional indicators (flags)
-            . '\x{200D}'              // zero-width joiner
-            . '\x{2028}\x{2029}'      // line/paragraph separators
-            . ']/u';
+            .'\x{1F300}-\x{1F5FF}'  // misc symbols & pictographs
+            .'\x{1F600}-\x{1F64F}'  // emoticons
+            .'\x{1F680}-\x{1F6FF}'  // transport & map
+            .'\x{1F700}-\x{1F77F}'  // alchemical
+            .'\x{1F780}-\x{1F7FF}'  // geometric shapes ext
+            .'\x{1F800}-\x{1F8FF}'  // supplemental arrows-C
+            .'\x{1F900}-\x{1F9FF}'  // supplemental symbols & pictographs
+            .'\x{1FA00}-\x{1FA6F}'  // chess symbols
+            .'\x{1FA70}-\x{1FAFF}'  // symbols & pictographs ext-A
+            .'\x{2600}-\x{26FF}'    // misc symbols (☀ ☂ ★)
+            .'\x{2700}-\x{27BF}'    // dingbats (✂ ✈ ✨)
+            .'\x{FE00}-\x{FE0F}'    // variation selectors
+            .'\x{1F1E6}-\x{1F1FF}'  // regional indicators (flags)
+            .'\x{200D}'              // zero-width joiner
+            .'\x{2028}\x{2029}'      // line/paragraph separators
+            .']/u';
         $text = preg_replace($emojiPattern, '', $text) ?? $text;
 
         // 3) Normalize fancy quotes/dashes that often render as ? on WP.
@@ -779,7 +780,7 @@ PROMPT;
     {
         // Quick reject — no characteristic mojibake glyphs.
         // Common signatures: Ã[©¨ ç¢] (latin accents), â€[™"\'] (smart quotes/dashes).
-        if (!preg_match('/Ã[\x{0080}-\x{00FF}]|â€[™"\'\x{0080}-\x{00BF}]/u', $text)) {
+        if (! preg_match('/Ã[\x{0080}-\x{00FF}]|â€[™"\'\x{0080}-\x{00BF}]/u', $text)) {
             return $text;
         }
 
@@ -792,7 +793,7 @@ PROMPT;
         }
 
         // The result must be valid UTF-8 — otherwise we've made things worse.
-        if (!mb_check_encoding($attempt, 'UTF-8')) {
+        if (! mb_check_encoding($attempt, 'UTF-8')) {
             return $text;
         }
 
@@ -820,10 +821,9 @@ PROMPT;
         return trim($lastStop > 120 ? mb_substr($cut, 0, $lastStop + 1) : $cut);
     }
 
-
     private function linkContactNumbers(string $html, array $overlay, array $options): string
     {
-        if (!$options['include_contact'] || $options['contact_channel'] === 'none') {
+        if (! $options['include_contact'] || $options['contact_channel'] === 'none') {
             return $html;
         }
 
@@ -834,13 +834,13 @@ PROMPT;
         }
 
         $href = in_array($options['contact_channel'], ['phone'], true)
-            ? 'tel:+' . $digits
-            : 'https://wa.me/' . $digits;
+            ? 'tel:+'.$digits
+            : 'https://wa.me/'.$digits;
 
         $escaped = htmlspecialchars($phone, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $linked = '<a href="' . htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">' . $escaped . '</a>';
+        $linked = '<a href="'.htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'">'.$escaped.'</a>';
 
-        return preg_replace('/(?<![\d>])' . preg_quote($escaped, '/') . '(?![\d<])/', $linked, $html, 1) ?? $html;
+        return preg_replace('/(?<![\d>])'.preg_quote($escaped, '/').'(?![\d<])/', $linked, $html, 1) ?? $html;
     }
 
     private function withCostEstimate(string $provider, array $usage): array
@@ -852,7 +852,7 @@ PROMPT;
 
         return array_merge($usage, [
             'estimated_cost_usd' => round($cost, 6),
-            'estimated_cost_label' => $cost > 0 ? '$' . number_format($cost, 6) : '$0.000000',
+            'estimated_cost_label' => $cost > 0 ? '$'.number_format($cost, 6) : '$0.000000',
             'pricing_basis' => 'Estimated from provider token usage and configured default per-1M-token rates.',
         ]);
     }
@@ -870,7 +870,7 @@ PROMPT;
         foreach ($paragraphs as $para) {
             $para = trim($para);
             if ($para !== '') {
-                $html .= '<p>' . nl2br(htmlspecialchars($para, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p>';
+                $html .= '<p>'.nl2br(htmlspecialchars($para, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')).'</p>';
             }
         }
 

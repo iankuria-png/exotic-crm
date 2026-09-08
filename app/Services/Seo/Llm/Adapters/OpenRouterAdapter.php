@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
-class DeepSeekAdapter implements LlmClient
+class OpenRouterAdapter implements LlmClient
 {
     private string $apiKey;
 
@@ -19,17 +19,17 @@ class DeepSeekAdapter implements LlmClient
 
     public function __construct()
     {
-        $this->apiKey = (string) config('services.seo_engine.deepseek.api_key', '');
-        $this->model = trim((string) config('services.seo_engine.deepseek.model', ''));
+        $this->apiKey = (string) config('services.seo_engine.openrouter.api_key', '');
+        $this->model = trim((string) config('services.seo_engine.openrouter.model', ''));
         $this->fallbackModels = array_values(array_filter(array_map(
             fn ($model): string => trim((string) $model),
-            (array) config('services.seo_engine.deepseek.fallback_models', [])
+            (array) config('services.seo_engine.openrouter.fallback_models', [])
         )));
     }
 
     public function name(): string
     {
-        return 'deepseek';
+        return 'openrouter';
     }
 
     public function isAvailable(): bool
@@ -40,7 +40,7 @@ class DeepSeekAdapter implements LlmClient
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
         if (! $this->isAvailable()) {
-            throw new RuntimeException('DeepSeek adapter not configured (missing API key or model).');
+            throw new RuntimeException('OpenRouter adapter not configured (missing API key or model).');
         }
 
         $failures = [];
@@ -49,7 +49,7 @@ class DeepSeekAdapter implements LlmClient
                 return $this->generateWithModel($model, $system, $user, $opts);
             } catch (\Throwable $e) {
                 $failures[$model] = $e->getMessage();
-                Log::warning('seo.deepseek_model_failed', [
+                Log::warning('seo.openrouter_model_failed', [
                     'model' => $model,
                     'error' => $e->getMessage(),
                 ]);
@@ -60,12 +60,12 @@ class DeepSeekAdapter implements LlmClient
             ->map(fn (string $error, string $model): string => "{$model}: {$error}")
             ->implode(' | ');
 
-        throw new RuntimeException('DeepSeek API failed for all configured models. '.$summary);
+        throw new RuntimeException('OpenRouter API failed for all configured models. '.$summary);
     }
 
     private function generateWithModel(string $model, string $system, string $user, array $opts = []): LlmResponse
     {
-        $payload = [
+        $payload = array_filter([
             'model' => $model,
             'max_tokens' => (int) ($opts['max_tokens'] ?? 1024),
             'temperature' => (float) ($opts['temperature'] ?? 0.85),
@@ -73,24 +73,28 @@ class DeepSeekAdapter implements LlmClient
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user', 'content' => $user],
             ],
-        ];
+            'provider' => $this->providerPreferences(),
+        ], fn ($value): bool => $value !== null && $value !== []);
 
-        $response = Http::withHeaders([
+        $response = Http::withHeaders(array_filter([
             'Authorization' => 'Bearer '.$this->apiKey,
             'Content-Type' => 'application/json',
-        ])
-            ->timeout(30)
-            ->post('https://api.deepseek.com/chat/completions', $payload);
+            'HTTP-Referer' => config('services.seo_engine.openrouter.site_url'),
+            'X-Title' => config('services.seo_engine.openrouter.app_name'),
+            'X-OpenRouter-Metadata' => 'enabled',
+        ]))
+            ->timeout(45)
+            ->post('https://openrouter.ai/api/v1/chat/completions', $payload);
 
         if ($response->failed()) {
-            throw new RuntimeException('DeepSeek API error for '.$model.': '.$response->status().' '.$response->body());
+            throw new RuntimeException('OpenRouter API error for '.$model.': '.$response->status().' '.$response->body());
         }
 
         $json = $response->json();
         $text = (string) ($json['choices'][0]['message']['content'] ?? '');
 
         if ($text === '') {
-            throw new RuntimeException('DeepSeek API returned empty content for '.$model.'.');
+            throw new RuntimeException('OpenRouter API returned empty content for '.$model.'.');
         }
 
         return new LlmResponse(
@@ -103,11 +107,12 @@ class DeepSeekAdapter implements LlmClient
     /**
      * @return array<int, string>
      */
-    private function modelsToTry(mixed $overrideModel = null): array
+    private function modelsToTry(mixed $overrideModel): array
     {
-        $override = is_string($overrideModel) && str_starts_with(trim($overrideModel), 'deepseek')
-            ? trim($overrideModel)
-            : '';
+        $override = is_string($overrideModel) ? trim($overrideModel) : '';
+        if ($override !== '' && ! str_contains($override, '/')) {
+            $override = '';
+        }
 
         return collect([$override, $this->model, ...$this->fallbackModels])
             ->map(fn ($model) => trim((string) $model))
@@ -115,5 +120,24 @@ class DeepSeekAdapter implements LlmClient
             ->unique()
             ->values()
             ->all();
+    }
+
+    private function providerPreferences(): array
+    {
+        $preferences = [
+            'allow_fallbacks' => (bool) config('services.seo_engine.openrouter.allow_fallbacks', true),
+        ];
+
+        $sort = trim((string) config('services.seo_engine.openrouter.provider_sort', ''));
+        if (in_array($sort, ['price', 'latency', 'throughput'], true)) {
+            $preferences['sort'] = $sort;
+        }
+
+        $dataCollection = trim((string) config('services.seo_engine.openrouter.data_collection', 'deny'));
+        if (in_array($dataCollection, ['allow', 'deny'], true)) {
+            $preferences['data_collection'] = $dataCollection;
+        }
+
+        return $preferences;
     }
 }

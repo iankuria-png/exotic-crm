@@ -22,11 +22,11 @@ use Illuminate\Validation\ValidationException;
 class SeoController extends Controller
 {
     public function __construct(
-        private readonly BioGenerationService   $generator,
+        private readonly BioGenerationService $generator,
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
-        private readonly SeoScorer              $scorer,
+        private readonly SeoScorer $scorer,
         private readonly FeedbackInsightService $feedbackInsight,
-        private readonly BioTranslationService  $translator,
+        private readonly BioTranslationService $translator,
         private readonly BioQualityAuditService $qualityAudit,
     ) {}
 
@@ -36,17 +36,17 @@ class SeoController extends Controller
      */
     public function generateBio(Request $request): JsonResponse
     {
-        if (!config('services.seo_engine.enabled', false)) {
+        if (! config('services.seo_engine.enabled', false)) {
             return response()->json(['message' => 'SEO Engine is disabled. Enable it under Settings → SEO Engine and save the settings.'], 403);
         }
 
         $data = $request->validate([
-            'client_id'        => 'nullable|integer|min:1',
-            'wp_post_id'       => 'nullable|integer|min:1',
-            'platform_id'      => 'nullable|integer|min:1',
+            'client_id' => 'nullable|integer|min:1',
+            'wp_post_id' => 'nullable|integer|min:1',
+            'platform_id' => 'nullable|integer|min:1',
             'profile_snapshot' => 'nullable|array',
-            'save'             => 'nullable|boolean',
-            'force_provider'   => 'nullable|string|in:claude,openai,gemini,deepseek',
+            'save' => 'nullable|boolean',
+            'force_provider' => 'nullable|string|in:openrouter,claude,openai,gemini,deepseek',
             'generation_options' => 'nullable|array',
             'generation_options.tone' => 'nullable|string|max:180',
             'generation_options.temperament' => 'nullable|string|max:180',
@@ -71,9 +71,9 @@ class SeoController extends Controller
             'feedback_context.rating' => 'nullable|integer|min:-1|max:1',
             'feedback_context.tag' => ['nullable', 'string', Rule::in(SeoBioFeedback::ALLOWED_TAGS)],
             'feedback_context.comment' => 'nullable|string|max:1000',
-            'refinements'      => 'nullable|array|max:6',
-            'refinements.*'    => ['string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::REFINEMENT_PRESETS))],
-            'previous_bio'     => 'nullable|string|max:6000',
+            'refinements' => 'nullable|array|max:6',
+            'refinements.*' => ['string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::REFINEMENT_PRESETS))],
+            'previous_bio' => 'nullable|string|max:6000',
         ]);
 
         $this->validateGenerationRequest($data);
@@ -101,7 +101,7 @@ class SeoController extends Controller
             ]), 500);
         }
 
-        if (!empty($data['save'])) {
+        if (! empty($data['save'])) {
             $this->persistResult($data, $result);
         }
 
@@ -119,47 +119,47 @@ class SeoController extends Controller
     public function feedback(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'platform_id'    => 'required|integer|min:1',
-            'client_id'      => 'nullable|integer|min:1',
-            'wp_post_id'     => 'nullable|integer|min:1',
-            'provider_used'  => 'nullable|string|max:40',
-            'rating'         => 'nullable|integer|min:-1|max:1',
-            'tag'            => ['nullable', 'string', Rule::in(SeoBioFeedback::ALLOWED_TAGS)],
-            'comment'        => 'nullable|string|max:2000',
-            'accepted'       => 'nullable|boolean',
-            'score'          => 'nullable|integer|min:0|max:100',
-            'bio_html'       => 'nullable|string|max:20000',
+            'platform_id' => 'required|integer|min:1',
+            'client_id' => 'nullable|integer|min:1',
+            'wp_post_id' => 'nullable|integer|min:1',
+            'provider_used' => 'nullable|string|max:40',
+            'rating' => 'nullable|integer|min:-1|max:1',
+            'tag' => ['nullable', 'string', Rule::in(SeoBioFeedback::ALLOWED_TAGS)],
+            'comment' => 'nullable|string|max:2000',
+            'accepted' => 'nullable|boolean',
+            'score' => 'nullable|integer|min:0|max:100',
+            'bio_html' => 'nullable|string|max:20000',
             'generation_options' => 'nullable|array',
         ]);
 
         $row = SeoBioFeedback::create([
-            'platform_id'        => (int) $data['platform_id'],
-            'client_id'          => $data['client_id'] ?? null,
-            'wp_post_id'         => $data['wp_post_id'] ?? null,
-            'user_id'            => $request->user()?->id,
-            'provider_used'      => $data['provider_used'] ?? null,
-            'rating'             => (int) ($data['rating'] ?? 0),
-            'tag'                => $data['tag'] ?? null,
-            'comment'            => $data['comment'] ?? null,
-            'accepted'           => (bool) ($data['accepted'] ?? false),
-            'score'              => $data['score'] ?? null,
+            'platform_id' => (int) $data['platform_id'],
+            'client_id' => $data['client_id'] ?? null,
+            'wp_post_id' => $data['wp_post_id'] ?? null,
+            'user_id' => $request->user()?->id,
+            'provider_used' => $data['provider_used'] ?? null,
+            'rating' => (int) ($data['rating'] ?? 0),
+            'tag' => $data['tag'] ?? null,
+            'comment' => $data['comment'] ?? null,
+            'accepted' => (bool) ($data['accepted'] ?? false),
+            'score' => $data['score'] ?? null,
             'generation_options' => $data['generation_options'] ?? null,
-            'bio_html'           => $data['bio_html'] ?? null,
+            'bio_html' => $data['bio_html'] ?? null,
         ]);
 
         $this->feedbackInsight->forgetPlatformCache((int) $data['platform_id']);
 
         Log::info('seo.feedback.recorded', [
-            'id'          => $row->id,
+            'id' => $row->id,
             'platform_id' => $row->platform_id,
-            'rating'      => $row->rating,
-            'tag'         => $row->tag,
-            'accepted'    => $row->accepted,
-            'user_id'     => $row->user_id,
+            'rating' => $row->rating,
+            'tag' => $row->tag,
+            'accepted' => $row->accepted,
+            'user_id' => $row->user_id,
         ]);
 
         return response()->json([
-            'id'      => $row->id,
+            'id' => $row->id,
             'message' => 'Feedback recorded.',
         ]);
     }
@@ -174,25 +174,26 @@ class SeoController extends Controller
      */
     public function translateBio(Request $request): JsonResponse
     {
-        if (!config('services.seo_engine.enabled', false)) {
+        if (! config('services.seo_engine.enabled', false)) {
             return response()->json(['message' => 'SEO Engine is disabled.'], 403);
         }
 
         $data = $request->validate([
-            'bio_html'      => 'required|string|max:20000',
+            'bio_html' => 'required|string|max:20000',
             'from_language' => ['required', 'string', Rule::in(array_keys(BioGenerationService::SUPPORTED_LANGUAGES))],
         ]);
 
         if ($data['from_language'] === 'en') {
             return response()->json([
                 'translation_html' => $data['bio_html'],
-                'provider_used'    => 'noop',
-                'cached'           => true,
-                'message'          => 'Source is already English.',
+                'provider_used' => 'noop',
+                'cached' => true,
+                'message' => 'Source is already English.',
             ]);
         }
 
         $result = $this->translator->translateToEnglish($data['bio_html'], $data['from_language']);
+
         return response()->json($result);
     }
 
@@ -234,17 +235,17 @@ class SeoController extends Controller
 
     private function validateGenerationRequest(array $data): void
     {
-        $hasClient   = !empty($data['client_id']);
-        $hasPost     = !empty($data['wp_post_id']);
-        $hasSnapshot = !empty($data['profile_snapshot']);
+        $hasClient = ! empty($data['client_id']);
+        $hasPost = ! empty($data['wp_post_id']);
+        $hasSnapshot = ! empty($data['profile_snapshot']);
 
-        if (!$hasClient && !$hasPost && !$hasSnapshot) {
+        if (! $hasClient && ! $hasPost && ! $hasSnapshot) {
             throw ValidationException::withMessages([
                 'request' => 'At least one of client_id, wp_post_id, or profile_snapshot is required.',
             ]);
         }
 
-        if (!empty($data['save']) && !$hasClient && !$hasPost) {
+        if (! empty($data['save']) && ! $hasClient && ! $hasPost) {
             throw ValidationException::withMessages([
                 'save' => 'save=true requires client_id or wp_post_id to anchor the result.',
             ]);
@@ -253,12 +254,13 @@ class SeoController extends Controller
 
     private function resolvePlatformId(array $data): int
     {
-        if (!empty($data['platform_id'])) {
+        if (! empty($data['platform_id'])) {
             return (int) $data['platform_id'];
         }
 
-        if (!empty($data['client_id'])) {
+        if (! empty($data['client_id'])) {
             $client = Client::findOrFail((int) $data['client_id']);
+
             return (int) $client->platform_id;
         }
 
@@ -267,8 +269,8 @@ class SeoController extends Controller
 
     private function persistResult(array $data, array $result): void
     {
-        $clientId = !empty($data['client_id']) ? (int) $data['client_id'] : null;
-        $wpPostId = !empty($data['wp_post_id']) ? (int) $data['wp_post_id'] : null;
+        $clientId = ! empty($data['client_id']) ? (int) $data['client_id'] : null;
+        $wpPostId = ! empty($data['wp_post_id']) ? (int) $data['wp_post_id'] : null;
 
         if ($clientId !== null) {
             $client = Client::find($clientId);
@@ -278,7 +280,7 @@ class SeoController extends Controller
         }
 
         if ($wpPostId !== null) {
-            $platformId = !empty($data['platform_id'])
+            $platformId = ! empty($data['platform_id'])
                 ? (int) $data['platform_id']
                 : ($clientId ? (int) Client::find($clientId)?->platform_id : 0);
 
@@ -290,7 +292,7 @@ class SeoController extends Controller
                 } catch (\Throwable $e) {
                     Log::error('SeoController: failed to persist to WP', [
                         'wp_post_id' => $wpPostId,
-                        'error'      => $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ]);
                 }
             }
@@ -298,8 +300,8 @@ class SeoController extends Controller
 
         if ($clientId !== null) {
             Client::where('id', $clientId)->update([
-                'seo_score'            => $result['score'],
-                'seo_score_breakdown'  => json_encode($result['breakdown']),
+                'seo_score' => $result['score'],
+                'seo_score_breakdown' => json_encode($result['breakdown']),
                 'seo_score_updated_at' => now(),
             ]);
         }

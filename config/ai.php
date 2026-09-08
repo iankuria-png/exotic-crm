@@ -103,6 +103,7 @@ return [
         'claude' => ['input' => 3.00, 'output' => 15.00],
         'openai' => ['input' => 2.50, 'output' => 10.00],
         'gemini' => ['input' => 1.25, 'output' => 5.00],
+        'openrouter' => ['input' => 0.75, 'output' => 3.75],
         'default' => ['input' => 0.50, 'output' => 1.50],
     ],
 

@@ -36,9 +36,10 @@ class ProviderWaterfall
             $provider = $adapter->name();
 
             try {
-                $resp           = $adapter->generate($system, $user, $opts);
+                $resp = $adapter->generate($system, $user, $opts);
                 $resp->provider = $provider;
                 $this->lastAttempts[] = ['provider' => $provider, 'status' => 'success', 'error' => null];
+
                 return $resp;
             } catch (\Throwable $e) {
                 $message = $this->summarizeProviderError($e->getMessage());
@@ -47,7 +48,7 @@ class ProviderWaterfall
 
                 Log::warning('seo.provider_failed', [
                     'provider' => $provider,
-                    'error'    => $e->getMessage(),
+                    'error' => $e->getMessage(),
                 ]);
             }
         }
@@ -72,15 +73,16 @@ class ProviderWaterfall
     public static function fromConfig(?string $forceProvider = null, ?array $providersOrder = null): self
     {
         $adapterMap = [
-            'claude'   => \App\Services\Seo\Llm\Adapters\ClaudeAdapter::class,
-            'openai'   => \App\Services\Seo\Llm\Adapters\OpenAiAdapter::class,
-            'gemini'   => \App\Services\Seo\Llm\Adapters\GeminiAdapter::class,
+            'openrouter' => \App\Services\Seo\Llm\Adapters\OpenRouterAdapter::class,
+            'claude' => \App\Services\Seo\Llm\Adapters\ClaudeAdapter::class,
+            'openai' => \App\Services\Seo\Llm\Adapters\OpenAiAdapter::class,
+            'gemini' => \App\Services\Seo\Llm\Adapters\GeminiAdapter::class,
             'deepseek' => \App\Services\Seo\Llm\Adapters\DeepSeekAdapter::class,
         ];
 
         $configuredOrder = is_array($providersOrder)
             ? $providersOrder
-            : config('services.seo_engine.providers', ['claude', 'openai', 'gemini', 'deepseek']);
+            : config('services.seo_engine.providers', ['openrouter', 'deepseek', 'gemini', 'claude', 'openai']);
 
         if ($forceProvider !== null && isset($adapterMap[$forceProvider])) {
             $configuredOrder = [$forceProvider];
@@ -89,7 +91,7 @@ class ProviderWaterfall
         $adapters = [];
         foreach ($configuredOrder as $name) {
             $name = trim((string) $name);
-            if (!isset($adapterMap[$name])) {
+            if (! isset($adapterMap[$name])) {
                 continue;
             }
 
@@ -97,7 +99,7 @@ class ProviderWaterfall
             $instance = app($adapterMap[$name]);
 
             // Skip adapters that aren't configured — avoids unnecessary failures in dev
-            if (method_exists($instance, 'isAvailable') && !$instance->isAvailable()) {
+            if (method_exists($instance, 'isAvailable') && ! $instance->isAvailable()) {
                 continue;
             }
 
@@ -123,7 +125,8 @@ class ProviderWaterfall
         $apiMessage = is_array($decoded) ? data_get($decoded, 'error.message') : null;
         if (is_string($apiMessage) && trim($apiMessage) !== '') {
             $status = data_get($decoded, 'error.status');
-            return trim($apiMessage) . ($status ? " ({$status})" : '');
+
+            return trim($apiMessage).($status ? " ({$status})" : '');
         }
 
         return mb_substr($message, 0, 500);

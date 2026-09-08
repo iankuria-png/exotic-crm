@@ -753,6 +753,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/settings/seo-engine', [SeoSettingsController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/seo-engine', [SeoSettingsController::class, 'update'])->middleware('role:admin');
     Route::post('/settings/seo-engine/test', [SeoSettingsController::class, 'test'])->middleware('role:admin');
+    Route::get('/settings/seo-engine/models', [SeoSettingsController::class, 'models'])->middleware('role:admin,sub_admin');
     Route::get('/settings/seo-engine/balance', [SeoSettingsController::class, 'balance'])->middleware('role:admin,sub_admin');
     Route::get('/settings/sales-dashboard-widgets', [SettingsController::class, 'getSalesDashboardWidgets']);
     Route::patch('/settings/sales-dashboard-widgets', [SettingsController::class, 'updateSalesDashboardWidgets'])->middleware('role:admin,sub_admin');

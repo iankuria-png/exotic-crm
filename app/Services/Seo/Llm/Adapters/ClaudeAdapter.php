@@ -10,12 +10,13 @@ use RuntimeException;
 class ClaudeAdapter implements LlmClient
 {
     private string $apiKey;
+
     private string $model;
 
     public function __construct()
     {
         $this->apiKey = (string) config('services.seo_engine.claude.api_key', '');
-        $this->model  = (string) config('services.seo_engine.claude.model', '');
+        $this->model = (string) config('services.seo_engine.claude.model', '');
     }
 
     public function name(): string
@@ -30,30 +31,35 @@ class ClaudeAdapter implements LlmClient
 
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
-        if (!$this->isAvailable()) {
+        if (! $this->isAvailable()) {
             throw new RuntimeException('Claude adapter not configured (missing API key or model).');
         }
 
+        $requestedModel = is_string($opts['model'] ?? null) ? trim((string) $opts['model']) : '';
+        $model = $this->isClaudeModel($requestedModel)
+            ? $requestedModel
+            : $this->model;
+
         $payload = [
-            'model'      => $this->model,
+            'model' => $model,
             'max_tokens' => (int) ($opts['max_tokens'] ?? 1024),
             'temperature' => (float) ($opts['temperature'] ?? 0.85),
-            'system'     => $system,
-            'messages'   => [
+            'system' => $system,
+            'messages' => [
                 ['role' => 'user', 'content' => $user],
             ],
         ];
 
         $response = Http::withHeaders([
-            'x-api-key'         => $this->apiKey,
+            'x-api-key' => $this->apiKey,
             'anthropic-version' => '2023-06-01',
-            'content-type'      => 'application/json',
+            'content-type' => 'application/json',
         ])
             ->timeout(30)
             ->post('https://api.anthropic.com/v1/messages', $payload);
 
         if ($response->failed()) {
-            throw new RuntimeException('Claude API error: ' . $response->status() . ' ' . $response->body());
+            throw new RuntimeException('Claude API error: '.$response->status().' '.$response->body());
         }
 
         $json = $response->json();
@@ -64,9 +70,16 @@ class ClaudeAdapter implements LlmClient
         }
 
         return new LlmResponse(
-            text:         $text,
-            inputTokens:  (int) ($json['usage']['input_tokens'] ?? 0),
+            text: $text,
+            inputTokens: (int) ($json['usage']['input_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['output_tokens'] ?? 0),
         );
+    }
+
+    private function isClaudeModel(string $model): bool
+    {
+        return $model !== ''
+            && ! str_contains($model, '/')
+            && str_starts_with($model, 'claude-');
     }
 }

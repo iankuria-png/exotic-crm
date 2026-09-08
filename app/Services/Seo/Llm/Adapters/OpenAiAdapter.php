@@ -10,12 +10,13 @@ use RuntimeException;
 class OpenAiAdapter implements LlmClient
 {
     private string $apiKey;
+
     private string $model;
 
     public function __construct()
     {
         $this->apiKey = (string) config('services.seo_engine.openai.api_key', '');
-        $this->model  = (string) config('services.seo_engine.openai.model', '');
+        $this->model = (string) config('services.seo_engine.openai.model', '');
     }
 
     public function name(): string
@@ -30,29 +31,34 @@ class OpenAiAdapter implements LlmClient
 
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
-        if (!$this->isAvailable()) {
+        if (! $this->isAvailable()) {
             throw new RuntimeException('OpenAI adapter not configured (missing API key or model).');
         }
 
+        $requestedModel = is_string($opts['model'] ?? null) ? trim((string) $opts['model']) : '';
+        $model = $this->isOpenAiModel($requestedModel)
+            ? $requestedModel
+            : $this->model;
+
         $payload = [
-            'model'      => $this->model,
+            'model' => $model,
             'max_tokens' => (int) ($opts['max_tokens'] ?? 1024),
             'temperature' => (float) ($opts['temperature'] ?? 0.85),
-            'messages'   => [
+            'messages' => [
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user', 'content' => $user],
             ],
         ];
 
         $response = Http::withHeaders([
-            'Authorization' => 'Bearer ' . $this->apiKey,
-            'Content-Type'  => 'application/json',
+            'Authorization' => 'Bearer '.$this->apiKey,
+            'Content-Type' => 'application/json',
         ])
             ->timeout(30)
             ->post('https://api.openai.com/v1/chat/completions', $payload);
 
         if ($response->failed()) {
-            throw new RuntimeException('OpenAI API error: ' . $response->status() . ' ' . $response->body());
+            throw new RuntimeException('OpenAI API error: '.$response->status().' '.$response->body());
         }
 
         $json = $response->json();
@@ -63,9 +69,20 @@ class OpenAiAdapter implements LlmClient
         }
 
         return new LlmResponse(
-            text:         $text,
-            inputTokens:  (int) ($json['usage']['prompt_tokens'] ?? 0),
+            text: $text,
+            inputTokens: (int) ($json['usage']['prompt_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['completion_tokens'] ?? 0),
         );
+    }
+
+    private function isOpenAiModel(string $model): bool
+    {
+        return $model !== ''
+            && ! str_contains($model, '/')
+            && (
+                str_starts_with($model, 'gpt-')
+                || str_starts_with($model, 'o')
+                || str_starts_with($model, 'chatgpt-')
+            );
     }
 }
