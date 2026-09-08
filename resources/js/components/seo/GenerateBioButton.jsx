@@ -212,15 +212,12 @@ export default function GenerateBioButton({
                 <button
                     type="button"
                     className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={() => {
-                        setError(null);
-                        setModalOpen(true);
-                    }}
+                    onClick={handleGenerate}
                     disabled={loading}
                     title="Generate an SEO-optimised bio from this profile's data"
                 >
                     <span aria-hidden="true">✨</span>
-                    <span>Generate SEO Bio</span>
+                    <span>{loading ? 'Generating bio...' : 'Generate SEO Bio'}</span>
                 </button>
 
                 <button

@@ -70,6 +70,7 @@ export default function BioPreviewModal({
     const [translationError, setTranslationError] = useState(null);
 
     const hasDraft = !!bioHtml;
+    const updatingDraft = loading || regenerating;
     const isNonEnglish = language && language !== 'en';
     const protectedLinks = useMemo(() => extractProtectedLinks(bioHtml), [bioHtml]);
     const missingProtectedLinks = useMemo(
@@ -217,12 +218,12 @@ export default function BioPreviewModal({
                                 {hasDraft ? 'Generated draft' : 'SEO bio draft'}
                             </p>
                             <h3 className="mt-1 text-lg font-semibold text-slate-950">
-                                {hasDraft ? 'Review the SEO bio before using it' : 'Choose the AI model for this bio'}
+                                {hasDraft ? 'Review the SEO bio before using it' : loading ? 'Generating SEO bio' : 'Generate SEO bio'}
                             </h3>
                             <p className="mt-1 text-sm text-slate-500">
                                 {hasDraft
                                     ? 'Accepting only fills the form. Give feedback so the AI learns your taste.'
-                                    : 'Generate inside this review step, then edit before it touches the profile form.'}
+                                    : 'The first draft starts with the default waterfall. Use the picker here for the next draft.'}
                             </p>
                         </div>
                         {hasDraft ? (
@@ -274,10 +275,23 @@ export default function BioPreviewModal({
 
                     {!hasDraft ? (
                         <div className="rounded-xl border border-dashed border-teal-200 bg-teal-50/50 px-4 py-5">
-                            <p className="text-sm font-semibold text-slate-900">Ready to draft from the current profile fields.</p>
-                            <p className="mt-1 text-sm text-slate-600">
-                                The generated copy will appear here for editing, SEO-link review, and feedback.
-                            </p>
+                            <div className="flex items-start gap-3">
+                                {loading ? (
+                                    <span className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-teal-700 ring-1 ring-teal-200">
+                                        <Spinner />
+                                    </span>
+                                ) : null}
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-900">
+                                        {loading ? 'Building the first draft from the current profile fields.' : 'No draft yet.'}
+                                    </p>
+                                    <p className="mt-1 text-sm text-slate-600">
+                                        {loading
+                                            ? 'The generated copy will appear here for editing, SEO-link review, and feedback.'
+                                            : 'Choose another AI route above and try again.'}
+                                    </p>
+                                </div>
+                            </div>
                         </div>
                     ) : (
                         <>
@@ -317,10 +331,10 @@ export default function BioPreviewModal({
                                 </div>
                             ) : null}
 
-                    {/* Bio body — fade overlay when regenerating */}
+                    {/* Bio body — fade overlay when replacing the draft */}
                     <div className="relative">
                         <div className={`rounded-xl border border-slate-200 bg-white transition ${
-                                regenerating ? 'opacity-40' : ''
+                                updatingDraft ? 'opacity-40' : ''
                             }`}>
                             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
                                 <div>
@@ -345,10 +359,10 @@ export default function BioPreviewModal({
                                 placeholder="Generated bio copy"
                             />
                         </div>
-                        {regenerating ? (
+                        {updatingDraft ? (
                             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                                 <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 shadow ring-1 ring-teal-200">
-                                    <Spinner /> Regenerating…
+                                    <Spinner /> {regenerating ? 'Regenerating...' : 'Generating...'}
                                 </div>
                             </div>
                         ) : null}
@@ -562,7 +576,9 @@ export default function BioPreviewModal({
                 <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4">
                     <p className="text-xs text-slate-500">
                         {!hasDraft
-                            ? 'Default waterfall uses the saved provider order from SEO Engine settings.'
+                            ? loading
+                                ? 'Default waterfall is running from the saved SEO Engine provider order.'
+                                : 'Default waterfall uses the saved provider order from SEO Engine settings.'
                             : missingProtectedLinks.length > 0
                             ? `${missingProtectedLinks.length} protected SEO link${missingProtectedLinks.length === 1 ? '' : 's'} missing from the edited draft.`
                             : 'Tip: you can edit the copy before saving.'}
@@ -581,14 +597,16 @@ export default function BioPreviewModal({
                                 {missingProtectedLinks.length > 0 && acceptAttempted ? 'Use anyway' : 'Use this bio'}
                             </button>
                         ) : (
-                            <button
-                                type="button"
-                                className="crm-btn-primary inline-flex items-center gap-2"
-                                onClick={onGenerateDraft}
-                                disabled={loading || regenerating || !onGenerateDraft}
-                            >
-                                {loading ? <><Spinner /> Generating...</> : 'Generate draft'}
-                            </button>
+                            !loading ? (
+                                <button
+                                    type="button"
+                                    className="crm-btn-primary inline-flex items-center gap-2"
+                                    onClick={onGenerateDraft}
+                                    disabled={regenerating || !onGenerateDraft}
+                                >
+                                    Try again
+                                </button>
+                            ) : null
                         )}
                     </div>
                 </footer>
