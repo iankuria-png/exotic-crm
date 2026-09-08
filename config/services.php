@@ -235,10 +235,10 @@ return [
         ],
         'openrouter' => [
             'api_key' => env('OPENROUTER_API_KEY'),
-            'model' => env('SEO_OPENROUTER_MODEL', 'google/gemini-3.7-flash'),
+            'model' => env('SEO_OPENROUTER_MODEL', 'google/gemini-3.8-flash'),
             'fallback_models' => array_filter(array_map(
                 'trim',
-                explode(',', env('SEO_OPENROUTER_FALLBACK_MODELS', 'deepseek/deepseek-v4-flash-0731,qwen/qwen3.7-flash,openai/gpt-5-mini'))
+                explode(',', env('SEO_OPENROUTER_FALLBACK_MODELS', 'deepseek/deepseek-v3.2,qwen/qwen3-max,mistralai/mistral-medium-3.1'))
             )),
             'site_url' => env('OPENROUTER_SITE_URL', env('APP_URL')),
             'app_name' => env('OPENROUTER_APP_NAME', env('APP_NAME', 'Exotic CRM')),

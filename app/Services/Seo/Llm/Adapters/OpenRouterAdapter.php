@@ -65,10 +65,12 @@ class OpenRouterAdapter implements LlmClient
 
     private function generateWithModel(string $model, string $system, string $user, array $opts = []): LlmResponse
     {
+        $maxTokens = max(16, (int) ($opts['max_tokens'] ?? 1024));
         $payload = array_filter([
             'model' => $model,
-            'max_tokens' => (int) ($opts['max_tokens'] ?? 1024),
+            'max_tokens' => $maxTokens,
             'temperature' => (float) ($opts['temperature'] ?? 0.85),
+            'modalities' => ['text'],
             'messages' => [
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user', 'content' => $user],
@@ -91,10 +93,12 @@ class OpenRouterAdapter implements LlmClient
         }
 
         $json = $response->json();
-        $text = (string) ($json['choices'][0]['message']['content'] ?? '');
+        $choice = (array) ($json['choices'][0] ?? []);
+        $message = (array) ($choice['message'] ?? []);
+        $text = $this->extractText($choice);
 
         if ($text === '') {
-            throw new RuntimeException('OpenRouter API returned empty content for '.$model.'.');
+            throw new RuntimeException($this->emptyContentMessage($model, $choice, $message, $json));
         }
 
         return new LlmResponse(
@@ -120,6 +124,73 @@ class OpenRouterAdapter implements LlmClient
             ->unique()
             ->values()
             ->all();
+    }
+
+    private function extractText(array $choice): string
+    {
+        $message = (array) ($choice['message'] ?? []);
+        $content = $message['content'] ?? null;
+
+        if (is_string($content)) {
+            return trim($content);
+        }
+
+        if (is_array($content)) {
+            $parts = collect($content)
+                ->map(function ($part): string {
+                    if (is_string($part)) {
+                        return $part;
+                    }
+
+                    if (! is_array($part)) {
+                        return '';
+                    }
+
+                    foreach (['text', 'content', 'output_text'] as $key) {
+                        if (isset($part[$key]) && is_string($part[$key])) {
+                            return $part[$key];
+                        }
+                    }
+
+                    return '';
+                })
+                ->filter()
+                ->implode('');
+
+            return trim($parts);
+        }
+
+        return trim((string) ($choice['text'] ?? ''));
+    }
+
+    private function emptyContentMessage(string $model, array $choice, array $message, array $json): string
+    {
+        $details = array_filter([
+            'finish_reason' => $choice['finish_reason'] ?? null,
+            'native_finish_reason' => $choice['native_finish_reason'] ?? null,
+            'provider' => data_get($choice, 'openrouter_metadata.provider_name')
+                ?? data_get($json, 'openrouter_metadata.provider_name'),
+            'error' => data_get($choice, 'error.message') ?? data_get($json, 'error.message'),
+            'refusal' => is_string($message['refusal'] ?? null) ? $message['refusal'] : null,
+            'reasoning_tokens' => data_get($json, 'usage.completion_tokens_details.reasoning_tokens'),
+        ], fn ($value): bool => $value !== null && $value !== '');
+
+        $suffix = $details === []
+            ? ''
+            : ' Details: '.collect($details)
+                ->map(fn ($value, string $key): string => $key.'='.$this->shortValue($value))
+                ->implode(', ');
+
+        return 'OpenRouter API returned empty visible text for '.$model.'.'.$suffix;
+    }
+
+    private function shortValue(mixed $value): string
+    {
+        $text = is_scalar($value)
+            ? (string) $value
+            : json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        return mb_substr((string) $text, 0, 180);
     }
 
     private function providerPreferences(): array

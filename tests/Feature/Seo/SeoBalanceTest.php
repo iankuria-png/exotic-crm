@@ -62,7 +62,7 @@ class SeoBalanceTest extends TestCase
             'value' => [
                 'enabled' => true,
                 'providers' => [
-                    'openrouter' => ['api_key' => 'sk-or-test', 'model' => 'google/gemini-3.7-flash'],
+                    'openrouter' => ['api_key' => 'sk-or-test', 'model' => 'google/gemini-3.8-flash'],
                 ],
             ],
         ]);

@@ -28,7 +28,7 @@ class SeoSettingsController extends Controller
     private const SUPPORTED_PROVIDERS = ['openrouter', 'deepseek', 'gemini', 'claude', 'openai'];
 
     private const DEFAULT_MODELS = [
-        'openrouter' => 'google/gemini-3.7-flash',
+        'openrouter' => 'google/gemini-3.8-flash',
         'claude' => 'claude-3-5-sonnet-20241022',
         'openai' => 'gpt-4o-mini',
         'gemini' => 'gemini-2.5-flash',
@@ -36,7 +36,7 @@ class SeoSettingsController extends Controller
     ];
 
     private const DEFAULT_FALLBACK_MODELS = [
-        'openrouter' => ['deepseek/deepseek-v4-flash-0731', 'qwen/qwen3.7-flash', 'openai/gpt-5-mini'],
+        'openrouter' => ['deepseek/deepseek-v3.2', 'qwen/qwen3-max', 'mistralai/mistral-medium-3.1'],
         'claude' => [],
         'openai' => [],
         'gemini' => [],
@@ -46,23 +46,23 @@ class SeoSettingsController extends Controller
     private const OPENROUTER_MODEL_PRESETS = [
         'balanced' => [
             'label' => 'Balanced SEO bios',
-            'models' => ['google/gemini-3.7-flash', 'deepseek/deepseek-v4-flash-0731', 'qwen/qwen3.7-flash', 'openai/gpt-5-mini'],
+            'models' => ['google/gemini-3.8-flash', 'deepseek/deepseek-v3.2', 'qwen/qwen3-max', 'mistralai/mistral-medium-3.1'],
         ],
         'lowest_cost' => [
             'label' => 'Lowest cost',
-            'models' => ['qwen/qwen3.7-flash', 'deepseek/deepseek-v4-flash-0731', 'google/gemini-2.5-flash-lite'],
+            'models' => ['qwen/qwen3.8-flash', '~deepseek/deepseek-v4-flash-latest', 'google/gemini-2.5-flash-lite'],
         ],
         'quality_review' => [
             'label' => 'Quality review',
-            'models' => ['anthropic/claude-sonnet-4.6', 'google/gemini-3.7-flash', 'openai/gpt-5-mini'],
+            'models' => ['anthropic/claude-sonnet-4.6', 'google/gemini-3.8-flash', 'openai/gpt-5-mini'],
         ],
         'creative_voice' => [
             'label' => 'Creative voice',
-            'models' => ['mistralai/mistral-medium-3-5', 'google/gemini-3.7-flash', 'deepseek/deepseek-v4-flash-0731'],
+            'models' => ['mistralai/mistral-medium-3-5', 'google/gemini-3.8-flash', 'deepseek/deepseek-v3.2'],
         ],
         'bulk_generation' => [
             'label' => 'Bulk generation',
-            'models' => ['deepseek/deepseek-v4-flash-0731', 'qwen/qwen3.7-flash', 'google/gemini-2.5-flash-lite'],
+            'models' => ['deepseek/deepseek-v3.2', 'qwen/qwen3.8-flash', 'google/gemini-2.5-flash-lite'],
         ],
     ];
 
@@ -244,9 +244,9 @@ class SeoSettingsController extends Controller
         try {
             $waterfall = ProviderWaterfall::fromConfig($data['provider']);
             $response = $waterfall->generate(
-                'You are a test echo. Reply with exactly the word OK.',
-                'Say OK.',
-                ['max_tokens' => 16],
+                'You are a health check for the CRM SEO bio generator. Reply with one short sentence that starts with OK.',
+                'Confirm this model can return normal visible text.',
+                ['max_tokens' => 128, 'temperature' => 0.2],
             );
 
             return response()->json([

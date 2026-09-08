@@ -17,9 +17,10 @@ const PROVIDER_DISPLAY = {
 
 const MODEL_PRESETS = {
     openrouter: [
-        { value: 'google/gemini-3.7-flash', label: 'Gemini 3.7 Flash', hint: 'Balanced quality and cost' },
-        { value: 'deepseek/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash', hint: 'Low-cost bulk fallback' },
-        { value: 'qwen/qwen3.7-flash', label: 'Qwen3.7 Flash', hint: 'Very low-cost experiment' },
+        { value: 'google/gemini-3.8-flash', label: 'Gemini 3.8 Flash', hint: 'Balanced quality and cost' },
+        { value: 'deepseek/deepseek-v3.2', label: 'DeepSeek V3.2', hint: 'Low-cost plain chat fallback' },
+        { value: 'qwen/qwen3-max', label: 'Qwen3 Max', hint: 'Strong general fallback' },
+        { value: 'mistralai/mistral-medium-3.1', label: 'Mistral Medium 3.1', hint: 'Creative copy fallback' },
         { value: 'openai/gpt-5-mini', label: 'GPT-5 Mini', hint: 'Reliable general fallback' },
         { value: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6', hint: 'Quality benchmark' },
     ],
@@ -1047,7 +1048,7 @@ function OpenRouterModelField({ value, fallbackModels = [], presets = {}, onMode
                                 addModel(customModel);
                             }
                         }}
-                        placeholder="Custom OpenRouter model slug, e.g. google/gemini-3.7-flash"
+                        placeholder="Custom OpenRouter model slug, e.g. google/gemini-3.8-flash"
                         className="min-w-0 flex-1 text-xs rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500"
                     />
                     <button
