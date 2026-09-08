@@ -38,7 +38,16 @@ export default function BioPreviewModal({
     corpusSampleSize = null,
     rewrittenForUniqueness = false,
     language = 'en',           // language the bio was generated in
+    loading = false,
     regenerating = false,
+    error = null,
+    providerOptions = [],
+    providerOptionsLoading = false,
+    selectedModelKey = '',
+    selectedModel = null,
+    forceProvider = null,
+    onSelectedModelChange,
+    onGenerateDraft,
     onAccept,
     onDiscard,
     onRegenerate,              // (refinements: string[]) => void
@@ -60,6 +69,7 @@ export default function BioPreviewModal({
     const [translating, setTranslating] = useState(false);
     const [translationError, setTranslationError] = useState(null);
 
+    const hasDraft = !!bioHtml;
     const isNonEnglish = language && language !== 'en';
     const protectedLinks = useMemo(() => extractProtectedLinks(bioHtml), [bioHtml]);
     const missingProtectedLinks = useMemo(
@@ -75,6 +85,17 @@ export default function BioPreviewModal({
     useEffect(() => {
         if (open && bioHtml) {
             setEditableText(htmlToPlainText(bioHtml));
+            setRating(null);
+            setTag(null);
+            setComment('');
+            setFeedbackSent(false);
+            setActiveRefinements([]);
+            setAcceptAttempted(false);
+            setShowTranslation(false);
+            setTranslationHtml(null);
+            setTranslationCached(false);
+            setTranslationError(null);
+        } else if (open && !bioHtml) {
             setRating(null);
             setTag(null);
             setComment('');
@@ -144,6 +165,8 @@ export default function BioPreviewModal({
     };
 
     const handleAccept = () => {
+        if (!hasDraft) return;
+
         if (missingProtectedLinks.length > 0 && !acceptAttempted) {
             setAcceptAttempted(true);
             return;
@@ -155,7 +178,7 @@ export default function BioPreviewModal({
     };
 
     const handleRegenerate = (refinementKey) => {
-        if (!onRegenerate) return;
+        if (!onRegenerate || !hasDraft) return;
         // Toggle behaviour: clicking a chip a second time deselects it before regen.
         let next;
         if (activeRefinements.includes(refinementKey)) {
@@ -171,7 +194,7 @@ export default function BioPreviewModal({
     };
 
     const handleRegenerateAndClear = () => {
-        if (!onRegenerate) return;
+        if (!onRegenerate || !hasDraft) return;
         const feedbackContext = { rating: -1, comment: comment.trim() };
         sendFeedback(feedbackContext);
         setActiveRefinements([]);
@@ -190,71 +213,109 @@ export default function BioPreviewModal({
                 <header className="border-b border-slate-100 bg-gradient-to-r from-teal-50 via-white to-white px-5 py-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">Generated draft</p>
-                            <h3 className="mt-1 text-lg font-semibold text-slate-950">Review the SEO bio before using it</h3>
+                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
+                                {hasDraft ? 'Generated draft' : 'SEO bio draft'}
+                            </p>
+                            <h3 className="mt-1 text-lg font-semibold text-slate-950">
+                                {hasDraft ? 'Review the SEO bio before using it' : 'Choose the AI model for this bio'}
+                            </h3>
                             <p className="mt-1 text-sm text-slate-500">
-                                Accepting only fills the form. Give feedback so the AI learns your taste.
+                                {hasDraft
+                                    ? 'Accepting only fills the form. Give feedback so the AI learns your taste.'
+                                    : 'Generate inside this review step, then edit before it touches the profile form.'}
                             </p>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                            <SeoScoreBadge score={score} />
-                            {language ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700" title={`Bio language: ${LANGUAGE_LABEL[language] || language}`}>
-                                    <span aria-hidden="true">{LANGUAGE_FLAG[language] || '🌐'}</span>
-                                    {LANGUAGE_LABEL[language] || language.toUpperCase()}
-                                </span>
-                            ) : null}
-                            {providerUsed ? (
-                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-                                    {providerUsed}
-                                </span>
-                            ) : null}
-                            {usage?.estimated_cost_label ? (
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                                    {usage.estimated_cost_label}
-                                </span>
-                            ) : null}
-                        </div>
+                        {hasDraft ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                                <SeoScoreBadge score={score} />
+                                {language ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700" title={`Bio language: ${LANGUAGE_LABEL[language] || language}`}>
+                                        <span aria-hidden="true">{LANGUAGE_FLAG[language] || '🌐'}</span>
+                                        {LANGUAGE_LABEL[language] || language.toUpperCase()}
+                                    </span>
+                                ) : null}
+                                {providerUsed ? (
+                                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                        {providerUsed}
+                                    </span>
+                                ) : null}
+                                {usage?.estimated_cost_label ? (
+                                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                                        {usage.estimated_cost_label}
+                                    </span>
+                                ) : null}
+                            </div>
+                        ) : null}
                     </div>
                 </header>
 
                 {/* ── Body (scrollable) ── */}
                 <div className="flex-1 overflow-y-auto px-5 py-4">
-                    {/* Peek-English toggle bar for non-English bios */}
-                    {isNonEnglish && onTranslate ? (
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
-                            <div className="flex items-center gap-2 text-slate-600">
-                                <span aria-hidden="true">{LANGUAGE_FLAG[language]}</span>
-                                <span className="font-semibold text-slate-800">{LANGUAGE_LABEL[language]} bio</span>
-                                {translationCached && showTranslation ? (
-                                    <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">cached</span>
-                                ) : null}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={handleToggleTranslation}
-                                disabled={translating}
-                                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                                    showTranslation
-                                        ? 'bg-teal-600 text-white shadow-sm'
-                                        : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                                }`}
-                            >
-                                {translating ? (
-                                    <><Spinner /> Translating…</>
-                                ) : showTranslation ? (
-                                    <><span aria-hidden="true">🇬🇧</span> Hide English</>
-                                ) : (
-                                    <><span aria-hidden="true">🇬🇧</span> Peek in English</>
-                                )}
-                            </button>
+                    {onGenerateDraft || onSelectedModelChange || providerOptions.length > 0 || forceProvider ? (
+                        <ModelChooser
+                            hasDraft={hasDraft}
+                            loading={loading}
+                            regenerating={regenerating}
+                            providerOptions={providerOptions}
+                            providerOptionsLoading={providerOptionsLoading}
+                            selectedModelKey={selectedModelKey}
+                            selectedModel={selectedModel}
+                            forceProvider={forceProvider}
+                            onSelectedModelChange={onSelectedModelChange}
+                            onGenerateDraft={onGenerateDraft}
+                        />
+                    ) : null}
+
+                    {error ? (
+                        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-800" role="alert">
+                            {error}
                         </div>
                     ) : null}
-                    {translationError ? (
-                        <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                            {translationError}
+
+                    {!hasDraft ? (
+                        <div className="rounded-xl border border-dashed border-teal-200 bg-teal-50/50 px-4 py-5">
+                            <p className="text-sm font-semibold text-slate-900">Ready to draft from the current profile fields.</p>
+                            <p className="mt-1 text-sm text-slate-600">
+                                The generated copy will appear here for editing, SEO-link review, and feedback.
+                            </p>
                         </div>
-                    ) : null}
+                    ) : (
+                        <>
+                            {/* Peek-English toggle bar for non-English bios */}
+                            {isNonEnglish && onTranslate ? (
+                                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                                    <div className="flex items-center gap-2 text-slate-600">
+                                        <span aria-hidden="true">{LANGUAGE_FLAG[language]}</span>
+                                        <span className="font-semibold text-slate-800">{LANGUAGE_LABEL[language]} bio</span>
+                                        {translationCached && showTranslation ? (
+                                            <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">cached</span>
+                                        ) : null}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleTranslation}
+                                        disabled={translating}
+                                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                            showTranslation
+                                                ? 'bg-teal-600 text-white shadow-sm'
+                                                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        {translating ? (
+                                            <><Spinner /> Translating…</>
+                                        ) : showTranslation ? (
+                                            <><span aria-hidden="true">🇬🇧</span> Hide English</>
+                                        ) : (
+                                            <><span aria-hidden="true">🇬🇧</span> Peek in English</>
+                                        )}
+                                    </button>
+                                </div>
+                            ) : null}
+                            {translationError ? (
+                                <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                    {translationError}
+                                </div>
+                            ) : null}
 
                     {/* Bio body — fade overlay when regenerating */}
                     <div className="relative">
@@ -493,31 +554,117 @@ export default function BioPreviewModal({
                             />
                         </div>
                     ) : null}
+                        </>
+                    )}
                 </div>
 
                 {/* ── Footer ── */}
                 <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4">
                     <p className="text-xs text-slate-500">
-                        {missingProtectedLinks.length > 0
+                        {!hasDraft
+                            ? 'Default waterfall uses the saved provider order from SEO Engine settings.'
+                            : missingProtectedLinks.length > 0
                             ? `${missingProtectedLinks.length} protected SEO link${missingProtectedLinks.length === 1 ? '' : 's'} missing from the edited draft.`
                             : 'Tip: you can edit the copy before saving.'}
                     </p>
                     <div className="flex items-center gap-2">
-                        <button type="button" className="crm-btn-secondary" onClick={onDiscard} disabled={regenerating}>
-                            Discard
+                        <button type="button" className="crm-btn-secondary" onClick={onDiscard} disabled={loading || regenerating}>
+                            {hasDraft ? 'Discard' : 'Close'}
                         </button>
-                        <button
-                            type="button"
-                            className={missingProtectedLinks.length > 0 && !acceptAttempted ? 'crm-btn-secondary' : 'crm-btn-primary'}
-                            onClick={handleAccept}
-                            disabled={regenerating}
-                        >
-                            {missingProtectedLinks.length > 0 && acceptAttempted ? 'Use anyway' : 'Use this bio'}
-                        </button>
+                        {hasDraft ? (
+                            <button
+                                type="button"
+                                className={missingProtectedLinks.length > 0 && !acceptAttempted ? 'crm-btn-secondary' : 'crm-btn-primary'}
+                                onClick={handleAccept}
+                                disabled={loading || regenerating}
+                            >
+                                {missingProtectedLinks.length > 0 && acceptAttempted ? 'Use anyway' : 'Use this bio'}
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                className="crm-btn-primary inline-flex items-center gap-2"
+                                onClick={onGenerateDraft}
+                                disabled={loading || regenerating || !onGenerateDraft}
+                            >
+                                {loading ? <><Spinner /> Generating...</> : 'Generate draft'}
+                            </button>
+                        )}
                     </div>
                 </footer>
             </div>
         </div>
+    );
+}
+
+function ModelChooser({
+    hasDraft,
+    loading,
+    regenerating,
+    providerOptions,
+    providerOptionsLoading,
+    selectedModelKey,
+    selectedModel,
+    forceProvider,
+    onSelectedModelChange,
+    onGenerateDraft,
+}) {
+    const locked = !!forceProvider;
+    const selectDisabled = loading || regenerating || providerOptionsLoading || locked || providerOptions.length === 0;
+    const actionDisabled = loading || regenerating || !onGenerateDraft;
+    const routeLabel = locked
+        ? `Locked to ${forceProvider}`
+        : selectedModel
+            ? `${selectedModel.provider_label} / ${selectedModel.label}`
+            : 'Default waterfall';
+    const routeModel = locked
+        ? forceProvider
+        : selectedModel?.model || 'Saved provider order';
+
+    return (
+        <section className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[240px] flex-1">
+                    <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500" htmlFor="seo-bio-ai-model">
+                        AI route
+                    </label>
+                    <select
+                        id="seo-bio-ai-model"
+                        value={selectedModelKey}
+                        onChange={(event) => onSelectedModelChange?.(event.target.value)}
+                        disabled={selectDisabled}
+                        className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm transition focus:border-teal-500 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                        <option value="">
+                            {providerOptionsLoading ? 'Loading configured models...' : locked ? `Locked: ${forceProvider}` : 'Default waterfall'}
+                        </option>
+                        {providerOptions.map((option) => (
+                            <option key={modelOptionKey(option)} value={modelOptionKey(option)}>
+                                {option.provider_label} · {option.label}: {option.model}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                {hasDraft && onGenerateDraft ? (
+                    <button
+                        type="button"
+                        onClick={onGenerateDraft}
+                        disabled={actionDisabled}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-teal-200 bg-white px-3 py-2 text-sm font-semibold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {loading ? <><Spinner /> Generating...</> : 'Generate new draft'}
+                    </button>
+                ) : null}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-slate-700 ring-1 ring-slate-200">
+                    {routeLabel}
+                </span>
+                <span className="max-w-full truncate text-slate-500">
+                    {routeModel}
+                </span>
+            </div>
+        </section>
     );
 }
 
@@ -613,6 +760,10 @@ function escapeHtml(value = '') {
 
 function escapeAttribute(value = '') {
     return escapeHtml(value).replace(/`/g, '&#096;');
+}
+
+function modelOptionKey(option) {
+    return `${option?.provider || ''}|||${option?.model || ''}`;
 }
 
 /** Inline spinner — minimal, no library dep. */

@@ -27,6 +27,7 @@ export default function GenerateBioButton({
     const [regenerating, setRegenerating] = useState(false);
     const [error, setError] = useState(null);
     const [preview, setPreview] = useState(null);
+    const [modalOpen, setModalOpen] = useState(false);
     const [showOptions, setShowOptions] = useState(false);
     const [providerOptions, setProviderOptions] = useState([]);
     const [providerOptionsLoading, setProviderOptionsLoading] = useState(false);
@@ -118,6 +119,7 @@ export default function GenerateBioButton({
     };
 
     const handleGenerate = async () => {
+        setModalOpen(true);
         setLoading(true);
         setError(null);
         try {
@@ -134,6 +136,7 @@ export default function GenerateBioButton({
     const handleRegenerate = async (refinements, feedbackContext = null, previousBioHtml = '') => {
         if (!preview) return;
         setRegenerating(true);
+        setError(null);
         try {
             const data = await callGenerate({
                 refinements,
@@ -195,6 +198,7 @@ export default function GenerateBioButton({
 
     const handleAccept = (bioHtml) => {
         setPreview(null);
+        setModalOpen(false);
         onAccept?.(bioHtml);
     };
 
@@ -208,31 +212,16 @@ export default function GenerateBioButton({
                 <button
                     type="button"
                     className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={handleGenerate}
+                    onClick={() => {
+                        setError(null);
+                        setModalOpen(true);
+                    }}
                     disabled={loading}
                     title="Generate an SEO-optimised bio from this profile's data"
                 >
                     <span aria-hidden="true">✨</span>
-                    <span>{loading ? 'Generating bio…' : 'Generate SEO Bio'}</span>
+                    <span>Generate SEO Bio</span>
                 </button>
-
-                <select
-                    value={selectedModelKey}
-                    onChange={(event) => setSelectedModelKey(event.target.value)}
-                    disabled={loading || providerOptionsLoading || providerOptions.length === 0 || !!forceProvider}
-                    className="max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition focus:border-teal-500 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                    aria-label="AI model"
-                    title={forceProvider ? `Using ${forceProvider}` : 'Choose a configured AI model for this draft'}
-                >
-                    <option value="">
-                        {providerOptionsLoading ? 'Loading AI models...' : 'AI: default waterfall'}
-                    </option>
-                    {providerOptions.map((option) => (
-                        <option key={modelOptionKey(option)} value={modelOptionKey(option)}>
-                            {option.provider_label} · {option.label}: {option.model}
-                        </option>
-                    ))}
-                </select>
 
                 <button
                     type="button"
@@ -340,7 +329,7 @@ export default function GenerateBioButton({
             ) : null}
 
             <BioPreviewModal
-                open={preview !== null}
+                open={modalOpen}
                 bioHtml={preview?.bio_html ?? ''}
                 score={preview?.score ?? null}
                 breakdown={preview?.breakdown ?? null}
@@ -352,11 +341,25 @@ export default function GenerateBioButton({
                 corpusSampleSize={preview?.corpus_sample_size ?? null}
                 rewrittenForUniqueness={!!preview?.rewritten_for_uniqueness}
                 language={preview?.generation_options?.language || generationOptions.language || 'en'}
+                loading={loading}
                 regenerating={regenerating}
+                error={error}
+                providerOptions={providerOptions}
+                providerOptionsLoading={providerOptionsLoading}
+                selectedModelKey={selectedModelKey}
+                selectedModel={selectedModel}
+                forceProvider={forceProvider}
+                onSelectedModelChange={(value) => {
+                    setSelectedModelKey(value);
+                    setError(null);
+                }}
+                onGenerateDraft={handleGenerate}
                 onAccept={handleAccept}
                 onDiscard={() => {
                     // Treat discard as soft negative signal (no rating, no tag) only if we never recorded anything.
                     setPreview(null);
+                    setError(null);
+                    setModalOpen(false);
                 }}
                 onRegenerate={handleRegenerate}
                 onFeedback={sendFeedback}
