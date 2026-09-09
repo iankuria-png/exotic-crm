@@ -293,6 +293,40 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
             return [...current, defaultTarget(location, Math.max(1, Math.ceil(Number(targetCount || 1) / Math.max(1, current.length + 1))))];
         });
     };
+    /**
+     * Selecting a region means "spread across this region", so it expands into
+     * that region's cities rather than sending a region-only target.
+     * WordPress rejects a profile attached to a parent term that has children
+     * ("Selected region requires a child city"), so a region-only target fails
+     * at provisioning time for every region that actually has towns.
+     */
+    const toggleRegion = (group) => {
+        if (!group.cities.length) {
+            addTarget({ region_id: group.region_id, region_name: group.region_name, city_id: null, city_name: null });
+            return;
+        }
+
+        resetPreview();
+        setTargets((current) => {
+            const cityKeys = new Set(group.cities.map((city) => targetKey(city)));
+            const alreadyAdded = current.filter((target) => cityKeys.has(targetKey(target))).length;
+
+            if (alreadyAdded === group.cities.length) {
+                return current.filter((target) => !cityKeys.has(targetKey(target)));
+            }
+
+            const room = MAX_TARGETS - current.length;
+            const missing = group.cities.filter((city) => !current.some((target) => targetKey(target) === targetKey(city)));
+            if (missing.length > room) {
+                toast.error(`Only ${room} more destination${room === 1 ? '' : 's'} fit; ${group.region_name} has ${missing.length}.`);
+                return current;
+            }
+
+            const share = Math.max(1, Math.ceil(Number(targetCount || 1) / Math.max(1, current.length + missing.length)));
+
+            return [...current, ...missing.map((city) => defaultTarget(city, share))];
+        });
+    };
     const clearTargets = () => {
         resetPreview();
         setTargets([]);
@@ -569,19 +603,23 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
 
                                     {filteredGroups.map((group) => {
                                         const regionTarget = { region_id: group.region_id, region_name: group.region_name, city_id: null, city_name: null };
-                                        const regionSelected = selectedTargetKeys.has(targetKey(regionTarget));
+                                        const regionSelected = group.cities.length
+                                            ? group.cities.every((city) => selectedTargetKeys.has(targetKey(city)))
+                                            : selectedTargetKeys.has(targetKey(regionTarget));
 
                                         return (
                                             <div key={`${group.region_id}-${group.region_name}`} className="rounded-md border border-slate-200">
                                                 <button
                                                     type="button"
-                                                    onClick={() => addTarget(regionTarget)}
+                                                    onClick={() => toggleRegion(group)}
                                                     aria-pressed={regionSelected}
                                                     className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-t-md px-3 py-2 text-left transition ${regionSelected ? 'bg-teal-50 text-teal-900' : 'bg-slate-50 text-slate-800 hover:bg-slate-100'}`}
                                                 >
                                                     <span className="text-sm font-semibold">{group.region_name || 'Unnamed region'}</span>
                                                     <span className="text-[11px] font-semibold uppercase text-slate-500">
-                                                        {regionSelected ? 'Region added' : `${group.cities.length} ${group.cities.length === 1 ? 'city' : 'cities'}`}
+                                                        {regionSelected
+                                                            ? 'All cities added'
+                                                            : `${group.cities.length} ${group.cities.length === 1 ? 'city' : 'cities'}`}
                                                     </span>
                                                 </button>
                                                 {group.cities.length ? (
