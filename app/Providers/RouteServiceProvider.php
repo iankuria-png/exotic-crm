@@ -41,6 +41,21 @@ class RouteServiceProvider extends ServiceProvider
      */
     protected function configureRateLimiting(): void
     {
+        // Image proxy. Every proxied asset holds one PHP-FPM child for the whole
+        // upstream fetch, so this limiter is sized against the pool rather than
+        // against what a browser would like to send. A client gallery HEADs and
+        // GETs each asset, so a page of media is already 2 requests per item;
+        // the per-IP allowance covers a generous page, the global ceiling stops
+        // several operators from collectively draining the pool.
+        RateLimiter::for('image-proxy', function (Request $request) {
+            return [
+                Limit::perMinute((int) config('crm.image_proxy.per_ip_per_minute', 40))
+                    ->by('image-proxy-ip:' . $request->ip()),
+                Limit::perMinute((int) config('crm.image_proxy.global_per_minute', 120))
+                    ->by('image-proxy-global'),
+            ];
+        });
+
         RateLimiter::for('api', function (Request $request) {
             // Resolve the CRM user via the bearer-token guard explicitly: the
             // default guard is `web`, which is unused on the token-first /api

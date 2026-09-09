@@ -174,8 +174,16 @@ Route::middleware('whatsapp.sidecar.hmac')->group(function () {
     Route::post('/crm/messaging/webhook/baileys', [MessagingSidecarController::class, 'baileysWebhook']);
 });
 
-// Image proxy — public but rate-limited; domain allowlist enforced server-side
-Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
+// Image proxy — public but rate-limited; domain allowlist enforced server-side.
+//
+// The limit is sized against the PHP-FPM pool, not plucked from the air. Each
+// proxied asset holds one worker for the whole upstream fetch, so a limit above
+// (workers / hold time) cannot be honoured no matter what it says. At 120/min
+// per IP and a multi-second fetch this permitted several times the pool's
+// entire capacity from a single browser, which is how the 8-9 September 2026
+// outages started. `image-proxy` is a named limiter (see AppServiceProvider)
+// combining a per-IP allowance with a global ceiling.
+Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:image-proxy');
 
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);
