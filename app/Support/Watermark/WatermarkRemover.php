@@ -38,8 +38,17 @@ class WatermarkRemover
     /** Below this blend factor the logo left no meaningful trace. */
     private const MIN_BLEND = 0.02;
 
-    /** At or above this, nothing of the original survives and the pixel is filled instead. */
-    private const OPAQUE_BLEND = 0.985;
+    /**
+     * Above this blend the inversion is too ill-conditioned to trust and the
+     * pixel is filled from its surroundings instead.
+     *
+     * Recovery divides by (1 - a), so at a = 0.9 the original occupies just 25
+     * of 256 output levels and one level of codec error becomes ten. Over a
+     * bright background that turns a white wordmark black — visibly worse than
+     * leaving it alone. Below this the amplification stays modest enough that
+     * the recovered pixel beats anything a neighbourhood could guess.
+     */
+    private const OPAQUE_BLEND = 0.7;
 
     /**
      * A recovered channel this far outside 0-255 means we are not looking at the
@@ -60,6 +69,14 @@ class WatermarkRemover
     private const CHROMA_REPAIR_BLEND = 0.35;
 
     private const CHROMA_REPAIR_PASSES = 8;
+
+    private const FILL_PASSES = 8;
+
+    /** Codec slack when testing an observed pixel against the logo's own contribution. */
+    private const EVIDENCE_TOLERANCE = 18;
+
+    /** Share of strong logo pixels allowed to contradict the logo before we decline. */
+    private const MAX_IMPLAUSIBLE_RATIO = 0.15;
 
     public function __construct(
         private readonly WatermarkStamp $stamp
@@ -135,7 +152,10 @@ class WatermarkRemover
         $opaque = [];
         $chromaSuspect = [];
         $blended = 0;
+        $landed = 0;
         $outOfGamut = 0;
+        $evidence = 0;
+        $implausible = 0;
         $maxBlend = 0.0;
 
         for ($y = 0; $y < $stampHeight; $y++) {
@@ -156,8 +176,27 @@ class WatermarkRemover
                     continue;
                 }
 
+                $landed++;
+
+                // Strongly blended pixels are the best evidence the mark is
+                // actually here: at this alpha the logo alone accounts for most
+                // of the observed value, so anything much darker than the logo
+                // contributes says we are looking at the wrong place. They are
+                // filled rather than inverted, but they still get a vote.
                 if ($alpha >= self::OPAQUE_BLEND) {
+                    $logoColour = imagecolorat($logo, $x, $y);
+                    $resultColour = imagecolorat($image, $targetX, $targetY);
+
+                    foreach ([16, 8, 0] as $shift) {
+                        $floor = $alpha * (($logoColour >> $shift) & 0xFF) - self::EVIDENCE_TOLERANCE;
+                        if ((($resultColour >> $shift) & 0xFF) < $floor) {
+                            $implausible++;
+                        }
+                        $evidence++;
+                    }
+
                     $opaque[] = [$targetX, $targetY];
+                    $chromaSuspect[] = [$targetX, $targetY];
                     continue;
                 }
 
@@ -178,6 +217,7 @@ class WatermarkRemover
                 }
 
                 $blended++;
+                $landed++;
                 $recovered[] = [$targetX, $targetY, $channels[0], $channels[1], $channels[2]];
 
                 if ($alpha >= self::CHROMA_REPAIR_BLEND) {
@@ -191,15 +231,28 @@ class WatermarkRemover
             'stamp' => $stampWidth . 'x' . $stampHeight,
             'origin' => $originX . ',' . $originY,
             'max_blend' => round($maxBlend, 3),
-            'blended_px' => $blended,
-            'opaque_px' => count($opaque),
+            'landed_px' => $landed,
+            'inverted_px' => $blended,
+            'filled_px' => count($opaque),
             'out_of_gamut' => $blended > 0 ? round($outOfGamut / ($blended * 3), 4) : 0.0,
+            'implausible' => $evidence > 0 ? round($implausible / $evidence, 4) : 0.0,
         ];
 
         // Enough of the logo's ink has to land on the photo for the recovery to
-        // be worth doing and for the gamut check below to mean anything.
-        if ($blended < self::MIN_BLENDED_PIXELS) {
+        // be worth doing and for the checks below to mean anything.
+        if ($landed < self::MIN_BLENDED_PIXELS) {
             return WatermarkRemovalResult::declined('Too little of the watermark lands on this image.', $stats);
+        }
+
+        if ($evidence > 0 && $stats['implausible'] > self::MAX_IMPLAUSIBLE_RATIO) {
+            return WatermarkRemovalResult::declined(
+                sprintf(
+                    'This image does not carry this watermark: %.1f%% of the strongest logo pixels are darker than the logo alone would make them (limit %.0f%%).',
+                    $stats['implausible'] * 100,
+                    self::MAX_IMPLAUSIBLE_RATIO * 100
+                ),
+                $stats
+            );
         }
 
         // Three channels are counted per pixel, so compare against that.
@@ -410,12 +463,18 @@ class WatermarkRemover
         $width = imagesx($image);
         $height = imagesy($image);
 
-        // Two passes: the first fills from recovered neighbours, the second
-        // reaches pixels that were surrounded entirely by opaque ones.
-        for ($pass = 0; $pass < 2; $pass++) {
+        // Works inwards: each pass fills from pixels that are already trusted
+        // and then promotes them, so a solid region several pixels across —
+        // the figure inside the O — is reached from its edges rather than
+        // left as a patch.
+        for ($pass = 0; $pass < self::FILL_PASSES && $opaqueIndex !== []; $pass++) {
             $updates = [];
 
             foreach ($pixels as [$x, $y]) {
+                if (!isset($opaqueIndex[$y . ':' . $x])) {
+                    continue;
+                }
+
                 $sum = [0, 0, 0];
                 $found = 0;
 
@@ -427,7 +486,7 @@ class WatermarkRemover
                         if (($dx === 0 && $dy === 0) || $nx < 0 || $ny < 0 || $nx >= $width || $ny >= $height) {
                             continue;
                         }
-                        if ($pass === 0 && isset($opaqueIndex[$ny . ':' . $nx])) {
+                        if (isset($opaqueIndex[$ny . ':' . $nx])) {
                             continue;
                         }
 
@@ -439,9 +498,13 @@ class WatermarkRemover
                     }
                 }
 
-                if ($found > 0) {
+                if ($found >= 3) {
                     $updates[] = [$x, $y, (int) ($sum[0] / $found), (int) ($sum[1] / $found), (int) ($sum[2] / $found)];
                 }
+            }
+
+            if ($updates === []) {
+                return;
             }
 
             foreach ($updates as [$x, $y, $r, $g, $b]) {
