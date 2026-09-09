@@ -268,6 +268,7 @@ export default function Pbn() {
     const [selectedBatch, setSelectedBatch] = useState(null);
     const [selectedItem, setSelectedItem] = useState(null);
     const [revertOpen, setRevertOpen] = useState(false);
+    const [revertMode, setRevertMode] = useState('private');
     const [revertReason, setRevertReason] = useState('');
     const [cancelOpen, setCancelOpen] = useState(false);
     const [cancelReason, setCancelReason] = useState('');
@@ -405,11 +406,12 @@ export default function Pbn() {
         onError: (error) => toast.error(apiErrorMessage(error, 'Could not process pending PBN media.')),
     });
     const revertMutation = useMutation({
-        mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/revert`, { reason: revertReason }).then((response) => response.data),
+        mutationFn: () => api.post(`/crm/pbn/batches/${selectedBatch.id}/revert`, { reason: revertReason, mode: revertMode }).then((response) => response.data),
         onSuccess: (response) => {
             toast.success(response?.message || 'PBN batch reverted.');
             setRevertOpen(false);
             setRevertReason('');
+            setRevertMode('private');
             setSelectedBatch(response?.batch || selectedBatch);
             invalidateOperations();
         },
@@ -1187,14 +1189,51 @@ export default function Pbn() {
             <ConfirmDialog
                 open={revertOpen && Boolean(selectedBatch)}
                 title="Revert PBN batch"
-                message={revertPreview.message || 'Created destination profiles will be moved private.'}
-                confirmLabel="Revert profiles"
+                message={revertPreview.message || 'Choose what happens to the destination profiles.'}
+                confirmLabel={revertMode === 'delete' ? 'Delete profiles' : 'Move profiles private'}
                 tone="danger"
                 onCancel={() => setRevertOpen(false)}
                 onConfirm={() => revertMutation.mutate()}
                 isPending={revertMutation.isPending}
                 confirmDisabled={revertReason.trim().length < 6 || !revertPreview.can_revert}
             >
+                <div className="space-y-2">
+                    {[
+                        {
+                            id: 'private',
+                            label: 'Move private',
+                            detail: 'Keeps the post and records its original status, so the profile can be restored. The slug stays taken, so re-seeding the same advertiser creates a new one alongside it.',
+                        },
+                        {
+                            id: 'delete',
+                            label: 'Delete from the site',
+                            detail: 'Removes the post, its media links, the owner account and the profile URL. Frees the slug and cannot be undone. The CRM client and its seed history are kept either way.',
+                        },
+                    ].map((option) => (
+                        <label
+                            key={option.id}
+                            className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition ${revertMode === option.id ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                        >
+                            <input
+                                type="radio"
+                                name="pbn-revert-mode"
+                                value={option.id}
+                                checked={revertMode === option.id}
+                                onChange={() => setRevertMode(option.id)}
+                                className="mt-1 h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                            />
+                            <span>
+                                <span className="block text-sm font-semibold text-slate-900">{option.label}</span>
+                                <span className="block text-xs text-slate-600">{option.detail}</span>
+                            </span>
+                        </label>
+                    ))}
+                </div>
+                {revertMode === 'delete' ? (
+                    <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                        Deleting is permanent. Any traffic or links these profile URLs have earned is lost.
+                    </p>
+                ) : null}
                 <label className="block text-sm font-semibold text-slate-700">
                     Reason
                     <textarea

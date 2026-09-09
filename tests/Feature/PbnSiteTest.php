@@ -472,6 +472,188 @@ class PbnSiteTest extends TestCase
         $this->assertSame(0, $service->inspect($batch->fresh(), $connectionConfig)['needs_repair'], 'Repair should be idempotent.');
     }
 
+    /**
+     * Duplicate detection reads the CRM's own item history, not WordPress. It
+     * counted every item ever created for a site, so a reverted batch marked
+     * its clients as permanent duplicates: the next preview selected nothing,
+     * queued an empty batch, and the seeder ran start to finish creating no
+     * profiles at all.
+     */
+    public function test_reverted_profiles_can_be_seeded_again(): void
+    {
+        Queue::fake();
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        $client = $this->publishedClient($platform, ['seo_score' => 95]);
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => 'reverted',
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 0,
+        ]);
+        $item = PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => 8123,
+            'status' => PbnSeedItem::STATUS_REVERTED,
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('c', 64),
+        ]);
+
+        Sanctum::actingAs($this->userFor($platform, 'sales'));
+        $payload = [
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'targets' => [['region_id' => 10, 'city_id' => 20, 'region_name' => 'Central', 'city_name' => 'Kampala', 'target_count' => 1]],
+        ];
+
+        $preview = $this->postJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/preview", $payload)->assertOk();
+        $preview->assertJsonPath('selected_client_ids', [$client->id]);
+
+        // A live item on the same site still blocks re-selection.
+        $item->forceFill(['status' => PbnSeedItem::STATUS_CREATED])->save();
+
+        $blocked = $this->postJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/preview", $payload)->assertOk();
+        $this->assertSame([], $blocked->json('selected_client_ids'));
+    }
+
+    /**
+     * Delete mode frees the slug. A privatised post keeps `joan-3` and pushes
+     * the next seed of that advertiser to `joan-4`.
+     */
+    public function test_delete_revert_removes_the_destination_profile_and_its_owner(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-delete.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        $site->forceFill([
+            'db_host' => 'sqlite',
+            'db_name' => $connectionConfig['database'],
+            'db_user' => 'sqlite',
+            'db_pass' => 'sqlite',
+            'db_prefix' => 'wp_',
+        ])->save();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        $client = $this->publishedClient($platform, ['seo_score' => 70]);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN Delete Demo',
+                'email' => 'pbn.delete@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-delete-demo-1',
+            ]);
+
+        $postId = (int) $result['wp_post_id'];
+        $userId = (int) $result['wp_user_id'];
+        $secret = DB::connection($connectionName)->table('postmeta')
+            ->where('post_id', $postId)->where('meta_key', 'secret')->value('meta_value');
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => 'completed',
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => $postId,
+            'target_wp_user_id' => $userId,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('d', 64),
+        ]);
+
+        Sanctum::actingAs($this->userFor($platform, 'admin'));
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/revert", [
+            'reason' => 'Replacing this batch entirely.',
+            'mode' => 'delete',
+        ])->assertOk();
+
+        $this->assertNull(DB::connection($connectionName)->table('posts')->where('ID', $postId)->first());
+        $this->assertNull(DB::connection($connectionName)->table('users')->where('ID', $userId)->first());
+        $this->assertSame(0, DB::connection($connectionName)->table('postmeta')->where('post_id', $postId)->count());
+        $this->assertSame(0, DB::connection($connectionName)->table('term_relationships')->where('object_id', $postId)->count());
+        $this->assertNull(DB::connection($connectionName)->table('options')->where('option_name', $secret)->value('option_value'));
+
+        // The CRM client and the seed history survive, so the profile can be seeded again.
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        $this->assertDatabaseHas('pbn_seed_items', ['batch_id' => $batch->id, 'status' => PbnSeedItem::STATUS_REVERTED]);
+    }
+
+    /** The default stays reversible: the post is kept and moved private. */
+    public function test_default_revert_still_moves_the_profile_private(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-private.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        $site->forceFill([
+            'db_host' => 'sqlite',
+            'db_name' => $connectionConfig['database'],
+            'db_user' => 'sqlite',
+            'db_pass' => 'sqlite',
+            'db_prefix' => 'wp_',
+        ])->save();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        $client = $this->publishedClient($platform, ['seo_score' => 70]);
+
+        $result = (new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig))
+            ->provisionEscort([
+                'name' => 'PBN Private Demo',
+                'email' => 'pbn.private@example.test',
+                'region_id' => $regionId,
+                'city_id' => $cityId,
+                'post_status' => 'publish',
+                'provision_request_id' => 'pbn-private-demo-1',
+            ]);
+
+        $postId = (int) $result['wp_post_id'];
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => 'completed',
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => $postId,
+            'target_wp_user_id' => (int) $result['wp_user_id'],
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('e', 64),
+        ]);
+
+        Sanctum::actingAs($this->userFor($platform, 'admin'));
+        $this->postJson("/api/crm/pbn/batches/{$batch->id}/revert", [
+            'reason' => 'Pausing this batch for review.',
+        ])->assertOk();
+
+        $this->assertSame('private', DB::connection($connectionName)->table('posts')->where('ID', $postId)->value('post_status'));
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

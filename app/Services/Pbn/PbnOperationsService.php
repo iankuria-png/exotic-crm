@@ -19,6 +19,9 @@ use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class PbnOperationsService
 {
+    public const REVERT_MODE_PRIVATE = 'private';
+    public const REVERT_MODE_DELETE = 'delete';
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PbnSeedPreviewService $previewService,
@@ -294,7 +297,68 @@ class PbnOperationsService
         ];
     }
 
-    public function revertBatch(User $actor, PbnSeedBatch $batch, string $reason): array
+    /**
+     * Remove a seeded profile from the destination WordPress entirely.
+     *
+     * Deletes the post, its meta, its term links, the owner user and that
+     * user's meta, plus the per-user link options the theme keys by id and by
+     * the profile's `secret`. Leaving those behind would strand rows that point
+     * at a post that no longer exists.
+     *
+     * Term counts are decremented so the location sidebar does not keep
+     * advertising profiles that are gone.
+     */
+    private function deleteDestinationProfile(string $connectionName, PbnSeedItem $item): void
+    {
+        $connection = DB::connection($connectionName);
+        $postId = (int) $item->target_wp_post_id;
+        $userId = (int) $item->target_wp_user_id;
+
+        $secret = trim((string) $connection->table('postmeta')
+            ->where('post_id', $postId)
+            ->where('meta_key', 'secret')
+            ->value('meta_value'));
+
+        $termTaxonomyIds = $connection->table('term_relationships')
+            ->where('object_id', $postId)
+            ->pluck('term_taxonomy_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $connection->table('term_relationships')->where('object_id', $postId)->delete();
+        foreach ($termTaxonomyIds as $termTaxonomyId) {
+            $count = $connection->table('term_relationships')->where('term_taxonomy_id', $termTaxonomyId)->count();
+            $connection->table('term_taxonomy')->where('term_taxonomy_id', $termTaxonomyId)->update(['count' => $count]);
+        }
+
+        $connection->table('postmeta')->where('post_id', $postId)->delete();
+        $connection->table('posts')->where('ID', $postId)->delete();
+
+        if ($userId > 0) {
+            $optionNames = array_values(array_filter([
+                'escortid' . $userId,
+                'escortpostid' . $userId,
+                $secret !== '' ? $secret : null,
+            ]));
+            $connection->table('options')->whereIn('option_name', $optionNames)->delete();
+            $connection->table('usermeta')->where('user_id', $userId)->delete();
+            $connection->table('users')->where('ID', $userId)->delete();
+        }
+
+        $connection->table('exotic_crm_provisions')
+            ->where('wp_post_id', $postId)
+            ->delete();
+    }
+
+    /**
+     * @param  string  $mode  self::REVERT_MODE_PRIVATE keeps the destination post and
+     *                        records its original status, so the action is reversible.
+     *                        self::REVERT_MODE_DELETE removes the post, its meta, its
+     *                        term links and the owner user, freeing the slug — a
+     *                        privatised post keeps `joan-3` and pushes the next seed
+     *                        of that advertiser to `joan-4`.
+     */
+    public function revertBatch(User $actor, PbnSeedBatch $batch, string $reason, string $mode = self::REVERT_MODE_PRIVATE): array
     {
         $this->marketAuthorizationService->ensureManager($actor, 'Only admin or sub-admin users can revert PBN seed batches.');
         $this->ensureBatchVisible($actor, $batch);
@@ -341,14 +405,18 @@ class PbnOperationsService
                     throw new \RuntimeException('Destination WordPress post was not found.');
                 }
 
-                DB::connection($connectionName)
-                    ->table('posts')
-                    ->where('ID', (int) $item->target_wp_post_id)
-                    ->update([
-                        'post_status' => 'private',
-                        'post_modified' => now()->format('Y-m-d H:i:s'),
-                        'post_modified_gmt' => now('UTC')->format('Y-m-d H:i:s'),
-                    ]);
+                if ($mode === self::REVERT_MODE_DELETE) {
+                    $this->deleteDestinationProfile($connectionName, $item);
+                } else {
+                    DB::connection($connectionName)
+                        ->table('posts')
+                        ->where('ID', (int) $item->target_wp_post_id)
+                        ->update([
+                            'post_status' => 'private',
+                            'post_modified' => now()->format('Y-m-d H:i:s'),
+                            'post_modified_gmt' => now('UTC')->format('Y-m-d H:i:s'),
+                        ]);
+                }
 
                 $item->forceFill([
                     'status' => PbnSeedItem::STATUS_REVERTED,
@@ -359,10 +427,21 @@ class PbnOperationsService
                     'revert_failure_reason' => null,
                 ])->save();
 
-                $this->recordEvent($batch, $item, $actor, 'item_reverted', 'warning', 'PBN destination profile moved private.', [
-                    'target_wp_post_id' => (int) $item->target_wp_post_id,
-                    'original_status' => (string) $post->post_status,
-                ]);
+                $this->recordEvent(
+                    $batch,
+                    $item,
+                    $actor,
+                    'item_reverted',
+                    'warning',
+                    $mode === self::REVERT_MODE_DELETE
+                        ? 'PBN destination profile deleted.'
+                        : 'PBN destination profile moved private.',
+                    [
+                        'target_wp_post_id' => (int) $item->target_wp_post_id,
+                        'original_status' => (string) $post->post_status,
+                        'mode' => $mode,
+                    ]
+                );
                 $reverted++;
             } catch (\Throwable $exception) {
                 $item->forceFill([
@@ -390,11 +469,17 @@ class PbnOperationsService
         ]);
 
         return [
-            'message' => $failed > 0
-                ? "{$reverted} PBN profiles reverted; {$failed} failed."
-                : "{$reverted} PBN profiles reverted.",
+            'message' => $this->revertMessage($mode, $reverted, $failed),
             ...$this->batch($actor, $fresh->fresh()),
         ];
+    }
+
+    private function revertMessage(string $mode, int $reverted, int $failed): string
+    {
+        $verb = $mode === self::REVERT_MODE_DELETE ? 'deleted' : 'moved private';
+        $message = "{$reverted} PBN profiles {$verb}.";
+
+        return $failed > 0 ? "{$reverted} PBN profiles {$verb}; {$failed} failed." : $message;
     }
 
     public function ensureBatchVisible(User $actor, PbnSeedBatch $batch): void

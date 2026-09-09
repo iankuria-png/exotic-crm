@@ -39,9 +39,23 @@ class PbnSeedPreviewService
         $payloadHash = self::payloadHash($sources->pluck('id')->all(), $targets, $targetCount, $copyPolicy);
         $limit = min(max($targetCount * 3, 50), self::MAX_PREVIEW_CANDIDATES);
 
-        $clients = $this->eligibleClientQuery($sources->pluck('id')->all())
+        // Fill the pool with candidates that can actually be selected. The pool
+        // is capped, so a site whose highest scoring profiles are all already
+        // seeded used to return a page that was entirely duplicates and a batch
+        // with nothing in it.
+        $clients = $this->eligibleClientQuery($sources->pluck('id')->all(), (int) $site->id)
             ->limit($limit)
             ->get();
+
+        // Duplicates stay visible on top of that, because they are soft: the
+        // preview reports how many exist and the operator can acknowledge and
+        // skip them. Hiding them would remove the explanation for a thin pool.
+        $clients = $clients->merge(
+            $this->eligibleClientQuery($sources->pluck('id')->all())
+                ->whereIn('id', $this->liveSeededClientIds($site))
+                ->limit($limit)
+                ->get()
+        )->unique('id')->values();
 
         $duplicateMap = $this->duplicateMap($site, $clients);
         $candidates = $clients
@@ -436,9 +450,24 @@ class PbnSeedPreviewService
         return $targetCount;
     }
 
-    private function eligibleClientQuery(array $sourcePlatformIds)
+    /**
+     * @param  int|null  $excludeSeededOnSiteId  Skip clients that already hold a
+     *                                           live profile on this PBN site.
+     */
+    private function eligibleClientQuery(array $sourcePlatformIds, ?int $excludeSeededOnSiteId = null)
     {
         return Client::query()
+            ->when($excludeSeededOnSiteId, fn ($query) => $query->whereNotExists(
+                // Excluded in SQL rather than after the fact. The candidate pool
+                // is capped, so filtering post-fetch meant a site whose highest
+                // scoring profiles were already seeded returned a pool that was
+                // entirely duplicates and a batch with nothing in it.
+                fn ($sub) => $sub->select(DB::raw(1))
+                    ->from('pbn_seed_items')
+                    ->whereColumn('pbn_seed_items.source_client_id', 'clients.id')
+                    ->where('pbn_seed_items.pbn_site_id', $excludeSeededOnSiteId)
+                    ->whereIn('pbn_seed_items.status', PbnSeedItem::LIVE_STATUSES)
+            ))
             ->with('platform:id,name,country')
             ->whereIn('platform_id', $sourcePlatformIds)
             ->where('profile_status', 'publish')
@@ -461,6 +490,22 @@ class PbnSeedPreviewService
             ->orderBy('name');
     }
 
+    /**
+     * Clients that currently hold a live profile on this site.
+     *
+     * @return array<int, int>
+     */
+    private function liveSeededClientIds(PbnSite $site): array
+    {
+        return PbnSeedItem::query()
+            ->where('pbn_site_id', (int) $site->id)
+            ->whereIn('status', PbnSeedItem::LIVE_STATUSES)
+            ->distinct()
+            ->pluck('source_client_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
     private function duplicateMap(PbnSite $site, Collection $clients): array
     {
         $ids = $clients->pluck('id')->map(fn ($id) => (int) $id)->all();
@@ -470,12 +515,14 @@ class PbnSeedPreviewService
 
         $sameSite = PbnSeedItem::query()
             ->where('pbn_site_id', (int) $site->id)
+            ->whereIn('status', PbnSeedItem::LIVE_STATUSES)
             ->whereIn('source_client_id', $ids)
             ->pluck('source_client_id')
             ->map(fn ($id) => (int) $id)
             ->all();
         $otherPbn = PbnSeedItem::query()
             ->where('pbn_site_id', '!=', (int) $site->id)
+            ->whereIn('status', PbnSeedItem::LIVE_STATUSES)
             ->whereIn('source_client_id', $ids)
             ->pluck('source_client_id')
             ->map(fn ($id) => (int) $id)
@@ -579,6 +626,7 @@ class PbnSeedPreviewService
     {
         return PbnSeedItem::query()
             ->where('pbn_site_id', (int) $site->id)
+            ->whereIn('status', PbnSeedItem::LIVE_STATUSES)
             ->whereIn('source_client_id', $selectedClientIds)
             ->pluck('source_client_id')
             ->map(fn ($id) => (int) $id)

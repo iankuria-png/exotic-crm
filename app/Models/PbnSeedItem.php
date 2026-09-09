@@ -16,6 +16,24 @@ class PbnSeedItem extends Model
     public const STATUS_CANCELLED = 'cancelled';
     public const STATUS_REVERTED = 'reverted';
 
+    /**
+     * Statuses in which an item still represents a profile standing on the
+     * destination site.
+     *
+     * Duplicate detection must use this rather than "any item ever created",
+     * because a reverted or cancelled item is history: the profile it made is
+     * gone or withdrawn, and the source client is free to be seeded again.
+     * Treating history as a live duplicate silently emptied every re-seed of a
+     * previously reverted batch.
+     */
+    public const LIVE_STATUSES = [
+        self::STATUS_SELECTED,
+        self::STATUS_QUEUED,
+        self::STATUS_PROVISIONING,
+        self::STATUS_CREATED,
+        self::STATUS_MEDIA_PENDING,
+    ];
+
     protected $fillable = [
         'batch_id',
         'target_id',

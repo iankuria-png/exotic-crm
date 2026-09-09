@@ -247,12 +247,14 @@ class PbnSiteController extends Controller
 
         $validated = $request->validate([
             'reason' => 'required|string|min:6|max:1000',
+            'mode' => 'sometimes|in:private,delete',
         ]);
 
         return response()->json($this->operationsService->revertBatch(
             $request->user(),
             $batch,
-            (string) $validated['reason']
+            (string) $validated['reason'],
+            (string) ($validated['mode'] ?? PbnOperationsService::REVERT_MODE_PRIVATE)
         ));
     }
 
