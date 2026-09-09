@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PbnSeedWizard from '../components/settings/PbnSeedWizard';
+import WatermarkControlPanel from '../components/pbn/WatermarkControlPanel';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../components/ToastProvider';
 import exportRowsToCsv from '../utils/csvExport';
@@ -16,6 +17,7 @@ const tabDefs = [
     { id: 'seed', label: 'Seed' },
     { id: 'batches', label: 'Batches' },
     { id: 'items', label: 'Items' },
+    { id: 'watermark', label: 'Watermark' },
     { id: 'observability', label: 'Observability' },
 ];
 
@@ -693,6 +695,10 @@ export default function Pbn() {
                                         compact
                                     />
                                 </div>
+                            ) : null}
+
+                            {activeTab === 'watermark' ? (
+                                <WatermarkControlPanel platforms={platforms} />
                             ) : null}
 
                             {activeTab === 'items' ? (

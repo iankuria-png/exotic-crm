@@ -35,20 +35,7 @@ class WatermarkRemover
     /** GD stores alpha 0-127 where 0 is opaque and 127 is fully transparent. */
     private const GD_ALPHA_MAX = 127;
 
-    /** Below this blend factor the logo left no meaningful trace. */
-    private const MIN_BLEND = 0.02;
 
-    /**
-     * Above this blend the inversion is too ill-conditioned to trust and the
-     * pixel is filled from its surroundings instead.
-     *
-     * Recovery divides by (1 - a), so at a = 0.9 the original occupies just 25
-     * of 256 output levels and one level of codec error becomes ten. Over a
-     * bright background that turns a white wordmark black — visibly worse than
-     * leaving it alone. Below this the amplification stays modest enough that
-     * the recovered pixel beats anything a neighbourhood could guess.
-     */
-    private const OPAQUE_BLEND = 0.7;
 
     /**
      * A recovered channel this far outside 0-255 means we are not looking at the
@@ -56,31 +43,20 @@ class WatermarkRemover
      */
     private const GAMUT_TOLERANCE = 24;
 
-    /** Share of blended pixels allowed to fall outside gamut before we decline. */
-    private const MAX_OUT_OF_GAMUT_RATIO = 0.12;
 
-    /** Below this the stamp barely touches the photo and there is nothing to gain. */
-    private const MIN_BLENDED_PIXELS = 64;
 
-    /**
-     * Recovered pixels at or above this blend keep their luma but take their
-     * colour from the surrounding photo. See repairChroma().
-     */
-    private const CHROMA_REPAIR_BLEND = 0.35;
 
-    private const CHROMA_REPAIR_PASSES = 8;
 
-    private const FILL_PASSES = 8;
 
-    /** Codec slack when testing an observed pixel against the logo's own contribution. */
-    private const EVIDENCE_TOLERANCE = 18;
 
-    /** Share of strong logo pixels allowed to contradict the logo before we decline. */
-    private const MAX_IMPLAUSIBLE_RATIO = 0.15;
+
+    private readonly WatermarkTuning $tuning;
 
     public function __construct(
-        private readonly WatermarkStamp $stamp
+        private readonly WatermarkStamp $stamp,
+        ?WatermarkTuning $tuning = null,
     ) {
+        $this->tuning = $tuning ?? new WatermarkTuning();
     }
 
     /**
@@ -172,7 +148,7 @@ class WatermarkRemover
 
                 $alpha = $blend[$y][$x];
                 $maxBlend = max($maxBlend, $alpha);
-                if ($alpha < self::MIN_BLEND) {
+                if ($alpha < $this->tuning->minBlend) {
                     continue;
                 }
 
@@ -183,12 +159,12 @@ class WatermarkRemover
                 // of the observed value, so anything much darker than the logo
                 // contributes says we are looking at the wrong place. They are
                 // filled rather than inverted, but they still get a vote.
-                if ($alpha >= self::OPAQUE_BLEND) {
+                if ($alpha >= $this->tuning->invertBelowBlend) {
                     $logoColour = imagecolorat($logo, $x, $y);
                     $resultColour = imagecolorat($image, $targetX, $targetY);
 
                     foreach ([16, 8, 0] as $shift) {
-                        $floor = $alpha * (($logoColour >> $shift) & 0xFF) - self::EVIDENCE_TOLERANCE;
+                        $floor = $alpha * (($logoColour >> $shift) & 0xFF) - $this->tuning->evidenceTolerance;
                         if ((($resultColour >> $shift) & 0xFF) < $floor) {
                             $implausible++;
                         }
@@ -220,7 +196,7 @@ class WatermarkRemover
                 $landed++;
                 $recovered[] = [$targetX, $targetY, $channels[0], $channels[1], $channels[2]];
 
-                if ($alpha >= self::CHROMA_REPAIR_BLEND) {
+                if ($alpha >= $this->tuning->chromaRepairBlend) {
                     $chromaSuspect[] = [$targetX, $targetY];
                 }
             }
@@ -240,30 +216,30 @@ class WatermarkRemover
 
         // Enough of the logo's ink has to land on the photo for the recovery to
         // be worth doing and for the checks below to mean anything.
-        if ($landed < self::MIN_BLENDED_PIXELS) {
+        if ($landed < $this->tuning->minLandedPixels) {
             return WatermarkRemovalResult::declined('barely_lands', 'Too little of the watermark lands on this image.', $stats);
         }
 
-        if ($evidence > 0 && $stats['implausible'] > self::MAX_IMPLAUSIBLE_RATIO) {
+        if ($evidence > 0 && $stats['implausible'] > $this->tuning->maxImplausibleRatio) {
             return WatermarkRemovalResult::declined(
                 'not_this_watermark',
                 sprintf(
                     'This image does not carry this watermark: %.1f%% of the strongest logo pixels are darker than the logo alone would make them (limit %.0f%%).',
                     $stats['implausible'] * 100,
-                    self::MAX_IMPLAUSIBLE_RATIO * 100
+                    $this->tuning->maxImplausibleRatio * 100
                 ),
                 $stats
             );
         }
 
         // Three channels are counted per pixel, so compare against that.
-        if ($stats['out_of_gamut'] > self::MAX_OUT_OF_GAMUT_RATIO) {
+        if ($stats['out_of_gamut'] > $this->tuning->maxOutOfGamutRatio) {
             return WatermarkRemovalResult::declined(
                 'not_this_watermark',
                 sprintf(
                     'Recovered pixels do not look like this logo: %.1f%% fell outside gamut (limit %.0f%%).',
                     $stats['out_of_gamut'] * 100,
-                    self::MAX_OUT_OF_GAMUT_RATIO * 100
+                    $this->tuning->maxOutOfGamutRatio * 100
                 ),
                 $stats
             );
@@ -374,7 +350,7 @@ class WatermarkRemover
         // Enough passes to reach the middle of the largest solid region in the
         // mark — the figure inside the O is about 36px across, so a radius-4
         // neighbourhood needs to work inwards several times to reach its core.
-        for ($pass = 0; $pass < self::CHROMA_REPAIR_PASSES && $suspect !== []; $pass++) {
+        for ($pass = 0; $pass < $this->tuning->chromaRepairPasses && $suspect !== []; $pass++) {
             $updates = [];
 
             foreach ($pixels as [$x, $y]) {
@@ -469,7 +445,7 @@ class WatermarkRemover
         // and then promotes them, so a solid region several pixels across —
         // the figure inside the O — is reached from its edges rather than
         // left as a patch.
-        for ($pass = 0; $pass < self::FILL_PASSES && $opaqueIndex !== []; $pass++) {
+        for ($pass = 0; $pass < $this->tuning->fillPasses && $opaqueIndex !== []; $pass++) {
             $updates = [];
 
             foreach ($pixels as [$x, $y]) {

@@ -872,6 +872,72 @@ class PbnSiteTest extends TestCase
         $items->assertJsonPath('data.0.watermark.label', 'Different watermark');
     }
 
+    /**
+     * The control centre answers two questions: is it removing watermarks, and
+     * when it is not, why. Both come from the recorded attempts.
+     */
+    public function test_the_watermark_control_centre_reports_outcomes_by_market(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Exotic Uganda']);
+        $other = Platform::factory()->create(['name' => 'Exotic Kenya']);
+        $site = $this->pbnSite($platform, [$platform->id, $other->id]);
+
+        foreach ([[$platform->id, true, 'applied'], [$platform->id, true, 'applied'], [$platform->id, false, 'not_this_watermark'], [$other->id, false, 'not_configured']] as [$platformId, $applied, $outcome]) {
+            \App\Models\WatermarkRemovalAttempt::create([
+                'source_platform_id' => $platformId,
+                'pbn_site_id' => $site->id,
+                'context' => 'pbn_seed',
+                'applied' => $applied,
+                'outcome' => $outcome,
+                'reason' => $outcome,
+                'implausible_ratio' => $applied ? 0.01 : 0.8,
+            ]);
+        }
+
+        Sanctum::actingAs($this->userFor($platform, 'admin'));
+
+        $response = $this->getJson('/api/crm/pbn/watermark')->assertOk();
+        $response->assertJsonPath('totals.attempted', 4);
+        $response->assertJsonPath('totals.removed', 2);
+        $response->assertJsonPath('totals.declined', 2);
+        $response->assertJsonPath('totals.misconfigured', 1);
+        $response->assertJsonPath('markets.0.platform_name', 'Exotic Uganda');
+        $response->assertJsonPath('markets.0.removed', 2);
+        $this->assertTrue($response->json('can_configure'));
+    }
+
+    /** The dials are stored, clamped to sane bounds, and honoured on read. */
+    public function test_watermark_thresholds_can_be_tuned_and_are_clamped(): void
+    {
+        $platform = Platform::factory()->create();
+        Sanctum::actingAs($this->userFor($platform, 'admin'));
+
+        $this->patchJson('/api/crm/pbn/watermark/settings', [
+            'enabled' => true,
+            'tuning' => ['invert_below_blend' => 0.55, 'max_implausible_ratio' => 0.2],
+        ])->assertOk()
+            ->assertJsonPath('tuning.invert_below_blend', 0.55)
+            ->assertJsonPath('tuning.max_implausible_ratio', 0.2);
+
+        // Out-of-range values are rejected rather than silently clamped, so a
+        // slip is visible instead of quietly changing behaviour.
+        $this->patchJson('/api/crm/pbn/watermark/settings', [
+            'tuning' => ['invert_below_blend' => 5],
+        ])->assertStatus(422);
+
+        $this->assertSame(0.55, \App\Models\WatermarkSetting::current()->tuning()->invertBelowBlend);
+    }
+
+    /** Sales can read the control centre but cannot move the dials. */
+    public function test_sales_cannot_change_watermark_thresholds(): void
+    {
+        $platform = Platform::factory()->create();
+        Sanctum::actingAs($this->userFor($platform, 'sales'));
+
+        $this->getJson('/api/crm/pbn/watermark')->assertOk()->assertJsonPath('can_configure', false);
+        $this->patchJson('/api/crm/pbn/watermark/settings', ['enabled' => false])->assertStatus(403);
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

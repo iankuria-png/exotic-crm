@@ -283,6 +283,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/batches/{batch}/media/retry', [PbnSiteController::class, 'processBatchMedia']);
         Route::get('/batches/{batch}/profile-links', [PbnSiteController::class, 'inspectProfileLinks']);
         Route::post('/batches/{batch}/profile-links/repair', [PbnSiteController::class, 'repairProfileLinks']);
+        Route::get('/watermark', [PbnSiteController::class, 'watermarkOverview']);
+        Route::patch('/watermark/settings', [PbnSiteController::class, 'updateWatermarkSettings']);
+        Route::post('/watermark/test', [PbnSiteController::class, 'testWatermark']);
         Route::get('/items', [PbnSiteController::class, 'items']);
         Route::get('/events', [PbnSiteController::class, 'events']);
     });

@@ -6,6 +6,7 @@ use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
 use App\Models\WatermarkRemovalAttempt;
+use App\Models\WatermarkSetting;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\AutoOptimize\AutoOptimizeImagePicker;
 use App\Services\ClientProfileImageService;
@@ -253,6 +254,13 @@ class PbnSeedMediaService
             return false;
         }
 
+        // The control centre's master switch stops removal everywhere without
+        // needing every batch policy edited.
+        $settings = WatermarkSetting::current();
+        if (!$settings->enabled) {
+            return false;
+        }
+
         try {
             $stamp = $this->watermarkConfig->forPlatform((int) $item->source_platform_id);
             if ($stamp === null) {
@@ -264,7 +272,7 @@ class PbnSeedMediaService
                 return false;
             }
 
-            $result = (new WatermarkRemover($stamp))->attempt($temporaryPath);
+            $result = (new WatermarkRemover($stamp, $settings->tuning()))->attempt($temporaryPath);
             $this->recordWatermarkAttempt($item, $sourceUrl, $result);
 
             return $result->applied;

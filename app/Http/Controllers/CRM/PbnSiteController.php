@@ -13,6 +13,7 @@ use App\Services\Pbn\PbnProfileLinkRepairService;
 use App\Services\Pbn\PbnSeedPreviewService;
 use App\Services\Pbn\PbnSeedProvisioningService;
 use App\Services\Pbn\PbnSiteService;
+use App\Services\Pbn\WatermarkControlService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -26,7 +27,8 @@ class PbnSiteController extends Controller
         private readonly PbnOperationsService $operationsService,
         private readonly PbnSeedPreviewService $previewService,
         private readonly PbnSeedProvisioningService $provisioningService,
-        private readonly PbnProfileLinkRepairService $linkRepairService
+        private readonly PbnProfileLinkRepairService $linkRepairService,
+        private readonly WatermarkControlService $watermarkControl
     ) {
     }
 
@@ -208,6 +210,55 @@ class PbnSiteController extends Controller
         );
 
         return response()->json($this->linkRepairService->repair($batch));
+    }
+
+    public function watermarkOverview(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate(['days' => 'sometimes|integer|min:1|max:180']);
+
+        return response()->json($this->watermarkControl->overview(
+            $request->user(),
+            (int) ($validated['days'] ?? 30)
+        ));
+    }
+
+    public function updateWatermarkSettings(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate([
+            'enabled' => 'sometimes|boolean',
+            'tuning' => 'sometimes|array',
+            'tuning.invert_below_blend' => 'sometimes|numeric|min:0.1|max:0.99',
+            'tuning.min_blend' => 'sometimes|numeric|min:0.005|max:0.3',
+            'tuning.max_implausible_ratio' => 'sometimes|numeric|min:0.01|max:0.9',
+            'tuning.evidence_tolerance' => 'sometimes|integer|min:0|max:80',
+            'tuning.max_out_of_gamut_ratio' => 'sometimes|numeric|min:0.01|max:0.9',
+            'tuning.chroma_repair_blend' => 'sometimes|numeric|min:0.05|max:0.95',
+            'tuning.chroma_repair_passes' => 'sometimes|integer|min:1|max:20',
+            'tuning.fill_passes' => 'sometimes|integer|min:1|max:20',
+            'tuning.min_landed_px' => 'sometimes|integer|min:8|max:5000',
+        ]);
+
+        return response()->json($this->watermarkControl->updateSettings($request->user(), $validated));
+    }
+
+    public function testWatermark(Request $request): JsonResponse
+    {
+        $this->ensurePbnUser($request);
+
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'url' => 'required|url|max:1000',
+        ]);
+
+        return response()->json($this->watermarkControl->testImage(
+            $request->user(),
+            (int) $validated['platform_id'],
+            (string) $validated['url']
+        ));
     }
 
     public function items(Request $request): JsonResponse
