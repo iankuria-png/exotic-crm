@@ -296,23 +296,9 @@ class CeoDashboardDataService
         $targetCurrency = $context['target_currency'];
         $timezone = (string) config('ceo.peak_hours_timezone', 'Africa/Nairobi');
 
-        $rows = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
-            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-            ->selectRaw($this->dowExpressionRaw().' as dow_raw')
-            ->selectRaw($this->hourExpression().' as hour')
-            ->selectRaw($this->dateExpression().' as event_date')
-            ->selectRaw('payments.platform_id as platform_id')
-            ->selectRaw('platforms.name as platform_name')
-            ->selectRaw('platforms.country as platform_country')
-            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
-            ->selectRaw('SUM(payments.amount) as amount')
-            ->selectRaw('COUNT(*) as payments_count')
-            ->groupByRaw($this->dowExpressionRaw())
-            ->groupByRaw($this->hourExpression())
-            ->groupByRaw($this->dateExpression())
-            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
-            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
-            ->get();
+        $rows = $this->peakHourRows($context['from'], $context['to'], $context['platform_id'], $targetCurrency);
+        $priorRows = $this->peakHourRows($context['prior_from'], $context['prior_to'], $context['platform_id'], $targetCurrency);
+        $agentRows = $this->weekdayAgentRows($context['from'], $context['to'], $context['platform_id'], $targetCurrency);
 
         $cells = [];
         for ($dow = 0; $dow < 7; $dow++) {
@@ -380,7 +366,201 @@ class CeoDashboardDataService
             'total_normalized' => $total,
             'total_payments' => $totalPayments,
             'avg_per_active_hour' => $activeHours > 0 ? round($total / $activeHours, 2) : 0.0,
+            'weekdays' => $this->weekdaySummaries($rows, $priorRows, $agentRows, $context, $targetCurrency),
         ];
+    }
+
+    private function peakHourRows(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): Collection
+    {
+        return $this->baseCollectedPayments($from, $to, $platformId)
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->selectRaw($this->dowExpressionRaw().' as dow_raw')
+            ->selectRaw($this->hourExpression().' as hour')
+            ->selectRaw($this->dateExpression().' as event_date')
+            ->selectRaw($this->localDateExpression().' as local_date')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->groupByRaw($this->dowExpressionRaw())
+            ->groupByRaw($this->hourExpression())
+            ->groupByRaw($this->dateExpression())
+            ->groupByRaw($this->localDateExpression())
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+    }
+
+    private function weekdayAgentRows(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): Collection
+    {
+        return $this->baseCollectedPayments($from, $to, $platformId)
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->join('users', 'users.id', '=', 'deals.assigned_to')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->whereNotNull('deals.assigned_to')
+            ->selectRaw($this->dowExpressionRaw().' as dow_raw')
+            ->selectRaw($this->dateExpression().' as event_date')
+            ->selectRaw('deals.assigned_to as agent_id')
+            ->selectRaw('users.name as agent_name')
+            ->selectRaw('users.role as agent_role')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
+            ->groupByRaw($this->dowExpressionRaw())
+            ->groupByRaw($this->dateExpression())
+            ->groupBy('deals.assigned_to', 'users.name', 'users.role', 'payments.platform_id', 'platforms.name', 'platforms.country')
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+    }
+
+    private function weekdaySummaries(Collection $rows, Collection $priorRows, Collection $agentRows, array $context, string $targetCurrency): array
+    {
+        $driver = DB::connection()->getDriverName();
+        $labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        $occurrences = $this->weekdayOccurrenceDates($context);
+        $currentByDow = $rows->groupBy(fn ($row) => $this->normalizePeakHoursDow((int) $row->dow_raw, $driver));
+        $priorByDow = $priorRows->groupBy(fn ($row) => $this->normalizePeakHoursDow((int) $row->dow_raw, $driver));
+        $agentsByDow = $agentRows->groupBy(fn ($row) => $this->normalizePeakHoursDow((int) $row->dow_raw, $driver));
+
+        return collect(range(0, 6))->map(function (int $dow) use ($labels, $occurrences, $currentByDow, $priorByDow, $agentsByDow, $targetCurrency) {
+            $currentRows = collect($currentByDow->get($dow, collect()));
+            $priorRows = collect($priorByDow->get($dow, collect()));
+            $agentRows = collect($agentsByDow->get($dow, collect()));
+            $current = $this->normalizedSummaryForRows($currentRows, $targetCurrency);
+            $prior = $this->normalizedSummaryForRows($priorRows, $targetCurrency);
+            $activeDates = $currentRows
+                ->filter(fn ($row) => (float) $row->amount > 0)
+                ->pluck('local_date')
+                ->filter()
+                ->map(fn ($date) => (string) $date)
+                ->unique()
+                ->values();
+            $weekdayDates = $occurrences[$dow] ?? [];
+            $gapDates = collect($weekdayDates)
+                ->reject(fn (string $date) => $activeDates->contains($date))
+                ->values()
+                ->all();
+
+            return [
+                'dow' => $dow,
+                'label' => $labels[$dow],
+                'value' => $current['normalized_total'],
+                'payments_count' => $current['payments_count'],
+                'average_ticket' => $current['average_ticket'],
+                'source_breakdown' => $current['source_breakdown'],
+                'normalization_meta' => $current['normalization_meta'],
+                'occurrences' => count($weekdayDates),
+                'active_days' => $activeDates->count(),
+                'gap_count' => count($gapDates),
+                'gap_dates' => array_slice($gapDates, 0, 6),
+                'baseline' => [
+                    'value' => $prior['normalized_total'],
+                    'payments_count' => $prior['payments_count'],
+                    'average_ticket' => $prior['average_ticket'],
+                    'source_breakdown' => $prior['source_breakdown'],
+                    'normalization_meta' => $prior['normalization_meta'],
+                ],
+                'delta_percent' => $this->percentDelta($current['normalized_total'], $prior['normalized_total']),
+                'trend_direction' => $this->trendDirection($current['normalized_total'], $prior['normalized_total']),
+                'top_agent' => $this->topWeekdayAgent($agentRows, $targetCurrency),
+                'top_country' => $this->topWeekdayCountry($currentRows, $targetCurrency),
+            ];
+        })->all();
+    }
+
+    private function normalizedSummaryForRows(Collection $rows, string $targetCurrency): array
+    {
+        $normalized = $this->reportingCurrencyService->normalizeEventRows($rows, $targetCurrency, false);
+        $paymentsCount = (int) $rows->sum('payments_count');
+        $total = (float) ($normalized['normalized_total'] ?? 0);
+
+        return [
+            'normalized_total' => $total,
+            'payments_count' => $paymentsCount,
+            'average_ticket' => $paymentsCount > 0 ? round($total / $paymentsCount, 2) : 0.0,
+            'source_breakdown' => $normalized['source_breakdown'] ?? [],
+            'normalization_meta' => $normalized['normalization_meta'] ?? null,
+        ];
+    }
+
+    private function topWeekdayAgent(Collection $rows, string $targetCurrency): ?array
+    {
+        $top = $rows
+            ->groupBy('agent_id')
+            ->map(function (Collection $group) use ($targetCurrency) {
+                $summary = $this->normalizedSummaryForRows($group, $targetCurrency);
+                $first = $group->first();
+
+                return [
+                    'id' => (int) $first->agent_id,
+                    'name' => (string) $first->agent_name,
+                    'role' => (string) $first->agent_role,
+                    'value' => $summary['normalized_total'],
+                    'payments_count' => $summary['payments_count'],
+                    'average_ticket' => $summary['average_ticket'],
+                    'source_breakdown' => $summary['source_breakdown'],
+                ];
+            })
+            ->sortByDesc(fn (array $agent) => [(float) $agent['value'], (int) $agent['payments_count']])
+            ->first();
+
+        return $top && ((float) $top['value'] > 0 || (int) $top['payments_count'] > 0) ? $top : null;
+    }
+
+    private function topWeekdayCountry(Collection $rows, string $targetCurrency): ?array
+    {
+        $top = $rows
+            ->groupBy(fn ($row) => (string) ($row->platform_country ?: 'Unassigned'))
+            ->map(function (Collection $group, string $country) use ($targetCurrency) {
+                $summary = $this->normalizedSummaryForRows($group, $targetCurrency);
+
+                return [
+                    'country' => $country,
+                    'value' => $summary['normalized_total'],
+                    'payments_count' => $summary['payments_count'],
+                    'average_ticket' => $summary['average_ticket'],
+                    'source_breakdown' => $summary['source_breakdown'],
+                ];
+            })
+            ->sortByDesc(fn (array $country) => [(float) $country['value'], (int) $country['payments_count']])
+            ->first();
+
+        return $top && ((float) $top['value'] > 0 || (int) $top['payments_count'] > 0) ? $top : null;
+    }
+
+    private function weekdayOccurrenceDates(array $context): array
+    {
+        $timezone = CarbonTimeZone::create((string) config('ceo.peak_hours_timezone', 'Africa/Nairobi'));
+        $from = $context['from']->copy()->setTimezone($timezone)->startOfDay();
+        $to = $context['to']->copy()->setTimezone($timezone)->startOfDay();
+        $dates = array_fill(0, 7, []);
+        $cursor = $from->copy();
+
+        while ($cursor->lte($to)) {
+            $dow = ((int) $cursor->dayOfWeek + 6) % 7;
+            $dates[$dow][] = $cursor->toDateString();
+            $cursor->addDay();
+        }
+
+        return $dates;
+    }
+
+    private function trendDirection(float $current, ?float $prior): string
+    {
+        if ($prior === null || $prior == 0.0) {
+            return $current > 0 ? 'new' : 'flat';
+        }
+
+        if (abs($current - $prior) < 0.01) {
+            return 'flat';
+        }
+
+        return $current > $prior ? 'increasing' : 'decreasing';
     }
 
     public function recentPayments(Request $request): array
@@ -1071,8 +1251,9 @@ class CeoDashboardDataService
     }
 
     /**
-     * @return array<int,array{value:float,payments_count:int,average_ticket:float,source_breakdown:array,future:bool}>
      * Indexed 0–23 by reporting-timezone hour, every hour seeded.
+     *
+     * @return array<int,array{value:float,payments_count:int,average_ticket:float,source_breakdown:array,future:bool}>
      */
     private function hourlyBuckets(Carbon $dayStart, Carbon $dayEnd, ?int $platformId, string $targetCurrency, int $maxHour): array
     {
@@ -1795,6 +1976,15 @@ class CeoDashboardDataService
         return DB::connection()->getDriverName() === 'sqlite'
             ? 'date(COALESCE(payments.completed_at, payments.created_at))'
             : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
+    }
+
+    private function localDateExpression(): string
+    {
+        $offsets = $this->peakHoursOffsets();
+
+        return DB::connection()->getDriverName() === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at), '{$offsets['sqlite']}')"
+            : "DATE(CONVERT_TZ(COALESCE(payments.completed_at, payments.created_at), '+00:00', '{$offsets['mysql']}'))";
     }
 
     private function hourExpression(): string

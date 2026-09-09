@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
@@ -66,11 +67,12 @@ class CeoPeakHoursTest extends TestCase
 
         $peakHours = $this->getJson('/api/crm/dashboard/ceo/peak-hours?horizon=custom&from=2026-06-10&to=2026-06-10&reporting_currency=USD')
             ->assertOk()
-            ->assertJsonStructure(['cells', 'peak', 'window', 'avg_per_active_hour', 'total_normalized'])
+            ->assertJsonStructure(['cells', 'peak', 'window', 'avg_per_active_hour', 'total_normalized', 'weekdays'])
             ->json();
 
         $this->assertCount(168, $peakHours['cells']);
-        $this->assertCount(168, collect($peakHours['cells'])->map(fn (array $cell) => $cell['dow'] . '-' . $cell['hour'])->unique());
+        $this->assertCount(7, $peakHours['weekdays']);
+        $this->assertCount(168, collect($peakHours['cells'])->map(fn (array $cell) => $cell['dow'].'-'.$cell['hour'])->unique());
 
         $shiftedCell = collect($peakHours['cells'])->first(fn (array $cell) => $cell['dow'] === 3 && $cell['hour'] === 1);
         $this->assertNotNull($shiftedCell);
@@ -91,6 +93,77 @@ class CeoPeakHoursTest extends TestCase
             (float) $peakHours['total_normalized'],
             0.001
         );
+    }
+
+    public function test_peak_hours_includes_weekday_click_summary_without_payment_level_payloads(): void
+    {
+        config([
+            'ceo.peak_hours_timezone' => 'Africa/Nairobi',
+            'services.reporting_fx.enabled' => true,
+        ]);
+
+        $kenya = Platform::factory()->create(['name' => 'Nairobi', 'country' => 'Kenya', 'currency_code' => 'USD']);
+        $tanzania = Platform::factory()->create(['name' => 'Dar', 'country' => 'Tanzania', 'currency_code' => 'USD']);
+        $kenyaProduct = Product::factory()->create(['platform_id' => $kenya->id, 'currency' => 'USD']);
+        $tanzaniaProduct = Product::factory()->create(['platform_id' => $tanzania->id, 'currency' => 'USD']);
+        $joanne = User::factory()->create(['name' => 'Joanne Yengo', 'role' => 'sales', 'status' => 'active']);
+        $daniel = User::factory()->create(['name' => 'Daniel Kimani', 'role' => 'sales', 'status' => 'active']);
+        $joanneDeal = Deal::factory()->create([
+            'platform_id' => $tanzania->id,
+            'product_id' => $tanzaniaProduct->id,
+            'assigned_to' => $joanne->id,
+        ]);
+        $danielDeal = Deal::factory()->create([
+            'platform_id' => $kenya->id,
+            'product_id' => $kenyaProduct->id,
+            'assigned_to' => $daniel->id,
+        ]);
+
+        $this->payment($tanzania, $tanzaniaProduct, [
+            'amount' => 240,
+            'deal_id' => $joanneDeal->id,
+            'completed_at' => '2026-06-01 09:00:00',
+        ]);
+        $this->payment($kenya, $kenyaProduct, [
+            'amount' => 60,
+            'deal_id' => $joanneDeal->id,
+            'completed_at' => '2026-06-08 10:00:00',
+        ]);
+        $this->payment($kenya, $kenyaProduct, [
+            'amount' => 90,
+            'deal_id' => $danielDeal->id,
+            'completed_at' => '2026-06-08 11:00:00',
+        ]);
+        $this->payment($kenya, $kenyaProduct, [
+            'amount' => 100,
+            'completed_at' => '2026-05-18 12:00:00',
+        ]);
+
+        Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
+
+        $payload = $this->getJson('/api/crm/dashboard/ceo/peak-hours?horizon=custom&from=2026-06-01&to=2026-06-15&reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $monday = collect($payload['weekdays'])->firstWhere('label', 'Monday');
+
+        $this->assertNotNull($monday);
+        $this->assertSame(0, (int) $monday['dow']);
+        $this->assertEqualsWithDelta(390.0, (float) $monday['value'], 0.001);
+        $this->assertSame(3, (int) $monday['payments_count']);
+        $this->assertEqualsWithDelta(130.0, (float) $monday['average_ticket'], 0.001);
+        $this->assertSame(3, (int) $monday['occurrences']);
+        $this->assertSame(2, (int) $monday['active_days']);
+        $this->assertSame(1, (int) $monday['gap_count']);
+        $this->assertSame(['2026-06-15'], $monday['gap_dates']);
+        $this->assertEqualsWithDelta(100.0, (float) data_get($monday, 'baseline.value'), 0.001);
+        $this->assertEqualsWithDelta(290.0, (float) $monday['delta_percent'], 0.001);
+        $this->assertSame('increasing', $monday['trend_direction']);
+        $this->assertSame('Joanne Yengo', data_get($monday, 'top_agent.name'));
+        $this->assertEqualsWithDelta(300.0, (float) data_get($monday, 'top_agent.value'), 0.001);
+        $this->assertSame('Tanzania', data_get($monday, 'top_country.country'));
+        $this->assertEqualsWithDelta(240.0, (float) data_get($monday, 'top_country.value'), 0.001);
+        $this->assertArrayNotHasKey('payments', $monday);
     }
 
     public function test_peak_hours_reconciles_when_market_uses_ambiguous_cfa_currency(): void
@@ -166,7 +239,7 @@ class CeoPeakHoursTest extends TestCase
     {
         return User::query()->create(array_merge([
             'name' => 'Test User',
-            'email' => Str::uuid() . '@example.test',
+            'email' => Str::uuid().'@example.test',
             'password' => bcrypt('password'),
             'role' => 'admin',
             'status' => 'active',
