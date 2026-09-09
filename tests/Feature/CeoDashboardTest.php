@@ -824,6 +824,62 @@ class CeoDashboardTest extends TestCase
         $this->assertStringContainsString('won-back', data_get($payload, 'definition.reactivated_profiles'));
     }
 
+    public function test_insight_strip_reports_visitor_unlock_revenue_instead_of_customer_mix(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Nairobi',
+            'country' => 'Kenya',
+            'currency_code' => 'USD',
+        ]);
+        Sanctum::actingAs($this->user(['role' => 'admin', 'is_ceo' => true]));
+
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => null,
+            'client_id' => null,
+            'purpose' => Payment::PURPOSE_SUBSCRIPTION,
+            'status' => 'completed',
+            'amount' => 500,
+            'currency' => 'USD',
+            'completed_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        foreach ([120, 80] as $amount) {
+            Payment::factory()->create([
+                'platform_id' => $platform->id,
+                'product_id' => null,
+                'client_id' => null,
+                'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+                'status' => 'completed',
+                'amount' => $amount,
+                'currency' => 'USD',
+                'completed_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=30d&reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $keys = array_column($summary['insights'], 'key');
+        $this->assertContains('visitor_revenue', $keys);
+        $this->assertNotContains('customer_mix', $keys);
+
+        $insight = collect($summary['insights'])->firstWhere('key', 'visitor_revenue');
+        $this->assertSame('/visitors', $insight['href']);
+        $this->assertStringContainsString('USD 200.00', $insight['message']);
+        $this->assertStringContainsString('2 paid unlocks', $insight['message']);
+
+        // Unlock revenue stays out of the subscription books it is displayed beside.
+        $this->assertSame(500.0, (float) data_get($summary, 'metrics.collected_revenue.value.normalized_total'));
+        $this->assertSame(200.0, (float) data_get($summary, 'visitor_revenue.normalized_total'));
+        $this->assertSame(2, (int) data_get($summary, 'visitor_revenue.payments_count'));
+    }
+
     private function user(array $overrides = []): User
     {
         return User::query()->create(array_merge([

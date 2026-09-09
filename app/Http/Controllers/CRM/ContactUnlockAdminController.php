@@ -7,6 +7,7 @@ use App\Models\ContactUnlockPricingRule;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
+use App\Services\ContactUnlockAnalyticsService;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockPulseService;
 use App\Services\ContactUnlockQueryService;
@@ -26,6 +27,7 @@ class ContactUnlockAdminController extends Controller
         private readonly ContactUnlockPricingService $pricingService,
         private readonly ContactUnlockReadinessService $readinessService,
         private readonly ContactUnlockPulseService $pulseService,
+        private readonly ContactUnlockAnalyticsService $analyticsService,
         private readonly ContactUnlockQueryService $unlockQueryService,
         private readonly MarketAuthorizationService $marketAuthorization,
         private readonly ReportingCurrencyService $reportingCurrencyService
@@ -250,6 +252,38 @@ class ContactUnlockAdminController extends Controller
             $validated['reporting_currency'] ?? null,
             $validated['from'] ?? null,
             $validated['to'] ?? null
+        ));
+    }
+
+    /**
+     * Visitor unlock revenue trend + market breakdown. Kept out of the CEO revenue endpoints on
+     * purpose: unlock revenue is never attributed to advertiser subscription sales.
+     */
+    public function analytics(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'range' => ['nullable', Rule::in(['today', '7d', '30d', 'custom'])],
+            'timezone' => 'nullable|string|max:80',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'bucket' => ['nullable', Rule::in(['auto', 'day', 'week', 'month'])],
+        ]);
+
+        $this->marketAuthorization->ensureRequestedPlatformIsAccessible($request);
+        $platformIds = ! empty($validated['platform_id'])
+            ? [(int) $validated['platform_id']]
+            : $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+
+        return response()->json($this->analyticsService->analytics(
+            $platformIds,
+            (string) ($validated['range'] ?? 'today'),
+            $validated['timezone'] ?? null,
+            $validated['reporting_currency'] ?? null,
+            $validated['from'] ?? null,
+            $validated['to'] ?? null,
+            (string) ($validated['bucket'] ?? 'auto')
         ));
     }
 

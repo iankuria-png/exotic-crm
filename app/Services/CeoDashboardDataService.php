@@ -45,6 +45,8 @@ class CeoDashboardDataService
         // the frontend already fetches as their own widgets; derive just the top row instead.
         $topMarket = $this->topMarketForInsight($context);
         $topAgent = $this->topAgentForInsight($context);
+        $currentVisitorRevenue = $this->visitorUnlockRevenue($context['from'], $context['to'], $context['platform_id'], $context['target_currency']);
+        $priorVisitorRevenue = $this->visitorUnlockRevenue($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
 
         return [
             'window' => $this->serializeWindow($context),
@@ -90,7 +92,14 @@ class CeoDashboardDataService
                 ],
             ],
             'customer_mix' => $currentCustomerMix,
-            'insights' => $this->insights($topMarket, $topAgent, $currentRevenue, $priorRevenue, $currentCustomerMix, $context),
+            'visitor_revenue' => [
+                ...$currentVisitorRevenue,
+                'prior_normalized_total' => $priorVisitorRevenue['normalized_total'],
+                'prior_payments_count' => $priorVisitorRevenue['payments_count'],
+                'delta_percent' => $this->percentDelta($currentVisitorRevenue['normalized_total'], $priorVisitorRevenue['normalized_total']),
+                'href' => '/visitors',
+            ],
+            'insights' => $this->insights($topMarket, $topAgent, $currentRevenue, $priorRevenue, $currentVisitorRevenue, $priorVisitorRevenue, $context),
         ];
     }
 
@@ -1498,10 +1507,8 @@ class CeoDashboardDataService
         ];
     }
 
-    private function insights(?array $topMarket, ?array $topAgent, array $currentRevenue, array $priorRevenue, array $customerMix, array $context): array
+    private function insights(?array $topMarket, ?array $topAgent, array $currentRevenue, array $priorRevenue, array $visitorRevenue, array $priorVisitorRevenue, array $context): array
     {
-        $existingShare = (float) data_get($customerMix, 'buckets.existing_active.share_percent', 0);
-        $newShare = (float) data_get($customerMix, 'buckets.new_active.share_percent', 0);
         $avgDaily = $this->averageDailyInsight($currentRevenue, $priorRevenue, $context);
 
         return array_values(array_filter([
@@ -1520,13 +1527,71 @@ class CeoDashboardDataService
                 'agent_id' => $topAgent['id'],
             ] : null,
             $avgDaily,
-            [
-                'key' => 'customer_mix',
-                'tone' => $existingShare >= $newShare ? 'positive' : 'market',
-                'label' => 'Customer mix',
-                'message' => sprintf('Existing users contribute %s%% vs. %s%% from new users.', number_format($existingShare, 1), number_format($newShare, 1)),
-            ],
+            $this->visitorRevenueInsight($visitorRevenue, $priorVisitorRevenue),
         ]));
+    }
+
+    /**
+     * Visitor contact-unlock revenue. Deliberately its own line on the CEO strip: it is collected
+     * on the same payment rails but is NOT advertiser subscription revenue, so it never rolls into
+     * Collected Revenue (baseCollectedPayments() excludes the purpose outright).
+     */
+    private function visitorRevenueInsight(array $current, array $prior): array
+    {
+        $currency = strtoupper((string) ($current['normalized_currency'] ?? 'USD'));
+        $total = $current['normalized_total'];
+        $payments = (int) ($current['payments_count'] ?? 0);
+        $delta = $this->percentDelta($total, $prior['normalized_total'] ?? null);
+
+        if ($total === null || $payments < 1) {
+            return [
+                'key' => 'visitor_revenue',
+                'tone' => 'default',
+                'label' => 'Visitor unlock revenue',
+                'message' => 'No visitor contact unlocks sold in this window.',
+                'badge' => 'Separate books',
+                'href' => '/visitors',
+            ];
+        }
+
+        $message = sprintf(
+            '%s from %s paid unlocks%s',
+            sprintf('%s %s', $currency, number_format((float) $total, 2)),
+            number_format($payments),
+            $delta === null ? '.' : sprintf(', %s%s%% vs. prior window.', $delta > 0 ? '+' : '', number_format($delta, 1))
+        );
+
+        return [
+            'key' => 'visitor_revenue',
+            'tone' => $delta !== null && $delta < 0 ? 'warning' : 'positive',
+            'label' => 'Visitor unlock revenue',
+            'message' => $message,
+            'badge' => 'Separate books',
+            'href' => '/visitors',
+        ];
+    }
+
+    /**
+     * Visitor contact-unlock revenue for a window. Separate books from subscription revenue.
+     */
+    private function visitorUnlockRevenue(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
+    {
+        $query = Payment::query()
+            ->contactUnlockRevenue()
+            ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$from->toDateTimeString()])
+            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) <= ?', [$to->toDateTimeString()])
+            ->when($platformId, fn (Builder $builder, int $id) => $builder->where('payments.platform_id', $id));
+
+        $normalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $query, $targetCurrency, false);
+
+        return [
+            'source_breakdown' => $normalized['source_breakdown'],
+            'normalized_total' => $normalized['normalized_total'],
+            'normalized_currency' => $normalized['normalized_currency'],
+            'normalization_meta' => $normalized['normalization_meta'],
+            'payments_count' => (int) (clone $query)->count(),
+        ];
     }
 
     /**

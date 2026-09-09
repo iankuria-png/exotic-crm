@@ -14,6 +14,9 @@ import VisitorDemandPanel from '../components/visitors/VisitorDemandPanel';
 import VisitorUnlockTrail from '../components/visitors/VisitorUnlockTrail';
 import VisitorSetupPanel from '../components/visitors/VisitorSetupPanel';
 import VisitorSafetyPanel from '../components/visitors/VisitorSafetyPanel';
+import VisitorRevenueTrendWidget from '../components/visitors/VisitorRevenueTrendWidget';
+import VisitorMarketRevenueWidget from '../components/visitors/VisitorMarketRevenueWidget';
+import VisitorMetricDrawer from '../components/visitors/VisitorMetricDrawer';
 
 const VALID_TABS = ['overview', 'demand', 'unlocks', 'safety', 'setup'];
 const DEFAULT_TRAIL_FILTERS = {
@@ -68,6 +71,8 @@ export default function WebVisitors() {
     const fromDate = searchParams.get('from') || '';
     const toDate = searchParams.get('to') || '';
     const [insightPlatformId, setInsightPlatformId] = useState(sharedPlatformId);
+    const [trendBucket, setTrendBucket] = useState('auto');
+    const [activeMetric, setActiveMetric] = useState(null);
     const requestedTab = searchParams.get('tab') || 'overview';
     const activeTab = VALID_TABS.includes(requestedTab) ? requestedTab : 'overview';
     const trailFilters = useMemo(() => readTrailFilters(searchParams, sharedPlatformId), [searchParams, sharedPlatformId]);
@@ -129,6 +134,18 @@ export default function WebVisitors() {
     const pulseQuery = useQuery({
         queryKey: ['contact-unlock-pulse', pulseParams],
         queryFn: () => contactUnlocks.getPulse(pulseParams),
+        enabled: Boolean(unlockQuery.data),
+        staleTime: 30_000,
+    });
+
+    const analyticsParams = useMemo(() => ({
+        ...pulseParams,
+        ...(trendBucket !== 'auto' ? { bucket: trendBucket } : {}),
+    }), [pulseParams, trendBucket]);
+
+    const analyticsQuery = useQuery({
+        queryKey: ['contact-unlock-analytics', analyticsParams],
+        queryFn: () => contactUnlocks.getAnalytics(analyticsParams),
         enabled: Boolean(unlockQuery.data),
         staleTime: 30_000,
     });
@@ -214,7 +231,33 @@ export default function WebVisitors() {
     const retry = () => {
         unlockQuery.refetch();
         pulseQuery.refetch();
+        analyticsQuery.refetch();
     };
+
+    // Metric card -> Unlocks trail. The drawer hands over the filters that reproduce the number,
+    // so the reader lands on the exact rows rather than an unfiltered list.
+    function openUnlocksWith(filters = {}) {
+        updateParams({
+            tab: 'unlocks',
+            status: filters.status ?? '',
+            payment_status: filters.payment_status ?? '',
+            scope: filters.scope ?? '',
+            page: 1,
+        });
+        setActiveMetric(null);
+    }
+
+    function exportFromDrawer() {
+        contactUnlocks.exportUnlocks({ ...overviewParams, page: undefined, per_page: undefined })
+            .then((result) => toast?.success?.(result?.truncated
+                ? `Export ready (capped at ${Number(result.rowLimit || 0).toLocaleString()} rows).`
+                : 'Export downloaded.'))
+            .catch(() => toast?.error?.('Export failed.'));
+    }
+
+    const analyticsError = analyticsQuery.isError
+        ? (analyticsQuery.error?.response?.data?.message || 'Visitor revenue analytics could not be loaded.')
+        : null;
 
     return (
         <div className="space-y-5">
@@ -286,6 +329,28 @@ export default function WebVisitors() {
                                         pulse={pulseQuery.data || {}}
                                         reportingCurrency={reportingCurrency}
                                         isLoading={unlockQuery.isLoading || pulseQuery.isLoading}
+                                        onOpenMetric={setActiveMetric}
+                                    />
+
+                                    <VisitorRevenueTrendWidget
+                                        data={analyticsQuery.data}
+                                        isLoading={analyticsQuery.isLoading}
+                                        errorMessage={analyticsError}
+                                        currency={analyticsQuery.data?.window?.target_currency || reportingCurrency.targetCurrency}
+                                        bucket={trendBucket}
+                                        onBucketChange={setTrendBucket}
+                                        onRetry={() => analyticsQuery.refetch()}
+                                    />
+
+                                    <VisitorMarketRevenueWidget
+                                        data={analyticsQuery.data}
+                                        isLoading={analyticsQuery.isLoading}
+                                        errorMessage={analyticsError}
+                                        reportingCurrency={reportingCurrency}
+                                        selectedPlatformId={insightPlatformId}
+                                        onSelectMarket={(value) => setSharedMarket(value)}
+                                        onClearMarket={() => setSharedMarket('all')}
+                                        onRetry={() => analyticsQuery.refetch()}
                                     />
                                 </div>
                             ) : null}
@@ -338,6 +403,17 @@ export default function WebVisitors() {
                     )}
                 </div>
             </div>
+
+            <VisitorMetricDrawer
+                metric={activeMetric}
+                analytics={analyticsQuery.data}
+                reportingCurrency={reportingCurrency}
+                isLoading={analyticsQuery.isLoading}
+                onClose={() => setActiveMetric(null)}
+                onOpenUnlocks={openUnlocksWith}
+                onSelectMarket={(value) => { setSharedMarket(value); setActiveMetric(null); }}
+                onExport={exportFromDrawer}
+            />
         </div>
     );
 }

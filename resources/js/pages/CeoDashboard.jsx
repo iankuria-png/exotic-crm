@@ -396,6 +396,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 isLoading={summaryQuery.isLoading}
                 onMarketClick={handleMarketScope}
                 onAgentClick={setFocusedAgentId}
+                onOpen={(href) => navigate(href)}
             />
 
             <RevenueTrendWidget

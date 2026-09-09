@@ -797,6 +797,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
     Route::get('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'index'])->middleware('role:admin,sub_admin,sales');
     Route::get('/settings/billing/contact-unlock/pulse', [ContactUnlockAdminController::class, 'pulse'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/settings/billing/contact-unlock/analytics', [ContactUnlockAdminController::class, 'analytics'])->middleware('role:admin,sub_admin,sales');
     Route::post('/settings/billing/contact-unlock/export', [ContactUnlockExportController::class, 'export'])->middleware('role:admin,sub_admin,sales');
     Route::put('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'update'])->middleware('role:admin,sub_admin');
     Route::post('/settings/billing/contact-unlock/readiness', [ContactUnlockAdminController::class, 'readiness'])->middleware('role:admin,sub_admin');

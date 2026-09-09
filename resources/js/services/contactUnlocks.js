@@ -23,6 +23,12 @@ const contactUnlocks = {
         }).then((response) => response.data);
     },
 
+    getAnalytics(params = {}) {
+        return api.get('/crm/settings/billing/contact-unlock/analytics', {
+            params: cleanParams(params),
+        }).then((response) => response.data);
+    },
+
     updateSettings(payload) {
         return api.put('/crm/settings/billing/contact-unlock', payload).then((response) => response.data);
     },
