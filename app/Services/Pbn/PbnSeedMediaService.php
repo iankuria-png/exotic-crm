@@ -365,9 +365,6 @@ class PbnSeedMediaService
         $stripped = $this->stripWatermark($item, $temporaryPath);
 
         $mime = trim((string) ($response->header('Content-Type') ?: ($media['mime_type'] ?? 'image/jpeg')));
-        if ($stripped) {
-            $mime = 'image/jpeg';
-        }
         $filename = $this->mediaFilename($item, $media, $url, $mime);
 
         return [

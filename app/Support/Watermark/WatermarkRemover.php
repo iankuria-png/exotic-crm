@@ -70,7 +70,7 @@ class WatermarkRemover
             return false;
         }
 
-        $image = $this->loadImage($imagePath);
+        [$image, $imageType] = $this->loadImage($imagePath);
         if ($image === null) {
             return false;
         }
@@ -83,14 +83,14 @@ class WatermarkRemover
         }
 
         try {
-            return $this->apply($image, $logo, $imagePath);
+            return $this->apply($image, $logo, $imagePath, $imageType);
         } finally {
             imagedestroy($image);
             imagedestroy($logo);
         }
     }
 
-    private function apply(GdImage $image, GdImage $logo, string $imagePath): bool
+    private function apply(GdImage $image, GdImage $logo, string $imagePath, int $imageType): bool
     {
         $imageWidth = imagesx($image);
         $imageHeight = imagesy($image);
@@ -167,7 +167,24 @@ class WatermarkRemover
 
         $this->fillOpaquePixels($image, $opaque);
 
-        return (bool) imagejpeg($image, $imagePath, 92);
+        return $this->writeImage($image, $imagePath, $imageType);
+    }
+
+    /**
+     * Write back in the format we read.
+     *
+     * The upload names the file from the source URL, and these markets serve
+     * WebP — a file called .webp carrying JPEG bytes would be rejected on
+     * arrival. Preserving the format also avoids adding a generation of
+     * recompression to an image that has already been through two.
+     */
+    private function writeImage(GdImage $image, string $path, int $imageType): bool
+    {
+        return match ($imageType) {
+            IMAGETYPE_WEBP => function_exists('imagewebp') && imagewebp($image, $path, 92),
+            IMAGETYPE_PNG => imagepng($image, $path),
+            default => imagejpeg($image, $path, 92),
+        };
     }
 
     /**
@@ -276,16 +293,21 @@ class WatermarkRemover
         }
     }
 
-    private function loadImage(string $path): ?GdImage
+    /**
+     * @return array{0: ?GdImage, 1: int}
+     */
+    private function loadImage(string $path): array
     {
         $info = @getimagesize($path);
-        $image = match ($info[2] ?? null) {
+        $type = (int) ($info[2] ?? 0);
+
+        $image = match ($type) {
             IMAGETYPE_JPEG => @imagecreatefromjpeg($path),
             IMAGETYPE_PNG => @imagecreatefrompng($path),
             IMAGETYPE_WEBP => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($path) : false,
             default => false,
         };
 
-        return $image instanceof GdImage ? $image : null;
+        return [$image instanceof GdImage ? $image : null, $type];
     }
 }
