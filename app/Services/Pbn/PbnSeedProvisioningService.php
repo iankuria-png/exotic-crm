@@ -220,7 +220,7 @@ class PbnSeedProvisioningService
             ?: $this->sourceValue($sourcePayload, $client, 'bio')
             ?: ($client->bio_original_html ?? ''));
 
-        $bio = $this->bioService->rewrite($sourceBio, $client, $seedPolicy);
+        $bio = $this->bioService->rewrite($sourceBio, $client->loadMissing('platform'), $seedPolicy);
         $this->recordBioOutcome($item, $seedPolicy, $bio);
 
         $payload = [

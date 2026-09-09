@@ -138,6 +138,12 @@ class PbnSite extends Model
             'bio' => [
                 'mode' => 'rewrite',
                 'on_failure' => 'template',
+
+                // SEO internal links are written root-relative for the site that
+                // will render them, so on a PBN they resolve to pages that do
+                // not exist. Stripping is the default; keep them only for a
+                // destination that genuinely mirrors the source's URL structure.
+                'internal_links' => 'strip',
             ],
 
             // Rotating away from the source's lead photo costs nothing and

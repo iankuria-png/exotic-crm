@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\Seo\BioGenerationService;
 use App\Services\Seo\LanguageDetector;
+use App\Support\BioSiteLinkStripper;
 use Illuminate\Support\Str;
 
 /**
@@ -49,7 +50,7 @@ class PbnSeedBioService
         $sourceBio = trim($sourceBio);
 
         if (($seedPolicy['bio_mode'] ?? 'verbatim') !== 'rewrite' || $sourceBio === '') {
-            return $this->outcome($sourceBio, self::RESULT_SKIPPED, null, 0.0, null);
+            return $this->finalise($this->outcome($sourceBio, self::RESULT_SKIPPED, null, 0.0, null), $client, $seedPolicy);
         }
 
         $config = AutoOptimizeConfig::effectiveForPlatform((int) $client->platform_id);
@@ -66,33 +67,31 @@ class PbnSeedBioService
                 'previous_bio' => $sourceBio,
             ]);
         } catch (\Throwable $exception) {
-            return $this->failure($sourceBio, $seedPolicy, Str::limit($exception->getMessage(), 200, ''));
+            return $this->failure($sourceBio, $client, $seedPolicy, Str::limit($exception->getMessage(), 200, ''));
         }
 
         $cost = (float) data_get($generated, 'usage.estimated_cost_usd', 0.0);
         $bioHtml = (string) ($generated['bio_html'] ?? '');
 
         if (trim(strip_tags($bioHtml)) === '') {
-            return $this->failure($sourceBio, $seedPolicy, 'Bio generation returned empty text.', $cost);
+            return $this->failure($sourceBio, $client, $seedPolicy, 'Bio generation returned empty text.', $cost);
         }
 
         // Every provider failed and BioGenerationService substituted its
         // deterministic template. Whether that is publishable is a policy
         // question, so it is answered by the batch rather than assumed.
         if ((bool) ($generated['fallback_used'] ?? false)) {
-            return $this->handleTemplateFallback($bioHtml, $sourceBio, $seedPolicy, $language, $cost);
+            return $this->handleTemplateFallback($bioHtml, $sourceBio, $client, $seedPolicy, $language, $cost);
         }
 
         if ($this->normalise($bioHtml) === $this->normalise($sourceBio)) {
-            return $this->failure($sourceBio, $seedPolicy, 'Generation returned the source bio unchanged.', $cost);
+            return $this->failure($sourceBio, $client, $seedPolicy, 'Generation returned the source bio unchanged.', $cost);
         }
 
-        return $this->outcome(
-            $bioHtml,
-            self::RESULT_REWRITTEN,
-            (string) ($generated['provider_used'] ?? null) ?: null,
-            $cost,
-            null
+        return $this->finalise(
+            $this->outcome($bioHtml, self::RESULT_REWRITTEN, (string) ($generated['provider_used'] ?? null) ?: null, $cost, null),
+            $client,
+            $seedPolicy
         );
     }
 
@@ -115,22 +114,27 @@ class PbnSeedBioService
      * @param  array<string, mixed>  $seedPolicy
      * @return array{text: string, result: string, provider: ?string, cost: float, note: ?string}
      */
-    private function handleTemplateFallback(string $bioHtml, string $sourceBio, array $seedPolicy, string $language, float $cost): array
+    private function handleTemplateFallback(string $bioHtml, string $sourceBio, Client $client, array $seedPolicy, string $language, float $cost): array
     {
         if (($seedPolicy['bio_on_failure'] ?? 'template') !== 'template') {
-            return $this->failure($sourceBio, $seedPolicy, 'Every AI provider failed and the batch does not accept the template fallback.', $cost);
+            return $this->failure($sourceBio, $client, $seedPolicy, 'Every AI provider failed and the batch does not accept the template fallback.', $cost);
         }
 
         if ($language !== 'en') {
             return $this->failure(
                 $sourceBio,
+                $client,
                 $seedPolicy,
                 'Every AI provider failed and the template fallback is English-only for a ' . $language . ' market.',
                 $cost
             );
         }
 
-        return $this->outcome($bioHtml, self::RESULT_TEMPLATE, 'template_fallback', $cost, 'All AI providers failed; the deterministic template was used.');
+        return $this->finalise(
+            $this->outcome($bioHtml, self::RESULT_TEMPLATE, 'template_fallback', $cost, 'All AI providers failed; the deterministic template was used.'),
+            $client,
+            $seedPolicy
+        );
     }
 
     /**
@@ -166,13 +170,55 @@ class PbnSeedBioService
      * @param  array<string, mixed>  $seedPolicy
      * @return array{text: string, result: string, provider: ?string, cost: float, note: ?string}
      */
-    private function failure(string $sourceBio, array $seedPolicy, string $note, float $cost = 0.0): array
+    private function failure(string $sourceBio, Client $client, array $seedPolicy, string $note, float $cost = 0.0): array
     {
         if (($seedPolicy['bio_on_failure'] ?? 'template') === 'attention') {
             throw new \RuntimeException('Bio rewrite failed and the batch policy holds the item: ' . $note);
         }
 
-        return $this->outcome($sourceBio, self::RESULT_FALLBACK, null, $cost, $note);
+        return $this->finalise(
+            $this->outcome($sourceBio, self::RESULT_FALLBACK, null, $cost, $note),
+            $client,
+            $seedPolicy
+        );
+    }
+
+    /**
+     * Last step for every outcome, including the ones that keep the source text.
+     *
+     * The SEO engine writes internal links root-relative, so a bio copied to a
+     * PBN points at pages that host does not have. That applies to a verbatim
+     * copy exactly as much as to a fresh generation, which is why the stripping
+     * happens here rather than by asking the generator not to inject.
+     *
+     * @param  array{text: string, result: string, provider: ?string, cost: float, note: ?string}  $outcome
+     * @param  array<string, mixed>  $seedPolicy
+     * @return array{text: string, result: string, provider: ?string, cost: float, note: ?string}
+     */
+    private function finalise(array $outcome, Client $client, array $seedPolicy): array
+    {
+        if (($seedPolicy['bio_internal_links'] ?? 'strip') !== 'strip') {
+            return $outcome;
+        }
+
+        $outcome['text'] = BioSiteLinkStripper::strip($outcome['text'], array_filter([
+            $this->hostOf($client->platform?->domain),
+            $this->hostOf($client->platform?->wp_api_url),
+        ]));
+
+        return $outcome;
+    }
+
+    private function hostOf(?string $value): ?string
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+
+        $host = parse_url(str_contains($value, '://') ? $value : 'https://' . $value, PHP_URL_HOST);
+
+        return is_string($host) && $host !== '' ? preg_replace('/^www\./i', '', strtolower($host)) : null;
     }
 
     /**

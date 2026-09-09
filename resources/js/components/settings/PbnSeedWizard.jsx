@@ -12,7 +12,7 @@ const BIO_COST_PER_PROFILE_USD = 0.001;
 
 const DEFAULT_POLICY = {
     badges: { featured_pct: 10, premium_pct: 25, verified_pct: 0 },
-    bio: { mode: 'rewrite', on_failure: 'template' },
+    bio: { mode: 'rewrite', on_failure: 'template', internal_links: 'strip' },
     main_image: { mode: 'rotate' },
     expiry: { mode: 'window', min_days: 30, max_days: 90 },
     release: { mode: 'immediate', per_period: 10 },
@@ -448,6 +448,20 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
                                                 <option value="rewrite">Rewrite for this site</option>
                                                 <option value="verbatim">Copy the source bio</option>
                                             </select>
+                                            <select
+                                                aria-label="Internal SEO links in the bio"
+                                                value={policy.bio.internal_links}
+                                                onChange={(event) => updatePolicy('bio', 'internal_links', event.target.value)}
+                                                className="crm-input mt-2"
+                                            >
+                                                <option value="strip">Remove internal SEO links</option>
+                                                <option value="keep">Keep internal SEO links</option>
+                                            </select>
+                                            <p className="mt-1 text-[11px] text-slate-500">
+                                                {policy.bio.internal_links === 'strip'
+                                                    ? 'Contact links are kept. Service and location links point at pages this site may not have.'
+                                                    : 'Only keep these if this site mirrors the source URL structure — otherwise readers hit 404s.'}
+                                            </p>
                                             {policy.bio.mode === 'rewrite' ? (
                                                 <>
                                                     <select

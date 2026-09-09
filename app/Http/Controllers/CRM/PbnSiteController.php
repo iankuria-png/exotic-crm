@@ -368,6 +368,7 @@ class PbnSiteController extends Controller
             'copy_policy.badges.verified_pct' => 'sometimes|integer|min:0|max:100',
             'copy_policy.bio.mode' => 'sometimes|in:rewrite,verbatim',
             'copy_policy.bio.on_failure' => 'sometimes|in:template,verbatim,attention',
+            'copy_policy.bio.internal_links' => 'sometimes|in:strip,keep',
             'copy_policy.main_image.mode' => 'sometimes|in:rotate,source',
             'copy_policy.expiry.mode' => 'sometimes|in:window,fixed,none',
             'copy_policy.expiry.min_days' => 'sometimes|integer|min:1|max:3650',
