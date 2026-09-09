@@ -8,10 +8,13 @@ use App\Models\PbnSeedItem;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\AutoOptimize\AutoOptimizeImagePicker;
 use App\Services\ClientProfileImageService;
+use App\Services\WpWatermarkConfigService;
+use App\Support\Watermark\WatermarkRemover;
 use App\Services\WpSyncService;
 use App\Support\WordPressSiteConnection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -24,7 +27,8 @@ class PbnSeedMediaService
     public function __construct(
         private readonly ClientProfileImageService $imageService,
         private readonly PbnSeedPreviewService $previewService,
-        private readonly AutoOptimizeImagePicker $imagePicker
+        private readonly AutoOptimizeImagePicker $imagePicker,
+        private readonly WpWatermarkConfigService $watermarkConfig
     ) {
     }
 
@@ -111,8 +115,10 @@ class PbnSeedMediaService
             $destinationSync = new WpSyncService(WordPressSiteConnection::fromPbnSite($site));
             $mainIndex = $this->resolveMainImageIndex($item, $sourceMediaPayload, $sourceMedia);
             $uploaded = 0;
+            $strippedWatermark = false;
             foreach ($sourceMedia as $index => $media) {
-                [$uploadedFile, $temporaryPath] = $this->downloadMedia($item, $media);
+                [$uploadedFile, $temporaryPath, $stripped] = $this->downloadMedia($item, $media);
+                $strippedWatermark = $stripped || $strippedWatermark;
                 try {
                     $destinationSync->uploadClientMedia(
                         (int) $item->target_wp_post_id,
@@ -141,6 +147,7 @@ class PbnSeedMediaService
                 'uploaded_count' => $uploaded,
                 'source_media_count' => count($sourceMedia),
                 'target_wp_post_id' => (int) $item->target_wp_post_id,
+                'watermark_stripped' => $strippedWatermark,
             ], $actorId);
 
             return 'copied';
@@ -228,6 +235,39 @@ class PbnSeedMediaService
      *
      * @param  array<int, array<string, mixed>>  $sourceMedia  The normalised, capped upload list.
      */
+    /**
+     * Take the source market's logo off a downloaded photo before it is copied.
+     *
+     * The file is rewritten in place, so the upload that follows carries the
+     * cleaned image. Every failure path leaves the file exactly as downloaded:
+     * a photo that still shows the mark is a far smaller problem than one with
+     * a rectangle of mangled pixels across it, so the remover declines rather
+     * than guesses whenever the image does not look stamped.
+     */
+    private function stripWatermark(PbnSeedItem $item, string $temporaryPath): bool
+    {
+        $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
+        if (($policy['watermark_mode'] ?? 'keep') !== 'strip') {
+            return false;
+        }
+
+        try {
+            $stamp = $this->watermarkConfig->forPlatform((int) $item->source_platform_id);
+            if ($stamp === null) {
+                return false;
+            }
+
+            return (new WatermarkRemover($stamp))->removeFromFile($temporaryPath);
+        } catch (\Throwable $exception) {
+            Log::warning('pbn.watermark_strip_failed', [
+                'item_id' => (int) $item->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
     private function resolveMainImageIndex(PbnSeedItem $item, array $sourceMediaPayload, array $sourceMedia): int
     {
         $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
@@ -295,6 +335,9 @@ class PbnSeedMediaService
         return null;
     }
 
+    /**
+     * @return array{0: UploadedFile, 1: string, 2: bool}
+     */
     private function downloadMedia(PbnSeedItem $item, array $media): array
     {
         $url = trim((string) ($media['url'] ?? ''));
@@ -317,12 +360,20 @@ class PbnSeedMediaService
             throw new \RuntimeException('Unable to stage source media for upload.');
         }
 
+        // Strip before the UploadedFile is built: it captures the file's size
+        // on construction, and the removal rewrites the file as JPEG.
+        $stripped = $this->stripWatermark($item, $temporaryPath);
+
         $mime = trim((string) ($response->header('Content-Type') ?: ($media['mime_type'] ?? 'image/jpeg')));
+        if ($stripped) {
+            $mime = 'image/jpeg';
+        }
         $filename = $this->mediaFilename($item, $media, $url, $mime);
 
         return [
             new UploadedFile($temporaryPath, $filename, $mime ?: 'image/jpeg', null, true),
             $temporaryPath,
+            $stripped,
         ];
     }
 

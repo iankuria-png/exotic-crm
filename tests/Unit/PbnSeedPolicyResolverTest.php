@@ -156,6 +156,35 @@ class PbnSeedPolicyResolverTest extends TestCase
         $this->assertNotEquals($this->resolve($policy, 40, 99), $this->resolve($policy, 40, 100));
     }
 
+    /** Content decisions are recorded per item so the media stage can read them. */
+    public function test_content_modes_are_carried_onto_every_item(): void
+    {
+        $resolved = $this->resolve([
+            'watermark' => ['mode' => 'strip'],
+            'main_image' => ['mode' => 'rotate'],
+            'bio' => ['mode' => 'rewrite', 'internal_links' => 'strip'],
+        ], 4);
+
+        foreach ($resolved as $decision) {
+            $this->assertSame('strip', $decision['watermark_mode']);
+            $this->assertSame('rotate', $decision['main_image_mode']);
+            $this->assertSame('strip', $decision['bio_internal_links']);
+        }
+    }
+
+    public function test_content_modes_can_be_turned_off(): void
+    {
+        $resolved = $this->resolve([
+            'watermark' => ['mode' => 'keep'],
+            'bio' => ['internal_links' => 'keep'],
+        ], 2);
+
+        foreach ($resolved as $decision) {
+            $this->assertSame('keep', $decision['watermark_mode']);
+            $this->assertSame('keep', $decision['bio_internal_links']);
+        }
+    }
+
     public function test_empty_batches_resolve_to_nothing(): void
     {
         $this->assertSame([], $this->resolve([], 0));

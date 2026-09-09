@@ -152,6 +152,15 @@ class PbnSite extends Model
                 'mode' => 'rotate',
             ],
 
+            // The source market stamps its own logo onto every upload at
+            // upload time, so a copied photo carries that market's brand onto
+            // a site that is not it. Removal is exact rather than generative —
+            // see WatermarkRemover — and declines rather than guessing when the
+            // image does not look stamped.
+            'watermark' => [
+                'mode' => 'strip',
+            ],
+
             // A window spreads expiry across a range so a whole batch does not
             // disappear on one day.
             'expiry' => [

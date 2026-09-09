@@ -50,6 +50,7 @@ class PbnSeedPolicyResolver
                 'expires_at' => $this->expiryFor($policy['expiry'] ?? [], $startsAt, $seed, $key),
                 'main_image_mode' => (string) ($policy['main_image']['mode'] ?? 'rotate'),
                 'main_image_seed' => $this->mix($seed, $key, 'image'),
+                'watermark_mode' => (string) ($policy['watermark']['mode'] ?? 'strip'),
                 'bio_mode' => (string) ($policy['bio']['mode'] ?? 'rewrite'),
                 'bio_on_failure' => (string) ($policy['bio']['on_failure'] ?? 'template'),
                 'bio_internal_links' => (string) ($policy['bio']['internal_links'] ?? 'strip'),

@@ -14,6 +14,7 @@ const DEFAULT_POLICY = {
     badges: { featured_pct: 10, premium_pct: 25, verified_pct: 0 },
     bio: { mode: 'rewrite', on_failure: 'template', internal_links: 'strip' },
     main_image: { mode: 'rotate' },
+    watermark: { mode: 'strip' },
     expiry: { mode: 'window', min_days: 30, max_days: 90 },
     release: { mode: 'immediate', per_period: 10 },
 };
@@ -25,6 +26,7 @@ function mergePolicy(sitePolicy) {
         badges: { ...DEFAULT_POLICY.badges, ...(source.badges || {}) },
         bio: { ...DEFAULT_POLICY.bio, ...(source.bio || {}) },
         main_image: { ...DEFAULT_POLICY.main_image, ...(source.main_image || {}) },
+        watermark: { ...DEFAULT_POLICY.watermark, ...(source.watermark || {}) },
         expiry: { ...DEFAULT_POLICY.expiry, ...(source.expiry || {}) },
         release: { ...DEFAULT_POLICY.release, ...(source.release || {}) },
     };
@@ -495,6 +497,19 @@ export default function PbnSeedWizard({ open, onClose, site, platforms = [], onQ
                                                 <option value="source">Keep the source lead photo</option>
                                             </select>
                                             <p className="mt-1 text-[11px] text-slate-500">Rotation honours the market's minimum image dimensions.</p>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="policy-watermark-mode">Source watermark</label>
+                                            <select id="policy-watermark-mode" value={policy.watermark.mode} onChange={(event) => updatePolicy('watermark', 'mode', event.target.value)} className="crm-input mt-1">
+                                                <option value="strip">Remove before copying</option>
+                                                <option value="keep">Leave the photo as it is</option>
+                                            </select>
+                                            <p className="mt-1 text-[11px] text-slate-500">
+                                                {policy.watermark.mode === 'strip'
+                                                    ? 'Reverses the source market\u2019s logo using its own watermark settings. A photo that does not look stamped is copied untouched.'
+                                                    : 'Photos keep the source market\u2019s branding on the destination site.'}
+                                            </p>
                                         </div>
                                     </div>
 
