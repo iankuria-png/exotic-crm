@@ -198,6 +198,7 @@ class PbnSeedProvisioningService
             'whatsapp' => data_get($policy, 'phone', 'copy') === 'copy' ? (string) $client->phone_normalized : '',
             'bio' => $bio['text'],
             'seed_policy' => $seedPolicy,
+            'relinkable_post_ids' => $this->retiredDestinationPostIds($item),
             'region_id' => $item->target_region_id,
             'city_id' => $item->target_city_id,
             'post_status' => in_array(data_get($policy, 'post_status'), ['publish', 'private', 'draft', 'pending'], true)
@@ -269,6 +270,34 @@ class PbnSeedProvisioningService
             'phone', 'whatsapp', 'personal_phone' => $client->phone_normalized,
             default => null,
         };
+    }
+
+    /**
+     * Destination posts this advertiser previously held on this site and no
+     * longer occupies.
+     *
+     * The destination email is derived from the source platform and client, so
+     * re-seeding the same advertiser lands on the same WordPress account. That
+     * account still points at the profile the last seed made, and provisioning
+     * refuses to take over a linked account — correctly, since the account may
+     * belong to a live profile. Handing it the posts we have already retired
+     * lets it tell "this is our own reverted profile" from "this belongs to
+     * somebody", so a re-seed reuses the advertiser's account and a genuine
+     * clash still fails.
+     *
+     * @return array<int, int>
+     */
+    private function retiredDestinationPostIds(PbnSeedItem $item): array
+    {
+        return PbnSeedItem::query()
+            ->where('pbn_site_id', (int) $item->pbn_site_id)
+            ->where('source_client_id', (int) $item->source_client_id)
+            ->where('id', '!=', (int) $item->id)
+            ->whereNotIn('status', PbnSeedItem::LIVE_STATUSES)
+            ->whereNotNull('target_wp_post_id')
+            ->pluck('target_wp_post_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
     }
 
     private function destinationEmail(PbnSeedItem $item): string

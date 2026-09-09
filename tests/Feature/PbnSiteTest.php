@@ -672,6 +672,58 @@ class PbnSiteTest extends TestCase
         $this->assertSame('private', DB::connection($connectionName)->table('posts')->where('ID', $postId)->value('post_status'));
     }
 
+    /**
+     * The destination email is derived from the source platform and client, so
+     * a re-seed lands on the same WordPress account. That account still points
+     * at the profile the previous seed created, and provisioning refuses to
+     * take over a linked account. Told which posts have been retired, it adopts
+     * the advertiser's own account instead of failing with "This email is
+     * already linked to a WordPress profile".
+     */
+    public function test_reseeding_adopts_the_account_left_by_a_retired_profile(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id], ['domain' => 'pbn-relink.test']);
+        [$connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture($site);
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        $service = new WpDirectProvisioningService(WordPressSiteConnection::fromPbnSite($site->fresh()), $connectionConfig);
+
+        $payload = [
+            'name' => 'PBN Relink Demo',
+            'email' => 'pbn+5-14069@pbn-relink.test',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'post_status' => 'publish',
+        ];
+
+        $first = $service->provisionEscort($payload + ['provision_request_id' => 'pbn-relink-1']);
+        $firstPostId = (int) $first['wp_post_id'];
+
+        // Without the retired list the account is defended, as it should be.
+        try {
+            $service->provisionEscort($payload + ['provision_request_id' => 'pbn-relink-2']);
+            $this->fail('Provisioning should refuse to take over a live linked account.');
+        } catch (\InvalidArgumentException $exception) {
+            $this->assertStringContainsString('already linked', $exception->getMessage());
+        }
+
+        // Told the previous post is retired, it reuses the same account.
+        $second = $service->provisionEscort($payload + [
+            'provision_request_id' => 'pbn-relink-3',
+            'relinkable_post_ids' => [$firstPostId],
+        ]);
+
+        $this->assertSame((int) $first['wp_user_id'], (int) $second['wp_user_id'], 'One advertiser keeps one account per site.');
+        $this->assertNotSame($firstPostId, (int) $second['wp_post_id']);
+        $this->assertSame(
+            (string) $second['wp_post_id'],
+            DB::connection($connectionName)->table('options')
+                ->where('option_name', 'escortpostid' . (int) $second['wp_user_id'])
+                ->value('option_value'),
+            'The account points at the new profile.'
+        );
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

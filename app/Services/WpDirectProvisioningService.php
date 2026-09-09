@@ -113,7 +113,11 @@ class WpDirectProvisioningService
                 $email,
                 $requestedUsername,
                 $password,
-                $website
+                $website,
+                array_values(array_filter(array_map(
+                    'intval',
+                    is_array($payload['relinkable_post_ids'] ?? null) ? $payload['relinkable_post_ids'] : []
+                )))
             );
 
             $postId = $this->createProfilePost(
@@ -409,7 +413,8 @@ class WpDirectProvisioningService
         string $email,
         string $requestedUsername,
         string $password,
-        string $website
+        string $website,
+        array $relinkablePostIds = []
     ): array {
         $users = DB::connection($this->connectionName)->table('users');
         $options = DB::connection($this->connectionName)->table('options');
@@ -437,10 +442,28 @@ class WpDirectProvisioningService
                 ->where('option_name', 'agencypostid'.$existingUserId)
                 ->value('option_value');
 
-            if ($existingProfileId || $existingAgencyId) {
+            if ($existingAgencyId) {
                 throw new \InvalidArgumentException(
-                    'This email is already linked to a WordPress profile. Use a different email.'
+                    'This email is already linked to a WordPress agency. Use a different email.'
                 );
+            }
+
+            // A seeded advertiser keeps one account per destination site, so a
+            // re-seed adopts the existing user rather than demanding a new
+            // email. That is only safe when the profile still linked to them is
+            // one the caller has retired — a reverted seed, or a post that has
+            // since been deleted. Anything else is a live profile owned by
+            // somebody, and taking their account over would be wrong.
+            if ($existingProfileId) {
+                $linkedPostId = (int) $existingProfileId;
+                $retired = in_array($linkedPostId, $relinkablePostIds, true)
+                    || !$this->postExists($linkedPostId);
+
+                if (!$retired) {
+                    throw new \InvalidArgumentException(
+                        'This email is already linked to a WordPress profile. Use a different email.'
+                    );
+                }
             }
 
             return [
@@ -497,6 +520,14 @@ class WpDirectProvisioningService
         ]);
 
         return [$userId, $username, false, $placeholderEmailUsed, $resolvedEmail];
+    }
+
+    private function postExists(int $postId): bool
+    {
+        return $postId > 0 && DB::connection($this->connectionName)
+            ->table('posts')
+            ->where('ID', $postId)
+            ->exists();
     }
 
     private function createProfilePost(int $userId, string $name, string $postType, string $postStatus, string $content = ''): int
