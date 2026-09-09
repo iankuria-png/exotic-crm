@@ -495,7 +495,7 @@ class PbnSiteTest extends TestCase
             'selected_count' => 1,
             'created_count' => 0,
         ]);
-        $item = PbnSeedItem::create([
+        PbnSeedItem::create([
             'batch_id' => $batch->id,
             'pbn_site_id' => $site->id,
             'source_platform_id' => $platform->id,
@@ -517,9 +517,27 @@ class PbnSiteTest extends TestCase
         $preview = $this->postJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/preview", $payload)->assertOk();
         $preview->assertJsonPath('selected_client_ids', [$client->id]);
 
-        // A live item on the same site still blocks re-selection.
-        $item->forceFill(['status' => PbnSeedItem::STATUS_CREATED])->save();
+        // Queueing must actually insert. The old unique index covered every item
+        // regardless of status, so a reverted row made the insert throw 1062 and
+        // the whole request 500 even once the client was selectable again.
+        $this->postJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/batches", [
+            ...$payload,
+            'preview_token' => $preview->json('preview_token'),
+            'selected_client_ids' => [$client->id],
+        ])->assertCreated();
 
+        $this->assertSame(
+            2,
+            PbnSeedItem::query()->where('source_client_id', $client->id)->count(),
+            'The reverted item is history and the new one lives alongside it.'
+        );
+        $this->assertSame(
+            1,
+            PbnSeedItem::query()->where('source_client_id', $client->id)->whereNotNull('live_source_client_id')->count(),
+            'Only the live item carries the uniqueness key.'
+        );
+
+        // A live item on the same site still blocks re-selection.
         $blocked = $this->postJson("/api/crm/settings/integrations/pbn-sites/{$site->id}/preview", $payload)->assertOk();
         $this->assertSame([], $blocked->json('selected_client_ids'));
     }

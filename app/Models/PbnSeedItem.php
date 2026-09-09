@@ -40,6 +40,7 @@ class PbnSeedItem extends Model
         'pbn_site_id',
         'source_platform_id',
         'source_client_id',
+        'live_source_client_id',
         'source_wp_post_id',
         'target_region_id',
         'target_city_id',
@@ -67,6 +68,7 @@ class PbnSeedItem extends Model
         'pbn_site_id' => 'integer',
         'source_platform_id' => 'integer',
         'source_client_id' => 'integer',
+        'live_source_client_id' => 'integer',
         'source_wp_post_id' => 'integer',
         'target_region_id' => 'integer',
         'target_city_id' => 'integer',
@@ -81,6 +83,19 @@ class PbnSeedItem extends Model
         'reverted_at' => 'datetime',
         'reverted_by' => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        // Mirrors source_client_id while the item is live and holds NULL once it
+        // is not, so the unique index enforces "one live item per client per
+        // site" without forbidding a client from ever being seeded again.
+        // Repeated NULLs do not collide in a MySQL or MariaDB unique index.
+        static::saving(function (self $item): void {
+            $item->live_source_client_id = in_array($item->status, self::LIVE_STATUSES, true)
+                ? $item->source_client_id
+                : null;
+        });
+    }
 
     public function batch()
     {
