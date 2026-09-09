@@ -74,7 +74,18 @@ export default function SubsidiaryClientSearchPopover({ open, platformId, onClos
                             <span className="block truncate text-xs text-slate-500">{client.phone_normalized || 'No phone'}</span>
                         </span>
                     </button>
-                )) : search.trim().length >= 2 ? (
+                )) : query.isError ? (
+                    <div className="flex items-center justify-between gap-2 rounded border border-amber-200 bg-amber-50 px-2 py-2">
+                        <p className="text-xs text-amber-800">Search failed.</p>
+                        <button
+                            type="button"
+                            onClick={() => query.refetch()}
+                            className="flex-shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+                        >
+                            Retry
+                        </button>
+                    </div>
+                ) : search.trim().length >= 2 ? (
                     <p className="px-2 py-2 text-xs text-slate-500">No clients found.</p>
                 ) : (
                     <p className="px-2 py-2 text-xs text-slate-500">Type at least 2 characters.</p>

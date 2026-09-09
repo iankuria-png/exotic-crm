@@ -534,6 +534,45 @@ class ClientIndexListingTest extends TestCase
         }
     }
 
+    /**
+     * Typeahead pickers (shared manual payment bundle, subsidiary search) request a
+     * short page of 8-10 rows. A per_page whitelist of the table's own page sizes
+     * 422'd those calls, and the UI rendered the 422 as "no clients found".
+     */
+    public function test_clients_index_accepts_small_typeahead_page_sizes(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+
+        Client::factory()->count(3)->create([
+            'platform_id' => $platform->id,
+            'name' => 'Sara Typeahead',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&search=Sara&per_page=10");
+
+        $response->assertOk();
+        $this->assertSame(10, $response->json('per_page'));
+        $this->assertCount(3, $response->json('data'));
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&search=Sara&per_page=8")
+            ->assertOk();
+    }
+
+    public function test_clients_index_rejects_page_sizes_above_the_cap(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&per_page=500")
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('per_page');
+    }
+
     private function createPlatform(): Platform
     {
         return Platform::factory()->create([

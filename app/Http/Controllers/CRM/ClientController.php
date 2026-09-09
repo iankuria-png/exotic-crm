@@ -122,7 +122,10 @@ class ClientController extends Controller
             'segment' => 'nullable|string|in:'.implode(',', ClientSegmentService::keys()),
             'city_key' => 'nullable|string|max:120',
             'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
-            'per_page' => 'nullable|integer|in:25,50,100,150',
+            // Typeahead pickers (shared-payment bundle, subsidiary search, conversations)
+            // legitimately ask for 8-40 rows. A whitelist of the table's own page sizes 422'd
+            // those callers, which surfaced as "no clients found" instead of an error.
+            'per_page' => 'nullable|integer|min:1|max:150',
             'client_type' => 'nullable|string|in:escort,agency',
         ]);
 
