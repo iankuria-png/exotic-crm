@@ -214,13 +214,66 @@ class WatermarkRemoverTest extends TestCase
         $this->assertSame($before, md5_file($plainPath), 'A declined removal must not rewrite the file.');
     }
 
-    public function test_it_declines_when_the_stamp_is_larger_than_the_image(): void
+    /**
+     * The real Exotic mark is 674x160 and lands on photos narrower than that.
+     * imagecopy clips rather than scaling or refusing, so the logo hangs off
+     * both sides and only its middle is composited — the removal has to handle
+     * the same negative origin instead of treating the size as an error.
+     */
+    public function test_it_removes_a_stamp_wider_than_the_image(): void
+    {
+        $logoPath = $this->dir . '/wide-logo.png';
+
+        // 300 wide with ink only in the middle 100, mirroring a wordmark inside
+        // a wide transparent canvas.
+        $logo = imagecreatetruecolor(300, 40);
+        imagesavealpha($logo, true);
+        imagealphablending($logo, false);
+        imagefill($logo, 0, 0, imagecolorallocatealpha($logo, 255, 255, 255, 127));
+        for ($y = 8; $y < 32; $y++) {
+            for ($x = 100; $x < 200; $x++) {
+                imagesetpixel($logo, $x, $y, imagecolorallocatealpha($logo, 255, 255, 255, 40));
+            }
+        }
+        imagepng($logo, $logoPath);
+        imagedestroy($logo);
+
+        $originalPath = $this->dir . '/wide-original.jpg';
+        $stampedPath = $this->dir . '/wide-stamped.jpg';
+
+        // Photo narrower than the stamp, so the origin is negative.
+        $photo = $this->makePhoto(200, 260);
+        imagejpeg($photo, $originalPath, 100);
+
+        $x = (int) round(200 / 2 - 300 / 2);
+        $y = (int) round(260 / 2 - 40 / 2);
+        $this->assertLessThan(0, $x, 'The fixture should place the stamp off the left edge.');
+
+        $this->stampOnto($photo, $logoPath, $x, $y);
+        imagejpeg($photo, $stampedPath, 90);
+        imagedestroy($photo);
+
+        // The ink lands from image x 0 to 100.
+        [$meanBefore] = $this->compare($originalPath, $stampedPath, 0, $y, 100, 40);
+        $this->assertGreaterThan(20, $meanBefore, 'The overlap should be visibly stamped.');
+
+        $this->assertTrue(
+            (new WatermarkRemover(new WatermarkStamp($logoPath, 'cc', 90)))->removeFromFile($stampedPath),
+            'A clipped stamp must still be removed.'
+        );
+
+        [$meanAfter] = $this->compare($originalPath, $stampedPath, 0, $y, 100, 40);
+        $this->assertLessThan($meanBefore / 4, $meanAfter, 'The clipped region should be recovered.');
+    }
+
+    /** A stamp placed entirely off the canvas leaves nothing to recover. */
+    public function test_it_declines_when_the_stamp_barely_touches_the_image(): void
     {
         $logoPath = $this->dir . '/logo.png';
         $this->makeLogo($logoPath);
 
         $tinyPath = $this->dir . '/tiny.jpg';
-        $tiny = $this->makePhoto(40, 20);
+        $tiny = $this->makePhoto(8, 8);
         imagejpeg($tiny, $tinyPath, 100);
         imagedestroy($tiny);
 

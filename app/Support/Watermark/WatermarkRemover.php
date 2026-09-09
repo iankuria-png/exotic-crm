@@ -50,6 +50,9 @@ class WatermarkRemover
     /** Share of blended pixels allowed to fall outside gamut before we decline. */
     private const MAX_OUT_OF_GAMUT_RATIO = 0.12;
 
+    /** Below this the stamp barely touches the photo and there is nothing to gain. */
+    private const MIN_BLENDED_PIXELS = 64;
+
     public function __construct(
         private readonly WatermarkStamp $stamp
     ) {
@@ -97,10 +100,11 @@ class WatermarkRemover
         $stampWidth = imagesx($logo);
         $stampHeight = imagesy($logo);
 
-        if ($stampWidth > $imageWidth || $stampHeight > $imageHeight) {
-            return false;
-        }
-
+        // A stamp wider or taller than the photo is normal, not a failure. The
+        // theme composites with imagecopy, which clips rather than scales or
+        // refuses, so a 674x160 logo centred on a 474px-wide photo hangs 100px
+        // off each side and only its middle lands. The loops below walk the
+        // overlap, so the placement maths just needs to allow a negative origin.
         $blend = $this->blendMap($logo, $stampWidth, $stampHeight);
         [$originX, $originY] = $this->stamp->originIn($imageWidth, $imageHeight, $stampWidth, $stampHeight);
 
@@ -152,7 +156,9 @@ class WatermarkRemover
             }
         }
 
-        if ($blended < 1) {
+        // Enough of the logo's ink has to land on the photo for the recovery to
+        // be worth doing and for the gamut check below to mean anything.
+        if ($blended < self::MIN_BLENDED_PIXELS) {
             return false;
         }
 

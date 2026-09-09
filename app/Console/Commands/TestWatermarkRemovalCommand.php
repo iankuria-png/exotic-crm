@@ -72,7 +72,8 @@ class TestWatermarkRemovalCommand extends Command
         $this->info(sprintf('Image: %dx%d %s', $size[0] ?? 0, $size[1] ?? 0, $size ? image_type_to_mime_type($size[2]) : 'unknown'));
 
         if ($size && ($logoWidth > $size[0] || $logoHeight > $size[1])) {
-            $this->warn('The stamp is larger than this image, so removal will decline. This is usually a resized copy rather than the full-size original.');
+            $this->line('The stamp is larger than this image, so only its middle lands. That is normal:');
+            $this->line('the theme composites with imagecopy, which clips rather than scaling.');
         }
 
         $applied = (new WatermarkRemover($stamp))->removeFromFile($after);
