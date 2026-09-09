@@ -33,8 +33,12 @@ class BannerAdController extends Controller
     {
         $this->ensureBannerAdRole($request);
 
+        $validated = $request->validate([
+            'platform_id' => ['nullable', 'integer', 'min:1'],
+        ]);
+
         return response()->json([
-            'data' => $this->bannerAds->marketsForUser($request->user()),
+            'data' => $this->bannerAds->marketsForUser($request->user(), isset($validated['platform_id']) ? (int) $validated['platform_id'] : null),
         ]);
     }
 

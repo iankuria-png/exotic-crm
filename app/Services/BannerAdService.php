@@ -17,7 +17,7 @@ class BannerAdService
 
     public function __construct(private readonly MarketAuthorizationService $marketAuthorization) {}
 
-    public function marketsForUser(User $user): array
+    public function marketsForUser(User $user, ?int $selectedPlatformId = null): array
     {
         $query = Platform::query()
             ->where('is_active', true)
@@ -26,6 +26,7 @@ class BannerAdService
         $this->marketAuthorization->applyPlatformScope($query, $user, 'id');
 
         return $query->get()
+            ->sortByDesc(fn (Platform $platform) => $selectedPlatformId !== null && (int) $platform->id === $selectedPlatformId ? 1 : 0)
             ->map(fn (Platform $platform) => $this->marketPayload($platform))
             ->values()
             ->all();
@@ -163,19 +164,10 @@ class BannerAdService
             ];
         }
 
-        try {
-            $this->settings($platform);
-
-            return [
-                'ready' => true,
-                'message' => null,
-            ];
-        } catch (BannerAdRemoteException $exception) {
-            return [
-                'ready' => false,
-                'message' => $exception->getMessage(),
-            ];
-        }
+        return [
+            'ready' => true,
+            'message' => null,
+        ];
     }
 
     private function request(Platform $platform, string $method, string $path, array $options = []): array

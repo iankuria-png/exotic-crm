@@ -22,12 +22,6 @@ class BannerAdControllerTest extends TestCase
 
         $platform = $this->createPlatform();
 
-        Http::fake([
-            'https://kenya.example/wp-json/exotic-campaigns/v1/settings' => Http::response([
-                'shuffle_mode' => false,
-            ]),
-        ]);
-
         foreach (['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'] as $role) {
             Sanctum::actingAs($this->createUser($role, [$platform->id]));
 
@@ -36,6 +30,31 @@ class BannerAdControllerTest extends TestCase
                 ->assertJsonPath('data.0.id', $platform->id)
                 ->assertJsonPath('data.0.banner_ads_ready', true);
         }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_markets_preserve_requested_market_without_wordpress_readiness_fanout(): void
+    {
+        Http::preventStrayRequests();
+
+        $kenya = $this->createPlatform(['name' => 'Kenya', 'domain' => 'kenya.example']);
+        $uganda = $this->createPlatform(['name' => 'Uganda', 'domain' => 'uganda.example']);
+        $tanzania = $this->createPlatform(['name' => 'Tanzania', 'domain' => 'tanzania.example']);
+        $user = $this->createUser('sales', [$kenya->id, $uganda->id, $tanzania->id]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/crm/banner-ads/markets?platform_id={$uganda->id}")
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $uganda->id)
+            ->assertJsonPath('data.0.banner_ads_ready', true);
+
+        $this->getJson('/api/crm/banner-ads/markets?platform_id=999999')
+            ->assertOk()
+            ->assertJsonCount(3, 'data');
+
+        Http::assertNothingSent();
     }
 
     public function test_list_proxies_wordpress_campaigns_summary_and_settings(): void

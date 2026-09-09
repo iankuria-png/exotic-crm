@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import { useToast } from '../components/ToastProvider';
+
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 const STATUS_OPTIONS = [
     { value: '', label: 'All statuses' },
@@ -34,6 +37,11 @@ const DEFAULT_FORM = {
     _campaign_start_date: '',
     _campaign_end_date: '',
 };
+
+function normalizePlatformId(value) {
+    const raw = String(value ?? '').trim();
+    return /^\d+$/.test(raw) ? raw : '';
+}
 
 function number(value) {
     return Number(value || 0).toLocaleString();
@@ -472,7 +480,19 @@ function MetricsDialog({ row, onClose }) {
 export default function BannerAds() {
     const toast = useToast();
     const queryClient = useQueryClient();
-    const [platformId, setPlatformId] = useState('');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [platformId, setPlatformId] = useState(() => {
+        const requested = normalizePlatformId(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformId(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
+    });
     const [statusFilter, setStatusFilter] = useState('');
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -482,8 +502,10 @@ export default function BannerAds() {
     const [metricsRow, setMetricsRow] = useState(null);
 
     const marketsQuery = useQuery({
-        queryKey: ['banner-ad-markets'],
-        queryFn: () => api.get('/crm/banner-ads/markets').then((response) => response.data),
+        queryKey: ['banner-ad-markets', platformId || 'none'],
+        queryFn: () => api.get('/crm/banner-ads/markets', {
+            params: platformId ? { platform_id: Number(platformId) } : {},
+        }).then((response) => response.data),
     });
 
     const markets = marketsQuery.data?.data || [];
@@ -491,10 +513,47 @@ export default function BannerAds() {
     const canLoadAds = Boolean(platformId && selectedMarket?.banner_ads_ready);
 
     useEffect(() => {
-        if (!platformId && markets.length > 0) {
-            const ready = markets.find((market) => market.banner_ads_ready);
-            setPlatformId(String((ready || markets[0]).id));
+        const requested = normalizePlatformId(searchParams.get('platform_id'));
+        if (requested && requested !== platformId) {
+            setPlatformId(requested);
+            setPage(1);
         }
+    }, [platformId, searchParams]);
+
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            if (platformId) {
+                window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformId);
+            } else {
+                window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+            }
+        }
+
+        const current = normalizePlatformId(searchParams.get('platform_id'));
+        if (platformId && current !== platformId) {
+            const params = new URLSearchParams(searchParams);
+            params.set('platform_id', platformId);
+            setSearchParams(params, { replace: true });
+        } else if (!platformId && current) {
+            const params = new URLSearchParams(searchParams);
+            params.delete('platform_id');
+            setSearchParams(params, { replace: true });
+        }
+    }, [platformId, searchParams, setSearchParams]);
+
+    useEffect(() => {
+        if (markets.length === 0) {
+            return;
+        }
+
+        const selectedStillAccessible = platformId && markets.some((market) => String(market.id) === String(platformId));
+        if (selectedStillAccessible) {
+            return;
+        }
+
+        const ready = markets.find((market) => market.banner_ads_ready);
+        setPlatformId(String((ready || markets[0]).id));
+        setPage(1);
     }, [markets, platformId]);
 
     const listQuery = useQuery({
@@ -684,6 +743,12 @@ export default function BannerAds() {
                     <label className="block">
                         <span className="text-xs font-semibold uppercase tracking-[0.10em] text-slate-500">Market</span>
                         <select className="crm-input mt-1.5" value={platformId} onChange={(event) => { setPlatformId(event.target.value); setPage(1); }}>
+                            {platformId && !selectedMarket ? (
+                                <option value={platformId}>Selected market #{platformId}</option>
+                            ) : null}
+                            {!platformId ? (
+                                <option value="">{marketsQuery.isLoading ? 'Loading markets...' : 'Select market'}</option>
+                            ) : null}
                             {markets.map((market) => (
                                 <option key={market.id} value={market.id}>
                                     {market.name}{market.banner_ads_ready ? '' : ' - not ready'}
