@@ -28,7 +28,15 @@ class PbnSeedMediaService
     ) {
     }
 
-    public function processBatch(PbnSeedBatch $batch, int $limit = self::DEFAULT_ITEMS_PER_RUN, ?int $actorId = null): array
+    /**
+     * @param  bool  $onlyUntried  Skip items that already carry a failure reason.
+     *                             The automated runner uses this so it can never
+     *                             spin on a profile whose media will not copy: a
+     *                             failed item keeps status media_pending, and the
+     *                             manual ordering below deliberately retries
+     *                             failures first, which would starve the rest.
+     */
+    public function processBatch(PbnSeedBatch $batch, int $limit = self::DEFAULT_ITEMS_PER_RUN, ?int $actorId = null, bool $onlyUntried = false): array
     {
         $batch->loadMissing('pbnSite');
         $site = $batch->pbnSite;
@@ -42,6 +50,7 @@ class PbnSeedMediaService
         $items = $batch->items()
             ->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)
             ->whereNotNull('target_wp_post_id')
+            ->when($onlyUntried, fn ($query) => $query->whereNull('failure_reason'))
             ->with(['batch.pbnSite', 'sourceClient.platform'])
             ->orderByRaw('case when failure_reason is not null then 0 else 1 end')
             ->orderBy('provision_finished_at')
@@ -140,6 +149,26 @@ class PbnSeedMediaService
 
             return 'attention';
         }
+    }
+
+    /**
+     * Pending media items that have not been attempted yet.
+     */
+    public function untriedMediaCount(PbnSeedBatch $batch): int
+    {
+        return $batch->items()
+            ->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)
+            ->whereNotNull('target_wp_post_id')
+            ->whereNull('failure_reason')
+            ->count();
+    }
+
+    public function pendingMediaCount(PbnSeedBatch $batch): int
+    {
+        return $batch->items()
+            ->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)
+            ->whereNotNull('target_wp_post_id')
+            ->count();
     }
 
     public function batchMediaSummary(PbnSeedBatch $batch): array

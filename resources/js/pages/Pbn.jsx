@@ -840,8 +840,12 @@ export default function Pbn() {
                                 <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                         <div className="min-w-0">
-                                            <p className="font-semibold text-amber-950">Media copy pending</p>
+                                            <p className="font-semibold text-amber-950">Media copy in progress</p>
                                             <p className="mt-1 text-amber-800">{mediaSummary.reason || 'Profiles were created; media is waiting for the copy pass.'}</p>
+                                            <p className="mt-1 text-xs text-amber-800">
+                                                Copying runs automatically in the background, a few profiles at a time. Use the button only to push
+                                                the ones that stopped needing a check.
+                                            </p>
                                             <div className="mt-3 grid gap-2 sm:grid-cols-3">
                                                 <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2">
                                                     <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">Pending</p>
@@ -864,7 +868,7 @@ export default function Pbn() {
                                             onClick={() => mediaMutation.mutate()}
                                             disabled={mediaMutation.isPending}
                                         >
-                                            {mediaMutation.isPending ? 'Processing...' : `Process next ${Math.min(5, pendingMediaCount)}`}
+                                            {mediaMutation.isPending ? 'Processing...' : `Retry now (${Math.min(5, pendingMediaCount)})`}
                                         </button>
                                     </div>
                                 </section>

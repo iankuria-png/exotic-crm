@@ -724,6 +724,87 @@ class PbnSiteTest extends TestCase
         );
     }
 
+    /**
+     * Media copy should not wait for a human. Provisioning queues the runner as
+     * soon as a batch has anything pending.
+     */
+    public function test_finishing_a_batch_queues_the_media_runner(): void
+    {
+        Queue::fake();
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        $client = $this->publishedClient($platform);
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => PbnSeedBatch::STATUS_RUNNING,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => 9001,
+            'target_wp_user_id' => 9002,
+            'status' => PbnSeedItem::STATUS_MEDIA_PENDING,
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('f', 64),
+        ]);
+
+        app(\App\Services\Pbn\PbnSeedProvisioningService::class)->execute($batch->fresh());
+
+        Queue::assertPushed(\App\Jobs\RunPbnSeedMediaJob::class, fn ($job) => $job->batchId === (int) $batch->id);
+        $this->assertDatabaseHas('pbn_seed_events', ['batch_id' => $batch->id, 'type' => 'batch_media_queued']);
+    }
+
+    /**
+     * A profile whose media will not copy keeps status media_pending with a
+     * failure reason, and the manual pass retries those first. The automated
+     * runner must skip them or it would never reach anything else.
+     */
+    public function test_the_automated_media_pass_skips_profiles_that_already_failed(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        $client = $this->publishedClient($platform);
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => PbnSeedBatch::STATUS_COMPLETED,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => 9101,
+            'status' => PbnSeedItem::STATUS_MEDIA_PENDING,
+            'failure_reason' => 'Media copy pending: source returned no images.',
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('9', 64),
+        ]);
+
+        $mediaService = app(\App\Services\Pbn\PbnSeedMediaService::class);
+
+        $this->assertSame(1, $mediaService->pendingMediaCount($batch->fresh()));
+        $this->assertSame(0, $mediaService->untriedMediaCount($batch->fresh()), 'A failed profile is not untried work.');
+
+        $result = $mediaService->processBatch($batch->fresh(), 5, null, onlyUntried: true);
+        $this->assertSame(0, $result['processed'], 'The automated pass leaves failed profiles to the operator.');
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();

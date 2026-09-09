@@ -3,6 +3,7 @@
 namespace App\Services\Pbn;
 
 use App\Jobs\RunPbnSeedBatchJob;
+use App\Jobs\RunPbnSeedMediaJob;
 use App\Models\Client;
 use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
@@ -77,6 +78,10 @@ class PbnSeedProvisioningService
 
         if ($fresh->status !== PbnSeedBatch::STATUS_CANCELLED
             && $this->scheduleNextRelease($fresh, $pendingStatuses)) {
+            // A trickled batch copies the media it has already created rather
+            // than holding every profile imageless until the last release.
+            $this->queueMediaCopy($fresh);
+
             return;
         }
 
@@ -89,6 +94,8 @@ class PbnSeedProvisioningService
 
             return;
         }
+
+        $this->queueMediaCopy($fresh);
 
         $this->recordEvent($fresh, null, 'batch_finished', $fresh->failed_count > 0 ? 'warning' : 'info', 'PBN seed batch finished.', [
             'status' => (string) $fresh->status,
@@ -126,6 +133,31 @@ class PbnSeedProvisioningService
         ]);
 
         return true;
+    }
+
+    /**
+     * Hand the batch's pending media to the background runner.
+     *
+     * Two-stage media copy exists so a profile appears quickly and its images
+     * follow; nothing about that requires a human to press a button, so the
+     * copy is queued as soon as there is anything to copy. The manual pass in
+     * the batch drawer stays as a way to retry what the runner gave up on.
+     */
+    private function queueMediaCopy(?PbnSeedBatch $batch): void
+    {
+        if (!$batch || in_array($batch->status, [PbnSeedBatch::STATUS_CANCELLED, PbnSeedBatch::STATUS_REVERTED], true)) {
+            return;
+        }
+
+        $pending = $batch->items()->where('status', PbnSeedItem::STATUS_MEDIA_PENDING)->count();
+        if ($pending < 1) {
+            return;
+        }
+
+        RunPbnSeedMediaJob::dispatch((int) $batch->id);
+        $this->recordEvent($batch, null, 'batch_media_queued', 'info', 'PBN seed batch media copy queued.', [
+            'pending_media' => $pending,
+        ]);
     }
 
     public function provisionItem(PbnSeedItem $item): void

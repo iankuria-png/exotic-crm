@@ -342,6 +342,18 @@ class Kernel extends ConsoleKernel
             ->skip(fn () => ! $allows('push_campaigns'))
             ->sendOutputTo(storage_path('logs/crm_maintain_auto_push.log'));
 
+        // Normally a no-op: provisioning queues the media runner itself. This
+        // catches batches whose chain was interrupted — a restarted worker, or
+        // a run that stopped on a credential problem since fixed.
+        $schedule->command('crm:sweep-pbn-seed-media')
+            ->name('crm_sweep_pbn_seed_media')
+            ->everyTenMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->runInBackground()
+            ->skip(fn () => ! $allows('pbn_seed'))
+            ->sendOutputTo(storage_path('logs/crm_sweep_pbn_seed_media.log'));
+
         $schedule->command('crm:run-auto-optimize')
             ->name('crm_run_auto_optimize')
             ->hourlyAt(52)
