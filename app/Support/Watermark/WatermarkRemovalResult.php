@@ -14,6 +14,8 @@ class WatermarkRemovalResult
 {
     public function __construct(
         public readonly bool $applied,
+        /** Stable slug for grouping; see WatermarkRemovalAttempt::OUTCOME_*. */
+        public readonly string $outcome,
         public readonly string $reason,
         public readonly array $stats = [],
     ) {
@@ -21,11 +23,11 @@ class WatermarkRemovalResult
 
     public static function applied(array $stats): self
     {
-        return new self(true, 'applied', $stats);
+        return new self(true, 'applied', 'applied', $stats);
     }
 
-    public static function declined(string $reason, array $stats = []): self
+    public static function declined(string $outcome, string $reason, array $stats = []): self
     {
-        return new self(false, $reason, $stats);
+        return new self(false, $outcome, $reason, $stats);
     }
 }

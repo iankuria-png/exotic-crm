@@ -53,6 +53,18 @@ function bioOutcome(policy) {
     return { label: 'Pending', tone: 'text-slate-400', hint: 'Not provisioned yet.' };
 }
 
+// What the remover did for this profile's photos. It declines rather than
+// guessing, so "nothing changed" needs a reason attached or it reads as
+// success.
+function watermarkOutcome(item) {
+    const wm = item.watermark;
+    if (!wm) return { label: '—', tone: 'text-slate-400', hint: null };
+    if (wm.declined === 0) return { label: `Removed · ${wm.removed}`, tone: 'text-teal-700', hint: null };
+    if (wm.removed === 0) return { label: wm.label, tone: 'text-amber-700', hint: wm.reason };
+
+    return { label: `${wm.removed} of ${wm.attempted}`, tone: 'text-amber-700', hint: wm.reason };
+}
+
 function imageOutcome(policy) {
     if (!policy) return { label: '—', tone: 'text-slate-400' };
     if (policy.main_image_mode !== 'rotate') return { label: 'Source photo', tone: 'text-slate-500' };
@@ -69,6 +81,7 @@ const itemPolicyFilters = [
     { id: 'bio_template', label: 'Bio from template', match: (item) => item.policy?.bio_result === 'template' },
     { id: 'bio_fallback', label: 'Bio fell back', match: (item) => item.policy?.bio_result === 'fallback' },
     { id: 'not_rotated', label: 'Photo not rotated', match: (item) => item.policy?.main_image_mode === 'rotate' && !item.policy?.main_image_rotated },
+    { id: 'watermark_left', label: 'Watermark left on', match: (item) => (item.watermark?.declined || 0) > 0 },
     { id: 'awaiting', label: 'Awaiting release', match: (item) => item.policy?.awaiting_release },
 ];
 
@@ -426,7 +439,7 @@ export default function Pbn() {
     const allBatchItems = batchItemsQuery.data?.data || [];
     const activePolicyFilter = itemPolicyFilters.find((filter) => filter.id === itemPolicyFilter) || itemPolicyFilters[0];
     const batchItems = activePolicyFilter.match ? allBatchItems.filter(activePolicyFilter.match) : allBatchItems;
-    const batchPolicySummary = batchDetailQuery.data?.summary?.policy || null;
+    const batchPolicySummary = batchDetailQuery.data?.policy_summary || null;
     const profileLinks = profileLinksQuery.data || null;
     const batchEvents = batchEventsQuery.data?.data || [];
     const revertPreview = batchDetailQuery.data?.revert_preview || {};
@@ -976,6 +989,14 @@ export default function Pbn() {
                                                         : ''}
                                                 </p>
                                             ) : null}
+                                            {batchPolicySummary?.watermark?.attempted > 0 ? (
+                                                <p className="mt-0.5 text-xs text-slate-500">
+                                                    Watermarks: {batchPolicySummary.watermark.removed} of {batchPolicySummary.watermark.attempted} images cleaned
+                                                    {batchPolicySummary.watermark.reasons.length > 0
+                                                        ? ` · ${batchPolicySummary.watermark.reasons.map((r) => `${r.attempts} ${r.label.toLowerCase()}`).join(', ')}`
+                                                        : ''}
+                                                </p>
+                                            ) : null}
                                         </div>
                                         <div className="flex gap-2">
                                             <button
@@ -996,6 +1017,8 @@ export default function Pbn() {
                                                     { label: 'Bio provider', value: (row) => row.policy?.bio_provider },
                                                     { label: 'Bio note', value: (row) => row.policy?.bio_note },
                                                     { label: 'Main image', value: (row) => imageOutcome(row.policy).label },
+                                                    { label: 'Watermark', value: (row) => watermarkOutcome(row).label },
+                                                    { label: 'Watermark reason', value: (row) => row.watermark?.reason },
                                                     { label: 'Expires', value: (row) => row.policy?.expires_at },
                                                     { label: 'Release at', value: (row) => row.policy?.release_at },
                                                     { label: 'Failure', value: (row) => row.failure_reason || row.revert_failure_reason },
@@ -1045,12 +1068,13 @@ export default function Pbn() {
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Badge</th>
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Bio</th>
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Main image</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Watermark</th>
                                                 <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Expires</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {batchItemsQuery.isLoading ? (
-                                                <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
+                                                <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">Loading seed items...</td></tr>
                                             ) : null}
                                             {batchItems.map((item) => (
                                                 <tr key={item.id} onClick={() => setSelectedItem(item)} className="cursor-pointer transition-colors hover:bg-slate-50" title="Open profile actions">
@@ -1109,11 +1133,19 @@ export default function Pbn() {
                                                         ) : null}
                                                     </td>
                                                     <td className={`px-3 py-2 text-sm font-medium ${imageOutcome(item.policy).tone}`}>{imageOutcome(item.policy).label}</td>
+                                                    <td className="px-3 py-2 text-sm">
+                                                        <p className={`font-medium ${watermarkOutcome(item).tone}`}>{watermarkOutcome(item).label}</p>
+                                                        {watermarkOutcome(item).hint ? (
+                                                            <p className="max-w-[210px] truncate text-[11px] text-slate-500" title={watermarkOutcome(item).hint}>
+                                                                {watermarkOutcome(item).hint}
+                                                            </p>
+                                                        ) : null}
+                                                    </td>
                                                     <td className="px-3 py-2 text-sm text-slate-500">{item.policy?.expires_at || '—'}</td>
                                                 </tr>
                                             ))}
                                             {!batchItemsQuery.isLoading && !batchItemsQuery.isError && batchItems.length === 0 ? (
-                                                <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
+                                                <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
                                                     {itemPolicyFilter === 'all' ? 'No items for this batch.' : 'No items match this filter.'}
                                                 </td></tr>
                                             ) : null}

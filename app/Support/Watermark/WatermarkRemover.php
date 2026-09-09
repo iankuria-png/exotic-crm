@@ -104,25 +104,25 @@ class WatermarkRemover
     public function attempt(string $imagePath): WatermarkRemovalResult
     {
         if (!function_exists('imagecreatetruecolor')) {
-            return WatermarkRemovalResult::declined('GD is not available.');
+            return WatermarkRemovalResult::declined('error', 'GD is not available.');
         }
         if (!$this->stamp->isUsable()) {
-            return WatermarkRemovalResult::declined('The watermark configuration is incomplete.');
+            return WatermarkRemovalResult::declined('not_configured', 'The watermark configuration is incomplete.');
         }
         if (!is_file($imagePath)) {
-            return WatermarkRemovalResult::declined('The image file is missing.');
+            return WatermarkRemovalResult::declined('unreadable', 'The image file is missing.');
         }
 
         [$image, $imageType] = $this->loadImage($imagePath);
         if ($image === null) {
-            return WatermarkRemovalResult::declined('The image could not be decoded.');
+            return WatermarkRemovalResult::declined('unreadable', 'The image could not be decoded.');
         }
 
         $logo = @imagecreatefrompng($this->stamp->pngPath);
         if (!$logo instanceof GdImage) {
             imagedestroy($image);
 
-            return WatermarkRemovalResult::declined('The watermark PNG could not be decoded.');
+            return WatermarkRemovalResult::declined('not_configured', 'The watermark PNG could not be decoded.');
         }
 
         try {
@@ -241,11 +241,12 @@ class WatermarkRemover
         // Enough of the logo's ink has to land on the photo for the recovery to
         // be worth doing and for the checks below to mean anything.
         if ($landed < self::MIN_BLENDED_PIXELS) {
-            return WatermarkRemovalResult::declined('Too little of the watermark lands on this image.', $stats);
+            return WatermarkRemovalResult::declined('barely_lands', 'Too little of the watermark lands on this image.', $stats);
         }
 
         if ($evidence > 0 && $stats['implausible'] > self::MAX_IMPLAUSIBLE_RATIO) {
             return WatermarkRemovalResult::declined(
+                'not_this_watermark',
                 sprintf(
                     'This image does not carry this watermark: %.1f%% of the strongest logo pixels are darker than the logo alone would make them (limit %.0f%%).',
                     $stats['implausible'] * 100,
@@ -258,6 +259,7 @@ class WatermarkRemover
         // Three channels are counted per pixel, so compare against that.
         if ($stats['out_of_gamut'] > self::MAX_OUT_OF_GAMUT_RATIO) {
             return WatermarkRemovalResult::declined(
+                'not_this_watermark',
                 sprintf(
                     'Recovered pixels do not look like this logo: %.1f%% fell outside gamut (limit %.0f%%).',
                     $stats['out_of_gamut'] * 100,
@@ -276,7 +278,7 @@ class WatermarkRemover
 
         return $this->writeImage($image, $imagePath, $imageType)
             ? WatermarkRemovalResult::applied($stats)
-            : WatermarkRemovalResult::declined('The cleaned image could not be written.', $stats);
+            : WatermarkRemovalResult::declined('write_failed', 'The cleaned image could not be written.', $stats);
     }
 
     /**

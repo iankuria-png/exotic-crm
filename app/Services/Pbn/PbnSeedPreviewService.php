@@ -8,6 +8,7 @@ use App\Models\PbnSeedItem;
 use App\Models\PbnSeedPreview;
 use App\Models\PbnSeedTarget;
 use App\Models\PbnSite;
+use App\Models\WatermarkRemovalAttempt;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\MarketAuthorizationService;
@@ -687,7 +688,50 @@ class PbnSeedPreviewService
      *
      * @return array<string, mixed>
      */
-    private function appliedPolicySummary(PbnSeedBatch $batch): array
+    /**
+     * What the watermark remover did across this batch, and why it declined.
+     *
+     * Counted from the recorded attempts rather than the item rows: a profile
+     * has several photos, and "three of five images cleaned" is the fact worth
+     * knowing. Reasons are grouped by their stable slug so the breakdown reads
+     * as a handful of causes rather than one row per image.
+     *
+     * @return array<string, mixed>
+     */
+    private function watermarkSummary(PbnSeedBatch $batch): array
+    {
+        $rows = WatermarkRemovalAttempt::query()
+            ->where('batch_id', (int) $batch->id)
+            ->selectRaw('outcome, applied, count(*) as attempts')
+            ->groupBy('outcome', 'applied')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return ['attempted' => 0, 'removed' => 0, 'declined' => 0, 'reasons' => []];
+        }
+
+        $removed = (int) $rows->where('applied', true)->sum('attempts');
+        $declined = (int) $rows->where('applied', false)->sum('attempts');
+
+        $reasons = $rows->where('applied', false)
+            ->sortByDesc('attempts')
+            ->map(fn ($row) => [
+                'outcome' => (string) $row->outcome,
+                'label' => WatermarkRemovalAttempt::OUTCOME_LABELS[$row->outcome] ?? (string) $row->outcome,
+                'attempts' => (int) $row->attempts,
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'attempted' => $removed + $declined,
+            'removed' => $removed,
+            'declined' => $declined,
+            'reasons' => $reasons,
+        ];
+    }
+
+    public function appliedPolicySummary(PbnSeedBatch $batch): array
     {
         $items = $batch->relationLoaded('items')
             ? $batch->items
@@ -738,6 +782,7 @@ class PbnSeedPreviewService
 
         $summary['bio_cost_usd'] = round($summary['bio_cost_usd'], 4);
         $summary['next_release_at'] = optional($summary['next_release_at'])->toDateTimeString();
+        $summary['watermark'] = $this->watermarkSummary($batch);
 
         return $summary;
     }

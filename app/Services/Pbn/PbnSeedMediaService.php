@@ -5,10 +5,12 @@ namespace App\Services\Pbn;
 use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
+use App\Models\WatermarkRemovalAttempt;
 use App\Services\AutoOptimize\AutoOptimizeConfig;
 use App\Services\AutoOptimize\AutoOptimizeImagePicker;
 use App\Services\ClientProfileImageService;
 use App\Services\WpWatermarkConfigService;
+use App\Support\Watermark\WatermarkRemovalResult;
 use App\Support\Watermark\WatermarkRemover;
 use App\Services\WpSyncService;
 use App\Support\WordPressSiteConnection;
@@ -244,7 +246,7 @@ class PbnSeedMediaService
      * a rectangle of mangled pixels across it, so the remover declines rather
      * than guesses whenever the image does not look stamped.
      */
-    private function stripWatermark(PbnSeedItem $item, string $temporaryPath): bool
+    private function stripWatermark(PbnSeedItem $item, string $temporaryPath, string $sourceUrl): bool
     {
         $policy = is_array($item->applied_policy) ? $item->applied_policy : [];
         if (($policy['watermark_mode'] ?? 'keep') !== 'strip') {
@@ -254,17 +256,68 @@ class PbnSeedMediaService
         try {
             $stamp = $this->watermarkConfig->forPlatform((int) $item->source_platform_id);
             if ($stamp === null) {
+                $this->recordWatermarkAttempt($item, $sourceUrl, WatermarkRemovalResult::declined(
+                    WatermarkRemovalAttempt::OUTCOME_NOT_CONFIGURED,
+                    'This market has no usable watermark settings, so nothing could be removed.'
+                ));
+
                 return false;
             }
 
-            return (new WatermarkRemover($stamp))->removeFromFile($temporaryPath);
+            $result = (new WatermarkRemover($stamp))->attempt($temporaryPath);
+            $this->recordWatermarkAttempt($item, $sourceUrl, $result);
+
+            return $result->applied;
         } catch (\Throwable $exception) {
             Log::warning('pbn.watermark_strip_failed', [
                 'item_id' => (int) $item->id,
                 'error' => $exception->getMessage(),
             ]);
 
+            $this->recordWatermarkAttempt($item, $sourceUrl, WatermarkRemovalResult::declined(
+                WatermarkRemovalAttempt::OUTCOME_ERROR,
+                Str::limit($exception->getMessage(), 300, '')
+            ));
+
             return false;
+        }
+    }
+
+    /**
+     * Keep a row per image the remover looked at.
+     *
+     * Declining rather than guessing is the right default, but it makes failure
+     * invisible: a batch whose photos all kept their mark looks exactly like a
+     * batch that had none. The reason and the measurements behind it are what
+     * turn "it did nothing" into something actionable, and they give the
+     * thresholds real data to be tuned against.
+     */
+    private function recordWatermarkAttempt(PbnSeedItem $item, string $sourceUrl, WatermarkRemovalResult $result): void
+    {
+        try {
+            WatermarkRemovalAttempt::create([
+                'source_platform_id' => (int) $item->source_platform_id,
+                'pbn_site_id' => (int) $item->pbn_site_id,
+                'pbn_seed_item_id' => (int) $item->id,
+                'batch_id' => (int) $item->batch_id,
+                'context' => 'pbn_seed',
+                'applied' => $result->applied,
+                'outcome' => $result->outcome,
+                'reason' => $result->reason,
+                'image_url' => Str::limit($sourceUrl, 500, ''),
+                'image_size' => $result->stats['image'] ?? null,
+                'stamp_size' => $result->stats['stamp'] ?? null,
+                'implausible_ratio' => $result->stats['implausible'] ?? null,
+                'out_of_gamut_ratio' => $result->stats['out_of_gamut'] ?? null,
+                'landed_px' => $result->stats['landed_px'] ?? null,
+                'stats' => $result->stats ?: null,
+            ]);
+        } catch (\Throwable $exception) {
+            // Never let bookkeeping fail a media copy.
+            Log::warning('pbn.watermark_attempt_not_recorded', [
+                'item_id' => (int) $item->id,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 
@@ -362,7 +415,7 @@ class PbnSeedMediaService
 
         // Strip before the UploadedFile is built: it captures the file's size
         // on construction, and the removal rewrites the file as JPEG.
-        $stripped = $this->stripWatermark($item, $temporaryPath);
+        $stripped = $this->stripWatermark($item, $temporaryPath, $url);
 
         $mime = trim((string) ($response->header('Content-Type') ?: ($media['mime_type'] ?? 'image/jpeg')));
         $filename = $this->mediaFilename($item, $media, $url, $mime);

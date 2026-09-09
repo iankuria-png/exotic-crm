@@ -5,6 +5,7 @@ namespace App\Services\Pbn;
 use App\Models\PbnSeedBatch;
 use App\Models\PbnSeedEvent;
 use App\Models\PbnSeedItem;
+use App\Models\WatermarkRemovalAttempt;
 use App\Models\PbnSite;
 use App\Models\User;
 use App\Services\DynamicDatabaseService;
@@ -121,6 +122,9 @@ class PbnOperationsService
                 'created_count' => (int) $target->created_count,
             ])->values(),
             'media_summary' => $this->mediaService->batchMediaSummary($batch),
+            // What the batch's content policy actually produced. The drawer
+            // reads it from here, which is the endpoint it polls.
+            'policy_summary' => $this->previewService->appliedPolicySummary($batch),
             'revert_preview' => $this->revertPreview($actor, $batch),
         ];
     }
@@ -593,6 +597,42 @@ class PbnOperationsService
      * would see it — the point of a seed batch is placement, so a row that only
      * shows term ids cannot be evaluated without a second lookup.
      */
+    /**
+     * What the watermark remover did for this profile's photos.
+     *
+     * A profile carries several images and they can differ — one cleaned, one
+     * declined because it predates a logo change — so the row reports the mix
+     * and the dominant reason rather than a single flag.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function watermarkOutcome(PbnSeedItem $item): ?array
+    {
+        $attempts = WatermarkRemovalAttempt::query()
+            ->where('pbn_seed_item_id', (int) $item->id)
+            ->get(['applied', 'outcome', 'reason']);
+
+        if ($attempts->isEmpty()) {
+            return null;
+        }
+
+        $removed = $attempts->where('applied', true)->count();
+        $failed = $attempts->where('applied', false);
+
+        $dominant = $failed->groupBy('outcome')->sortByDesc->count()->keys()->first();
+
+        return [
+            'attempted' => $attempts->count(),
+            'removed' => $removed,
+            'declined' => $failed->count(),
+            'outcome' => $dominant ? (string) $dominant : WatermarkRemovalAttempt::OUTCOME_APPLIED,
+            'label' => $dominant
+                ? (WatermarkRemovalAttempt::OUTCOME_LABELS[$dominant] ?? (string) $dominant)
+                : 'Removed',
+            'reason' => $dominant ? (string) optional($failed->firstWhere('outcome', $dominant))->reason : null,
+        ];
+    }
+
     private function destinationLocation(PbnSeedItem $item): ?string
     {
         $city = trim((string) ($item->target?->city_name ?? ''));
@@ -676,6 +716,7 @@ class PbnOperationsService
                 'display_image_url' => $item->sourceClient->display_image_url ?: $item->sourceClient->main_image_url,
             ] : null,
             'destination_location' => $this->destinationLocation($item),
+            'watermark' => $this->watermarkOutcome($item),
             'policy' => $this->serializeAppliedPolicy($item),
             'media_status' => $this->mediaService->itemMediaState($item),
             'batch_status' => $item->batch?->status,

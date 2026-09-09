@@ -805,6 +805,73 @@ class PbnSiteTest extends TestCase
         $this->assertSame(0, $result['processed'], 'The automated pass leaves failed profiles to the operator.');
     }
 
+    /**
+     * Declining is silent by design, so every attempt is recorded with its
+     * reason. Without that a batch whose photos all kept their mark looks
+     * exactly like a batch that had none.
+     */
+    public function test_watermark_attempts_are_recorded_with_their_reason(): void
+    {
+        $platform = Platform::factory()->create();
+        $site = $this->pbnSite($platform, [$platform->id]);
+        $client = $this->publishedClient($platform);
+
+        $batch = PbnSeedBatch::create([
+            'pbn_site_id' => $site->id,
+            'created_by' => null,
+            'status' => PbnSeedBatch::STATUS_COMPLETED,
+            'source_platform_ids' => [$platform->id],
+            'target_count' => 1,
+            'selected_count' => 1,
+            'created_count' => 1,
+        ]);
+        $item = PbnSeedItem::create([
+            'batch_id' => $batch->id,
+            'pbn_site_id' => $site->id,
+            'source_platform_id' => $platform->id,
+            'source_client_id' => $client->id,
+            'source_wp_post_id' => $client->wp_post_id,
+            'target_wp_post_id' => 7700,
+            'status' => PbnSeedItem::STATUS_CREATED,
+            'duplicate_state' => 'none',
+            'payload_hash' => str_repeat('7', 64),
+        ]);
+
+        \App\Models\WatermarkRemovalAttempt::create([
+            'source_platform_id' => $platform->id,
+            'pbn_site_id' => $site->id,
+            'pbn_seed_item_id' => $item->id,
+            'batch_id' => $batch->id,
+            'context' => 'pbn_seed',
+            'applied' => true,
+            'outcome' => \App\Models\WatermarkRemovalAttempt::OUTCOME_APPLIED,
+            'reason' => 'applied',
+        ]);
+        \App\Models\WatermarkRemovalAttempt::create([
+            'source_platform_id' => $platform->id,
+            'pbn_site_id' => $site->id,
+            'pbn_seed_item_id' => $item->id,
+            'batch_id' => $batch->id,
+            'context' => 'pbn_seed',
+            'applied' => false,
+            'outcome' => \App\Models\WatermarkRemovalAttempt::OUTCOME_NOT_THIS_WATERMARK,
+            'reason' => 'This image does not carry this watermark.',
+            'implausible_ratio' => 0.87,
+        ]);
+
+        Sanctum::actingAs($this->userFor($platform, 'sales'));
+
+        $batchResponse = $this->getJson("/api/crm/pbn/batches/{$batch->id}")->assertOk();
+        $batchResponse->assertJsonPath('policy_summary.watermark.attempted', 2);
+        $batchResponse->assertJsonPath('policy_summary.watermark.removed', 1);
+        $batchResponse->assertJsonPath('policy_summary.watermark.reasons.0.outcome', 'not_this_watermark');
+
+        $items = $this->getJson('/api/crm/pbn/items?batch_id=' . $batch->id)->assertOk();
+        $items->assertJsonPath('data.0.watermark.attempted', 2);
+        $items->assertJsonPath('data.0.watermark.removed', 1);
+        $items->assertJsonPath('data.0.watermark.label', 'Different watermark');
+    }
+
     public function test_pbn_locations_endpoint_normalizes_wordpress_catalog_payload(): void
     {
         $platform = Platform::factory()->create();
