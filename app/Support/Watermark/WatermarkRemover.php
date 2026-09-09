@@ -62,27 +62,42 @@ class WatermarkRemover
      * Rewrite the file in place with the watermark removed.
      *
      * Returns false, having changed nothing, whenever the removal cannot be
-     * trusted: no GD, an unreadable image, a stamp that does not fit, or pixels
+     * trusted: no GD, an unreadable image, a stamp that barely lands, or pixels
      * that do not look like they were blended with this logo. A seeded photo
      * that still carries the mark is a much smaller problem than one with a
      * rectangle of mangled pixels stamped across it.
      */
     public function removeFromFile(string $imagePath): bool
     {
-        if (!function_exists('imagecreatetruecolor') || !$this->stamp->isUsable() || !is_file($imagePath)) {
-            return false;
+        return $this->attempt($imagePath)->applied;
+    }
+
+    /**
+     * The same work, reporting what happened and the numbers behind it, so a
+     * decline can be diagnosed rather than guessed at.
+     */
+    public function attempt(string $imagePath): WatermarkRemovalResult
+    {
+        if (!function_exists('imagecreatetruecolor')) {
+            return WatermarkRemovalResult::declined('GD is not available.');
+        }
+        if (!$this->stamp->isUsable()) {
+            return WatermarkRemovalResult::declined('The watermark configuration is incomplete.');
+        }
+        if (!is_file($imagePath)) {
+            return WatermarkRemovalResult::declined('The image file is missing.');
         }
 
         [$image, $imageType] = $this->loadImage($imagePath);
         if ($image === null) {
-            return false;
+            return WatermarkRemovalResult::declined('The image could not be decoded.');
         }
 
         $logo = @imagecreatefrompng($this->stamp->pngPath);
         if (!$logo instanceof GdImage) {
             imagedestroy($image);
 
-            return false;
+            return WatermarkRemovalResult::declined('The watermark PNG could not be decoded.');
         }
 
         try {
@@ -93,7 +108,7 @@ class WatermarkRemover
         }
     }
 
-    private function apply(GdImage $image, GdImage $logo, string $imagePath, int $imageType): bool
+    private function apply(GdImage $image, GdImage $logo, string $imagePath, int $imageType): WatermarkRemovalResult
     {
         $imageWidth = imagesx($image);
         $imageHeight = imagesy($image);
@@ -112,6 +127,7 @@ class WatermarkRemover
         $opaque = [];
         $blended = 0;
         $outOfGamut = 0;
+        $maxBlend = 0.0;
 
         for ($y = 0; $y < $stampHeight; $y++) {
             $targetY = $originY + $y;
@@ -126,6 +142,7 @@ class WatermarkRemover
                 }
 
                 $alpha = $blend[$y][$x];
+                $maxBlend = max($maxBlend, $alpha);
                 if ($alpha < self::MIN_BLEND) {
                     continue;
                 }
@@ -156,15 +173,32 @@ class WatermarkRemover
             }
         }
 
+        $stats = [
+            'image' => $imageWidth . 'x' . $imageHeight,
+            'stamp' => $stampWidth . 'x' . $stampHeight,
+            'origin' => $originX . ',' . $originY,
+            'max_blend' => round($maxBlend, 3),
+            'blended_px' => $blended,
+            'opaque_px' => count($opaque),
+            'out_of_gamut' => $blended > 0 ? round($outOfGamut / ($blended * 3), 4) : 0.0,
+        ];
+
         // Enough of the logo's ink has to land on the photo for the recovery to
         // be worth doing and for the gamut check below to mean anything.
         if ($blended < self::MIN_BLENDED_PIXELS) {
-            return false;
+            return WatermarkRemovalResult::declined('Too little of the watermark lands on this image.', $stats);
         }
 
         // Three channels are counted per pixel, so compare against that.
-        if (($outOfGamut / ($blended * 3)) > self::MAX_OUT_OF_GAMUT_RATIO) {
-            return false;
+        if ($stats['out_of_gamut'] > self::MAX_OUT_OF_GAMUT_RATIO) {
+            return WatermarkRemovalResult::declined(
+                sprintf(
+                    'Recovered pixels do not look like this logo: %.1f%% fell outside gamut (limit %.0f%%).',
+                    $stats['out_of_gamut'] * 100,
+                    self::MAX_OUT_OF_GAMUT_RATIO * 100
+                ),
+                $stats
+            );
         }
 
         foreach ($recovered as [$x, $y, $r, $g, $b]) {
@@ -173,7 +207,9 @@ class WatermarkRemover
 
         $this->fillOpaquePixels($image, $opaque);
 
-        return $this->writeImage($image, $imagePath, $imageType);
+        return $this->writeImage($image, $imagePath, $imageType)
+            ? WatermarkRemovalResult::applied($stats)
+            : WatermarkRemovalResult::declined('The cleaned image could not be written.', $stats);
     }
 
     /**

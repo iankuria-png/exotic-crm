@@ -29,6 +29,16 @@ class WpWatermarkConfigService
 
     private const CACHE_TTL_MINUTES = 720;
 
+    /**
+     * The resolved settings behind forPlatform(), for diagnostics.
+     *
+     * @return array{url: string, position: string}|null
+     */
+    public function describeFor(int $platformId): ?array
+    {
+        return $this->settingsFor($platformId);
+    }
+
     public function forPlatform(int $platformId): ?WatermarkStamp
     {
         $settings = $this->settingsFor($platformId);

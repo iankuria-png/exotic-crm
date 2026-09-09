@@ -53,6 +53,8 @@ class TestWatermarkRemovalCommand extends Command
             $stamp->position,
             $stamp->opacityPercent
         ));
+        $this->line('  source: ' . (string) (($config->describeFor($platformId)['url']) ?? 'unknown'));
+        $this->line('  cached: ' . $stamp->pngPath);
 
         $response = Http::timeout(60)->get($url);
         if (!$response->successful()) {
@@ -76,14 +78,17 @@ class TestWatermarkRemovalCommand extends Command
             $this->line('the theme composites with imagecopy, which clips rather than scaling.');
         }
 
-        $applied = (new WatermarkRemover($stamp))->removeFromFile($after);
+        $result = (new WatermarkRemover($stamp))->attempt($after);
 
-        if ($applied) {
+        if ($result->applied) {
             $this->info('Removal applied. Compare:');
         } else {
             $this->warn('Removal declined and the file is unchanged.');
-            $this->line('That means the pixels did not look like this logo blended at this position —');
-            $this->line('a resized copy, a different market\'s mark, or an image that never carried one.');
+            $this->line('Reason: ' . $result->reason);
+        }
+
+        foreach ($result->stats as $key => $value) {
+            $this->line(sprintf('  %-13s %s', $key, $value));
         }
 
         $this->line('  before: ' . $before);
