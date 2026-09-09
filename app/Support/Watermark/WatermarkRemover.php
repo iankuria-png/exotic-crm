@@ -53,6 +53,14 @@ class WatermarkRemover
     /** Below this the stamp barely touches the photo and there is nothing to gain. */
     private const MIN_BLENDED_PIXELS = 64;
 
+    /**
+     * Recovered pixels at or above this blend keep their luma but take their
+     * colour from the surrounding photo. See repairChroma().
+     */
+    private const CHROMA_REPAIR_BLEND = 0.35;
+
+    private const CHROMA_REPAIR_PASSES = 8;
+
     public function __construct(
         private readonly WatermarkStamp $stamp
     ) {
@@ -125,6 +133,7 @@ class WatermarkRemover
 
         $recovered = [];
         $opaque = [];
+        $chromaSuspect = [];
         $blended = 0;
         $outOfGamut = 0;
         $maxBlend = 0.0;
@@ -170,6 +179,10 @@ class WatermarkRemover
 
                 $blended++;
                 $recovered[] = [$targetX, $targetY, $channels[0], $channels[1], $channels[2]];
+
+                if ($alpha >= self::CHROMA_REPAIR_BLEND) {
+                    $chromaSuspect[] = [$targetX, $targetY];
+                }
             }
         }
 
@@ -206,6 +219,7 @@ class WatermarkRemover
         }
 
         $this->fillOpaquePixels($image, $opaque);
+        $this->repairChroma($image, $chromaSuspect);
 
         return $this->writeImage($image, $imagePath, $imageType)
             ? WatermarkRemovalResult::applied($stats)
@@ -268,6 +282,108 @@ class WatermarkRemover
         }
 
         return $map;
+    }
+
+    /**
+     * Take the colour of strongly recovered pixels from the photo around them.
+     *
+     * Dividing by (1 - a) amplifies whatever compression error the file already
+     * carried by 1/(1 - a) — about ten at the strongest part of the mark. JPEG
+     * subsamples colour, so that error is far larger in chroma than in luma and
+     * shows up as red and cyan speckle along the strokes rather than as grain.
+     *
+     * Luminance carries the texture and is kept as recovered. Chroma varies
+     * slowly across a photograph, so averaging it from neighbours that were
+     * never under the mark restores the colour without softening detail.
+     *
+     * Several passes, because the mark has solid regions — the figure inside
+     * the O — that are wider than one neighbourhood. Each pass promotes the
+     * pixels it fixed into the pool of trustworthy sources for the next.
+     *
+     * @param  array<int, array{0: int, 1: int}>  $pixels
+     */
+    private function repairChroma(GdImage $image, array $pixels): void
+    {
+        if ($pixels === []) {
+            return;
+        }
+
+        $width = imagesx($image);
+        $height = imagesy($image);
+
+        $suspect = [];
+        foreach ($pixels as [$x, $y]) {
+            $suspect[$y . ':' . $x] = true;
+        }
+
+        // Enough passes to reach the middle of the largest solid region in the
+        // mark — the figure inside the O is about 36px across, so a radius-4
+        // neighbourhood needs to work inwards several times to reach its core.
+        for ($pass = 0; $pass < self::CHROMA_REPAIR_PASSES && $suspect !== []; $pass++) {
+            $updates = [];
+
+            foreach ($pixels as [$x, $y]) {
+                if (!isset($suspect[$y . ':' . $x])) {
+                    continue;
+                }
+
+                $cbSum = 0.0;
+                $crSum = 0.0;
+                $found = 0;
+
+                for ($dy = -4; $dy <= 4; $dy++) {
+                    for ($dx = -4; $dx <= 4; $dx++) {
+                        $nx = $x + $dx;
+                        $ny = $y + $dy;
+
+                        if (($dx === 0 && $dy === 0) || $nx < 0 || $ny < 0 || $nx >= $width || $ny >= $height) {
+                            continue;
+                        }
+                        if (isset($suspect[$ny . ':' . $nx])) {
+                            continue;
+                        }
+
+                        $colour = imagecolorat($image, $nx, $ny);
+                        $r = ($colour >> 16) & 0xFF;
+                        $g = ($colour >> 8) & 0xFF;
+                        $b = $colour & 0xFF;
+
+                        $cbSum += -0.168736 * $r - 0.331264 * $g + 0.5 * $b;
+                        $crSum += 0.5 * $r - 0.418688 * $g - 0.081312 * $b;
+                        $found++;
+                    }
+                }
+
+                if ($found < 4) {
+                    continue;
+                }
+
+                $colour = imagecolorat($image, $x, $y);
+                $luma = 0.299 * (($colour >> 16) & 0xFF)
+                    + 0.587 * (($colour >> 8) & 0xFF)
+                    + 0.114 * ($colour & 0xFF);
+
+                $cb = $cbSum / $found;
+                $cr = $crSum / $found;
+
+                $updates[] = [
+                    $x,
+                    $y,
+                    (int) max(0, min(255, round($luma + 1.402 * $cr))),
+                    (int) max(0, min(255, round($luma - 0.344136 * $cb - 0.714136 * $cr))),
+                    (int) max(0, min(255, round($luma + 1.772 * $cb))),
+                ];
+            }
+
+            if ($updates === []) {
+                return;
+            }
+
+            foreach ($updates as [$x, $y, $r, $g, $b]) {
+                imagesetpixel($image, $x, $y, imagecolorallocate($image, $r, $g, $b));
+                unset($suspect[$y . ':' . $x]);
+            }
+        }
     }
 
     /**
