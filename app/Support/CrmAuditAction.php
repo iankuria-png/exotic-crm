@@ -35,7 +35,9 @@ final class CrmAuditAction
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
 
     public const LIFECYCLE_SETTINGS_UPDATE = 'lifecycle_settings_update';
+
     public const CUSTOMER_ROLLOUT_UPDATE = 'customer_rollout_update';
+
     public const CUSTOMER_ROLLOUT_PROVISION = 'customer_rollout_provision';
 
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
@@ -145,6 +147,22 @@ final class CrmAuditAction
     public const RENEWAL_CAMPAIGN_DELETE = 'renewal_campaign_delete';
 
     public const RENEWAL_GUARD_UPDATE = 'renewal_guard_update';
+
+    public const BANNER_AD_CREATE = 'banner_ad_create';
+
+    public const BANNER_AD_UPDATE = 'banner_ad_update';
+
+    public const BANNER_AD_SCHEDULE = 'banner_ad_schedule';
+
+    public const BANNER_AD_ACTIVATE = 'banner_ad_activate';
+
+    public const BANNER_AD_PAUSE = 'banner_ad_pause';
+
+    public const BANNER_AD_EXPIRE = 'banner_ad_expire';
+
+    public const BANNER_AD_DELETE = 'banner_ad_delete';
+
+    public const BANNER_AD_SETTINGS_UPDATE = 'banner_ad_settings_update';
 
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
 

@@ -21,6 +21,7 @@ use App\Http\Controllers\CRM\AiInsightsController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
 use App\Http\Controllers\CRM\AutoPushPlanController;
+use App\Http\Controllers\CRM\BannerAdController;
 use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\ClientController;
@@ -378,6 +379,19 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/runs', [AutoPushPlanController::class, 'runs']);
         Route::get('/alerts', [AutoPushPlanController::class, 'alerts']);
         Route::post('/alerts/{alert}/resolve', [AutoPushPlanController::class, 'resolveAlert']);
+    });
+
+    Route::middleware('role:admin,sub_admin,sales,field_sales,marketing')->prefix('banner-ads')->group(function () {
+        Route::get('/markets', [BannerAdController::class, 'markets']);
+        Route::get('/', [BannerAdController::class, 'index']);
+        Route::post('/', [BannerAdController::class, 'store']);
+        Route::patch('/settings', [BannerAdController::class, 'settings']);
+        Route::get('/media', [BannerAdController::class, 'media']);
+        Route::post('/media', [BannerAdController::class, 'uploadMedia']);
+        Route::get('/{campaignId}', [BannerAdController::class, 'show']);
+        Route::patch('/{campaignId}', [BannerAdController::class, 'update']);
+        Route::post('/{campaignId}/status', [BannerAdController::class, 'status']);
+        Route::delete('/{campaignId}', [BannerAdController::class, 'destroy']);
     });
 
     // Auto Optimize Engine — three permission tiers enforced inside the controller

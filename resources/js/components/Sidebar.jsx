@@ -65,11 +65,38 @@ const pushCampaignNavItem = {
     icon: 'M4.5 6.75h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-3l-3 2.25v-2.25h-9A1.5 1.5 0 0 1 3 15.75v-7.5a1.5 1.5 0 0 1 1.5-1.5Z',
 };
 
+const bannerAdsNavItem = {
+    to: '/banner-ads',
+    label: 'Banner Ads',
+    icon: 'M3.75 6.75h16.5v10.5H3.75V6.75Zm3 3h5.25m-5.25 3h3.75m4.5 0h2.25m-2.25-3h2.25',
+};
+
 const autoPushNavItem = {
     to: '/auto-push',
     label: 'Auto Push',
     icon: 'M12 3.75v3m0 10.5v3m8.25-8.25h-3M6.75 12h-3m11.031 5.281-2.122-2.122M9.341 8.219 7.22 6.098m0 11.184 2.121-2.122m5.318-5.318 2.122-2.121M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z',
 };
+
+function insertBannerAdsRevenueItem(groups) {
+    return groups.map((group) => {
+        if (group.title !== 'Revenue' || group.items.some((item) => item.to === bannerAdsNavItem.to)) {
+            return group;
+        }
+
+        const output = [];
+        group.items.forEach((item) => {
+            output.push(item);
+            if (item.to === '/campaigns') {
+                output.push(bannerAdsNavItem);
+            }
+        });
+
+        return {
+            ...group,
+            items: output,
+        };
+    });
+}
 
 const pbnNavItem = {
     to: '/pbn',
@@ -117,6 +144,7 @@ const fieldSalesGroups = [
             { to: '/clients?signup_source=field', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
             { to: '/deals', label: 'Subscriptions', icon: 'M12 3.75v16.5m3.375-13.125h-4.5a2.625 2.625 0 0 0 0 5.25h2.25a2.625 2.625 0 1 1 0 5.25H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
             { to: '/payments', label: 'Payments', icon: 'M2.25 8.25h19.5M4.5 5.25h15a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25v-9A2.25 2.25 0 0 1 4.5 5.25Zm12 8.25h1.5' },
+            bannerAdsNavItem,
             { to: '/field/commissions', label: 'Commissions', icon: 'M12 6v12m3.75-8.25h-4.5a2.25 2.25 0 0 0 0 4.5h1.5a2.25 2.25 0 1 1 0 4.5H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
         ],
     },
@@ -162,12 +190,12 @@ export default function Sidebar({ onClose }) {
             },
             {
                 title: 'Campaigns',
-                items: [pushCampaignNavItem, autoPushNavItem],
+                items: [bannerAdsNavItem, pushCampaignNavItem, autoPushNavItem],
             },
             resourcesGroup,
         ]
         : role === 'admin' || role === 'sub_admin'
-            ? insertVisitorsGroup(insertPbnWorkspaceItem(navGroups).map((group) => {
+            ? insertVisitorsGroup(insertPbnWorkspaceItem(insertBannerAdsRevenueItem(navGroups)).map((group) => {
                 if (group.title !== 'Revenue') {
                     return group;
                 }
@@ -182,7 +210,7 @@ export default function Sidebar({ onClose }) {
                 };
             })).concat([resourcesGroup])
             : role === 'sales'
-                ? insertVisitorsGroup(insertPbnWorkspaceItem(navGroups.filter((group) => group.title !== 'Admin'))).concat([resourcesGroup])
+                ? insertVisitorsGroup(insertPbnWorkspaceItem(insertBannerAdsRevenueItem(navGroups.filter((group) => group.title !== 'Admin')))).concat([resourcesGroup])
                 : navGroups.concat([resourcesGroup]);
 
     return (

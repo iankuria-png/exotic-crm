@@ -13,6 +13,7 @@ import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
 import LifecycleAnalytics from './pages/LifecycleAnalytics';
+import BannerAds from './pages/BannerAds';
 import PushCampaigns from './pages/PushCampaigns';
 import AutoPush from './pages/AutoPush';
 import Reports from './pages/Reports';
@@ -69,6 +70,7 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/clients')
             || path.startsWith('/kyc')
             || path.startsWith('/push-campaigns')
+            || path.startsWith('/banner-ads')
             || path.startsWith('/auto-push')
             || path.startsWith('/team')
             || path.startsWith('/faq')
@@ -96,6 +98,7 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/leads')
             || path.startsWith('/conversations')
             || path.startsWith('/campaigns')
+            || path.startsWith('/banner-ads')
             || path.startsWith('/kyc')
             || path.startsWith('/reports')
             || path.startsWith('/faq')
@@ -140,6 +143,7 @@ export default function AppRouter() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
+                <Route path="banner-ads" element={<BannerAds />} />
                 <Route path="lifecycle" element={<LifecycleAnalytics />} />
                 <Route path="kyc" element={<Kyc />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
