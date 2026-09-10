@@ -3,12 +3,14 @@
 namespace App\Services\Forecast;
 
 use App\Jobs\BuildForecastBaselineJob;
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Services\ChurnAggregatorService;
 use App\Services\ClientFunnelService;
 use App\Services\PaymentRecoveryMetricService;
+use App\Services\Payments\PaymentIdentityTokenizer;
 use App\Services\ReportingCurrencyService;
 use App\Services\Revenue\CollectedRevenueQuery;
 use Illuminate\Database\Eloquent\Builder;
@@ -22,7 +24,9 @@ class ForecastBaselineService
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
         private readonly ChurnAggregatorService $churnAggregatorService,
-        private readonly SignupSourceConversionService $signupSourceConversionService
+        private readonly SignupSourceConversionService $signupSourceConversionService,
+        private readonly PaymentIdentityTokenizer $identityTokenizer,
+        private readonly ForecastClaimResolver $claimResolver
     ) {}
 
     public function response(ForecastContext $context, bool $cacheOnly = false): array
@@ -95,6 +99,182 @@ class ForecastBaselineService
         ];
     }
 
+    /**
+     * Per-market rows carry only levers actually measured per market.
+     *
+     * Recovery is, via computeByPlatform(). Copying the global renewal/activation
+     * figures onto all 44 markets would make the solver emit 44 identical moves
+     * summing to 44x the real headroom, so those stay on the global row and the
+     * solver offers them once as an all-markets move.
+     */
+    private function marketLeverBaselines(array $globalLevers, array $recovery, array $claimStats): array
+    {
+        $levers = [];
+
+        $levers['failed_recovery'] = [
+            ...($globalLevers['failed_recovery'] ?? []),
+            'market_measured' => true,
+            'actual' => (float) ($recovery['payment_recovery_rate'] ?? 0),
+            'suggested' => min(85.0, (float) ($recovery['payment_recovery_rate'] ?? 0) + 6.0),
+            'eligible_units' => (int) ($recovery['failed_payments'] ?? 0),
+            'evidence' => [
+                ...($levers['failed_recovery']['evidence'] ?? []),
+                'failed_payments' => (int) ($recovery['failed_payments'] ?? 0),
+                'recovered_payments' => (int) ($recovery['recovered_payments'] ?? 0),
+                'lost_payments' => (int) ($recovery['lost_payments'] ?? 0),
+                'payment_level_metric' => true,
+            ],
+        ];
+
+        return $this->applyClaimStats($levers, $claimStats);
+    }
+
+    private function applyClaimStats(array $levers, array $claimStats): array
+    {
+        foreach (['renewal', 'churn_winback', 'new_activations'] as $key) {
+            if (! isset($levers[$key])) {
+                continue;
+            }
+
+            $claimed = count($claimStats['sets'][$key] ?? []);
+            $excluded = (int) ($claimStats['excluded'][$key] ?? 0);
+            $originalEligible = (int) ($levers[$key]['eligible_units'] ?? 0);
+
+            if ($claimed + $excluded > 0) {
+                $levers[$key]['eligible_units'] = $claimed;
+                $levers[$key]['evidence']['claimed_roots'] = $claimed;
+                $levers[$key]['evidence']['excluded_by_precedence'] = $excluded;
+                $levers[$key]['evidence']['unclaimed_eligible_units'] = $originalEligible;
+            }
+
+            if (($levers[$key]['unit'] ?? null) === 'percentage_points' && $claimed > 0 && isset($levers[$key]['evidence']['renewed'])) {
+                $levers[$key]['actual'] = round(min(100, ((int) $levers[$key]['evidence']['renewed'] / $claimed) * 100), 1);
+                $levers[$key]['suggested'] = min(85.0, $levers[$key]['actual'] + 5.0);
+            }
+        }
+
+        foreach ($levers as $key => $lever) {
+            $levers[$key]['evidence']['identity_claims'] = [
+                'claimed_roots' => count($claimStats['sets'][$key] ?? []),
+                'excluded_by_precedence' => (int) ($claimStats['excluded'][$key] ?? 0),
+            ];
+        }
+
+        return $levers;
+    }
+
+    /**
+     * Resolve every lever's candidate population to identity roots once, then let
+     * ForecastClaimResolver assign each root to exactly one lever by precedence.
+     * Without this the same client is sold by recovery, renewal and win-back.
+     */
+    private function claimContext(ForecastContext $context): array
+    {
+        $resolver = new ForecastIdentityResolver($this->identityTokenizer);
+        $platformIds = $context->platformIdsForServices();
+        $prefixes = Platform::query()->pluck('phone_prefix', 'id')->all();
+        $prefixFor = fn ($platformId) => (string) ($prefixes[(int) $platformId] ?? '254');
+
+        $candidates = [
+            'failed_recovery' => [],
+            'renewal' => [],
+            'churn_winback' => [],
+            'new_activations' => [],
+        ];
+
+        Payment::query()
+            ->businessVisible()
+            ->excludingWalletTopups()
+            ->where('status', 'failed')
+            ->whereBetween('created_at', [$context->from, $context->to])
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->select(['id', 'platform_id', 'client_id', 'phone'])
+            ->chunkById(1000, function ($payments) use (&$candidates, $resolver, $prefixFor) {
+                foreach ($payments as $payment) {
+                    $candidates['failed_recovery'][] = $resolver->rootForPayment($payment, $prefixFor($payment->platform_id));
+                }
+            });
+
+        $renewalClientIds = $this->renewalEligibleQuery($context, $context->platformScope)
+            ->distinct()
+            ->pluck('deals.client_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $candidates['renewal'] = $this->rootsForClientIds($renewalClientIds, $resolver, $prefixFor);
+
+        $churnedIds = Client::query()
+            ->whereNotNull('churned_at')
+            ->whereBetween('churned_at', [$context->from, $context->to])
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $candidates['churn_winback'] = $this->rootsForClientIds($churnedIds, $resolver, $prefixFor);
+
+        $unconvertedIds = Client::query()
+            ->whereBetween('created_at', [$context->from, $context->to])
+            ->when(is_array($platformIds), fn (Builder $query) => $query->whereIn('platform_id', $platformIds))
+            ->whereDoesntHave('deals', fn (Builder $query) => $query->whereIn('status', ClientFunnelService::PAID_DEAL_STATUSES))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $candidates['new_activations'] = $this->rootsForClientIds($unconvertedIds, $resolver, $prefixFor);
+
+        $resolved = $this->claimResolver->resolve($candidates);
+
+        return [
+            'global' => $resolved,
+            'reconciliation' => [
+                'identities_merged_across_phone_formats' => $resolver->mergedCount(),
+                'candidates' => array_map('count', $candidates),
+                'claimed' => array_map('count', $resolved['sets'] ?? []),
+                'excluded_by_precedence' => $resolved['excluded'] ?? [],
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<int>  $clientIds
+     * @return array<string>
+     */
+    private function rootsForClientIds(array $clientIds, ForecastIdentityResolver $resolver, callable $prefixFor): array
+    {
+        if (empty($clientIds)) {
+            return [];
+        }
+
+        $roots = [];
+        Client::query()
+            ->whereIn('id', $clientIds)
+            ->select(['id', 'platform_id', 'phone', 'phone_normalized'])
+            ->chunkById(1000, function ($clients) use (&$roots, $resolver, $prefixFor) {
+                foreach ($clients as $client) {
+                    $roots[] = $resolver->rootForClient($client, $prefixFor($client->platform_id));
+                }
+            });
+
+        return $roots;
+    }
+
+    private function emptyClaimStats(): array
+    {
+        return ['sets' => [], 'excluded' => [], 'claimed' => []];
+    }
+
+    private function emptyRecovery(): array
+    {
+        return [
+            'failed_payments' => 0,
+            'recovered_payments' => 0,
+            'lost_payments' => 0,
+            'payment_recovery_rate' => 0.0,
+        ];
+    }
+
     public function status(string $jobToken): array
     {
         $status = Cache::get($this->statusKey($jobToken));
@@ -122,14 +302,21 @@ class ForecastBaselineService
             ? round(((float) $revenue['normalized_total'] / $context->days) * 30.4375, 2)
             : 0.0;
 
-        $globalLevers = $this->leverBaselines($context, $context->platformScope);
+        $claimContext = $this->claimContext($context);
+        $globalRecovery = $this->paymentRecoveryMetricService->compute($context->platformIdsForServices(), $context->from, $context->to);
+        $recoveryByPlatform = $this->paymentRecoveryMetricService->computeByPlatform($context->platformIdsForServices(), $context->from, $context->to);
+        $globalLevers = $this->leverBaselines($context, $context->platformScope, $globalRecovery, $claimContext['global']);
         $markets = $this->platforms($context)
-            ->map(function (Platform $platform) use ($context) {
+            ->map(function (Platform $platform) use ($globalLevers, $recoveryByPlatform, $claimContext) {
                 return [
                     'platform_id' => (int) $platform->id,
                     'market_label' => $platform->name,
                     'country' => $platform->country,
-                    'levers' => $this->leverBaselines($context, (int) $platform->id),
+                    'levers' => $this->marketLeverBaselines(
+                        $globalLevers,
+                        $recoveryByPlatform[(int) $platform->id] ?? $this->emptyRecovery(),
+                        $claimContext['markets'][(int) $platform->id] ?? $this->emptyClaimStats()
+                    ),
                 ];
             })
             ->values()
@@ -148,6 +335,7 @@ class ForecastBaselineService
             ],
             'levers' => $globalLevers,
             'per_market' => $markets,
+            'identity_reconciliation' => $claimContext['reconciliation'],
             'normalization_meta' => $revenue['normalization_meta'],
             'computed_at' => now()->toIso8601String(),
             'config_digest' => $this->configDigest(),
@@ -164,10 +352,14 @@ class ForecastBaselineService
         Cache::put($context->cacheKey(), $baseline, now()->addSeconds((int) config('forecast.cache_ttl_seconds')));
     }
 
-    private function leverBaselines(ForecastContext $context, int|array|null $platformScope): array
-    {
+    private function leverBaselines(
+        ForecastContext $context,
+        int|array|null $platformScope,
+        ?array $recovery = null,
+        ?array $claimStats = null
+    ): array {
         $platformIds = is_int($platformScope) ? [$platformScope] : $platformScope;
-        $recovery = $this->paymentRecoveryMetricService->compute($platformIds, $context->from, $context->to);
+        $recovery ??= $this->paymentRecoveryMetricService->compute($platformIds, $context->from, $context->to);
         $recoveredNormalized = $this->reportingCurrencyService->normalizeBreakdown(
             $recovery['recovered_amount_breakdown'] ?? [],
             $context->to,
@@ -200,7 +392,7 @@ class ForecastBaselineService
             $churnTicket = $activationTicket;
         }
 
-        return [
+        $levers = [
             'failed_recovery' => [
                 'key' => 'failed_recovery',
                 'label' => 'Failed payment recovery',
@@ -286,11 +478,13 @@ class ForecastBaselineService
                 'evidence' => ['description' => 'Cross-check only; not additive revenue.'],
             ],
         ];
+
+        return $this->applyClaimStats($levers, $claimStats ?? $this->emptyClaimStats());
     }
 
-    private function renewalStats(ForecastContext $context, int|array|null $platformScope): array
+    private function renewalEligibleQuery(ForecastContext $context, int|array|null $platformScope): Builder
     {
-        $eligible = Deal::query()
+        return Deal::query()
             ->whereBetween('deals.expires_at', [$context->from, $context->to])
             ->whereIn('deals.status', ClientFunnelService::PAID_DEAL_STATUSES)
             ->where(fn (Builder $query) => $query->whereNull('deals.is_free_trial')->orWhere('deals.is_free_trial', false))
@@ -298,7 +492,12 @@ class ForecastBaselineService
             ->when(is_int($platformScope), fn (Builder $query) => $query->where('deals.platform_id', $platformScope))
             ->when(is_array($platformScope), function (Builder $query) use ($platformScope) {
                 empty($platformScope) ? $query->whereRaw('1 = 0') : $query->whereIn('deals.platform_id', $platformScope);
-            })
+            });
+    }
+
+    private function renewalStats(ForecastContext $context, int|array|null $platformScope): array
+    {
+        $eligible = $this->renewalEligibleQuery($context, $platformScope)
             ->distinct()
             ->pluck('deals.client_id')
             ->filter()

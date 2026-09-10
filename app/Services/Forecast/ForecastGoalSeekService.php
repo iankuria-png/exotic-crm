@@ -101,6 +101,48 @@ class ForecastGoalSeekService
         ];
     }
 
+    private function candidateFor(
+        array $baseline,
+        string $band,
+        array $excludeLevers,
+        string $key,
+        array $lever,
+        ?int $platformId,
+        string $marketLabel
+    ): ?array {
+        if (in_array($key, $excludeLevers, true) || $key === 'agent_targets') {
+            return null;
+        }
+
+        $from = (float) ($lever['actual'] ?? 0);
+        $ceiling = $this->ceiling($key, $lever, $band);
+        if ($ceiling <= $from) {
+            return null;
+        }
+
+        $available = $this->monthlyContribution($lever, $from, $ceiling, (int) data_get($baseline, 'context.days', 30));
+        if ($available <= 0) {
+            return null;
+        }
+
+        $yield = $this->engine->lever($key)?->yieldPerUnit($lever) ?? 0;
+        $effort = (float) data_get(config('forecast.effort_weights'), $key, 1.0);
+
+        return [
+            'lever' => $key,
+            'label' => $lever['label'] ?? $key,
+            'platform_id' => $platformId,
+            'market_label' => $marketLabel,
+            'from' => $from,
+            'ceiling' => $ceiling,
+            'eligible_units' => (int) ($lever['eligible_units'] ?? 0),
+            'available_monthly' => round($available, 2),
+            'score' => $effort > 0 ? $yield / $effort : $yield,
+            'yield' => $yield,
+            'basis' => $this->basis($band, $marketLabel),
+        ];
+    }
+
     private function candidates(array $baseline, string $band, array $excludeLevers): array
     {
         $markets = $baseline['per_market'] ?? [];
@@ -113,38 +155,39 @@ class ForecastGoalSeekService
         }
 
         $candidates = [];
+        $measuredPerMarket = [];
+
         foreach ($markets as $market) {
             foreach (($market['levers'] ?? []) as $key => $lever) {
-                if (in_array($key, $excludeLevers, true) || $key === 'agent_targets') {
-                    continue;
-                }
+                $measuredPerMarket[$key] = true;
+                $candidate = $this->candidateFor(
+                    $baseline,
+                    $band,
+                    $excludeLevers,
+                    $key,
+                    $lever,
+                    $market['platform_id'] ?? null,
+                    $market['market_label'] ?? 'All markets'
+                );
 
-                $from = (float) ($lever['actual'] ?? 0);
-                $ceiling = $this->ceiling($key, $lever, $band);
-                if ($ceiling <= $from) {
-                    continue;
+                if ($candidate !== null) {
+                    $candidates[] = $candidate;
                 }
+            }
+        }
 
-                $yield = $this->engine->lever($key)?->yieldPerUnit($lever) ?? 0;
-                $effort = (float) data_get(config('forecast.effort_weights'), $key, 1.0);
-                $available = $this->monthlyContribution($lever, $from, $ceiling, (int) data_get($baseline, 'context.days', 30));
-                if ($available <= 0) {
-                    continue;
-                }
+        // Levers that are not measured per market live on the global row. Offering
+        // them once as an all-markets move is what stops a lever the markets all
+        // share being counted once per market.
+        foreach (($baseline['levers'] ?? []) as $key => $lever) {
+            if (isset($measuredPerMarket[$key])) {
+                continue;
+            }
 
-                $candidates[] = [
-                    'lever' => $key,
-                    'label' => $lever['label'] ?? $key,
-                    'platform_id' => $market['platform_id'] ?? null,
-                    'market_label' => $market['market_label'] ?? 'All markets',
-                    'from' => $from,
-                    'ceiling' => $ceiling,
-                    'eligible_units' => (int) ($lever['eligible_units'] ?? 0),
-                    'available_monthly' => round($available, 2),
-                    'score' => $effort > 0 ? $yield / $effort : $yield,
-                    'yield' => $yield,
-                    'basis' => $this->basis($band, $market['market_label'] ?? 'All markets'),
-                ];
+            $candidate = $this->candidateFor($baseline, $band, $excludeLevers, $key, $lever, null, 'All markets');
+
+            if ($candidate !== null) {
+                $candidates[] = $candidate;
             }
         }
 
