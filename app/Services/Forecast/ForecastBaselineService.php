@@ -64,9 +64,8 @@ class ForecastBaselineService
         }
 
         $marketCount = $this->platforms($context)->count();
-        $queueAfterMarkets = (int) config('forecast.queue_after_markets', 12);
 
-        if ($days > (int) config('forecast.queue_after_days') || $marketCount > $queueAfterMarkets) {
+        if ($days > (int) config('forecast.queue_after_days')) {
             $tokenKey = "forecast:building-token:{$key}";
             $token = Cache::get($tokenKey);
 

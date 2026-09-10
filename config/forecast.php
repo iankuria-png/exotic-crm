@@ -6,11 +6,11 @@ return [
     'settle_days' => 14,
     'cache_ttl_seconds' => 600,
     'sync_row_budget' => 250000,
+    // Measured on prod (MariaDB, 54 markets, 30-day window): a cold all-markets
+    // build is 5.5s and 134MB, so market count is not what makes a build heavy -
+    // window width is. Queueing on market count only added a worker dependency to
+    // work that fits in a request, so the day threshold is the sole trigger.
     'queue_after_days' => 30,
-    // A cold all-markets build is heavy regardless of how short the window is, so
-    // market count queues it too. Without this an exactly-30-day window across 54
-    // markets ran inline on the request thread and timed out.
-    'queue_after_markets' => 12,
     'volume_floors' => [
         'failed_recovery' => 20,
         'renewal' => 25,
