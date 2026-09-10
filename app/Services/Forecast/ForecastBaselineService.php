@@ -416,6 +416,22 @@ class ForecastBaselineService
                 ? (float) $lostNormalized['normalized_total'] / (int) $recovery['lost_payments']
                 : 0
         );
+        // A lever whose ticket resolves to zero silently does nothing when dragged, which
+        // reads as a broken control. Fall back to the window's average successful
+        // payment and record which source was used rather than showing 0.
+        $recoveryTicketSource = 'recovered payments in window';
+        if ($recoveryTicket <= 0) {
+            $recoveryTicket = $activationTicket;
+            $recoveryTicketSource = 'window average payment';
+        }
+
+        $signupTicket = (float) ($signup['avg_ticket'] ?: 0);
+        $signupTicketSource = 'first payments from this cohort';
+        if ($signupTicket <= 0) {
+            $signupTicket = $activationTicket;
+            $signupTicketSource = 'window average payment';
+        }
+
         $churnCount = (int) data_get($churn, 'totals.churn', data_get($movement, 'totals.inactive_profiles', 0));
         $churnTicket = (float) data_get($churn, 'revenue_at_risk.average_ticket', 0);
         if ($churnTicket <= 0) {
@@ -435,6 +451,8 @@ class ForecastBaselineService
                     'failed_payments' => (int) ($recovery['failed_payments'] ?? 0),
                     'recovered_payments' => (int) ($recovery['recovered_payments'] ?? 0),
                     'lost_payments' => (int) ($recovery['lost_payments'] ?? 0),
+                    'avg_ticket' => round($recoveryTicket, 2),
+                    'ticket_source' => $recoveryTicketSource,
                     'payment_level_metric' => true,
                 ],
             ],
@@ -449,13 +467,14 @@ class ForecastBaselineService
                 'actual' => (float) $signup['rate'],
                 'suggested' => min(60.0, (float) $signup['rate'] + 5.0),
                 'eligible_units' => (int) $signup['signups'],
-                'unit_value' => (float) ($signup['avg_ticket'] ?: $activationTicket),
+                'unit_value' => $signupTicket,
                 'unit' => 'percentage_points',
                 'evidence' => [
                     'signups' => (int) $signup['signups'],
                     'converted' => (int) $signup['converted'],
                     'rate' => (float) $signup['rate'],
-                    'avg_ticket' => (float) $signup['avg_ticket'],
+                    'avg_ticket' => round($signupTicket, 2),
+                    'ticket_source' => $signupTicketSource,
                     'sources' => $signup['sources'],
                     'first_payments_in_window' => (int) data_get($movement, 'totals.new_paid_activations', 0),
                 ],

@@ -49,10 +49,10 @@ function evidenceLine(key, lever) {
     const n = (value) => Number(value || 0).toLocaleString();
 
     if (key === 'failed_recovery') {
-        return `${n(e.failed_payments)} failed · ${n(e.recovered_payments)} recovered · ${n(e.lost_payments)} lost`;
+        return `${n(e.failed_payments)} failed · ${n(e.recovered_payments)} recovered · ${n(e.lost_payments)} lost · ${n(Math.round(e.avg_ticket || 0))} avg per recovery`;
     }
     if (key === 'new_activations') {
-        return `${n(e.converted)} of ${n(e.signups)} new signups converted · avg ${n(Math.round(e.avg_ticket || 0))} per conversion`;
+        return `${n(e.converted)} of ${n(e.signups)} signups converted · ${n(Math.round(e.avg_ticket || 0))} avg per conversion`;
     }
     if (key === 'renewal') {
         return `${n(e.renewed)} renewed of ${n(lever.eligible_units)} subscriptions that expired`;
@@ -202,6 +202,29 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
             mode: 'target',
             monthly_target: Number(targetAmount),
             reach_by_months: Number(reachByMonths),
+        }).then((response) => response.data),
+    });
+
+    const narrateMutation = useMutation({
+        mutationFn: () => api.post('/crm/dashboard/ceo/forecast/narrate', {
+            kind: 'narrative',
+            // Only computed figures go over - the model explains them, never derives them.
+            payload: {
+                mode,
+                currency,
+                window: { from: effectiveParams?.from, to: effectiveParams?.to, days: baseline?.context?.days },
+                horizon_days: baseline?.projection?.horizon_days,
+                base_total: outcome?.base_total,
+                scenario_total: outcome?.scenario_total,
+                incremental_total: outcome?.incremental_total,
+                movements: bridgeRows.map((row) => ({
+                    lever: row.label || row.lever,
+                    from: row.from,
+                    to: row.to,
+                    unit_delta: row.delta_units,
+                    contribution: row.contribution,
+                })),
+            },
         }).then((response) => response.data),
     });
 
@@ -433,8 +456,32 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                         </p>
                                     </div>
                                     <FxNormalizationNotice meta={outcome?.normalization_meta || baseline?.normalization_meta} />
-                                    <p className="text-xs leading-5 text-slate-600">
-                                        Straight-line run-rate from the selected window. Deterministic figures; AI narrative is optional.
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">What this asks for</p>
+                                        {narrateMutation.data?.state === 'ready' && narrateMutation.data?.text ? (
+                                            <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-slate-700">{narrateMutation.data.text}</p>
+                                        ) : narrateMutation.data?.state === 'unavailable' || narrateMutation.isError ? (
+                                            <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                                                The summary is unavailable right now. Every figure above is computed server-side and unaffected.
+                                            </p>
+                                        ) : (
+                                            <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                                                {Number(outcome?.incremental_total || 0) > 0
+                                                    ? 'Translate this scenario into the operational work behind it.'
+                                                    : 'Move a lever first — there is nothing to explain while everything sits at its current rate.'}
+                                            </p>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => narrateMutation.mutate()}
+                                            disabled={narrateMutation.isPending || Number(outcome?.incremental_total || 0) <= 0}
+                                            className="mt-2 h-8 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {narrateMutation.isPending ? 'Writing…' : 'Explain this scenario'}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs leading-5 text-slate-500">
+                                        Straight-line run-rate from the selected window. Every figure is computed server-side.
                                     </p>
                                     <button
                                         type="button"

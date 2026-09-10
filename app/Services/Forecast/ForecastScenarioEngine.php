@@ -35,6 +35,15 @@ class ForecastScenarioEngine
             ? (float) data_get($baseline, 'baseline_revenue.normalized_total', 0)
             : (float) data_get($baseline, 'projection.horizon_run_rate_total', data_get($baseline, 'baseline_revenue.normalized_total', 0));
 
+        // Levers are measured against the window's own population, so a rate change is
+        // worth one window. Projecting stretches the baseline over the horizon, and the
+        // lever contributions have to stretch with it - otherwise a 90-day projection
+        // carries a 30-day upside and understates every lever threefold.
+        $windowDays = max(1, (int) data_get($baseline, 'context.days', 30));
+        $horizonScale = $mode === 'replay'
+            ? 1.0
+            : max(1, (int) data_get($baseline, 'projection.horizon_days', $windowDays)) / $windowDays;
+
         $bridgeRows = [[
             'key' => 'baseline',
             'label' => $mode === 'replay' ? 'Baseline collected revenue' : 'Baseline run-rate',
@@ -57,6 +66,8 @@ class ForecastScenarioEngine
 
             $input = $inputs[$key] ?? ['target' => $leverBaseline['actual'] ?? 0];
             $outcome = $lever->apply($leverBaseline, $input, $mode);
+            $outcome['contribution'] = round($outcome['contribution'] * $horizonScale, 2);
+            $outcome['horizon_scale'] = round($horizonScale, 4);
             if ($outcome['contribution'] > 0 || array_key_exists($key, $inputs)) {
                 $leverOutcomes[$key] = $outcome;
                 $bridgeRows[] = $outcome + ['is_baseline' => false];
@@ -69,6 +80,8 @@ class ForecastScenarioEngine
         return [
             'mode' => $mode,
             'base_total' => round($baseTotal, 2),
+            'horizon_scale' => round($horizonScale, 4),
+            'window_days' => $windowDays,
             'incremental_total' => $incremental,
             'scenario_total' => $scenarioTotal,
             'bridge_rows' => $bridgeRows,
