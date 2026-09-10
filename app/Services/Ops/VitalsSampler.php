@@ -33,7 +33,7 @@ class VitalsSampler
         'fast' => ['push', 'alerts', 'default', 'kyc-fanout'],
         'sync' => ['sync-clients', 'sync-clients-reconcile'],
         'optimize' => ['auto_optimize'],
-        'heavy' => ['heavy'],
+        'heavy' => ['forecast', 'heavy'],
     ];
 
     /** Cache key holding the most recent sample, which the API serves. */

@@ -77,7 +77,7 @@ class OpsCronReference
             ['lane' => 'fast', 'connection' => $connection, 'queues' => 'push,alerts,default,kyc-fanout', 'options' => '--max-time=55 --max-jobs=100 --tries=3 --sleep=3'],
             ['lane' => 'sync', 'connection' => $connection, 'queues' => 'sync-clients,sync-clients-reconcile', 'options' => '--max-time=55 --max-jobs=50 --tries=3 --sleep=3'],
             ['lane' => 'optimize', 'connection' => $connection, 'queues' => 'auto_optimize', 'options' => '--max-time=55 --max-jobs=30 --tries=3 --sleep=3'],
-            ['lane' => 'heavy', 'connection' => 'database_long', 'queues' => 'heavy', 'options' => '--max-time=55 --max-jobs=10 --tries=2 --sleep=3'],
+            ['lane' => 'heavy', 'connection' => 'database_long', 'queues' => 'forecast,heavy', 'options' => '--max-time=55 --max-jobs=10 --tries=2 --sleep=3'],
         ];
 
         return array_map(fn (array $lane): array => [
