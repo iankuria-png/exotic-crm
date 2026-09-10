@@ -563,7 +563,7 @@ class Kernel extends ConsoleKernel
                 ->sendOutputTo(storage_path('logs/queue_worker_optimize.log'));
 
             $schedule->command(sprintf(
-                'queue:work database_long --queue=heavy --max-time=%d --max-jobs=%d --tries=2 --sleep=3',
+                'queue:work database_long --queue=forecast,heavy --max-time=%d --max-jobs=%d --tries=2 --sleep=3',
                 $workerMaxTime,
                 $opsInt('ops.lanes.heavy.max_jobs', 10)
             ))

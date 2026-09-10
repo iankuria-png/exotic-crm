@@ -19,7 +19,7 @@ class BuildForecastBaselineJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $timeout = 90;
+    public int $timeout = 600;
 
     public function __construct(
         private readonly array $context,
