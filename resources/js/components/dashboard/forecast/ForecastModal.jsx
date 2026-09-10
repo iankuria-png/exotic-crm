@@ -13,17 +13,9 @@ import { formatCurrency } from '../../../utils/currency';
 
 const DEFAULT_LEVERS = ['failed_recovery', 'new_activations', 'renewal'];
 
-function leverDelta(lever, target) {
-    const actual = Number(lever?.actual || 0);
-    const eligible = Number(lever?.eligible_units || 0);
-    const unitValue = Number(lever?.unit_value || 0);
-    const units = lever?.unit === 'count'
-        ? Math.max(0, Number(target || 0) - actual)
-        : Math.max(0, Number(target || 0) - actual) / 100 * eligible;
-
-    return units * unitValue;
-}
-
+// Deliberately no client-side delta helper. The server owns the arithmetic; a
+// second implementation here drifted from it and showed 1,807 on the slider
+// beside 101 in the bridge for the same lever.
 function ModeButton({ active, children, onClick }) {
     return (
         <button
@@ -342,7 +334,10 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                     const lever = levers[key];
                                     if (!lever) return null;
                                     const target = targets[key] ?? lever.actual ?? 0;
-                                    const delta = leverDelta(lever, target);
+                                    const moved = Number(target) !== Number(lever.actual || 0);
+                                    const serverContribution = outcome?.levers?.[key]?.contribution;
+                                    const deltaKnown = serverContribution !== undefined && serverContribution !== null;
+                                    const delta = Number(serverContribution || 0);
                                     const supported = leverSupportsMode(lever, mode);
                                     const isMoney = key === 'new_market';
                                     const max = isMoney
@@ -378,7 +373,9 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                                         : `now ${Number(lever.actual || 0).toFixed(lever.unit === 'count' ? 0 : 1)}${lever.unit === 'count' ? '' : '%'}`}
                                                 </span>
                                                 <span className={delta > 0 ? 'font-semibold text-emerald-700' : 'text-slate-400'}>
-                                                    {delta > 0 ? `+${formatCurrency(delta, currency)}` : 'no change'}
+                                                    {moved && !deltaKnown
+                                                        ? 'calculating…'
+                                                        : delta > 0 ? `+${formatCurrency(delta, currency)}` : 'no change'}
                                                 </span>
                                             </span>
                                             {!supported ? (

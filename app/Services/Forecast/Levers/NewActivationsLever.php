@@ -11,7 +11,7 @@ class NewActivationsLever extends BaseLever
 
     public function label(): string
     {
-        return 'New paid activations';
+        return 'New user conversion';
     }
 
     protected function isRateLever(): bool
