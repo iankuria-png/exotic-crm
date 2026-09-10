@@ -43,11 +43,27 @@ class PaymentRecoveryMetricService
 
     public function computeByPlatform(?array $platformIds, Carbon $from, Carbon $to): array
     {
+        return $this->computeWithPlatforms($platformIds, $from, $to)['by_platform'];
+    }
+
+    /**
+     * Global metrics and every market's metrics from a single collection pass.
+     *
+     * Calling compute() and computeByPlatform() separately ran collectWindowData()
+     * twice, and summarising per market re-indexed every success once per market -
+     * O(markets x successes) on top of a doubled pass. Both are avoided here.
+     *
+     * @return array{global: array, by_platform: array<int, array>}
+     */
+    public function computeWithPlatforms(?array $platformIds, Carbon $from, Carbon $to): array
+    {
         if (is_array($platformIds) && empty($platformIds)) {
-            return [];
+            return ['global' => $this->emptyResult($from, $to), 'by_platform' => []];
         }
 
         $data = $this->collectWindowData($platformIds, $from, $to);
+        $global = $this->summarize($data['union_find'], $data['failures'], $data['successes'], $from, $to);
+        $latestSuccessByRoot = $global['latest_success_by_root'];
         $failuresByPlatform = [];
 
         foreach ($data['failures'] as $failure) {
@@ -57,13 +73,22 @@ class PaymentRecoveryMetricService
 
         ksort($failuresByPlatform);
 
-        return collect($failuresByPlatform)
-            ->mapWithKeys(function (array $failures, int $platformId) use ($data, $from, $to) {
-                $result = $this->summarize($data['union_find'], $failures, $data['successes'], $from, $to);
+        $byPlatform = collect($failuresByPlatform)
+            ->mapWithKeys(function (array $failures, int $platformId) use ($data, $from, $to, $latestSuccessByRoot) {
+                $result = $this->summarize(
+                    $data['union_find'],
+                    $failures,
+                    [],
+                    $from,
+                    $to,
+                    $latestSuccessByRoot
+                );
 
                 return [$platformId => $result['metrics']];
             })
             ->all();
+
+        return ['global' => $global['metrics'], 'by_platform' => $byPlatform];
     }
 
     public function report(?array $platformIds, Carbon $from, Carbon $to, int $limit = 100): array
@@ -215,9 +240,28 @@ class PaymentRecoveryMetricService
         ];
     }
 
-    private function summarize(PaymentRecoveryUnionFind $unionFind, array $failures, array $successes, Carbon $from, Carbon $to): array
+    private function summarize(
+        PaymentRecoveryUnionFind $unionFind,
+        array $failures,
+        array $successes,
+        Carbon $from,
+        Carbon $to,
+        ?array $latestSuccessByRoot = null
+    ): array {
+        // A caller summarising many markets from one collection pass can hand in the
+        // index it already built, instead of re-walking every success per market.
+        $latestSuccessByRoot ??= $this->indexLatestSuccessByRoot($unionFind, $successes);
+
+        return $this->summarizeAgainstIndex($unionFind, $failures, $from, $to, $latestSuccessByRoot);
+    }
+
+    /**
+     * @return array<string, CarbonInterface>
+     */
+    private function indexLatestSuccessByRoot(PaymentRecoveryUnionFind $unionFind, array $successes): array
     {
         $latestSuccessByRoot = [];
+
         foreach ($successes as $success) {
             $root = $unionFind->find($success['tokens'][0]);
             $eventAt = $success['event_at'];
@@ -231,6 +275,16 @@ class PaymentRecoveryMetricService
             }
         }
 
+        return $latestSuccessByRoot;
+    }
+
+    private function summarizeAgainstIndex(
+        PaymentRecoveryUnionFind $unionFind,
+        array $failures,
+        Carbon $from,
+        Carbon $to,
+        array $latestSuccessByRoot
+    ): array {
         $failedPayments = count($failures);
         $recoveredPayments = 0;
         $customers = [];

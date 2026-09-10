@@ -7,6 +7,10 @@ return [
     'cache_ttl_seconds' => 600,
     'sync_row_budget' => 250000,
     'queue_after_days' => 30,
+    // A cold all-markets build is heavy regardless of how short the window is, so
+    // market count queues it too. Without this an exactly-30-day window across 54
+    // markets ran inline on the request thread and timed out.
+    'queue_after_markets' => 12,
     'volume_floors' => [
         'failed_recovery' => 20,
         'renewal' => 25,

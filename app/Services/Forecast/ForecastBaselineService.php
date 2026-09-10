@@ -63,7 +63,10 @@ class ForecastBaselineService
             ];
         }
 
-        if ($days > (int) config('forecast.queue_after_days')) {
+        $marketCount = $this->platforms($context)->count();
+        $queueAfterMarkets = (int) config('forecast.queue_after_markets', 12);
+
+        if ($days > (int) config('forecast.queue_after_days') || $marketCount > $queueAfterMarkets) {
             $tokenKey = "forecast:building-token:{$key}";
             $token = Cache::get($tokenKey);
 
@@ -72,7 +75,7 @@ class ForecastBaselineService
                 Cache::put($tokenKey, $token, now()->addMinutes(20));
                 Cache::put($this->statusKey($token), [
                     'state' => 'building',
-                    'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $this->platforms($context)->count()],
+                    'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $marketCount],
                     'cache_key' => $key,
                 ], now()->addMinutes(20));
 
@@ -85,7 +88,7 @@ class ForecastBaselineService
                 'state' => 'building',
                 'job_token' => $token,
                 'poll_after_ms' => 1500,
-                'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $this->platforms($context)->count()],
+                'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $marketCount],
             ];
         }
 
@@ -303,8 +306,10 @@ class ForecastBaselineService
             : 0.0;
 
         $claimContext = $this->claimContext($context);
-        $globalRecovery = $this->paymentRecoveryMetricService->compute($context->platformIdsForServices(), $context->from, $context->to);
-        $recoveryByPlatform = $this->paymentRecoveryMetricService->computeByPlatform($context->platformIdsForServices(), $context->from, $context->to);
+        // One collection pass serves the global figure and every market.
+        $recovery = $this->paymentRecoveryMetricService->computeWithPlatforms($context->platformIdsForServices(), $context->from, $context->to);
+        $globalRecovery = $recovery['global'];
+        $recoveryByPlatform = $recovery['by_platform'];
         $globalLevers = $this->leverBaselines($context, $context->platformScope, $globalRecovery, $claimContext['global']);
         $markets = $this->platforms($context)
             ->map(function (Platform $platform) use ($globalLevers, $recoveryByPlatform, $claimContext) {
