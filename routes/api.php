@@ -35,7 +35,6 @@ use App\Http\Controllers\CRM\CustomerSafetyAdminController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
-use App\Http\Controllers\CRM\PulseExportController;
 use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
 use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
 use App\Http\Controllers\CRM\Faq\ContextController as FaqContextController;
@@ -55,6 +54,10 @@ use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\LifecycleRestoreController;
 use App\Http\Controllers\CRM\LifecycleSmsController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
+use App\Http\Controllers\CRM\McpActivityController;
+use App\Http\Controllers\CRM\McpController;
+use App\Http\Controllers\CRM\McpSettingsController;
+use App\Http\Controllers\CRM\McpTokenController;
 use App\Http\Controllers\CRM\MessagingController;
 use App\Http\Controllers\CRM\MessagingSidecarController;
 use App\Http\Controllers\CRM\MessagingWebhookController;
@@ -64,6 +67,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PbnSiteController;
+use App\Http\Controllers\CRM\PulseExportController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
@@ -188,6 +192,9 @@ Route::middleware('whatsapp.sidecar.hmac')->group(function () {
 // combining a per-IP allowance with a global ceiling.
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:image-proxy');
 
+// Stateless MCP transport. McpAuthenticate records pre-auth refusals itself.
+Route::post('/mcp', McpController::class)->middleware('mcp.auth');
+
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);
     Route::post('/check-env', [SetupController::class, 'checkEnv']);
@@ -196,15 +203,17 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::post('/create-admin', [SetupController::class, 'createAdmin']);
 
     Route::middleware('auth:sanctum')->group(function () {
-        Route::post('/check-platform', [SetupController::class, 'checkPlatform']);
-        Route::post('/run-sync', [SetupController::class, 'runSync']);
-        Route::post('/run-diagnostics', [SetupController::class, 'runDiagnostics']);
-        Route::post('/complete', [SetupController::class, 'complete']);
+        Route::middleware('crm.session-token')->group(function () {
+            Route::post('/check-platform', [SetupController::class, 'checkPlatform']);
+            Route::post('/run-sync', [SetupController::class, 'runSync']);
+            Route::post('/run-diagnostics', [SetupController::class, 'runDiagnostics']);
+            Route::post('/complete', [SetupController::class, 'complete']);
+        });
     });
 });
 
 // CRM Protected Routes (Sanctum token required)
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
     // Auth
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
@@ -284,6 +293,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         });
     });
     Route::get('/products', [CrmDashboardController::class, 'products']);
+    Route::get('/settings/mcp', [McpSettingsController::class, 'show'])->middleware('role:admin,sub_admin');
+    Route::put('/settings/mcp', [McpSettingsController::class, 'update'])->middleware('role:admin');
+    Route::post('/settings/mcp/self-test', [McpSettingsController::class, 'selfTest'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/mcp/tokens', [McpTokenController::class, 'index'])->middleware('role:admin');
+    Route::post('/settings/mcp/tokens', [McpTokenController::class, 'store'])->middleware('role:admin');
+    Route::delete('/settings/mcp/tokens/{token}', [McpTokenController::class, 'destroy'])->middleware('role:admin');
+    Route::get('/settings/mcp/activity', [McpActivityController::class, 'index'])->middleware('role:admin,sub_admin');
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales,field_sales');
 
@@ -1018,7 +1034,7 @@ Route::get('/users', [AuthController::class, 'getUsers']);
 
 // Platform routes
 Route::get('/platforms', [PlatformController::class, 'platform']);
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin'])->group(function () {
     Route::post('/platforms', [PlatformController::class, 'store']);
     Route::put('/platforms/{id}', [PlatformController::class, 'update']);
     Route::delete('/platforms/{id}', [PlatformController::class, 'destroy']);
@@ -1035,7 +1051,7 @@ Route::get('/recent-users', [DashboardController::class, 'recentUsers']);
 
 // Product routes
 Route::get('/products', [ProductController::class, 'index']);
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
     Route::post('/products', [ProductController::class, 'store']);
     Route::put('/products/{id}', [ProductController::class, 'update']);
     Route::delete('/products/{id}', [ProductController::class, 'destroy']);
@@ -1075,7 +1091,7 @@ Route::post('/billing/pawapay/callback', [BillingController::class, 'pawaPayCall
 Route::get('/sms-logs', [SmsLogController::class, 'messages']);
 
 // Profile activation/deactivation (staff only)
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
     Route::post('/activate-profile', [PaymentController::class, 'manualActivate']);
     Route::post('/deactivate-profile', [PaymentController::class, 'manualDeactivate']);
 });
@@ -1089,7 +1105,7 @@ Route::get('/deactivated-profiles', [PaymentController::class, 'listDeactivatedP
 
 Route::post('/payment/update', [PaymentController::class, 'updatePaymentStatus'])
     ->middleware('legacy.payment.callback');
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
     Route::post('/manual-stk-push', [PaymentController::class, 'manualStkPush']);
     Route::post('/manual-update', [PaymentController::class, 'manuallyUpdatePaymentStatus']);
 });
@@ -1101,7 +1117,7 @@ Route::get('/african-countries/search', [AfricanCountryController::class, 'searc
 
 // Payment status and protected diagnostics
 Route::post('/check-payment-status', [PaymentController::class, 'checkStatus']);
-Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin'])->group(function () {
     Route::get('/debug-kopokopo', [PaymentController::class, 'debugKopokopo']);
     Route::post('/clear-pending-payments', [PaymentController::class, 'clearPendingPayments']);
     Route::any('/test-webhook', [PaymentController::class, 'testWebhook']);

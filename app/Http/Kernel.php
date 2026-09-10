@@ -51,6 +51,7 @@ class Kernel extends HttpKernel
             \Illuminate\Session\Middleware\StartSession::class,
             \Illuminate\View\Middleware\ShareErrorsFromSession::class,
             \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \App\Http\Middleware\RejectMcpTokenOutsideEndpoint::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
         
@@ -85,6 +86,8 @@ class Kernel extends HttpKernel
         'wp.service.auth' => \App\Http\Middleware\WpServiceAuth::class,
         'whatsapp.sidecar.hmac' => \App\Http\Middleware\VerifyWhatsAppSidecarHmac::class,
         'legacy.payment.callback' => \App\Http\Middleware\VerifyLegacyPaymentCallback::class,
+        'mcp.auth' => \App\Http\Middleware\McpAuthenticate::class,
+        'crm.session-token' => \App\Http\Middleware\EnsureCrmSessionToken::class,
     ];
     
     protected function schedule(Schedule $schedule)

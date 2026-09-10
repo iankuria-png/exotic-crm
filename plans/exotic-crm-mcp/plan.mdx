@@ -1,0 +1,486 @@
+---
+title: MCP ingestion point and control station
+objective: Expose a governed, pseudonymous, read-only view of the CRM to Codex CLI and Claude Code over one authenticated endpoint, operated entirely from a Settings workspace where every tool, limit, view and token is configurable, every call is observable, and the setup guide lives in the product.
+status: audit round 3 — READY
+owner: Ian K
+date: 2026-09-10
+scope: one MCP endpoint on cPanel, 15 curated tools, 3 context resources, 6 new reporting views, scoped tokens, and a seven-panel MCP control station in Settings
+non_goals:
+  - no write actions of any kind in v1 — no campaign sends, no deal changes, no profile edits
+  - no OAuth authorization server (Codex and Claude Code take a bearer token; the Claude and ChatGPT desktop apps would need OAuth and are deferred)
+  - no Laravel 11/12 upgrade
+  - no refactor of CeoDashboardDataService or the other large request-coupled services
+  - no raw table access — the model never sees a base table, only curated tools and vw_* views
+---
+
+## What this is
+
+One HTTPS endpoint at `crm.exotic-online.com/api/mcp` that speaks MCP, and a
+Settings workspace that runs it. An AI session registers the endpoint once and
+thereafter has a governed view of the CRM: revenue and market analytics, client
+lifecycle and retention, ops and error state, and the schema knowledge every
+session currently re-learns from `CLAUDE.md`.
+
+Registration is one line per client:
+
+```bash
+claude mcp add --transport http exotic https://crm.exotic-online.com/api/mcp --header "Authorization: Bearer $EXOTIC_MCP_TOKEN"
+```
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.exotic]
+url = "https://crm.exotic-online.com/api/mcp"
+bearer_token_env_var = "EXOTIC_MCP_TOKEN"
+```
+
+Asked "why did new-user revenue fall 3.1% this window?", a session calls
+`exotic_revenue_summary`, sees the drop concentrated in two markets, calls
+`exotic_market_breakdown` for those, then `exotic_churn_analysis` with
+`breakdown=signup_source` — three typed calls, no SQL written, no PII moved. Every
+one of those calls appears in the control station within seconds, with its
+arguments, row count, payload size and latency.
+
+<Wireframe title="Settings → MCP → Overview" surface="desktop" caption="The default landing panel. Master switch and endpoint at the top, six live counters, then the call feed — so the first question a control station must answer (is it on, is it being used, is it healthy) is answered without a click." html="<div style='background:var(--wf-paper);color:var(--wf-ink);font-size:12px'><div style='display:flex;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--wf-line);padding-bottom:8px;margin-bottom:12px;color:var(--wf-muted)'><span>Error Logs</span><span>Roles &amp; Permissions</span><span style='color:var(--wf-ink);font-weight:600;border-bottom:2px solid var(--wf-accent);padding-bottom:6px'>MCP</span><span>Security</span><span>System Health</span></div><div style='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px'><span style='background:var(--wf-card);border:1px solid var(--wf-accent);border-radius:var(--wf-radius);padding:5px 9px;font-weight:600'>Overview <span style='color:var(--wf-muted);font-weight:400'>· live</span></span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Tokens · 3 active</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Tools · 14/15 on</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Data &amp; Privacy · pseudonymous</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Limits · 18%</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Activity · 6 refusals</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Guide</span></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap'><div><div style='display:flex;align-items:center;gap:8px'><span style='width:8px;height:8px;border-radius:8px;background:var(--wf-ok);display:inline-block'></span><strong>Server enabled</strong><span style='color:var(--wf-muted)'>protocol 2026-07-28 · 2025-03-26 fallback · stateless HTTP</span></div><div style='color:var(--wf-muted);margin-top:5px;display:flex;align-items:center;gap:6px'><code>https://crm.exotic-online.com/api/mcp</code><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:1px 6px'>Copy</span></div></div><div style='display:flex;gap:8px;align-items:center'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:7px 11px'>Run self-test</span><span style='background:var(--wf-accent);color:var(--wf-paper);border-radius:var(--wf-radius);padding:7px 11px;font-weight:600'>Disable server</span></div></div><div style='display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px'><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>CALLS TODAY</div><div style='font-size:17px;font-weight:600'>1,204</div><div style='color:var(--wf-ok);font-size:10px'>+18% vs yest.</div></div><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>ROWS RETURNED</div><div style='font-size:17px;font-weight:600'>36,900</div><div style='color:var(--wf-muted);font-size:10px'>18% of 200k budget</div></div><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>PAYLOAD OUT</div><div style='font-size:17px;font-weight:600'>21.4 MB</div><div style='color:var(--wf-muted);font-size:10px'>peak 2.1 MB/call</div></div><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>P95 LATENCY</div><div style='font-size:17px;font-weight:600'>412 ms</div><div style='color:var(--wf-muted);font-size:10px'>slowest: churn_analysis</div></div><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>REFUSALS</div><div style='font-size:17px;font-weight:600;color:var(--wf-warn)'>6</div><div style='color:var(--wf-muted);font-size:10px'>5 sql_validation</div></div><div style='flex:1;min-width:110px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='color:var(--wf-muted);font-size:10px'>ACTIVE TOKENS</div><div style='font-size:17px;font-weight:600'>3</div><div style='color:var(--wf-warn);font-size:10px'>1 expires in 6d</div></div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);overflow:hidden'><div style='display:flex;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--wf-line)'><strong>Live call feed</strong><span style='color:var(--wf-muted)'>auto-refresh 5s · pause</span></div><div style='display:flex;padding:7px 10px;color:var(--wf-muted);font-size:10px;border-bottom:1px solid var(--wf-line)'><div style='flex:3'>TOOL</div><div style='flex:2'>TOKEN</div><div style='flex:2'>SCOPE</div><div style='flex:1'>ROWS</div><div style='flex:1'>MS</div><div style='flex:2'>STATUS</div></div><div style='display:flex;padding:7px 10px;border-bottom:1px solid var(--wf-line)'><div style='flex:3'>exotic_churn_analysis</div><div style='flex:2;color:var(--wf-muted)'>ian-laptop</div><div style='flex:2;color:var(--wf-muted)'>all markets</div><div style='flex:1'>142</div><div style='flex:1'>688</div><div style='flex:2;color:var(--wf-ok)'>success · 2s ago</div></div><div style='display:flex;padding:7px 10px;border-bottom:1px solid var(--wf-line)'><div style='flex:3'>exotic_run_reporting_sql</div><div style='flex:2;color:var(--wf-muted)'>ian-laptop</div><div style='flex:2;color:var(--wf-muted)'>all markets</div><div style='flex:1'>0</div><div style='flex:1'>11</div><div style='flex:2;color:var(--wf-warn)'>refused · sql_validation</div></div><div style='display:flex;padding:7px 10px'><div style='flex:3'>exotic_revenue_summary</div><div style='flex:2;color:var(--wf-muted)'>ops-codex</div><div style='flex:2;color:var(--wf-muted)'>TZ, RW</div><div style='flex:1'>1</div><div style='flex:1'>240</div><div style='flex:2;color:var(--wf-ok)'>success · 41s ago</div></div></div></div>" />
+
+The station is seven panels inside one Settings tab, following the shape
+`AiWorkspacePanel.jsx` already uses — sub-tabs with a live hint on each, so the
+nav itself reports state. **Overview** answers is-it-on and is-it-healthy.
+**Tokens** issues and revokes credentials. **Tools** is the registry with a
+per-tool kill switch. **Data & Privacy** governs what may leave the building.
+**Limits** sets the budgets. **Activity** is the searchable audit trail.
+**Guide** is the setup and reference documentation, in the product.
+
+<Callout tone="decision" title="Hand-rolled JSON-RPC, no new dependency" body="The official `laravel/mcp` package requires Laravel 11.45+ or 12.41+. This repo is Laravel 10.50.2, so it is unavailable and a framework upgrade is out of scope. MCP over stateless Streamable HTTP is a single POST route handling the core methods this product exposes — `server/discover`, `tools/list`, `tools/call`, `resources/list`, `resources/read` — with full control over auth, scoping and audit. `initialize` is accepted only inside the isolated 2025-era fallback path, never mixed into a modern 2026-07-28 request. It adds **zero composer dependencies**, which matters because `vendor/` is gitignored while `composer.lock` is tracked: every new package becomes a `composer install` step in the cPanel deploy. `php-mcp/server` v3.3 is the fallback if the hand-rolled dispatcher drifts from the spec." />
+
+Stateless Streamable HTTP — one JSON response per POST, no SSE stream — is what
+makes this viable on cPanel. Every request is independent, nothing is long-lived,
+and PHP-FPM serves it like any other route.
+
+<Callout tone="warn" title="Transport contract to implement, not approximate" body="Target the current Streamable HTTP shape (`MCP-Protocol-Version: 2026-07-28`) and accept older clients that omit the header by treating them as `2025-03-26` only after `initialize`. Every POST must validate `Accept: application/json, text/event-stream`, `Content-Type: application/json`, `Origin` when present, `Mcp-Method`, `Mcp-Name` for `tools/call` and `resources/read`, `params._meta.io.modelcontextprotocol/protocolVersion` matching the protocol header, and any recognised `Mcp-Param-*` against the JSON-RPC body. Successful modern `tools/call` results include `resultType: complete`; `server/discover`, `tools/list`, `resources/list` and `resources/read` keep their own spec-shaped results. Mismatches return a deterministic JSON-RPC error (`HeaderMismatch`, code `-32020`). `server/discover`, `tools/list` and `resources/list` must be deterministic and cacheable. Do **not** mint or require `Mcp-Session-Id`; protocol-level sessions are gone in the current revision. Add feature tests that send both the modern header set and the older initialize-style client flow used by Claude Code/Codex today." />
+
+<Diagram title="Request path" caption="Everything below the token check is the governance band. No tool reaches a base table directly, and every band member is configurable from the control station." html="<div style='display:flex;flex-direction:column;gap:8px'><div style='display:flex;gap:8px'><div style='flex:1;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>Codex CLI</strong><div style='color:var(--wf-muted)'>bearer_token_env_var</div></div><div style='flex:1;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>Claude Code</strong><div style='color:var(--wf-muted)'>--header Authorization</div></div></div><div style='text-align:center;color:var(--wf-muted);font-size:11px'>HTTPS POST · JSON-RPC 2.0 · stateless</div><div style='background:var(--wf-accent-soft);border:1px solid var(--wf-accent);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>McpAuthenticate</strong> — token must carry ability <code>mcp:read</code>, must not be expired, throttled per token, server master switch honoured</div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>McpServer</strong> — JSON-RPC dispatch &rarr; <strong>ToolRegistry</strong>, filtered by <strong>McpSettingsService</strong> (a disabled tool is absent from tools/list, not merely refused)</div><div style='border:1px dashed var(--wf-accent);border-radius:var(--wf-radius);padding:10px'><div style='color:var(--wf-muted);font-size:11px;margin-bottom:6px'>GOVERNANCE BAND — every tool passes through all four, all four editable in Settings</div><div style='display:flex;gap:6px;flex-wrap:wrap'><div style='flex:1;min-width:120px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;color:var(--wf-ink);font-size:11px'>MarketAuthorizationService<div style='color:var(--wf-muted)'>platform scope</div></div><div style='flex:1;min-width:120px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;color:var(--wf-ink);font-size:11px'>PseudonymService<div style='color:var(--wf-muted)'>ids &rarr; handles</div></div><div style='flex:1;min-width:120px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;color:var(--wf-ink);font-size:11px'>SqlSafetyValidator<div style='color:var(--wf-muted)'>escape hatch only</div></div><div style='flex:1;min-width:120px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;color:var(--wf-ink);font-size:11px'>Budget + audit<div style='color:var(--wf-muted)'>mcp_tool_calls</div></div></div></div><div style='display:flex;gap:8px'><div style='flex:1;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>Curated services</strong><div style='color:var(--wf-muted)'>CeoDashboardDataService, ChurnAggregatorService, MarketHealthService, ErrorLogGroup</div></div><div style='flex:1;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:10px;color:var(--wf-ink);font-size:12px'><strong>vw_* views</strong><div style='color:var(--wf-muted)'>on the mysql_readonly SELECT-only connection</div></div></div></div>" />
+
+## Why curated tools rather than schema-plus-SQL
+
+Large surface: many tables, models and migrations. Pointed at raw tables an LLM re-derives
+joins, grain and metric definitions on every prompt, so the same question returns
+a different number each time and nothing enforces market scope. A named tool with
+typed parameters returns the same figure the CEO dashboard returns, because it
+calls the same service.
+
+The escape hatch stays, because a fixed tool set cannot anticipate every question.
+`exotic_run_reporting_sql` runs model-written SQL through a shared
+`App\Services\Ai\SqlSafetyValidator` core — single statement, SELECT only, no
+comments, allow-listed `vw_*` views only, forced LIMIT, and an outer projection
+that filters `platform_id` server-side so the model cannot widen its own
+visibility. The existing validator currently reads `config('ai.reporting_views')`
+and `AiInsightsSettingsService` directly, so this work must first split that into
+a reusable validation engine plus an explicit `SqlValidationPolicy` value object:
+Talk to Your Data passes the AI policy, and MCP passes `mcp_config.sql_hatch`
+views/limits/timeouts. This is one shared validator with two policies, not two
+validators and not a global config mutation.
+
+The SQL hatch is deliberately stricter than the tool-internal view layer. A view
+may contain `client_id` or `deal_id` when it is used only by PHP tools that
+pseudonymise before serialisation, but it is not eligible for
+`exotic_run_reporting_sql` until a wrapper view removes or replaces those raw
+entity IDs. The MCP SQL policy carries a forbidden-output list:
+`client_id`, `deal_id`, `payment_id`, `lead_id`, `agent_id`, `user_id`, names,
+phones, emails and free-text columns. `platform_id` is the one raw identifier
+allowed through, because it is the scope column.
+
+<Callout tone="risk" title="Tool output is untrusted input" body="This is the Supabase/Cursor incident shape: privileged read access, plus attacker-controlled text, plus an outbound channel. This CRM holds attacker-controlled text in `client_notes.body`, Support Board tickets and WordPress profile bios. **No tool returns client- or visitor-authored free text at all.** `exotic_error_digest` returns exception messages, which can embed user input, so they are truncated and stripped of URLs, `Authorization:` header shapes and bearer/API-key patterns before leaving the server — with those rules shown and adjustable in the Data &amp; Privacy panel." />
+
+## Identity: handles, not names
+
+Every client, user and lead crosses the boundary as a stable opaque handle. The
+model can follow `cli_7f3a9c2e` across a whole session, group it into cohorts and
+compare it against others — but the handle carries no name, phone, email, bio or
+KYC state, and cannot be reversed outside the CRM.
+
+The same rule applies to SQL results. `platform_id` may cross the boundary raw;
+`client_id`, `deal_id`, `lead_id`, `payment_id`, `agent_id` and `user_id` either
+leave as handles through curated tools or do not leave at all. A
+`ToolResultSanitizer` fails any tool response that still contains raw entity-id
+keys or raw-id-bearing URLs, and `SqlValidationPolicy` rejects SQL-hatch views or
+projections that return those columns. Its projection check is identifier-aware
+(aliases such as `agent_id AS rep` do not bypass it) and runs before the query is
+wrapped for market scope.
+
+<AnnotatedCode file="app/Services/Mcp/PseudonymService.php" lang="php" annotations={[{"lines":"9-12","label":"Key separation","note":"Derived from APP_KEY via a fixed context string, not APP_KEY itself, so leaking a handle set never weakens session or cookie encryption."},{"lines":"14-20","label":"Stable and one-way","note":"The same entity always yields the same handle across sessions and markets, which is what lets an agent reason about a cohort over many turns. Eight hex chars keeps responses token-cheap; the prefix already partitions the space by entity type."},{"lines":"22-27","label":"Reverse lookup stays server-side","note":"A scan over the entity's own id range, recomputing and comparing. Cheap at CRM scale, and it means no reverse map table exists to be exfiltrated."}]} code={"<?php\n\nnamespace App\\Services\\Mcp;\n\nuse Illuminate\\Support\\Facades\\Config;\n\nclass PseudonymService\n{\n    private function secret(): string\n    {\n        return hash_hmac('sha256', 'mcp-pseudonym-v1', Config::get('app.key'));\n    }\n\n    /** client|user|lead|deal + id  ->  'cli_7f3a9c2e' */\n    public function handle(string $type, int $id): string\n    {\n        $prefix = self::PREFIXES[$type] ?? throw new \\InvalidArgumentException($type);\n\n        return $prefix.'_'.substr(hash_hmac('sha256', $type.':'.$id, $this->secret()), 0, 8);\n    }\n\n    /** Server-side only. Never exposed as an MCP tool. */\n    public function resolve(string $handle): ?array\n    {\n        // scan the entity id range, recompute, compare — no reverse map is stored\n        // returns ['type' => 'client', 'id' => 4821] or null\n    }\n}\n"} />
+
+`exotic_client_snapshot` returns the handle only. It does not return a `/clients/{id}` URL or any other
+raw-id-bearing deep link: a URL would make the pseudonym boundary porous even if the response contains no
+name or phone. A future authenticated handle-to-record redirect can be added as a separate, explicitly
+scoped feature; it is not part of v1.
+
+<Compare title="The same client, two sides of the boundary" left={{"title":"What the CRM row holds","body":"`id: 4821`\n`name: \"Amina K\"`\n`phone_normalized: 254712…`\n`email: a…@gmail.com`\n`bio_original_html: \"…\"`\n`city: Nairobi`\n`lifecycle_state: active`\n`escort_expire: 1789…`"}} right={{"title":"What the model receives","body":"`handle: cli_7f3a9c2e`\n`market: KE`\n`city: Nairobi`\n`lifecycle_state: active`\n`expires_in_days: 12`\n`plan_type: premium`\n`ltv_usd: 184.00`\n\nName, phone, email and bio are never selected — absent from the query, not redacted downstream."}} />
+
+## Tool catalogue
+
+Namespaced `exotic_*` so the client groups them. `exotic_catalog` is the entry
+point: it returns the enabled tool families, the markets this token can see with
+their ids and names, the date coverage of the data, and the reporting-view
+dictionary — so an agent orients in one call instead of guessing at parameters.
+
+Every tool takes an optional `response_format` of `concise` (default) or
+`detailed`, and every list-shaped tool defaults to 50 rows with an explicit
+`limit`. Errors are written to steer: an unknown `platform_id` returns the list of
+ids this token may use, not a bare 422.
+
+<Table title="v1 tools" columns={["Tool","Key arguments","Returns","Backed by"]} rows={[
+["exotic_catalog","none","enabled tool families, accessible markets with ids, data coverage window, view dictionary","ToolRegistry + McpSettingsService + MarketAuthorizationService"],
+["exotic_revenue_summary","window, from, to, platform_ids[], currency_mode","collected revenue USD, active subscribers, new vs existing split, failed-payment recovery, avg daily, deltas vs prior window","CeoDashboardDataService::summary"],
+["exotic_revenue_trend","window, bucket (auto/daily/weekly/monthly), platform_ids[], overlay_prior","bucketed revenue and payment-count series with optional prior-window overlay","CeoDashboardDataService::revenueTrend"],
+["exotic_market_breakdown","window, platform_ids[], metric (revenue/payments/subscribers)","per-market share, totals, rank, health status","CeoDashboardDataService::marketPie + marketHealth"],
+["exotic_agent_performance","window, platform_ids[], limit","per-agent handle, revenue USD, deals closed, avg ticket","CeoDashboardDataService::agentPerformance, vw_agent_perf"],
+["exotic_peak_hours","window, platform_ids[]","payment volume by hour-of-day and weekday","CeoDashboardDataService::peakHours"],
+["exotic_lifecycle_summary","platform_ids[], as_of","active / expiring-7d / expiring-30d / expired / archived counts per market","vw_client_lifecycle (new)"],
+["exotic_churn_analysis","from, to, platform_ids[], breakdown (reason/tier/signup_source/duration)","churn counts and rates by the chosen dimension, with movement series","ChurnAggregatorService"],
+["exotic_cohort_retention","cohort_field (signup_month/signup_source), platform_ids[], horizon_months","retention curve per cohort","vw_client_lifecycle + vw_subscription_deals (new)"],
+["exotic_client_snapshot","handle, include_deals, include_payments","pseudonymous single-client view: lifecycle state, plan, expiry, deal history and LTV; no deep links","ClientLifetimeValueService::forClientIds + vw_subscription_deals"],
+["exotic_error_digest","since, level, source, resolved, limit","grouped errors: signature, class, sanitised message, file:line, count, first/last seen","ErrorLogGroup / ErrorLogOccurrence"],
+["exotic_system_vitals","none","scheduler heartbeat, concurrent ticks, tasks due, queue lane depths, payment proxy, SMS gateway, pending migrations","OperationsController::vitals surface + SystemHealth checks"],
+["exotic_market_health","platform_ids[]","per-market WP reachability, last sync run outcome, synced profile count, last error","MarketHealthService::summarize + ClientSyncRun"],
+["exotic_schema_dictionary","table, search","columns with types, indexes, FK relations, owning model, and the who-is-who note where one applies","Schema introspection + a curated annotation map"],
+["exotic_run_reporting_sql","sql, limit","validated SELECT rows plus the SQL actually executed after hardening","SqlSafetyValidator on mysql_readonly"]
+]} />
+
+Three MCP **resources** carry the standing context that is currently re-learned
+every session:
+
+<Table title="v1 resources" columns={["URI","Content","Why it exists"]} rows={[
+["exotic://context/who-is-who","The client / user / visitor / customer taxonomy, with the owning table for each and the rule that `visitor_contact_unlocks.client_id` is the advertiser, not the visitor","Mixing these four up is the most expensive mistake available in this codebase"],
+["exotic://context/reporting-views","Every vw_* view, its columns, its grain, its USD normalisation rule and what it deliberately excludes","Without it the SQL escape hatch guesses at grain and returns plausible wrong numbers"],
+["exotic://context/conventions","Phone normalisation, the two WP expiry systems (`escort_expire` unix vs `subscription_start/end` strings), primary/subsidiary market pairs, prod being MariaDB","Each of these has already caused a production defect"]
+]} />
+
+<Wireframe title="Settings → MCP → Tools" surface="desktop" caption="The registry doubles as the kill switch. Selecting a row opens the inspector: schema, example call, backing service, and the exact views it reads. A disabled tool disappears from tools/list rather than failing at call time, so an agent never plans around a tool it cannot use." html="<div style='background:var(--wf-paper);color:var(--wf-ink);font-size:12px'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap'><div><div style='font-size:14px;font-weight:600'>Tool registry</div><div style='color:var(--wf-muted)'>14 of 15 enabled · changes take effect on the next tools/list, no deploy</div></div><div style='display:flex;gap:6px'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Domain: All</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Status: All</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px'>Export CSV</span></div></div><div style='display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap'><div style='flex:3;min-width:260px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);overflow:hidden'><div style='display:flex;padding:7px 10px;color:var(--wf-muted);font-size:10px;border-bottom:1px solid var(--wf-line)'><div style='flex:3'>TOOL</div><div style='flex:2'>MIN ROLE</div><div style='flex:1'>7D</div><div style='flex:1'>P95</div><div style='flex:1'>ERR</div><div style='flex:1'>ON</div></div><div style='display:flex;padding:8px 10px;border-bottom:1px solid var(--wf-line);align-items:center'><div style='flex:3'>exotic_revenue_summary<div style='color:var(--wf-muted);font-size:10px'>revenue</div></div><div style='flex:2;color:var(--wf-muted)'>sub_admin</div><div style='flex:1'>412</div><div style='flex:1'>240ms</div><div style='flex:1;color:var(--wf-ok)'>0%</div><div style='flex:1'><span style='background:var(--wf-ok);color:var(--wf-paper);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>on</span></div></div><div style='display:flex;padding:8px 10px;border-bottom:1px solid var(--wf-line);align-items:center;background:var(--wf-accent-soft)'><div style='flex:3'><strong>exotic_churn_analysis</strong><div style='color:var(--wf-muted);font-size:10px'>lifecycle</div></div><div style='flex:2;color:var(--wf-muted)'>sub_admin</div><div style='flex:1'>96</div><div style='flex:1'>688ms</div><div style='flex:1;color:var(--wf-ok)'>0%</div><div style='flex:1'><span style='background:var(--wf-ok);color:var(--wf-paper);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>on</span></div></div><div style='display:flex;padding:8px 10px;border-bottom:1px solid var(--wf-line);align-items:center'><div style='flex:3'>exotic_error_digest<div style='color:var(--wf-muted);font-size:10px'>ops</div></div><div style='flex:2;color:var(--wf-muted)'>admin</div><div style='flex:1'>58</div><div style='flex:1'>91ms</div><div style='flex:1;color:var(--wf-ok)'>0%</div><div style='flex:1'><span style='background:var(--wf-ok);color:var(--wf-paper);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>on</span></div></div><div style='display:flex;padding:8px 10px;align-items:center;opacity:0.6'><div style='flex:3'>exotic_run_reporting_sql<div style='color:var(--wf-muted);font-size:10px'>escape hatch</div></div><div style='flex:2;color:var(--wf-muted)'>admin</div><div style='flex:1'>23</div><div style='flex:1'>310ms</div><div style='flex:1;color:var(--wf-warn)'>22%</div><div style='flex:1'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px;color:var(--wf-muted)'>off</span></div></div></div><div style='flex:2;min-width:220px;background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px'><div style='font-weight:600;margin-bottom:2px'>exotic_churn_analysis</div><div style='color:var(--wf-muted);margin-bottom:9px'>Churn counts and rates by reason, tier, signup source or subscribed duration.</div><div style='color:var(--wf-muted);font-size:10px;margin-bottom:3px'>ARGUMENTS</div><div style='background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:7px;font-size:10px;margin-bottom:9px'>from: date · to: date<br/>platform_ids: int[]<br/>breakdown: reason | tier | signup_source | duration<br/>response_format: concise | detailed</div><div style='color:var(--wf-muted);font-size:10px;margin-bottom:3px'>READS</div><div style='margin-bottom:9px'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>ChurnAggregatorService</span> <span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>vw_churn_events</span></div><div style='color:var(--wf-muted);font-size:10px;margin-bottom:3px'>RETURNS NO</div><div style='margin-bottom:11px;color:var(--wf-muted);font-size:10px'>names · phones · emails · bios · free text</div><div style='display:flex;gap:6px'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:6px 9px'>Preview payload</span><span style='border:1px solid var(--wf-warn);color:var(--wf-warn);border-radius:var(--wf-radius);padding:6px 9px'>Disable</span></div></div></div></div>" />
+
+## Everything configurable, without a deploy
+
+Configuration follows the pattern `AiInsightsSettingsService` already establishes:
+`config/mcp.php` holds defaults, an `IntegrationSetting` row keyed `mcp_config`
+overrides them, and `array_replace_recursive` merges the two. Settings wins, so
+every control in the station is a database write rather than an env change and a
+redeploy — which matters because cPanel deploys are a manual pull.
+
+<Callout tone="decision" title="Settings overrides config, and a disabled tool is invisible" body="A tool switched off in the station is filtered out of `tools/list` entirely rather than left listed and refused on call. An agent that cannot see a tool never plans around it; an agent that sees a tool and gets refused will retry, rephrase and burn calls. The same rule applies to resources and to the SQL escape hatch." />
+
+<DataModel name="IntegrationSetting row: mcp_config" note="Merged over config/mcp.php defaults by McpSettingsService::settings(). Every field below is edited from the control station and audited through AuditService on write using entity_type ops_mcp_config, or by extending AuditService's system entity allow-list to include ops_mcp_* before the first settings write ships." fields={[
+{"name":"enabled","type":"bool","note":"master switch — when false the endpoint returns a JSON-RPC error saying the server is disabled, and the Overview banner turns amber"},
+{"name":"tools","type":"object<string, {enabled: bool, min_role: string}>","note":"per-tool kill switch and role floor; a tool absent from the map falls back to its registry default"},
+{"name":"resources","type":"object<string, {enabled: bool}>","note":"per-resource switch for the three exotic://context/* documents"},
+{"name":"pii_mode","type":"enum: pseudonymous | aggregate_only","note":"aggregate_only additionally strips handles and per-entity rows, leaving only counts and sums — the lockdown setting"},
+{"name":"sql_hatch","type":"{enabled: bool, views: string[], default_row_limit: int, max_row_limit: int, timeout_seconds: int}","note":"converted into a SqlValidationPolicy handed to SqlSafetyValidator; editing it here does not touch config/ai.php, so Talk to Your Data keeps its own list"},
+{"name":"limits","type":"{rate_per_minute: int, daily_row_budget: int, daily_bytes_budget: int, on_exhaustion: throttle | disable_token}","note":"budgets are per token per day and reset at the configured timezone midnight"},
+{"name":"token_policy","type":"{default_ttl_days: int, max_ttl_days: int, allow_tool_allowlist: bool}","note":"caps what the mint form will issue; a request for a longer TTL is rejected server-side, not just hidden in the UI"},
+{"name":"sanitisation","type":"{truncate_chars: int, strip_urls: bool, strip_credentials: bool}","note":"applied to every free-text field any tool returns, currently only exception messages"},
+{"name":"audit","type":"{retain_days: int, alert_bytes_per_hour: int}","note":"retention for mcp_tool_calls and the threshold that raises the Overview anomaly banner"}
+]} relations={["belongsTo App\\Models\\User (updated_by)","read by App\\Services\\Mcp\\McpSettingsService"]} />
+
+The Data & Privacy panel is where the posture is set and, more usefully, *shown*.
+Each allow-listed view is listed with its columns and a verification badge that
+re-checks, live, that the view exposes no name, phone, email or bio column and
+that the stored view definition does not reference obvious PII/free-text source
+columns (`name`, `phone`, `email`, `bio`, `notes`, `description`, `message`,
+`body`, `raw_payload`, `payment_data`). This source-definition scan is paired with
+seeded payload tests, because a harmless output alias can still be derived from a
+sensitive source expression. Beside it, **Preview payload** runs any tool with
+sample arguments and renders the exact JSON the model would receive.
+
+<Wireframe title="Settings → MCP → Data & Privacy" surface="desktop" caption="The payload preview is the panel's point: it answers 'what would actually leave the building' with the real serialised response, not a description of one." html="<div style='background:var(--wf-paper);color:var(--wf-ink);font-size:12px'><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px;margin-bottom:10px'><div style='font-weight:600;margin-bottom:7px'>Privacy posture</div><div style='display:flex;gap:8px;flex-wrap:wrap'><div style='flex:1;min-width:200px;border:1px solid var(--wf-accent);background:var(--wf-accent-soft);border-radius:var(--wf-radius);padding:9px'><div style='font-weight:600'>Pseudonymous <span style='color:var(--wf-accent)'>· active</span></div><div style='color:var(--wf-muted);font-size:11px'>Stable handles per entity. Per-client rows allowed. No names, phones, emails, bios.</div></div><div style='flex:1;min-width:200px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px'><div style='font-weight:600'>Aggregate only</div><div style='color:var(--wf-muted);font-size:11px'>Counts and sums. No handles, no per-entity rows. Disables exotic_client_snapshot.</div></div></div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);overflow:hidden;margin-bottom:10px'><div style='display:flex;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--wf-line)'><strong>Reporting views and SQL-safe wrappers</strong><span style='color:var(--wf-muted)'>2 allowed · re-verified 4 min ago</span></div><div style='display:flex;padding:8px 10px;border-bottom:1px solid var(--wf-line);align-items:center'><div style='flex:3'>vw_mcp_lifecycle_rollup <span style='color:var(--wf-muted);font-size:10px'>· market · day · slice</span></div><div style='flex:2;color:var(--wf-muted);font-size:10px'>platform_id, coverage_date, lifecycle_state, signup_source, client_count</div><div style='flex:1;color:var(--wf-ok)'>no PII ✓</div><div style='flex:1'><span style='background:var(--wf-ok);color:var(--wf-paper);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px'>on</span></div></div><div style='display:flex;padding:8px 10px;align-items:center;opacity:0.6'><div style='flex:3'>vw_mcp_revenue_rollup <span style='color:var(--wf-muted);font-size:10px'>· market · day · slice</span></div><div style='flex:2;color:var(--wf-muted);font-size:10px'>platform_id, revenue_date, source, plan_type, amount_usd, payments_count</div><div style='flex:1;color:var(--wf-ok)'>no PII ✓</div><div style='flex:1'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:1px 6px;font-size:10px;color:var(--wf-muted)'>off</span></div></div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'><strong>Preview payload — what leaves the building</strong><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:4px 9px;color:var(--wf-muted)'>Tool: exotic_client_snapshot ▾</span></div><div style='background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:9px;font-size:10px;line-height:1.6'>{ &quot;handle&quot;: &quot;cli_7f3a9c2e&quot;, &quot;market&quot;: &quot;KE&quot;, &quot;city&quot;: &quot;Nairobi&quot;,<br/>&nbsp;&nbsp;&quot;lifecycle_state&quot;: &quot;active&quot;, &quot;expires_in_days&quot;: 12,<br/>&nbsp;&nbsp;&quot;plan_type&quot;: &quot;premium&quot;, &quot;ltv_usd&quot;: 184.00 }</div><div style='margin-top:7px;color:var(--wf-ok);font-size:11px'>Scanned for PII: no name, phone, email or bio field present · 182 bytes</div></div></div>" />
+
+## Observability
+
+Every call writes one row, whether it succeeds, is refused or is throttled — the
+same discipline `AiGateway` already applies to `ai_interactions`. Results are
+never stored, and arguments are stored only as a redacted shape, so the audit log
+cannot itself become a PII store. Refused SQL writes the refusal code, a safe
+statement hash and a redacted projection when one can be derived; it does not
+persist the raw rejected statement.
+
+<DataModel name="mcp_tool_calls" note="New table. Powers the Overview counters, the live feed, the per-tool statistics in the registry, and the Activity panel's filtered export." fields={[
+{"name":"id","type":"bigint pk"},
+{"name":"token_id","type":"bigint index","note":"FK to personal_access_tokens; nullable so revoking a token does not erase its history"},
+{"name":"user_id","type":"bigint nullable index","note":"owning user at call time; nullable for malformed, anonymous, expired or otherwise unauthenticated refusals"},
+{"name":"tool","type":"string(64) index","note":"e.g. exotic_revenue_summary; 'rpc:tools/list' for non-tool methods"},
+{"name":"argument_summary","type":"json","note":"redacted/truncated shape only: keys, scalar types, counts, approved enum values and safe date/window values; no handles from rejected calls, no free text, no bearer strings"},
+{"name":"generated_sql_sha256","type":"char(64) null","note":"only for exotic_run_reporting_sql — hash of the hardened statement for correlation without storing sensitive SQL"},
+{"name":"generated_sql_redacted","type":"text null","note":"optional Activity drawer preview with literals stripped and forbidden projections removed; raw rejected SQL is never stored"},
+{"name":"platform_scope","type":"json null","note":"the resolved platform_ids, or null for org-wide"},
+{"name":"status","type":"string(16) index","note":"success | refused | throttled | failed"},
+{"name":"refusal_reason","type":"string(64) null","note":"sql_validation | missing_ability | tool_disabled | budget_exceeded | role_denied"},
+{"name":"row_count","type":"unsigned int","note":"rows returned"},
+{"name":"bytes_out","type":"unsigned int","note":"serialised response size — the exfiltration signal the anomaly banner watches"},
+{"name":"latency_ms","type":"unsigned int"},
+{"name":"created_at","type":"timestamp index"},
+{"name":"request_id","type":"string(64) nullable index","note":"correlates a refusal or failure without persisting raw request bodies"}
+]} relations={["belongsTo PersonalAccessToken","belongsTo App\\Models\\User"]} />
+
+Overview polls a single aggregate endpoint every five seconds with a pause
+control, so the feed is live without holding a connection open — the same
+constraint that shaped the transport shapes the UI. The Activity panel is the
+full table with filters on token, tool, status, refusal reason and date range,
+plus CSV export, following the list conventions the rest of the CRM uses. An
+hourly `bytes_out` total above the configured threshold raises a banner on
+Overview naming the token responsible.
+
+## Auth: a token that can only do this
+
+<Callout tone="risk" title="Sanctum abilities are unused in this codebase" body="`tokenCan()` appears nowhere in `app/` or `routes/`, and `config/sanctum.php:57` sets `'expiration' => null`. So today `createToken('crm-session')` in `AuthController` mints a **non-expiring token with `['*']` abilities**. Minted the same way, an MCP token would be a permanent full-power CRM credential in a config file on a laptop — and because no CRM route checks abilities, a `mcp:read` token would authenticate against every `/api/crm/*` route including admin-only ones. Both halves need fixing: the MCP endpoint must require the ability, and the CRM routes must reject tokens that carry it." />
+
+Sanctum 3.3.3 already supports what is needed —
+`createToken(string $name, array $abilities, DateTimeInterface $expiresAt)` — and
+`Guard::isValidAccessToken` honours per-token `expires_at` regardless of the null
+global. No new token table is required.
+
+<DataModel name="personal_access_tokens (MCP rows)" note="Existing Sanctum table, used with fields the codebase currently leaves at their defaults." fields={[
+{"name":"name","type":"string","note":"'mcp:<label>' — distinguishes MCP rows from 'crm-session' rows in the Tokens panel"},
+{"name":"abilities","type":"json","note":"['mcp:read'], optionally plus per-tool abilities like 'mcp:tool:exotic_error_digest' when a token is issued with an allow-list"},
+{"name":"expires_at","type":"datetime","note":"always set; default and ceiling come from token_policy, enforced server-side at mint"},
+{"name":"last_used_at","type":"datetime","note":"already maintained by Sanctum; surfaced in the Tokens list so a stale credential is visible"},
+{"name":"tokenable_id","type":"bigint","note":"the CRM user the token acts as — market scope and role gates resolve from this user, so a sub_admin's token sees only their markets"}
+]} relations={["belongsTo App\\Models\\User (tokenable)","hasMany App\\Models\\McpToolCall (by token id)"]} />
+
+Market scope is not a token property. It resolves per request from the owning user
+through `MarketAuthorizationService::resolveAccessiblePlatformIds()`, so revoking a
+user's market access immediately narrows their token.
+
+<Callout tone="warn" title="resolveAccessiblePlatformIds returns null for admins" body="It returns `null`, not an array, when the user is an admin — meaning unrestricted. Every tool must branch on `is_array($ids)` before calling `whereIn('platform_id', $ids)`. Passing null straight into `whereIn` 500s. This has already bitten this codebase once." />
+
+<Wireframe title="Settings → MCP → Tokens" surface="desktop" caption="Filters, export and revoke on the list itself. The plaintext token is shown once at mint, inside the ready-to-paste client command, and never again." html="<div style='background:var(--wf-paper);color:var(--wf-ink);font-size:12px'><div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px;gap:10px;flex-wrap:wrap'><div><div style='font-size:14px;font-weight:600'>Access tokens</div><div style='color:var(--wf-muted)'>Read-only. Scope follows the owner's markets. Max TTL 365 days.</div></div><div style='background:var(--wf-accent);color:var(--wf-paper);border-radius:var(--wf-radius);padding:7px 11px;font-weight:600'>Mint token</div></div><div style='display:flex;gap:6px;margin-bottom:9px;flex-wrap:wrap'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Owner: All</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Status: Active</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;color:var(--wf-muted)'>Last used: Any</span><span style='margin-left:auto;border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px'>Export CSV</span></div><div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);overflow:hidden;margin-bottom:10px'><div style='display:flex;background:var(--wf-card);padding:7px 10px;color:var(--wf-muted);font-size:10px'><div style='flex:2'>LABEL</div><div style='flex:2'>OWNER · SCOPE</div><div style='flex:2'>TOOLS</div><div style='flex:2'>EXPIRES</div><div style='flex:2'>LAST USED</div><div style='flex:2'>CALLS 7D</div><div style='flex:1'></div></div><div style='display:flex;padding:9px 10px;border-top:1px solid var(--wf-line);align-items:center'><div style='flex:2'>ian-laptop</div><div style='flex:2;color:var(--wf-muted)'>Ian K · all markets</div><div style='flex:2;color:var(--wf-muted)'>all 14</div><div style='flex:2'>in 90 days</div><div style='flex:2'>4 min ago</div><div style='flex:2'><span style='color:var(--wf-ok)'>312</span> <span style='color:var(--wf-muted)'>· 18% cap</span></div><div style='flex:1;color:var(--wf-muted);text-align:right'>Revoke</div></div><div style='display:flex;padding:9px 10px;border-top:1px solid var(--wf-line);align-items:center'><div style='flex:2'>ops-codex</div><div style='flex:2;color:var(--wf-muted)'>J. Yengo · TZ, RW</div><div style='flex:2;color:var(--wf-muted)'>ops only (3)</div><div style='flex:2'><span style='color:var(--wf-warn)'>in 6 days</span></div><div style='flex:2'>2 days ago</div><div style='flex:2'>41 <span style='color:var(--wf-muted)'>· 2% cap</span></div><div style='flex:1;color:var(--wf-muted);text-align:right'>Revoke</div></div><div style='display:flex;padding:9px 10px;border-top:1px solid var(--wf-line);align-items:center;opacity:0.55'><div style='flex:2'>old-macbook</div><div style='flex:2;color:var(--wf-muted)'>Ian K · all markets</div><div style='flex:2;color:var(--wf-muted)'>all</div><div style='flex:2'>expired</div><div style='flex:2'>Aug 2</div><div style='flex:2'>0</div><div style='flex:1;color:var(--wf-muted);text-align:right'>Delete</div></div></div><div style='background:var(--wf-accent-soft);border:1px solid var(--wf-accent);border-radius:var(--wf-radius);padding:10px'><div style='font-weight:600;margin-bottom:5px'>Token minted — copy it now, it will not be shown again</div><div style='background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:10px;margin-bottom:6px'>claude mcp add --transport http exotic https://crm.exotic-online.com/api/mcp \\<br/>&nbsp;&nbsp;--header &quot;Authorization: Bearer 14|s3cr3t…&quot;</div><div style='display:flex;gap:6px'><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;background:var(--wf-card)'>Copy Claude Code command</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:5px 9px;background:var(--wf-card)'>Copy Codex config.toml</span></div></div></div>" />
+
+<Endpoint method="POST" path="/api/mcp" auth="Sanctum bearer token that must carry exactly `mcp:read` plus optional `mcp:tool:<name>` abilities, must have a future `expires_at`, and must not carry `['*']` or any non-MCP write ability. Market scope and role gates resolve from the token's owning user on every call, never from the request body. Transport headers must include Content-Type: application/json, Accept with application/json and text/event-stream, Origin validation when present, MCP-Protocol-Version for modern clients, Mcp-Method, and Mcp-Name when the method addresses a tool or resource." request={{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exotic_revenue_summary","arguments":{"window":"30d","platform_ids":[1,7],"response_format":"concise"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}} response={{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[{"type":"text","text":"{ collected_revenue_usd: 65423.27, … }"}],"isError":false}}} errors="401 when the token is missing, expired or lacks mcp:read · 403 when the tool's min_role exceeds the owning user's role or the token allow-list excludes it · 429 when the per-token rate limit or daily budget is exhausted · JSON-RPC -32601 for an unknown or disabled tool, whose message lists the tools currently available to this token · JSON-RPC -32020 HeaderMismatch for recognised header/body disagreement" note="Stateless: no Mcp-Session-Id is issued or required. Responds application/json for v1; SSE support is not required because every response is short and request-scoped, but the server must tolerate clients advertising text/event-stream in Accept. Modern requests must include the protocol header and matching params._meta protocol version; recognised header/body mismatches are refused before tool execution." />
+
+<Endpoint method="PUT" path="/api/crm/settings/mcp" auth="auth:sanctum with a ['*'] session token, plus role:admin. Sub-admins may read this endpoint but not write it, because tool availability and privacy posture are org-wide settings." request={{"enabled":true,"pii_mode":"pseudonymous","tools":{"exotic_run_reporting_sql":{"enabled":false}},"limits":{"rate_per_minute":30,"daily_row_budget":200000}}} response={{"settings":"…merged effective settings…","changed":["tools.exotic_run_reporting_sql.enabled","limits.rate_per_minute"]}} errors="403 for non-admins · 422 when a TTL or budget exceeds the hard ceiling in config/mcp.php" note="Writes the mcp_config IntegrationSetting row and logs the field-level diff through AuditService using an allowed system entity_type such as ops_mcp_config, so a privacy-posture change is attributable." />
+
+<Endpoint method="POST" path="/api/crm/mcp/self-test" auth="auth:sanctum with a ['*'] session token, plus role:admin,sub_admin. Runs as the calling user against a short-lived internal token; never accepts a token in the request." request={{"include_sample_call":true}} response={{"reachable":true,"protocol":"2026-07-28","fallback_protocol":"2025-03-26","tools_listed":14,"resources_listed":3,"readonly_connection":"ok","views_present":7,"sample_call":{"tool":"exotic_catalog","latency_ms":38,"status":"success"}}} errors="503 with a per-check breakdown when any stage fails — each failure names the fix, e.g. 'mysql_readonly unreachable: check DB_RO_* env on cPanel'" note="Backs the Run self-test button on Overview and the Guide's troubleshooting section. Every check maps to one remediation line." />
+
+<Endpoint method="POST" path="/api/crm/mcp/tools/{tool}/preview" auth="auth:sanctum with a ['*'] session token, plus the tool's own min_role. Executes the real tool with the real governance band, then discards the result after rendering." request={{"arguments":{"handle":"cli_7f3a9c2e"},"response_format":"detailed"}} response={{"payload":"…exact JSON the model would receive…","bytes":218,"row_count":1,"pii_scan":{"clean":true,"fields_checked":["name","phone","email","bio"]}}} errors="403 when the caller's role is below the tool's floor · 422 on invalid arguments, echoing the tool's JSON Schema" note="Powers Preview payload in Data & Privacy and in the tool inspector. Preview calls are written to mcp_tool_calls with tool prefixed 'preview:' so they are visible but never counted against a token budget." />
+
+## The guide, in the product
+
+The Guide panel is documentation that stays correct because it is generated from
+live state rather than written once. It carries the real endpoint URL, the real
+enabled-tool list, and commands that are copyable rather than transcribable.
+
+<Wireframe title="Settings → MCP → Guide" surface="desktop" caption="Setup, self-test and troubleshooting in one place. The tool reference lists example prompts, because the failure mode for a new user is not misconfiguration — it is not knowing what to ask." html="<div style='background:var(--wf-paper);color:var(--wf-ink);font-size:12px'><div style='display:flex;gap:10px;flex-wrap:wrap'><div style='flex:3;min-width:280px'><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px;margin-bottom:9px'><div style='font-weight:600;margin-bottom:6px'>1 · Connect your client</div><div style='display:flex;gap:6px;margin-bottom:7px'><span style='border:1px solid var(--wf-accent);background:var(--wf-accent-soft);border-radius:var(--wf-radius);padding:4px 9px;font-weight:600'>Claude Code</span><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:4px 9px;color:var(--wf-muted)'>Codex CLI</span></div><div style='background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:8px;font-size:10px'>claude mcp add --transport http exotic \\<br/>&nbsp;&nbsp;https://crm.exotic-online.com/api/mcp \\<br/>&nbsp;&nbsp;--header &quot;Authorization: Bearer $EXOTIC_MCP_TOKEN&quot;</div><div style='color:var(--wf-muted);font-size:11px;margin-top:6px'>Mint a token in the Tokens panel first. Store it in your shell profile, not in the command.</div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px;margin-bottom:9px'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'><div style='font-weight:600'>2 · Verify</div><span style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:4px 9px'>Run self-test</span></div><div style='display:flex;flex-direction:column;gap:3px;font-size:11px'><div><span style='color:var(--wf-ok)'>✓</span> Endpoint reachable · protocol 2026-07-28 + 2025-03-26 fallback</div><div><span style='color:var(--wf-ok)'>✓</span> 14 tools, 3 resources listed</div><div><span style='color:var(--wf-ok)'>✓</span> mysql_readonly connection healthy</div><div><span style='color:var(--wf-ok)'>✓</span> 7 reporting views present, all PII-clean</div><div><span style='color:var(--wf-warn)'>!</span> 1 token expires in 6 days</div></div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px'><div style='font-weight:600;margin-bottom:6px'>3 · Ask something</div><div style='display:flex;flex-direction:column;gap:5px'><div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:7px;color:var(--wf-muted)'>&ldquo;Why did new-user revenue fall this window?&rdquo; <span style='font-size:10px'>→ revenue_summary, market_breakdown, churn_analysis</span></div><div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:7px;color:var(--wf-muted)'>&ldquo;Which markets have profiles expiring in 7 days?&rdquo; <span style='font-size:10px'>→ lifecycle_summary</span></div><div style='border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:7px;color:var(--wf-muted)'>&ldquo;What errors started after the last deploy?&rdquo; <span style='font-size:10px'>→ error_digest, system_vitals</span></div></div></div></div><div style='flex:2;min-width:210px'><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px;margin-bottom:9px'><div style='font-weight:600;margin-bottom:6px'>Troubleshooting</div><div style='display:flex;flex-direction:column;gap:6px;font-size:11px'><div><strong>401 unauthorized</strong><div style='color:var(--wf-muted)'>Token expired, revoked, or minted without mcp:read. Check the Tokens panel.</div></div><div><strong>Tool missing from the list</strong><div style='color:var(--wf-muted)'>Disabled in Tools, or your role is below its floor.</div></div><div><strong>429 throttled</strong><div style='color:var(--wf-muted)'>Rate or daily row budget hit. See Limits for the reset time.</div></div><div><strong>SQL refused</strong><div style='color:var(--wf-muted)'>Only allow-listed vw_* views. See Data &amp; Privacy for the current list.</div></div></div></div><div style='background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:11px'><div style='font-weight:600;margin-bottom:6px'>What it can never do</div><div style='color:var(--wf-muted);font-size:11px;line-height:1.6'>Write anything · read names, phones, emails or bios · read a base table · send a message · cross into markets its owner cannot see</div></div></div></div></div>" />
+
+## The request-coupling compromise
+
+`CeoDashboardDataService::summary()`, `revenueTrend()`, `marketPie()`,
+`agentPerformance()` and `peakHours()` all take an `Illuminate\Http\Request`. That
+is how the whole CEO dashboard is built, and rewriting a 1,000-line service to
+take parameter arrays would put the dashboard at risk to make an MCP tool tidier.
+
+So the tools do not refactor it. `McpRequestAdapter` builds a synthetic `Request`
+from validated MCP arguments and passes it in. This is a deliberate compromise: it
+keeps the numbers identical to the dashboard's by construction for admin
+org-wide and single-market calls — same code path, same FX handling, same
+exclusions — at the cost of an adapter that must know the query-parameter names
+each method reads.
+
+Multi-market scoping is owned by `McpDashboardScopeRunner`, not by the adapter.
+It resolves the caller's allowed markets, intersects any requested
+`platform_ids`, runs the dashboard once for unrestricted admin/org-wide requests,
+runs it once for a single market, and fans out across allowed markets for
+sub-admin multi-market requests before merging the typed result. Tests pin all
+three cases: admin org-wide parity, single-market parity, and sub-admin
+multi-market fan-out with no scope widening.
+
+<AnnotatedCode file="app/Services/Mcp/McpRequestAdapter.php" lang="php" annotations={[{"lines":"3-9","label":"Validated in, never raw","note":"Arguments arrive already validated against the tool's JSON Schema, so the adapter translates rather than acting as a second validation layer."},{"lines":"13-14","label":"Single platform in","note":"McpDashboardScopeRunner resolves allowed markets and fans out before calling this adapter, so the synthetic dashboard request carries the one platform_id the current dashboard methods already understand."},{"lines":"16-17","label":"setUserResolver","note":"The downstream service calls $request->user(); without this the synthetic request has no user and scope resolution inside those services silently widens."}]} code={"<?php\n\npublic function build(array $args, User $user, array $paramMap): Request\n{\n    $query = [];\n\n    foreach ($paramMap as $mcpKey => $httpKey) {\n        if (array_key_exists($mcpKey, $args)) {\n            $query[$httpKey] = $args[$mcpKey];\n        }\n    }\n\n    // McpDashboardScopeRunner owns platform fan-out and passes one platform here.\n    $query['platform_id'] = $args['platform_id'] ?? null;\n\n    $request = Request::create('/mcp-synthetic', 'GET', array_filter($query, fn ($v) => $v !== null));\n    $request->setUserResolver(fn () => $user);\n\n    return $request;\n}\n"} />
+
+## New reporting views
+
+Three of the four domains need views that do not exist yet. All follow the rules
+the latest August reporting-view migration establishes: expose `platform_id` for
+server-side scoping, normalise money to USD through `reporting_fx_rates`, and
+carry the production exclusions for manual-review rows, reversed or invalid
+references, test classifications, sandbox provider environments, wallet topups
+and visitor contact unlocks. Tool-internal views may expose join IDs because PHP
+serialisers replace them with handles; SQL-hatch views must be aggregate or
+id-safe and may expose only `platform_id` raw.
+
+<Table title="Views added for tools and SQL-safe wrappers" columns={["View","Grain","Key columns","Feeds"]} rows={[
+["vw_client_lifecycle","one row per client","platform_id, client_id, client_type, lifecycle_state, profile_status, premium, verified, signup_source, city, region, escort_expire_date, created_date, closed_date, close_reason_code, is_high_risk","exotic_lifecycle_summary, exotic_cohort_retention"],
+["vw_subscription_deals","one row per deal","platform_id, deal_id, client_id, plan_type, duration_days, amount_usd, status, is_free_trial, origin, subscription_lifecycle, activated_date, expires_date","exotic_client_snapshot, exotic_cohort_retention"],
+["vw_churn_events","one row per churn event","platform_id, client_id, churn_date, reason_code, tier, subscribed_days, signup_source","exotic_churn_analysis"],
+["vw_market_coverage","one row per market per day","platform_id, market_name, market_country, coverage_date, active_clients, expiring_7d, new_clients, churned_clients","exotic_market_breakdown, exotic_lifecycle_summary"],
+["vw_mcp_lifecycle_rollup","one row per market / date / lifecycle slice","platform_id, coverage_date, lifecycle_state, signup_source, plan_type, client_count, expiring_7d, churned_clients","SQL hatch only; aggregate/id-safe wrapper over lifecycle data"],
+["vw_mcp_revenue_rollup","one row per market / date / revenue slice","platform_id, revenue_date, source, plan_type, amount_usd, payments_count, new_client_count, recovered_count","SQL hatch only; aggregate/id-safe wrapper over revenue data"]
+]} />
+
+<Callout tone="decision" title="Ops data stays out of the SQL escape hatch" body="`SqlSafetyValidator::wrapWithScope` filters on `platform_id`, so every allow-listed SQL-hatch view must expose one and must be aggregate/id-safe. Error groups, scheduler vitals and queue depth have no market dimension, and faking a null `platform_id` would create an ambiguous scoping rule. Ops data therefore reaches the model **only** through `exotic_error_digest`, `exotic_system_vitals` and `exotic_market_health`, each with an admin role floor. Tool-internal views containing client_id or deal_id are not automatically SQL-hatch views; the SQL allow-list stays purely business data." />
+
+## Steps
+
+Phase 1 is steps 1-3 — the endpoint exists, is safe, and is observable. Phase 2 is
+steps 4-7 — the tools that answer real questions. Phase 3 is steps 8-12 — the
+remaining domains and the full control station. The implementation order is
+strictly sequential from step 1 through step 12, so the grand vision stays visible
+while each layer is built on the last. Step 7 is a checkpoint, not a cut line:
+transport/auth/audit, revenue and lifecycle tools, Overview, Tokens and Activity
+must work before moving on. Then steps 8-12 complete the ops, context, SQL,
+privacy, limits and guide surfaces before the MCP station is considered shipped.
+
+<Steps items={[
+  {"title":"JSON-RPC transport, auth and settings resolution","reuses":"Sanctum 3.3.3 (per-token abilities and expires_at), the existing `throttle` middleware, the `AiInsightsSettingsService` settings-over-config pattern","adds":"`POST /api/mcp` outside the `crm` prefix; `McpAuthenticate` middleware; `McpServer` dispatching `server/discover`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, plus an isolated 2025-era `initialize` fallback; Streamable HTTP header validation for 2026-07-28, Origin validation, `params._meta` protocol matching, `resultType: complete` on tool-call results only, HeaderMismatch `-32020`; `ToolRegistry`; `McpSettingsService` merging the `mcp_config` IntegrationSetting over `config/mcp.php`; one probe tool","files":"routes/api.php, app/Http/Middleware/McpAuthenticate.php, app/Services/Mcp/McpServer.php, app/Services/Mcp/ToolRegistry.php, app/Services/Mcp/McpSettingsService.php, config/mcp.php","verify":"`claude mcp add --transport http` then `claude mcp list` shows it connected; modern POSTs with MCP-Protocol-Version/Mcp-Method/Mcp-Name/params._meta pass, and tools/call responses include resultType=complete; invalid Origin and mismatched transport headers fail predictably; flipping `enabled` to false in the settings row makes the endpoint refuse without a deploy"},
+  {"title":"Close the ability hole on every non-MCP route","reuses":"all existing `auth:sanctum` CRM and legacy staff mutation groups in routes/api.php, not only the `/api/crm` group at line 207","adds":"`EnsureCrmSessionToken` on every protected staff bearer route, plus an optional-token firewall for legacy public routes: anonymous public traffic remains unchanged, but any request carrying a Sanctum bearer token with `mcp:*` abilities is rejected unless the route is `/api/mcp`. Normal CRM session tokens remain `['*']`; MCP tokens are accepted only at the MCP endpoint. The middleware must cover setup routes that currently use only `auth:sanctum`, and the tests must enumerate every public route that returns staff, client, payment or operational data so a read token cannot use a legacy endpoint as an alternate data channel","files":"app/Http/Middleware/EnsureCrmSessionToken.php, app/Http/Middleware/RejectMcpTokenOutsideEndpoint.php, app/Http/Kernel.php, routes/api.php","verify":"feature tests: an mcp:read token gets 401/403 on `/api/crm/dashboard/ceo/summary`, `/api/crm/setup/run-sync`, `POST /api/platforms`, `POST /api/products`, `/api/activate-profile`, `/api/manual-stk-push`, and every enumerated legacy data route; anonymous `GET /api/platforms` and `GET /api/products` preserve existing behaviour; a normal ['*'] CRM session token keeps its existing access; a wildcard session token gets 401 at `/api/mcp`"},
+  {"title":"Pseudonyms, output sanitisation and the audit trail","reuses":"APP_KEY, the AuditService pattern after extending/using an allowed system entity type","adds":"`PseudonymService` with handle only; no CRM deep links or raw-id-bearing URLs cross the boundary. `ToolResultSanitizer` rejects raw entity IDs, raw-id URL patterns, disallowed free text and PII-shaped keys. `mcp_tool_calls` stores nullable actor/token fields so malformed, anonymous, expired and pre-auth refusals remain observable; it stores a request id, redacted argument summaries and SQL hashes only. Audit is written from `McpServer` around every dispatch including refusals and throttles; settings writes are audited as `ops_mcp_config` or another `ops_mcp_*` entity accepted by AuditService","files":"app/Services/Mcp/PseudonymService.php, app/Services/Mcp/ToolResultSanitizer.php, app/Models/McpToolCall.php, database/migrations/2026_09_10_000002_create_mcp_tool_calls_table.php, app/Services/AuditService.php","verify":"unit test: the same (type,id) yields the same handle across two service instances; an anonymous or expired-token refusal still writes a row with nullable actor/token fields and no raw SQL/body; PUT /api/crm/settings/mcp creates an AuditLog row instead of being skipped by AuditService; seeded raw entity IDs and raw-id URLs fail response sanitisation before leaving the server"},
+  {"title":"Revenue and market tools","reuses":"CeoDashboardDataService, MetricsSnapshotService, vw_payments_usd, vw_market_revenue, vw_agent_perf","adds":"`McpRequestAdapter`; `McpDashboardScopeRunner` for admin org-wide, single-market and scoped multi-market fan-out; six revenue/market tools with JSON Schema arguments and concise/detailed formatting","files":"app/Services/Mcp/McpRequestAdapter.php, app/Services/Mcp/McpDashboardScopeRunner.php, app/Services/Mcp/Tools/Revenue/*.php","verify":"`exotic_revenue_summary` for the 30-day window returns the same collected-revenue figure as the live CEO dashboard for admin org-wide and single-market calls; a sub-admin multi-market request is narrowed to allowed markets and merged without widening"},
+  {"title":"Lifecycle reporting views","reuses":"the reporting_fx_rates join, USD expression and payment-exclusion rules from the latest August reporting-view migration","adds":"vw_client_lifecycle, vw_subscription_deals, vw_churn_events, vw_market_coverage for PHP tools; aggregate/id-safe vw_mcp_lifecycle_rollup and vw_mcp_revenue_rollup for the SQL hatch; only SQL-safe wrappers are registered in the default SQL allow-list. The migration uses the next concrete timestamp at implementation time, checks every optional source column with Schema::hasColumn, and has a reversible down path that drops only the MCP-owned views","files":"database/migrations/2026_09_10_000003_create_mcp_reporting_views.php, config/mcp.php","verify":"`php artisan migrate` locally, then assert every new view exposes platform_id; PHP-only views select no PII/free text; SQL-hatch allow-listed views expose no raw entity IDs except platform_id and carry the manual_review/reversed/invalid/test/sandbox/wallet/contact-unlock exclusions; run migrate:rollback for the migration and confirm the pre-existing AI views remain"},
+  {"title":"Lifecycle and retention tools","reuses":"ChurnAggregatorService, ClientLifetimeValueService, the new views","adds":"the four lifecycle tools, with client ids replaced by handles at the serialisation boundary","files":"app/Services/Mcp/Tools/Lifecycle/*.php","verify":"`exotic_client_snapshot` on a known handle returns no name, phone or email anywhere in the payload — assert by scanning the serialised response"},
+  {"title":"Control station: Overview, Tokens and Activity","reuses":"the sub-tabbed workspace idiom in AiWorkspacePanel.jsx, the crm-surface card styling, the existing list filter/export conventions","adds":"the MCP Settings tab; `McpWorkspacePanel.jsx` shell; Overview with master switch, endpoint copy, six counters and the polled live feed; Tokens with filters, export, mint-once modal carrying both client commands; Activity with full filtering and CSV export; `McpTokenController` and `McpActivityController`","files":"resources/js/pages/Settings.jsx, resources/js/components/settings/mcp/McpWorkspacePanel.jsx, .../McpOverviewPanel.jsx, .../McpTokensPanel.jsx, .../McpActivityPanel.jsx, app/Http/Controllers/CRM/McpTokenController.php, app/Http/Controllers/CRM/McpActivityController.php","verify":"mint a 1-day token in the UI, confirm a call appears in the live feed within one poll, wind expires_at back and confirm 401 plus a row in Activity with refusal_reason; capture desktop and mobile Playwright screenshots and assert no horizontal overflow or clipped controls"},
+  {"title":"Ops tools with output sanitisation","reuses":"ErrorLogGroup, MarketHealthService, the OperationsController vitals surface","adds":"the three ops tools with an admin role floor; a `SanitisesToolOutput` trait driven by the sanitisation settings","files":"app/Services/Mcp/Tools/Ops/*.php, app/Services/Mcp/Concerns/SanitisesToolOutput.php","verify":"seed an error group whose message embeds a bearer token and a URL; assert both are stripped, and that lowering truncate_chars in Settings shortens the next response"},
+  {"title":"Engineering context tools and resources","reuses":"Laravel schema introspection, the taxonomy already written in CLAUDE.md","adds":"`exotic_schema_dictionary`; the three `exotic://context/*` resources served from `resources/mcp/*.md` so wording is editable without shipping code","files":"app/Services/Mcp/Tools/Schema/*.php, resources/mcp/who-is-who.md, resources/mcp/reporting-views.md, resources/mcp/conventions.md","verify":"`resources/read` on exotic://context/who-is-who returns the four-subject taxonomy including the visitor-is-not-a-customer rule"},
+  {"title":"Guarded SQL escape hatch","reuses":"the SqlSafetyValidator validation rules and the mysql_readonly connection","adds":"refactor SqlSafetyValidator to accept an explicit SqlValidationPolicy for allowed views, default/max limits, timeout source and forbidden output columns; keep AiInsightsSettingsService as the AI policy provider; add `exotic_run_reporting_sql`, taking its policy from McpSettingsService and writing only SQL hashes/redacted SQL previews to mcp_tool_calls","files":"app/Services/Ai/SqlSafetyValidator.php, app/Services/Ai/SqlValidationPolicy.php, app/Services/Mcp/Tools/Sql/RunReportingSqlTool.php","verify":"`SELECT * FROM clients` is refused with a message naming the MCP allow-listed views; selecting client_id/deal_id from a tool-internal view is refused; removing a view in Data & Privacy makes the next query against it fail; changing MCP SQL settings does not change Talk to Your Data limits or view access"},
+  {"title":"Control station: Tools, Data & Privacy, Limits","reuses":"the ToolRegistry metadata and the mcp_tool_calls aggregates","adds":"Tools registry with per-tool switch, role floor and inspector drawer; Data & Privacy with posture selector, view allow-list plus live PII/entity-id verification, sanitisation rules and payload preview; Limits with budgets and a per-token consumption chart; `McpSettingsController` with the audited PUT and the preview endpoint","files":"resources/js/components/settings/mcp/McpToolsPanel.jsx, .../McpPrivacyPanel.jsx, .../McpLimitsPanel.jsx, app/Http/Controllers/CRM/McpSettingsController.php","verify":"disable a tool in the UI and confirm it vanishes from the next `tools/list` in a live client session, not merely refuses; Preview payload on exotic_client_snapshot reports a clean PII scan; capture desktop and mobile Playwright screenshots and assert no horizontal overflow or clipped controls"},
+  {"title":"Control station: Guide and self-test","reuses":"the settings state and registry already exposed to the other panels","adds":"the Guide panel generated from live state — real endpoint, real enabled-tool list, copyable Claude Code and Codex snippets, example prompts, troubleshooting mapped to refusal reasons; `POST /api/crm/mcp/self-test` with per-check remediation text","files":"resources/js/components/settings/mcp/McpGuidePanel.jsx, app/Http/Controllers/CRM/McpSettingsController.php","verify":"break DB_RO_* deliberately and confirm the self-test fails that one check with a remediation line naming the env keys, while the others still pass; document rollback: disable `mcp_config.enabled`, revoke active mcp:* tokens, remove `/api/mcp` route if needed, and leave the reporting views in place until a planned cleanup migration"}
+]} />
+
+<FileMap items={[
+  {"path":"routes/api.php","action":"edit","note":"POST /api/mcp outside the crm prefix; EnsureCrmSessionToken on every non-MCP auth:sanctum staff route, including legacy staff mutation groups; crm/mcp management routes"},
+  {"path":"app/Http/Middleware/McpAuthenticate.php","action":"add","note":"ability + expiry gate, master switch, per-token throttle key"},
+  {"path":"app/Http/Middleware/EnsureCrmSessionToken.php","action":"add","note":"closes the hole where an mcp:read token would pass every CRM route"},
+  {"path":"app/Services/Mcp/McpServer.php","action":"add","note":"JSON-RPC dispatch, error codes, audit wrapper"},
+  {"path":"app/Services/Mcp/McpSettingsService.php","action":"add","note":"mcp_config over config/mcp.php; the single source every panel and the registry read"},
+  {"path":"app/Services/Mcp/ToolRegistry.php","action":"add","note":"registration, JSON Schema emission, settings-driven filtering of tools/list"},
+  {"path":"app/Services/Mcp/PseudonymService.php","action":"add","note":"HMAC handles, server-side resolve"},
+  {"path":"app/Services/Mcp/ToolResultSanitizer.php","action":"add","note":"final response gate: no raw entity IDs, no disallowed free text, no PII-shaped fields"},
+  {"path":"app/Services/Mcp/McpRequestAdapter.php","action":"add","note":"the synthetic-Request compromise; translates validated arguments into the single-platform request shape the dashboard methods understand"},
+  {"path":"app/Services/Mcp/McpDashboardScopeRunner.php","action":"add","note":"resolves platform scope, intersects requested markets, preserves admin org-wide/single-market parity, and fans out scoped multi-market dashboard calls"},
+  {"path":"app/Services/Mcp/Tools/","action":"add","note":"15 tool classes grouped Revenue / Lifecycle / Ops / Schema / Sql"},
+  {"path":"app/Services/Ai/SqlSafetyValidator.php","action":"edit","note":"keep validation rules, but accept explicit SqlValidationPolicy so MCP and Talk to Your Data do not share mutable limits or allow-lists"},
+  {"path":"app/Services/Ai/SqlValidationPolicy.php","action":"add","note":"small value object for allowed views, default/max row limits, timeout source and forbidden output columns"},
+  {"path":"app/Http/Controllers/CRM/McpSettingsController.php","action":"add","note":"read/write settings, self-test, tool preview"},
+  {"path":"app/Http/Controllers/CRM/McpTokenController.php","action":"add","note":"list, mint, revoke"},
+  {"path":"app/Http/Controllers/CRM/McpActivityController.php","action":"add","note":"aggregates for Overview, filtered feed, CSV export"},
+  {"path":"config/mcp.php","action":"add","note":"defaults and the hard ceilings the settings row may not exceed"},
+  {"path":"database/migrations/2026_09_10_000003_create_mcp_reporting_views.php","action":"add","note":"PHP tool views plus SQL-safe aggregate wrappers, based on the latest payment-exclusion rules"},
+  {"path":"database/migrations/2026_09_10_000002_create_mcp_tool_calls_table.php","action":"add","note":"audit table storing redacted argument summaries and SQL hashes/previews, never raw rejected SQL"},
+  {"path":"resources/mcp/who-is-who.md","action":"add","note":"served as an MCP resource; the taxonomy stops being re-derived every session"},
+  {"path":"resources/js/components/settings/mcp/","action":"add","note":"seven panels plus the workspace shell, following AiWorkspacePanel.jsx"},
+  {"path":"resources/js/pages/Settings.jsx","action":"edit","note":"register the MCP tab"},
+  {"path":"tests/Feature/Mcp/","action":"add","note":"transport headers/versioning, ability isolation across CRM and legacy staff routes, settings-driven filtering, PII absence, SQL refusal, budget"}
+]} />
+
+<Risks items={[
+  {"risk":"A leaked token gives an attacker a queryable business-intelligence view of every market until someone notices","impact":"high","likelihood":"possible","mitigation":"mandatory expiry rather than the codebase's current never-expires default; per-token bytes_out and call volume on Overview with an hourly anomaly banner; one-click revoke; and the token can only read, because no write tool exists to escalate to"},
+  {"risk":"Prompt injection through data the model reads — a client note or exception message instructing the agent to call another tool and paste the result somewhere","impact":"high","likelihood":"possible","mitigation":"no tool returns client- or visitor-authored free text; exception messages are truncated and stripped of URLs and credential patterns; and because every tool is read-only there is no send, write or fetch tool to pivot into"},
+  {"risk":"Tool figures drift from the CEO dashboard, so the AI and the dashboard disagree and neither is trusted","impact":"high","likelihood":"likely if tools reimplement queries","mitigation":"revenue tools call CeoDashboardDataService through the adapter rather than writing their own SQL; the parity check in step 4 is against the live dashboard and a regression test pins one window's figure"},
+  {"risk":"A settings change silently breaks a running session — a tool disabled mid-conversation, or a view removed from the allow-list","impact":"medium","likelihood":"likely once the station is used","mitigation":"disabled tools disappear from tools/list so the next turn re-plans rather than failing; every settings write is audited with a field-level diff; and the Activity panel shows tool_disabled refusals so the cause is visible rather than mysterious"},
+  {"risk":"The audit table becomes a long-lived sink for raw prompts, rejected SQL, handles or credential-shaped text","impact":"high","likelihood":"possible without a redaction layer","mitigation":"store argument_summary instead of arguments, store generated_sql_sha256 plus a redacted preview instead of raw SQL, exclude handles from rejected calls, and add feature tests that seed bearer-looking strings and PII into failed requests"},
+  {"risk":"`COUNT(*) as rows` in a new view or aggregate passes locally and 1064s on production MariaDB","impact":"medium","likelihood":"likely without a check","mitigation":"`rows` is reserved on MariaDB — use `entries` or `row_count`; grep the diff for `as rows` before shipping"},
+  {"risk":"The synthetic-Request adapter or multi-market runner mismatches a query-parameter name and a tool returns unscoped, default-window or double-counted data that looks plausible","impact":"medium","likelihood":"possible","mitigation":"the param map is explicit per tool and unit-tested against each service's actual parameter reads; `McpDashboardScopeRunner` owns platform fan-out and merging; tests pin admin org-wide parity, single-market parity and sub-admin multi-market no-widen behaviour"},
+  {"risk":"The control station is a large React surface and production cannot run npm","impact":"low","likelihood":"certain","mitigation":"every push that touches these panels runs `npm run build` and commits `public/build/` via the ship skill; steps 1-12 remain one ordered implementation spine, with step 7 and step 12 checkpoints to keep defects local without dropping the full station scope"}
+]} />
+
+## Verification
+
+Beyond `--filter='Mcp'` feature tests:
+
+1. **Real client handshake.** Register the endpoint in both clients against
+   staging or local — `claude mcp add --transport http …` then `claude mcp list`,
+   and the Codex `config.toml` block. Both must list the enabled tools and the
+   three resources from a single `tools/list` / `resources/list`.
+2. **Transport compliance.** Feature tests must cover a modern 2026-07-28 POST
+   with `MCP-Protocol-Version`, matching `params._meta` protocol version, `Mcp-Method`,
+   `Mcp-Name`, deterministic `server/discover`, and successful
+   `resultType=complete` on `tools/call`; an older initialize-style client without the protocol
+   header; an invalid protocol version; a rejected Origin; and mismatched
+   method/name/recognised-param headers returning `HeaderMismatch -32020`. All
+   failures return predictable JSON-RPC errors and are logged to `mcp_tool_calls`.
+3. **Dashboard parity.** Ask a session for collected revenue over the last 30 days
+   across all markets and compare against the CEO dashboard for the same window
+   and currency mode. Admin org-wide and single-market calls must match exactly;
+   scoped sub-admin multi-market calls must equal the merge of allowed
+   single-market dashboard calls and must not include disallowed markets.
+4. **Settings actually govern.** With a live session connected, disable
+   `exotic_churn_analysis` in the Tools panel; the next `tools/list` in that
+   session must omit it. Re-enable and confirm it returns.
+5. **PII absence, mechanically.** A feature test calling every tool with
+   representative arguments against a seeded database, concatenating all
+   responses, asserting the seeded client's name, phone and email appear nowhere.
+   A second test reads the SQL text for every MCP allow-listed view and fails if
+   it references obvious PII/free-text source columns such as `phone`, `email`,
+   `bio`, `notes`, `message`, `body`, `raw_payload`, or `payment_data`. SQL-hatch
+   allow-listed views and projections also fail on raw entity IDs other than
+   `platform_id`.
+6. **Ability isolation.** An `mcp:read` token must 403 against
+   `/api/crm/dashboard/ceo/summary`, `/api/crm/setup/run-sync`,
+   `POST /api/platforms`, `POST /api/products`, `/api/activate-profile`, and
+   `/api/manual-stk-push`; public legacy `GET /api/platforms` and
+   `GET /api/products` keep their current unauthenticated responses; a `['*']`
+   session token must 401 against `/api/mcp`.
+7. **SQL policy separation.** Lower the MCP SQL max row limit and remove one MCP
+   reporting view; confirm MCP obeys those changes while Talk to Your Data still
+   uses `ai_insights_config` / `config/ai.php` limits and view access.
+8. **Refusal path is visible.** `exotic_run_reporting_sql` with
+   `SELECT * FROM clients` must be refused, appear in Activity with
+   `refusal_reason=sql_validation`, and the error text must name the allow-listed
+   views so the agent can retry correctly. The row must contain no raw rejected
+   SQL or bearer-looking text.
+9. **Legacy payment regression.** Public checkout initiation, callback routes,
+   `legacy.payment.callback`, STK auto-activation, `/api/activate-profile`, and
+   `/api/manual-stk-push` keep their current successful-path behaviour with a
+   normal CRM/session or callback credential; MCP ability isolation must not alter
+   the production payment flow.
+10. **UI fit.** For each control-station checkpoint, capture desktop and mobile
+    Playwright screenshots, assert no horizontal overflow, and verify long labels,
+    token names, error reasons and copyable commands do not clip or overlap.
+11. **Self-test detects a real break.** Point `DB_RO_*` at a bad host; the self-test
+   must fail that one check with a remediation line and leave the others passing.
+12. **Rollback drill.** Before production, prove the rollback path locally:
+    disable `mcp_config.enabled`, revoke active `mcp:*` tokens, confirm `/api/mcp`
+    refuses every call, and document that reporting views stay in place until a
+    cleanup migration because dropping views is not needed to stop data egress.
+13. **Sequential release path.** Implement and verify steps 1-12 in order. At the
+    step 7 checkpoint, run the full backend/client handshake and UI smoke checks
+    before starting step 8. At step 12, run `npm run build`, commit `public/build/`,
+    push to `origin main`, pull on cPanel, run the MCP migrations, mint a token in
+    Settings, then repeat steps 1-12 against production.
+
+## Audit changelog
+
+Round 2 returned **not ready** after repository verification. The plan now removes the raw-id-bearing CRM deep link, defines a route-wide optional-token firewall so MCP credentials cannot use public legacy data paths, makes actor fields nullable for pre-auth refusals, and requires identifier-aware SQL projection checks with wrapper-only MCP SQL views. The concrete migration timestamp and rollback ownership are explicit.
+
+Round 1 returned **not ready**. The plan was patched to block raw entity IDs from
+SQL-hatch results, add `ToolResultSanitizer`, preserve CEO dashboard scoping via
+`McpDashboardScopeRunner`, distinguish public legacy reads from authenticated
+staff mutation routes, stop storing raw SQL/arguments in `mcp_tool_calls`, harden
+Streamable HTTP headers and protocol metadata, anchor payment exclusions to the
+latest reporting views, add STK/payment regression gates, require desktop/mobile
+UI screenshots, and define the rollback drill.
+
+<Questions items={[
+  {"id":"consumer","q":"Who holds a token in the first month?","mode":"single","why":"Codex CLI and Claude Code are terminal tools. If the intent is for the CEO to query the CRM himself, the client matters more than the server — and the Claude and ChatGPT desktop apps need an OAuth 2.1 authorization server this plan deliberately does not build.","options":[
+    {"label":"You only, to start","detail":"One token, you hold it. Proves the tool set against real questions before anyone depends on it, and defers the OAuth question entirely.","recommended":true},
+    {"label":"You plus the CEO on a terminal client","detail":"Needs no extra build, but a CLI is a poor daily surface for an exec."},
+    {"label":"Add an OAuth phase so the desktop apps can connect","detail":"Makes it reachable from the Claude and ChatGPT apps, which is the surface an exec would actually use. Costs Passport plus RFC 9728 and RFC 8414 metadata and a Dynamic Client Registration endpoint — a phase in its own right on top of everything here."}
+  ]},
+  {"id":"sequence","q":"How should the implementation be sequenced?","mode":"single","why":"Decision after review: keep all twelve steps in the plan and implement them sequentially. The checkpoint after step 7 exists to prove the foundation before the remaining station panels, not to postpone the larger vision.","options":[
+    {"label":"Steps 1-12 sequentially","detail":"Build every planned layer in order, with a hard verification checkpoint after step 7 and final production verification after step 12.","recommended":true},
+    {"label":"Steps 1-7 only","detail":"Useful as a temporary safety gate if production risk forces a smaller push, but not the target implementation plan."},
+    {"label":"Phase 1 only","detail":"Transport, auth and audit with a single probe tool. Too small for the intended MCP station unless used only as an emergency rollback scope."}
+  ]},
+  {"id":"scope_default","q":"Should a sub-admin's token see org-wide aggregates?","mode":"single","why":"Scope resolves from the owning user, so a sub_admin token is narrowed to their markets. Correct for row-level data, but it means they cannot see the company total even as a single number.","options":[
+    {"label":"No — scope applies to aggregates too","detail":"A sub_admin sees only their markets in every tool. Consistent with how the CRM already scopes them, and the simplest rule to reason about.","recommended":true},
+    {"label":"Yes — org-wide totals, market-scoped rows","detail":"More useful for a market lead, but introduces a second scoping rule every tool must implement correctly."}
+  ]},
+  {"id":"error_text","q":"Should exception messages reach the model at all?","mode":"single","why":"exotic_error_digest is what makes this useful during real debugging, but exception messages are the one place user-controlled text can leak in, and sanitisation is heuristic rather than provable.","options":[
+    {"label":"Yes, sanitised and truncated, with the rules editable","detail":"Truncate and strip URLs and credential patterns, with the thresholds visible in Data & Privacy so the posture can be tightened without a deploy.","recommended":true},
+    {"label":"Class, file and line only","detail":"Provably safe and much weaker — most CRM exceptions are only diagnosable from the message."}
+  ]},
+  {"id":"station_extras","q":"Anything else the station must show that is not in these seven panels?","mode":"freeform","why":"You asked to know everything. The seven panels cover state, usage, configuration, privacy, budget, audit and setup — but you know which question you will actually walk up to this page to answer."}
+]} />
+The default MCP SQL allow-list therefore contains only the two aggregate wrappers
+(`vw_mcp_lifecycle_rollup` and `vw_mcp_revenue_rollup`) plus any future wrapper
+that passes the same identifier/source-definition test; existing AI views such as
+`vw_payments_usd` and `vw_agent_perf` remain available to Talk to Your Data but
+are never registered as MCP SQL-hatch views.
+The policy also rejects `SELECT *` from any non-wrapper view, because a wildcard
+cannot prove that forbidden entity columns are absent; wrapper views must expose
+an explicit, tested column contract and the validator must reject forbidden
+identifiers in explicit projections and aliases before execution.

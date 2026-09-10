@@ -46,9 +46,9 @@ class SqlSafetyValidator
     /**
      * Validate and harden a candidate SQL string.
      *
-     * @param  string    $sql                Raw model-generated SQL.
-     * @param  int[]|null $allowedPlatformIds null = org-wide (CEO/admin, no scope filter);
-     *                                        array = restrict to these platform_ids (sub-admin).
+     * @param  string  $sql  Raw model-generated SQL.
+     * @param  int[]|null  $allowedPlatformIds  null = org-wide (CEO/admin, no scope filter);
+     *                                          array = restrict to these platform_ids (sub-admin).
      * @return array{sql:string, limit:int, views:string[], scoped:bool}
      *
      * @throws SqlValidationException
@@ -84,9 +84,50 @@ class SqlSafetyValidator
         }
 
         return [
-            'sql'    => $final,
-            'limit'  => $limit,
-            'views'  => $views,
+            'sql' => $final,
+            'limit' => $limit,
+            'views' => $views,
+            'scoped' => $scoped,
+        ];
+    }
+
+    /**
+     * Validate with an explicit policy owned by a separate read-only surface.
+     * The AI settings path above remains unchanged so MCP limits and views cannot
+     * silently alter Talk to Your Data behaviour.
+     *
+     * @param  int[]|null  $allowedPlatformIds
+     * @return array{sql:string, limit:int, views:string[], scoped:bool}
+     */
+    public function validateWithPolicy(
+        string $sql,
+        ?array $allowedPlatformIds,
+        SqlValidationPolicy $policy,
+    ): array {
+        $normalized = $this->normalize($sql);
+
+        if ($normalized === '') {
+            throw new SqlValidationException('No SQL statement was provided.', 'empty');
+        }
+
+        $this->rejectComments($normalized);
+        $this->rejectMultipleStatements($normalized);
+        $statement = rtrim(rtrim($normalized), ';');
+        $this->requireSelect($statement);
+        $this->rejectForbiddenKeywords($statement);
+        $this->rejectForbiddenProjectionColumns($statement, $policy->forbiddenColumns);
+
+        $views = $this->extractAndValidateViewsAgainst($statement, $policy->allowedViews);
+        $limit = $this->resolvePolicyLimit($statement, $policy);
+        $scoped = is_array($allowedPlatformIds);
+        $final = $scoped
+            ? $this->wrapWithScope($statement, $allowedPlatformIds, $limit)
+            : $this->applyOuterLimit($statement, $limit);
+
+        return [
+            'sql' => $final,
+            'limit' => $limit,
+            'views' => $views,
             'scoped' => $scoped,
         ];
     }
@@ -127,7 +168,7 @@ class SqlSafetyValidator
         // surface minimal and predictable.
         $lead = ltrim($statement, " (\t\n");
 
-        if (!preg_match('/^select\b/i', $lead)) {
+        if (! preg_match('/^select\b/i', $lead)) {
             throw new SqlValidationException('Only SELECT statements are allowed.', 'not_select');
         }
     }
@@ -137,7 +178,7 @@ class SqlSafetyValidator
         $lower = mb_strtolower($statement);
 
         foreach (self::FORBIDDEN_KEYWORDS as $keyword) {
-            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/', $lower)) {
+            if (preg_match('/\b'.preg_quote($keyword, '/').'\b/', $lower)) {
                 throw new SqlValidationException(
                     "Disallowed keyword in query: {$keyword}.",
                     'forbidden_keyword'
@@ -166,7 +207,7 @@ class SqlSafetyValidator
         }
 
         foreach ($referenced as $table) {
-            if (!str_starts_with($table, 'vw_') || !in_array($table, $allowed, true)) {
+            if (! str_starts_with($table, 'vw_') || ! in_array($table, $allowed, true)) {
                 throw new SqlValidationException(
                     "Table '{$table}' is not an allow-listed reporting view.",
                     'table_not_allowed'
@@ -178,12 +219,74 @@ class SqlSafetyValidator
     }
 
     /**
+     * @param  string[]  $allowedViews
+     * @return string[]
+     */
+    private function extractAndValidateViewsAgainst(string $statement, array $allowedViews): array
+    {
+        $allowed = array_map('strtolower', $allowedViews);
+
+        if (preg_match_all('/\b(?:from|join)\s+([`"\[]?)([a-z_][a-z0-9_]*)\1/i', $statement, $matches)) {
+            $referenced = array_map('strtolower', $matches[2]);
+        } else {
+            $referenced = [];
+        }
+
+        if ($referenced === []) {
+            throw new SqlValidationException('Query must read from a reporting view.', 'no_table');
+        }
+
+        foreach ($referenced as $table) {
+            if (! str_starts_with($table, 'vw_') || ! in_array($table, $allowed, true)) {
+                throw new SqlValidationException(
+                    "Table '{$table}' is not an allow-listed reporting view.",
+                    'table_not_allowed'
+                );
+            }
+        }
+
+        return array_values(array_unique($referenced));
+    }
+
+    private function rejectForbiddenProjectionColumns(string $statement, array $forbiddenColumns): void
+    {
+        if ($forbiddenColumns === [] || ! preg_match('/^\s*\(?\s*select\b(.*?)\bfrom\b/is', $statement, $match)) {
+            return;
+        }
+
+        $projection = $match[1];
+        foreach ($forbiddenColumns as $column) {
+            $identifier = preg_quote((string) $column, '/');
+            if (preg_match('/(?<![a-z0-9_])(?:[`"a-z_][a-z0-9_`"]*\.)?[`"]?'.$identifier.'[`"]?(?![a-z0-9_])/i', $projection)) {
+                throw new SqlValidationException(
+                    "Projection includes a forbidden column: {$column}.",
+                    'forbidden_projection'
+                );
+            }
+        }
+    }
+
+    private function resolvePolicyLimit(string $statement, SqlValidationPolicy $policy): int
+    {
+        $max = max(1, $policy->maxRowLimit);
+        $default = max(1, min($policy->defaultRowLimit, $max));
+
+        if (preg_match('/\blimit\s+(\d+)(?:\s*,\s*(\d+))?\s*$/i', $statement, $match)) {
+            $value = isset($match[2]) && $match[2] !== '' ? (int) $match[2] : (int) $match[1];
+
+            return max(1, min($value, $max));
+        }
+
+        return $default;
+    }
+
+    /**
      * Pull an existing trailing LIMIT (clamping it) or signal that one must be
      * injected. We never trust an unbounded query.
      */
     private function resolveLimit(string $statement): int
     {
-        $max     = $this->settings->maxRowLimit();
+        $max = $this->settings->maxRowLimit();
         $default = min($this->settings->defaultRowLimit(), $max);
 
         if (preg_match('/\blimit\s+(\d+)(?:\s*,\s*(\d+))?\s*$/i', $statement, $m)) {
@@ -210,7 +313,7 @@ class SqlSafetyValidator
      */
     private function wrapWithScope(string $statement, array $allowedPlatformIds, int $limit): string
     {
-        if (!$this->projectsPlatformId($statement)) {
+        if (! $this->projectsPlatformId($statement)) {
             throw new SqlValidationException(
                 'Scoped queries must select platform_id so market access can be enforced.',
                 'missing_platform_id'
@@ -225,7 +328,7 @@ class SqlSafetyValidator
             // No markets assigned -> deliberately match nothing.
             $predicate = '0 = 1';
         } else {
-            $predicate = 'scoped_q.platform_id IN (' . implode(', ', $ids) . ')';
+            $predicate = 'scoped_q.platform_id IN ('.implode(', ', $ids).')';
         }
 
         return "SELECT * FROM ({$inner}) AS scoped_q WHERE {$predicate} LIMIT {$limit}";
@@ -234,7 +337,7 @@ class SqlSafetyValidator
     private function projectsPlatformId(string $statement): bool
     {
         // Isolate the projection list between SELECT and FROM.
-        if (!preg_match('/^\s*\(?\s*select\b(.*?)\bfrom\b/is', $statement, $m)) {
+        if (! preg_match('/^\s*\(?\s*select\b(.*?)\bfrom\b/is', $statement, $m)) {
             return false;
         }
 

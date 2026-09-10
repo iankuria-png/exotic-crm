@@ -24,6 +24,7 @@ import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import CustomerRolloutPanel from '../components/settings/CustomerRolloutPanel';
 import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
+import McpWorkspacePanel from '../components/settings/McpWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
 import DiagnosticsExportModal from '../components/settings/DiagnosticsExportModal';
@@ -44,6 +45,7 @@ const baseTabs = [
     { id: 'my-exotic', label: 'My Exotic' },
     { id: 'auto-optimize', label: 'Auto Optimize' },
     { id: 'ai', label: 'AI Briefings' },
+    { id: 'mcp', label: 'MCP' },
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
@@ -9444,6 +9446,10 @@ export default function Settings() {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
+            if (tab.id === 'mcp') {
+                return ['admin', 'sub_admin'].includes(user?.role || '');
+            }
+
             if (tab.id === 'operations') {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
@@ -9515,6 +9521,7 @@ export default function Settings() {
             {activeTab === 'my-exotic' ? <CustomerRolloutPanel canWrite={(user?.role || '') === 'admin'} /> : null}
             {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
+            {activeTab === 'mcp' ? <McpWorkspacePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
