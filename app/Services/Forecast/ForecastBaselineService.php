@@ -438,31 +438,26 @@ class ForecastBaselineService
                     'payment_level_metric' => true,
                 ],
             ],
+            // The question is what share of a window's signups convert to paying, not
+            // how many first payments happened to land in it. movement()'s
+            // new_paid_activations counts the latter - it includes clients who signed
+            // up long before the window - so it cannot answer "1,890 signed up, what if
+            // more of them paid". The signup cohort can, and carries its own ticket.
             'new_activations' => [
                 'key' => 'new_activations',
-                'label' => 'New paid activations',
-                'actual' => (float) data_get($movement, 'totals.new_paid_activations', 0),
-                'suggested' => max((float) data_get($movement, 'totals.new_paid_activations', 0), ceil((float) data_get($movement, 'totals.new_paid_activations', 0) * 1.1)),
-                'eligible_units' => (int) max(1, data_get($movement, 'totals.created_profiles', 0)),
-                'unit_value' => $activationTicket,
-                'unit' => 'count',
-                'evidence' => [
-                    'created_profiles' => (int) data_get($movement, 'totals.created_profiles', 0),
-                    'new_paid_activations' => (int) data_get($movement, 'totals.new_paid_activations', 0),
-                ],
-            ],
-            'signup_source_conversion' => [
-                'key' => 'signup_source_conversion',
-                'label' => 'Signup-source conversion',
+                'label' => 'New user conversion',
                 'actual' => (float) $signup['rate'],
                 'suggested' => min(60.0, (float) $signup['rate'] + 5.0),
                 'eligible_units' => (int) $signup['signups'],
-                'unit_value' => (float) $signup['avg_ticket'],
+                'unit_value' => (float) ($signup['avg_ticket'] ?: $activationTicket),
                 'unit' => 'percentage_points',
                 'evidence' => [
                     'signups' => (int) $signup['signups'],
                     'converted' => (int) $signup['converted'],
+                    'rate' => (float) $signup['rate'],
+                    'avg_ticket' => (float) $signup['avg_ticket'],
                     'sources' => $signup['sources'],
+                    'first_payments_in_window' => (int) data_get($movement, 'totals.new_paid_activations', 0),
                 ],
             ],
             'renewal' => [

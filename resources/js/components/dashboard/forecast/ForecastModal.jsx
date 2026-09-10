@@ -52,16 +52,13 @@ function evidenceLine(key, lever) {
         return `${n(e.failed_payments)} failed · ${n(e.recovered_payments)} recovered · ${n(e.lost_payments)} lost`;
     }
     if (key === 'new_activations') {
-        return `${n(e.new_paid_activations)} first-time payers from ${n(e.created_profiles)} signups`;
+        return `${n(e.converted)} of ${n(e.signups)} new signups converted · avg ${n(Math.round(e.avg_ticket || 0))} per conversion`;
     }
     if (key === 'renewal') {
         return `${n(e.renewed)} renewed of ${n(lever.eligible_units)} subscriptions that expired`;
     }
     if (key === 'churn_winback') {
         return `${n(lever.eligible_units)} clients churned in this window`;
-    }
-    if (key === 'signup_source_conversion') {
-        return `${n(lever.eligible_units)} signups across sources`;
     }
     return null;
 }
