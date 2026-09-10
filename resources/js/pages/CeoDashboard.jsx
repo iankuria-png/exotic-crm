@@ -337,7 +337,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             value={engagementPlatform || ''}
             onChange={(event) => setEngagementMarket(event.target.value || null)}
             disabled={marketOptions.length === 0}
-            className="h-9 min-w-[200px] rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-60 sm:h-9 sm:w-auto sm:min-w-[200px]"
             aria-label="Profile engagement market"
         >
             {marketOptions.length === 0 ? <option value="">No markets available</option> : null}

@@ -81,7 +81,7 @@ export default function CeoHeader({
     return (
         <header className="-mx-1 space-y-3">
             <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-700">CEO dashboard</p>
                         <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
@@ -90,18 +90,18 @@ export default function CeoHeader({
                         <p className="mt-1 text-sm text-slate-500">{today}</p>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="grid w-full grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
                         {onOpenScorecards ? (
                             <button
                                 type="button"
                                 onClick={onOpenScorecards}
-                                className="group inline-flex min-h-11 items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                className="group inline-flex min-h-11 w-full min-w-0 items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:w-auto sm:gap-3 sm:px-3"
                             >
                                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-slate-950 text-[11px] font-bold uppercase text-white">
                                     W
                                 </span>
                                 <span className="min-w-0">
-                                    <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700">Weekly scorecards</span>
+                                    <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700 sm:block">Weekly scorecards</span>
                                     <span className="block text-sm font-semibold text-slate-950">{scorecardCtaText(scorecardSummary, scorecardsLoading)}</span>
                                 </span>
                             </button>
@@ -111,13 +111,13 @@ export default function CeoHeader({
                             <button
                                 type="button"
                                 onClick={onOpenForecast}
-                                className="group inline-flex min-h-11 items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                className="group inline-flex min-h-11 w-full min-w-0 items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:w-auto sm:gap-3 sm:px-3"
                             >
                                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-slate-950 text-[11px] font-bold uppercase text-white">
                                     F
                                 </span>
                                 <span className="min-w-0">
-                                    <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700">Revenue forecast</span>
+                                    <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700 sm:block">Revenue forecast</span>
                                     <span className="block text-sm font-semibold text-slate-950">Model a target</span>
                                 </span>
                             </button>
@@ -128,13 +128,13 @@ export default function CeoHeader({
 
             <div className="sticky top-0 z-20 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
                 <div className="grid gap-2 xl:grid-cols-[auto_minmax(220px,1fr)_auto]">
-                    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Dashboard horizon">
+                    <div className="-mx-1 flex flex-nowrap items-center gap-2 overflow-x-auto px-1 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0" role="group" aria-label="Dashboard horizon">
                         {HORIZONS.map((item) => (
                             <button
                                 key={item.key}
                                 type="button"
                                 onClick={() => onHorizonChange(item.key)}
-                                className={`h-9 rounded-md px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                className={`h-9 shrink-0 rounded-md px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                                     horizon === item.key
                                         ? 'bg-slate-900 text-white shadow-sm'
                                         : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
@@ -149,7 +149,7 @@ export default function CeoHeader({
                         <select
                             value={platformFilter || ''}
                             onChange={(event) => onPlatformChange(event.target.value || null)}
-                            className="h-9 min-w-[220px] rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            className="h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 sm:h-9 sm:min-w-[220px]"
                             aria-label="Market scope"
                         >
                             <option value="">All accessible markets</option>

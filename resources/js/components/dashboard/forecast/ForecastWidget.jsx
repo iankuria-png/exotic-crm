@@ -63,13 +63,37 @@ export default function ForecastWidget({ params, currency = 'USD', onOpen }) {
                 </button>
             </div>
 
-            {cold ? (
+            {query.isLoading ? (
+                <div className="space-y-3 px-4 py-4" aria-busy="true" aria-label="Loading forecast headroom">
+                    {[0, 1].map((row) => (
+                        <div key={row} className="space-y-2">
+                            <div className="flex justify-between">
+                                <span className="h-3 w-24 animate-pulse rounded-sm bg-slate-100" />
+                                <span className="h-3 w-16 animate-pulse rounded-sm bg-slate-100" />
+                            </div>
+                            <span className="block h-1 w-full animate-pulse rounded-sm bg-slate-100" />
+                        </div>
+                    ))}
+                </div>
+            ) : query.isError ? (
+                <div className="px-4 py-4">
+                    <p className="text-xs text-slate-600">Headroom could not be loaded.</p>
+                    <button
+                        type="button"
+                        onClick={() => query.refetch()}
+                        className="mt-2 h-8 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                        Retry
+                    </button>
+                </div>
+            ) : cold ? (
                 <button
                     type="button"
                     onClick={onOpen}
                     className="block w-full px-4 py-4 text-left text-xs text-slate-500 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
                 >
                     Build a scenario from the selected window.
+                    <span className="mt-1 block text-slate-400">Opens instantly once a baseline is cached.</span>
                 </button>
             ) : (
                 <div>

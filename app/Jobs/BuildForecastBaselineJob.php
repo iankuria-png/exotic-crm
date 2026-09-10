@@ -40,18 +40,38 @@ class BuildForecastBaselineJob implements ShouldQueue
             horizonDays: (int) ($this->context['horizon_days'] ?? 90),
         );
 
-        Cache::put("forecast:baseline-status:{$this->jobToken}", [
-            'state' => 'building',
-            'poll_after_ms' => 2000,
-            'progress' => ['phase' => 'collecting payments', 'markets_done' => 0, 'markets_total' => 0],
-            'cache_key' => $context->cacheKey(),
-        ], now()->addMinutes(20));
+        $startedAt = now();
+        $durationKey = 'forecast:build-duration:'.($context->platformId ? 'market' : 'all');
+        // Only ever an estimate learned from the last successful build of the same
+        // shape. Absent on the first run, and the UI says "estimating" rather than
+        // inventing a number.
+        $estimate = Cache::get($durationKey);
 
-        $baseline = $baselineService->build($context);
+        $publish = function (string $phase, int $done = 0, int $total = 0) use ($context, $startedAt, $estimate): void {
+            Cache::put("forecast:baseline-status:{$this->jobToken}", [
+                'state' => 'building',
+                'poll_after_ms' => 1500,
+                'started_at' => $startedAt->toIso8601String(),
+                'estimated_seconds' => $estimate,
+                'progress' => [
+                    'phase' => $phase,
+                    'markets_done' => $done,
+                    'markets_total' => $total,
+                ],
+                'cache_key' => $context->cacheKey(),
+            ], now()->addMinutes(20));
+        };
+
+        $publish('Starting');
+
+        $baseline = $baselineService->build($context, $publish);
+
         Cache::put($context->cacheKey(), $baseline, now()->addSeconds((int) config('forecast.cache_ttl_seconds')));
+        Cache::put($durationKey, max(1, (int) $startedAt->diffInSeconds(now())), now()->addDays(7));
         Cache::put("forecast:baseline-status:{$this->jobToken}", [
             'state' => 'ready',
             'cache_key' => $context->cacheKey(),
+            'built_in_seconds' => max(1, (int) $startedAt->diffInSeconds(now())),
         ], now()->addMinutes(20));
     }
 
@@ -59,7 +79,8 @@ class BuildForecastBaselineJob implements ShouldQueue
     {
         Cache::put("forecast:baseline-status:{$this->jobToken}", [
             'state' => 'failed',
-            'message' => 'Baseline build failed - the window has been left uncached, retry or narrow it.',
+            'message' => 'The baseline build did not finish. Nothing was cached, so retrying is safe.',
+            'failed_at' => now()->toIso8601String(),
         ], now()->addMinutes(20));
     }
 }

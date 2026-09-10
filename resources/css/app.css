@@ -232,3 +232,20 @@
     isolation: isolate;
     transform: translateZ(0);
 }
+
+
+/* Indeterminate progress for the forecast baseline build, used while the job has
+   not yet reported market counts. Respects reduced-motion. */
+@keyframes forecastSlide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .animate-\[forecastSlide_1\.4s_ease-in-out_infinite] {
+        animation: none;
+        transform: translateX(0);
+        width: 100%;
+        opacity: 0.5;
+    }
+}

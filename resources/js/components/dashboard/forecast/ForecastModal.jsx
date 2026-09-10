@@ -1,4 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import {
+    ForecastBuildingState,
+    ForecastFailedState,
+    ForecastLoadingState,
+    ForecastRefusedState,
+} from './ForecastStates';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../../services/api';
 import FxNormalizationNotice from '../../FxNormalizationNotice';
@@ -39,21 +45,47 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
     const [reachByMonths, setReachByMonths] = useState(3);
     const [activeRoute, setActiveRoute] = useState('balanced');
     const [computed, setComputed] = useState(null);
+    const [rangeOverride, setRangeOverride] = useState(null);
 
-    const enabled = open && Boolean(params?.from && params?.to);
+    const effectiveParams = useMemo(
+        () => (rangeOverride ? { ...params, ...rangeOverride } : params),
+        [params, rangeOverride]
+    );
+
+    const enabled = open && Boolean(effectiveParams?.from && effectiveParams?.to);
     const baselineQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'forecast-baseline', params, currency],
+        queryKey: ['ceo-dashboard', 'forecast-baseline', effectiveParams, currency],
         queryFn: () => api.get('/crm/dashboard/ceo/forecast/baseline', {
-            params: { ...params, currency },
+            params: { ...effectiveParams, currency },
         }).then((response) => response.data),
         enabled,
-        refetchInterval: (query) => query.state.data?.state === 'building'
-            ? Number(query.state.data?.poll_after_ms || 1500)
-            : false,
         staleTime: 60_000,
     });
 
-    const baseline = baselineQuery.data?.baseline;
+    // Once a build is queued the status route is the authority: it is the only one
+    // that reports progress and, crucially, failure. Re-polling /baseline would sit
+    // on 'building' forever after a failed job.
+    const jobToken = baselineQuery.data?.state === 'building' ? baselineQuery.data?.job_token : null;
+    const statusQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'forecast-baseline-status', jobToken],
+        queryFn: () => api.get('/crm/dashboard/ceo/forecast/baseline/status', {
+            params: { job_token: jobToken },
+        }).then((response) => response.data),
+        enabled: Boolean(jobToken),
+        refetchInterval: (query) => query.state.data?.state === 'building'
+            ? Number(query.state.data?.poll_after_ms || 1500)
+            : false,
+    });
+
+    const buildState = jobToken ? (statusQuery.data || baselineQuery.data) : baselineQuery.data;
+
+    const retryBuild = () => {
+        setRangeOverride((current) => (current ? { ...current } : null));
+        statusQuery.remove?.();
+        baselineQuery.refetch();
+    };
+
+    const baseline = buildState?.baseline || baselineQuery.data?.baseline;
     const levers = baseline?.levers || {};
     const visibleKeys = expanded ? Object.keys(levers).filter((key) => key !== 'agent_targets') : DEFAULT_LEVERS;
 
@@ -146,7 +178,8 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                     <div>
                         <h2 className="text-base font-semibold text-slate-950">Revenue forecast</h2>
                         <p className="mt-0.5 text-xs text-slate-500">
-                            {params?.from || '--'} to {params?.to || '--'} · {currency}
+                            {effectiveParams?.from || '--'} to {effectiveParams?.to || '--'} · {currency}
+                            {rangeOverride ? <span className="ml-1 rounded-sm bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">narrowed</span> : null}
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -164,13 +197,23 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                 </div>
 
                 {baselineQuery.isLoading ? (
-                    <div className="p-6 text-sm text-slate-500">Building forecast baseline...</div>
-                ) : baselineQuery.data?.state === 'building' ? (
-                    <div className="p-6 text-sm text-slate-500">{baselineQuery.data?.progress?.phase || 'Baseline is building'}.</div>
-                ) : baselineQuery.data?.state === 'refused' ? (
-                    <div className="p-6 text-sm text-rose-600">That window is too wide. Try {baselineQuery.data?.suggested?.from} to {baselineQuery.data?.suggested?.to}.</div>
+                    <ForecastLoadingState />
+                ) : baselineQuery.isError ? (
+                    <ForecastFailedState
+                        data={{ message: 'The forecast could not be reached. Nothing was cached, so retrying is safe.' }}
+                        onRetry={retryBuild}
+                    />
+                ) : buildState?.state === 'failed' ? (
+                    <ForecastFailedState data={buildState} onRetry={retryBuild} />
+                ) : buildState?.state === 'building' ? (
+                    <ForecastBuildingState data={buildState} onCancel={onClose} />
+                ) : buildState?.state === 'refused' ? (
+                    <ForecastRefusedState
+                        data={buildState}
+                        onUseSuggested={(suggested) => setRangeOverride({ from: suggested.from, to: suggested.to })}
+                    />
                 ) : !baseline ? (
-                    <div className="p-6 text-sm text-slate-500">Baseline is not ready.</div>
+                    <ForecastLoadingState />
                 ) : (
                     <div className="grid gap-0 xl:grid-cols-[0.95fr_1.1fr_0.95fr]">
                         <aside className="border-b border-slate-200 p-4 xl:border-b-0 xl:border-r">

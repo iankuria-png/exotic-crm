@@ -75,7 +75,9 @@ class ForecastBaselineService
                 Cache::put($tokenKey, $token, now()->addMinutes(20));
                 Cache::put($this->statusKey($token), [
                     'state' => 'building',
-                    'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $marketCount],
+                    'started_at' => now()->toIso8601String(),
+                    'estimated_seconds' => Cache::get('forecast:build-duration:'.($context->platformId ? 'market' : 'all')),
+                    'progress' => ['phase' => 'Waiting for a worker', 'markets_done' => 0, 'markets_total' => $marketCount],
                     'cache_key' => $key,
                 ], now()->addMinutes(20));
 
@@ -84,11 +86,15 @@ class ForecastBaselineService
                 });
             }
 
+            $queued = Cache::get($this->statusKey($token), []);
+
             return [
                 'state' => 'building',
                 'job_token' => $token,
                 'poll_after_ms' => 1500,
-                'progress' => ['phase' => 'queued', 'markets_done' => 0, 'markets_total' => $marketCount],
+                'started_at' => $queued['started_at'] ?? now()->toIso8601String(),
+                'estimated_seconds' => $queued['estimated_seconds'] ?? null,
+                'progress' => $queued['progress'] ?? ['phase' => 'Waiting for a worker', 'markets_done' => 0, 'markets_total' => $marketCount],
             ];
         }
 
@@ -298,21 +304,41 @@ class ForecastBaselineService
         return $status + ['poll_after_ms' => 2000];
     }
 
-    public function build(ForecastContext $context): array
+    /**
+     * @param  null|callable(string, int, int): void  $onProgress  phase, done, total
+     */
+    public function build(ForecastContext $context, ?callable $onProgress = null): array
     {
+        $report = function (string $phase, int $done = 0, int $total = 0) use ($onProgress): void {
+            if ($onProgress !== null) {
+                $onProgress($phase, $done, $total);
+            }
+        };
+
+        $report('Reading collected revenue');
         $revenue = $this->collectedRevenueQuery->total($context->from, $context->to, $context->platformScope, $context->currency);
         $monthlyRunRate = $context->days > 0 && $revenue['normalized_total'] !== null
             ? round(((float) $revenue['normalized_total'] / $context->days) * 30.4375, 2)
             : 0.0;
 
+        $report('Resolving client identities');
         $claimContext = $this->claimContext($context);
+
+        $report('Matching failed payments to recoveries');
         // One collection pass serves the global figure and every market.
         $recovery = $this->paymentRecoveryMetricService->computeWithPlatforms($context->platformIdsForServices(), $context->from, $context->to);
         $globalRecovery = $recovery['global'];
         $recoveryByPlatform = $recovery['by_platform'];
+
+        $report('Measuring levers');
         $globalLevers = $this->leverBaselines($context, $context->platformScope, $globalRecovery, $claimContext['global']);
-        $markets = $this->platforms($context)
-            ->map(function (Platform $platform) use ($globalLevers, $recoveryByPlatform, $claimContext) {
+
+        $platforms = $this->platforms($context)->values();
+        $marketTotal = $platforms->count();
+        $markets = $platforms
+            ->map(function (Platform $platform, int $index) use ($globalLevers, $recoveryByPlatform, $claimContext, $report, $marketTotal) {
+                $report('Measuring markets', $index + 1, $marketTotal);
+
                 return [
                     'platform_id' => (int) $platform->id,
                     'market_label' => $platform->name,

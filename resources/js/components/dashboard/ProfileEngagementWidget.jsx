@@ -43,7 +43,7 @@ function MiniStat({ label, value, delta, deltaSuffix }) {
             : 'text-slate-400';
 
     return (
-        <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3.5 py-3">
+        <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 sm:px-3.5 sm:py-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.10em] text-slate-400">{label}</p>
             <p className="mt-1.5 text-base font-semibold tracking-tight text-slate-900">{value}</p>
             {delta !== undefined ? (
@@ -93,7 +93,7 @@ function RankingList({ title, rows, onOpenProfile }) {
                         type="button"
                         disabled={!profile.crm_client_id}
                         onClick={() => profile.crm_client_id && onOpenProfile?.(profile.crm_client_id)}
-                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3.5 py-3 text-left transition hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-default disabled:hover:border-slate-200"
+                        className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 px-3.5 py-3 text-left transition hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-default disabled:hover:border-slate-200"
                     >
                         <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-900">{profile.name}</p>
@@ -166,15 +166,17 @@ export default function ProfileEngagementWidget({
         <SectionFrame
             title="Profile Engagement"
             subtitle={subtitle || `Selected market performance across the ${windowLabel}. Deltas compare against the previous matching window.`}
+            headerClassName="flex-col sm:flex-row"
+            subtitleClassName="max-w-2xl"
             action={(headerControl || onOpenReport) ? (
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
                     {headerControl}
                     {onOpenReport ? (
                         <button
                             type="button"
                             onClick={onOpenReport}
                             disabled={!enabled}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="h-10 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60 sm:h-auto"
                         >
                             Open report
                         </button>
@@ -186,7 +188,7 @@ export default function ProfileEngagementWidget({
                 <EmptyState message="Select a market to load WordPress profile engagement analytics." />
             ) : topQuery.isLoading || bottomQuery.isLoading ? (
                 <div className="space-y-4">
-                    <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         {Array.from({ length: 4 }).map((_, index) => (
                             <div key={index} className="h-20 animate-pulse rounded-lg bg-slate-200" />
                         ))}
@@ -197,7 +199,7 @@ export default function ProfileEngagementWidget({
                 <EmptyState message={topQuery.error?.response?.data?.message || bottomQuery.error?.response?.data?.message || 'Profile engagement analytics are currently unavailable.'} />
             ) : (
                 <div className="space-y-4">
-                    <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <MiniStat
                             label="Views"
                             value={abbreviateNumber(platformTotals.profile_view?.total)}
