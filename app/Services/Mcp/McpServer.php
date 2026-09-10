@@ -13,6 +13,7 @@ use App\Services\ChurnAggregatorService;
 use App\Services\MarketAuthorizationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -32,7 +33,7 @@ class McpServer
         private readonly MarketAuthorizationService $marketAuth,
     ) {}
 
-    public function handle(Request $request): JsonResponse
+    public function handle(Request $request): JsonResponse|Response
     {
         $started = microtime(true);
         $payload = $request->json()->all();
@@ -46,6 +47,13 @@ class McpServer
         try {
             $this->validateTransport($request, $payload, $method, $params);
             $result = $this->dispatch($request, $method, $params, $user, $token?->abilities);
+
+            if (! array_key_exists('id', $payload)) {
+                $response = response('', Response::HTTP_ACCEPTED);
+                $this->audit($request, $method, $params, 'success', null, [], $started, $requestId);
+
+                return $response;
+            }
 
             $response = $this->success($id, $method, $result);
             $this->audit($request, $method, $params, 'success', null, $response->getData(true), $started, $requestId);
@@ -100,10 +108,11 @@ class McpServer
                 '_meta' => ['io.modelcontextprotocol/serverInfo' => ['name' => 'exotic-crm', 'version' => '1.0.0']],
             ],
             'initialize' => [
-                'protocolVersion' => '2025-03-26',
+                'protocolVersion' => $this->initializeProtocolVersion($params),
                 'capabilities' => ['tools' => ['listChanged' => true], 'resources' => ['listChanged' => false]],
                 'serverInfo' => ['name' => 'exotic-crm', 'version' => '1.0.0'],
             ],
+            'notifications/initialized' => [],
             'tools/list' => ['resultType' => 'complete', 'tools' => $this->registry->definitions($user, $this->settings, $abilities)],
             'resources/list' => ['resultType' => 'complete', 'resources' => $this->resources($user)],
             'resources/read' => $this->readResource($params, $user),
@@ -332,13 +341,17 @@ class McpServer
     {
         $headerVersion = $request->header('MCP-Protocol-Version');
         $meta = is_array($params['_meta'] ?? null) ? $params['_meta'] : [];
-        $bodyVersion = $meta['io.modelcontextprotocol/protocolVersion']
+        $metaVersion = $meta['io.modelcontextprotocol/protocolVersion']
             ?? data_get($meta, 'io.modelcontextprotocol.protocolVersion');
-        $legacy = $headerVersion === null && $method === 'initialize';
-        if ($headerVersion === null && ! $legacy && $method !== 'initialize') {
+        $initializeVersion = $method === 'initialize' ? ($params['protocolVersion'] ?? null) : null;
+        $bodyVersion = $metaVersion ?? $initializeVersion;
+        $perRequestProtocol = $headerVersion === '2026-07-28';
+        $initializing = $method === 'initialize';
+
+        if ($headerVersion === null && ! $initializing) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: MCP-Protocol-Version is required.', 'header_mismatch', 400);
         }
-        if ($headerVersion !== null && $headerVersion !== $bodyVersion) {
+        if ($headerVersion !== null && ($perRequestProtocol || $initializing) && $headerVersion !== $bodyVersion) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: protocol version does not match request metadata.', 'header_mismatch', 400);
         }
         if ($headerVersion !== null && ! in_array($headerVersion, (array) data_get($this->settings->settings(), 'protocol_versions', []), true)) {
@@ -348,10 +361,10 @@ class McpServer
         if ($headerVersion !== null && (! str_contains($accept, 'application/json') || ! str_contains($accept, 'text/event-stream'))) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: Accept must include application/json and text/event-stream.', 'header_mismatch', 400);
         }
-        if ($method !== '' && ! ($legacy && $request->header('Mcp-Method') === null) && $request->header('Mcp-Method') !== $method) {
+        if ($method !== '' && ($perRequestProtocol || $request->header('Mcp-Method') !== null) && $request->header('Mcp-Method') !== $method) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Method does not match request.', 'header_mismatch', 400);
         }
-        if (in_array($method, ['tools/call', 'resources/read'], true)) {
+        if ($perRequestProtocol && in_array($method, ['tools/call', 'resources/read'], true)) {
             $expectedName = $method === 'tools/call' ? (string) ($params['name'] ?? '') : (string) ($params['uri'] ?? '');
             if ($request->header('Mcp-Name') !== $expectedName) {
                 throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Name does not match request.', 'header_mismatch', 400);
@@ -360,6 +373,20 @@ class McpServer
         if ($request->header('Origin') && ! empty(config('mcp.allowed_origins')) && ! in_array($request->header('Origin'), (array) config('mcp.allowed_origins'), true)) {
             throw McpProtocolException::rpc(-32021, 'Origin is not allowed.', 'origin_rejected', 403);
         }
+    }
+
+    private function initializeProtocolVersion(array $params): string
+    {
+        $supported = (array) data_get($this->settings->settings(), 'protocol_versions', ['2025-03-26']);
+        $requested = (string) ($params['protocolVersion'] ?? '');
+
+        if ($requested !== '' && in_array($requested, $supported, true)) {
+            return $requested;
+        }
+
+        return in_array('2025-03-26', $supported, true)
+            ? '2025-03-26'
+            : (string) ($supported[0] ?? '2025-03-26');
     }
 
     private function success($id, string $method, array $result): JsonResponse

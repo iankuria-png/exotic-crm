@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Models\IntegrationSetting;
 use App\Models\McpToolCall;
 use App\Models\User;
+use App\Services\Mcp\McpSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
 use Laravel\Sanctum\Sanctum;
@@ -68,6 +70,63 @@ class McpEndpointTest extends TestCase
                 'params' => [],
             ])
             ->assertUnauthorized();
+    }
+
+    public function test_codex_can_initialize_and_list_tools_with_standard_streamable_http_requests(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:codex', ['mcp:read'], now()->addDay())->plainTextToken;
+        $headers = [
+            'Accept' => 'application/json, text/event-stream',
+            'Content-Type' => 'application/json',
+            'MCP-Protocol-Version' => '2025-06-18',
+        ];
+
+        $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 3,
+                'method' => 'initialize',
+                'params' => [
+                    'protocolVersion' => '2025-06-18',
+                    'capabilities' => [],
+                    'clientInfo' => ['name' => 'codex', 'version' => '0.153.4'],
+                ],
+            ], $headers)
+            ->assertOk()
+            ->assertJsonPath('result.protocolVersion', '2025-06-18');
+
+        $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'method' => 'notifications/initialized',
+            ], $headers)
+            ->assertAccepted()
+            ->assertNoContent(202);
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 4,
+                'method' => 'tools/list',
+                'params' => [],
+            ], $headers)
+            ->assertOk();
+
+        $this->assertContains('exotic_catalog', collect($response->json('result.tools'))->pluck('name')->all());
+    }
+
+    public function test_saved_settings_cannot_remove_supported_protocol_defaults(): void
+    {
+        IntegrationSetting::query()->create([
+            'key' => McpSettingsService::KEY,
+            'value' => ['protocol_versions' => ['2026-07-28', '2025-03-26']],
+        ]);
+
+        $versions = app(McpSettingsService::class)->settings()['protocol_versions'];
+
+        $this->assertContains('2025-06-18', $versions);
     }
 
     public function test_tools_list_honours_role_and_token_allowlist(): void

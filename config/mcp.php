@@ -3,7 +3,7 @@
 return [
     'enabled' => (bool) env('MCP_ENABLED', false),
     'endpoint' => env('MCP_ENDPOINT', '/api/mcp'),
-    'protocol_versions' => ['2026-07-28', '2025-03-26'],
+    'protocol_versions' => ['2026-07-28', '2025-06-18', '2025-03-26'],
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',
         explode(',', (string) env('MCP_ALLOWED_ORIGINS', ''))

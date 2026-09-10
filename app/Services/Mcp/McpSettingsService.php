@@ -11,11 +11,15 @@ class McpSettingsService
     public function settings(): array
     {
         $stored = IntegrationSetting::query()->where('key', self::KEY)->value('value');
+        $defaults = (array) config('mcp', []);
+        $overrides = is_array($stored) ? $stored : [];
+        $settings = array_replace_recursive($defaults, $overrides);
+        $settings['protocol_versions'] = array_values(array_unique(array_merge(
+            (array) ($defaults['protocol_versions'] ?? []),
+            (array) ($overrides['protocol_versions'] ?? [])
+        )));
 
-        return array_replace_recursive(
-            (array) config('mcp', []),
-            is_array($stored) ? $stored : []
-        );
+        return $settings;
     }
 
     public function save(array $input, ?int $actorId = null): array
