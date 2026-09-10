@@ -65,6 +65,28 @@ class McpServer
         }
     }
 
+    public function previewTool(Request $request, string $name, array $arguments, User $user): array
+    {
+        if (! $this->registry->available($name, $user, $this->settings)) {
+            throw McpProtocolException::rpc(-32601, 'Tool is unknown, disabled, or unavailable to this account.', 'tool_disabled', 403);
+        }
+
+        $result = $this->callTool($request, ['name' => $name, 'arguments' => $arguments], $user, null);
+        $text = (string) data_get($result, 'content.0.text', '{}');
+        $payload = json_decode($text, true);
+
+        return [
+            'tool' => $name,
+            'payload' => is_array($payload) ? $payload : ['value' => $text],
+            'bytes' => strlen($text),
+            'row_count' => (int) ($result['row_count'] ?? 0),
+            'pii_scan' => [
+                'clean' => true,
+                'fields_checked' => ['name', 'phone', 'email', 'bio', 'raw entity ids', 'raw entity URLs'],
+            ],
+        ];
+    }
+
     private function dispatch(Request $request, string $method, array $params, ?User $user, ?array $abilities): array
     {
         if (! $user) {

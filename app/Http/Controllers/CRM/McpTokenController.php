@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Models\McpToolCall;
 use Illuminate\Http\Request;
 use Laravel\Sanctum\PersonalAccessToken;
 
@@ -10,6 +11,17 @@ class McpTokenController extends Controller
 {
     public function index()
     {
+        $weekAgo = now()->subDays(7);
+        $stats = McpToolCall::query()
+            ->select('token_id')
+            ->selectRaw('COUNT(*) as calls_7d')
+            ->selectRaw('COALESCE(SUM(bytes_out), 0) as bytes_7d')
+            ->where('created_at', '>=', $weekAgo)
+            ->whereNotNull('token_id')
+            ->groupBy('token_id')
+            ->get()
+            ->keyBy('token_id');
+
         $tokens = PersonalAccessToken::query()
             ->where('name', 'like', 'mcp:%')
             ->with('tokenable:id,name,email,role')
@@ -23,6 +35,9 @@ class McpTokenController extends Controller
                 'abilities' => $token->abilities,
                 'expires_at' => optional($token->expires_at)->toISOString(),
                 'last_used_at' => optional($token->last_used_at)->toISOString(),
+                'status' => $token->expires_at && $token->expires_at->isPast() ? 'expired' : 'active',
+                'calls_7d' => (int) ($stats[$token->id]->calls_7d ?? 0),
+                'bytes_7d' => (int) ($stats[$token->id]->bytes_7d ?? 0),
             ]);
 
         return response()->json(['tokens' => $tokens]);

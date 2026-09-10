@@ -1,127 +1,491 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import AiStateBlock from '../ai/AiStateBlock';
+import ConfirmDialog from '../ConfirmDialog';
+import { useToast } from '../ToastProvider';
+import exportRowsToCsv from '../../utils/csvExport';
 
 const PANELS = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'tokens', label: 'Tokens' },
-    { id: 'tools', label: 'Tools' },
-    { id: 'privacy', label: 'Data & Privacy' },
-    { id: 'limits', label: 'Limits' },
-    { id: 'activity', label: 'Activity' },
-    { id: 'guide', label: 'Guide' },
+    { id: 'overview', label: 'Overview', summary: 'Live health' },
+    { id: 'tokens', label: 'Tokens', summary: 'Credentials' },
+    { id: 'tools', label: 'Tools', summary: 'Registry' },
+    { id: 'privacy', label: 'Data & Privacy', summary: 'Payload policy' },
+    { id: 'limits', label: 'Limits', summary: 'Budgets' },
+    { id: 'activity', label: 'Activity', summary: 'Audit trail' },
+    { id: 'guide', label: 'Guide', summary: 'Connect' },
 ];
 
-export default function McpWorkspacePanel() {
+const DOMAIN_LABELS = {
+    catalog: 'Catalog',
+    revenue: 'Revenue',
+    lifecycle: 'Lifecycle',
+    clients: 'Clients',
+    operations: 'Operations',
+    schema: 'Schema',
+};
+
+const ROLE_LABELS = {
+    sales: 'Sales',
+    sub_admin: 'Sub-admin',
+    admin: 'Admin',
+};
+
+const inputClass = 'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-2 focus:ring-teal-100';
+const buttonClass = 'inline-flex min-h-9 items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50';
+const secondaryButtonClass = `${buttonClass} border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50`;
+const primaryButtonClass = `${buttonClass} bg-teal-700 text-white hover:bg-teal-800`;
+
+export default function McpWorkspacePanel({ userRole = '' }) {
     const [panel, setPanel] = useState('overview');
+    const [activityFilters, setActivityFilters] = useState({ tool: '', status: '', refusal_reason: '', from: '', to: '' });
+    const [selfTest, setSelfTest] = useState(null);
+    const [confirmDisable, setConfirmDisable] = useState(false);
     const queryClient = useQueryClient();
+    const toast = useToast();
+    const canManage = userRole === 'admin';
+    const canManageTokens = canManage;
+
     const settingsQuery = useQuery({
         queryKey: ['mcp-settings'],
         queryFn: () => api.get('/crm/settings/mcp').then((response) => response.data),
         staleTime: 15000,
     });
+
+    const activityKey = JSON.stringify(activityFilters);
     const activityQuery = useQuery({
-        queryKey: ['mcp-activity'],
-        queryFn: () => api.get('/crm/settings/mcp/activity').then((response) => response.data),
-        enabled: panel === 'overview' || panel === 'activity',
+        queryKey: ['mcp-activity', activityKey],
+        queryFn: () => {
+            const params = new URLSearchParams({ limit: panel === 'overview' ? '20' : '200' });
+            if (panel === 'activity') {
+                Object.entries(activityFilters).forEach(([key, value]) => { if (value) params.set(key, value); });
+            }
+            return api.get(`/crm/settings/mcp/activity?${params.toString()}`).then((response) => response.data);
+        },
+        enabled: ['overview', 'activity', 'limits'].includes(panel),
         refetchInterval: panel === 'overview' ? 5000 : false,
+        staleTime: panel === 'overview' ? 0 : 15000,
     });
+
     const tokensQuery = useQuery({
         queryKey: ['mcp-tokens'],
         queryFn: () => api.get('/crm/settings/mcp/tokens').then((response) => response.data),
-        enabled: panel === 'tokens',
+        enabled: panel === 'tokens' && canManageTokens,
     });
+
     const updateMutation = useMutation({
         mutationFn: (payload) => api.put('/crm/settings/mcp', payload).then((response) => response.data),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mcp-settings'] }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['mcp-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['mcp-activity'] });
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not save MCP settings.'),
     });
+
     const selfTestMutation = useMutation({
         mutationFn: () => api.post('/crm/settings/mcp/self-test').then((response) => response.data),
+        onSuccess: (data) => { setSelfTest(data); toast.success('MCP self-test completed.'); },
+        onError: (error) => toast.error(error?.response?.data?.message || 'MCP self-test failed.'),
     });
+
     const mintMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/mcp/tokens', payload).then((response) => response.data),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mcp-tokens'] }),
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not mint token.'),
     });
 
-    if (settingsQuery.isLoading) return <AiStateBlock variant="loading" message="Loading MCP control station..." />;
-    if (settingsQuery.isError) return <AiStateBlock variant="error" message="Could not load MCP settings." onRetry={() => settingsQuery.refetch()} />;
+    const revokeMutation = useMutation({
+        mutationFn: (tokenId) => api.delete(`/crm/settings/mcp/tokens/${tokenId}`).then((response) => response.data),
+        onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['mcp-tokens'] }); toast.success('Token revoked.'); },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not revoke token.'),
+    });
+
+    const previewMutation = useMutation({
+        mutationFn: ({ tool, arguments: args }) => api.post(`/crm/settings/mcp/tools/${encodeURIComponent(tool)}/preview`, { arguments: args }).then((response) => response.data),
+        onError: (error) => toast.error(error?.response?.data?.message || 'Preview failed.'),
+    });
+
+    if (settingsQuery.isLoading) return <AiStateBlock variant="loading" title="Loading MCP control station" message="Reading the current endpoint, policy and registry." />;
+    if (settingsQuery.isError) return <AiStateBlock variant="error" title="MCP settings unavailable" message="The control station could not load its configuration." onRetry={() => settingsQuery.refetch()} />;
 
     const settings = settingsQuery.data?.settings || {};
-    const activity = activityQuery.data || {};
     const tools = settingsQuery.data?.tools || [];
+    const activity = activityQuery.data || {};
     const enabled = Boolean(settings.enabled);
-    const tabClass = (active) => 'rounded-md px-3 py-2 text-sm font-medium transition ' + (active ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700');
+    const endpoint = settingsQuery.data?.endpoint || `${window.location.origin}${settings.endpoint || '/api/mcp'}`;
+    const saveSettings = (payload, message = 'MCP settings saved.') => {
+        if (!canManage) return;
+        updateMutation.mutate(payload, { onSuccess: () => toast.success(message) });
+    };
+
+    const toggleServer = () => {
+        if (!canManage) return;
+        if (enabled) {
+            setConfirmDisable(true);
+            return;
+        }
+        saveSettings({ enabled: true }, 'MCP server enabled.');
+    };
 
     return (
         <div className="space-y-4" data-testid="mcp-workspace">
-            <nav className="flex flex-wrap gap-1 border-b border-slate-200 pb-2" aria-label="MCP settings sections">
-                {PANELS.map((item) => <button key={item.id} type="button" onClick={() => setPanel(item.id)} aria-current={panel === item.id ? 'page' : undefined} className={tabClass(panel === item.id)}>{item.label}</button>)}
+            <McpWorkspaceHeader
+                endpoint={endpoint}
+                enabled={enabled}
+                canManage={canManage}
+                isSaving={updateMutation.isPending}
+                onToggle={toggleServer}
+                onSelfTest={() => selfTestMutation.mutate()}
+                isSelfTesting={selfTestMutation.isPending}
+            />
+
+            <nav className="crm-surface overflow-x-auto p-1" aria-label="MCP control station sections">
+                <div className="flex min-w-max gap-1">
+                    {PANELS.map((item) => {
+                        const locked = item.id === 'tokens' && !canManageTokens;
+                        return (
+                            <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => !locked && setPanel(item.id)}
+                                disabled={locked}
+                                aria-current={panel === item.id ? 'page' : undefined}
+                                aria-label={locked ? `${item.label}, admin only` : item.label}
+                                className={`${buttonClass} min-h-10 gap-2 whitespace-nowrap px-3 ${panel === item.id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'} disabled:bg-slate-50 disabled:text-slate-400`}
+                            >
+                                <span>{item.label}</span>
+                                <span className={`hidden text-[11px] font-normal sm:inline ${panel === item.id ? 'text-slate-300' : 'text-slate-400'}`}>{locked ? 'Admin only' : item.summary}</span>
+                            </button>
+                        );
+                    })}
+                </div>
             </nav>
-            {panel === 'overview' ? <Overview settings={settings} enabled={enabled} activity={activity} onToggle={() => updateMutation.mutate({ enabled: !enabled })} onSelfTest={() => selfTestMutation.mutate()} selfTest={selfTestMutation.data} /> : null}
-            {panel === 'tokens' ? <Tokens tokens={tokensQuery.data?.tokens || []} mintMutation={mintMutation} /> : null}
-            {panel === 'tools' ? <Tools tools={tools} settings={settings} onUpdate={(payload) => updateMutation.mutate(payload)} /> : null}
-            {panel === 'privacy' ? <Privacy settings={settings} /> : null}
-            {panel === 'limits' ? <Limits settings={settings} onUpdate={(payload) => updateMutation.mutate(payload)} /> : null}
-            {panel === 'activity' ? <Activity rows={activity.rows || []} summary={activity.summary || {}} /> : null}
-            {panel === 'guide' ? <Guide endpoint={settingsQuery.data?.endpoint || '/api/mcp'} tools={tools} /> : null}
+
+            {panel === 'overview' ? (
+                <Overview
+                    settings={settings}
+                    tools={tools}
+                    activity={activity}
+                    selfTest={selfTest}
+                    onSelfTest={() => selfTestMutation.mutate()}
+                    isSelfTesting={selfTestMutation.isPending}
+                />
+            ) : null}
+            {panel === 'tokens' && canManageTokens ? (
+                <Tokens tools={tools} tokens={tokensQuery.data?.tokens || []} isLoading={tokensQuery.isLoading} isError={tokensQuery.isError} mintMutation={mintMutation} revokeMutation={revokeMutation} />
+            ) : null}
+            {panel === 'tools' ? (
+                <Tools tools={tools} activity={activity} canManage={canManage} isSaving={updateMutation.isPending} onUpdate={(payload) => saveSettings(payload, 'Tool registry updated.')} previewMutation={previewMutation} />
+            ) : null}
+            {panel === 'privacy' ? (
+                <Privacy settings={settings} tools={tools} canManage={canManage} isSaving={updateMutation.isPending} onSave={saveSettings} previewMutation={previewMutation} />
+            ) : null}
+            {panel === 'limits' ? (
+                <Limits settings={settings} activity={activity} canManage={canManage} isSaving={updateMutation.isPending} onSave={saveSettings} />
+            ) : null}
+            {panel === 'activity' ? (
+                <Activity rows={activity.rows || []} summary={activity.summary || {}} tools={tools} filters={activityFilters} setFilters={setActivityFilters} isLoading={activityQuery.isLoading} isFetching={activityQuery.isFetching} onRefresh={() => activityQuery.refetch()} />
+            ) : null}
+            {panel === 'guide' ? (
+                <Guide endpoint={endpoint} tools={tools} selfTest={selfTest} onSelfTest={() => selfTestMutation.mutate()} isSelfTesting={selfTestMutation.isPending} />
+            ) : null}
+
+            <ConfirmDialog
+                open={confirmDisable}
+                title="Disable the MCP server?"
+                message="New client requests will be rejected until an administrator enables the endpoint again. Existing audit data is retained."
+                confirmLabel="Disable server"
+                tone="danger"
+                onCancel={() => setConfirmDisable(false)}
+                onConfirm={() => { setConfirmDisable(false); saveSettings({ enabled: false }, 'MCP server disabled.'); }}
+                isPending={updateMutation.isPending}
+            />
         </div>
     );
 }
 
-function Section({ title, children, action }) {
-    return <section className="crm-surface p-4"><div className="flex flex-wrap items-start justify-between gap-3"><h2 className="text-base font-semibold text-slate-900">{title}</h2>{action}</div><div className="mt-4">{children}</div></section>;
+function McpWorkspaceHeader({ endpoint, enabled, canManage, isSaving, onToggle, onSelfTest, isSelfTesting }) {
+    return (
+        <section className="crm-surface overflow-hidden">
+            <div className="flex flex-col gap-4 border-b border-slate-200 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">MCP control station</p>
+                        <StatusPill tone={enabled ? 'success' : 'warning'} label={enabled ? 'Server enabled' : 'Server disabled'} />
+                    </div>
+                    <h2 className="mt-2 text-xl font-semibold text-slate-950">Govern the CRM data boundary</h2>
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">Manage the read-only endpoint, credentials, tool access, privacy posture and audit trail from one place.</p>
+                    <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <code className="max-w-full break-all rounded bg-slate-100 px-2 py-1 font-mono text-[11px] text-slate-700">{endpoint}</code>
+                        <CopyButton value={endpoint} label="Copy endpoint" />
+                    </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                    <button type="button" onClick={onSelfTest} disabled={isSelfTesting} className={secondaryButtonClass}>{isSelfTesting ? 'Testing...' : 'Run self-test'}</button>
+                    <button type="button" onClick={onToggle} disabled={!canManage || isSaving} className={`${buttonClass} ${enabled ? 'bg-rose-700 text-white hover:bg-rose-800' : 'bg-teal-700 text-white hover:bg-teal-800'}`}>
+                        {enabled ? 'Disable server' : 'Enable server'}
+                    </button>
+                </div>
+            </div>
+            {!canManage ? <div className="border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-900">Read-only view. An administrator is required to change MCP settings or credentials.</div> : null}
+            <div className="grid grid-cols-2 divide-x divide-y divide-slate-200 sm:grid-cols-4 sm:divide-y-0">
+                <HeaderFact label="Protocol" value="2026-07-28" />
+                <HeaderFact label="Transport" value="Stateless HTTP" />
+                <HeaderFact label="Write access" value="Never" />
+                <HeaderFact label="Policy" value="Pseudonymous" />
+            </div>
+        </section>
+    );
 }
 
-function Overview({ settings, enabled, activity, onToggle, onSelfTest, selfTest }) {
+function HeaderFact({ label, value }) {
+    return <div className="px-5 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p><p className="mt-1 text-sm font-semibold text-slate-800">{value}</p></div>;
+}
+
+function Overview({ settings, tools, activity, selfTest, onSelfTest, isSelfTesting }) {
     const summary = activity.summary || {};
-    const stateClass = enabled ? 'text-emerald-700' : 'text-amber-700';
-    const dotClass = enabled ? 'bg-emerald-500' : 'bg-amber-500';
-    return <div className="space-y-4">
-        <Section title="MCP endpoint" action={<button type="button" onClick={onToggle} className={'rounded-md px-3 py-2 text-sm font-semibold ' + (enabled ? 'bg-rose-600 text-white' : 'bg-teal-700 text-white')}>{enabled ? 'Disable server' : 'Enable server'}</button>}>
-            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600"><span className={'inline-flex items-center gap-2 font-semibold ' + stateClass}><span className={'h-2 w-2 rounded-full ' + dotClass} />{enabled ? 'Server enabled' : 'Server disabled'}</span><code className="rounded bg-slate-100 px-2 py-1">{window.location.origin}{settings.endpoint || '/api/mcp'}</code></div>
-            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4"><Metric label="Calls today" value={summary.calls_today || 0} /><Metric label="Rows returned" value={summary.rows_today || 0} /><Metric label="Payload out" value={Math.round((summary.bytes_today || 0) / 1024) + ' KB'} /><Metric label="Refusals" value={summary.refusals_today || 0} /></div>
-        </Section>
-        <Section title="Self-test" action={<button type="button" onClick={onSelfTest} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Run self-test</button>}>
-            {selfTest ? <div className="grid gap-2 text-sm text-slate-700 md:grid-cols-2">{(selfTest.checks || []).map((check) => <div key={check.key} className="rounded-md bg-slate-50 px-3 py-2"><strong>{check.status === 'ok' ? 'Pass' : 'Fail'}</strong> · {check.message}</div>)}</div> : <p className="text-sm text-slate-500">Check configuration, database reachability and the active tool registry.</p>}
-        </Section>
-    </div>;
+    const enabledTools = tools.filter((tool) => tool.enabled).length;
+    const totalTools = tools.length;
+    const rowBudget = Number(settings.limits?.daily_row_budget || 0);
+    const byteBudget = Number(settings.limits?.daily_bytes_budget || 0);
+    const rowUsage = rowBudget ? Math.min(100, (Number(summary.rows_today || 0) / rowBudget) * 100) : 0;
+    const byteUsage = byteBudget ? Math.min(100, (Number(summary.bytes_today || 0) / byteBudget) * 100) : 0;
+
+    return (
+        <div className="space-y-4">
+            <MetricGrid metrics={[
+                { label: 'Calls today', value: formatNumber(summary.calls_today), detail: 'All MCP requests' },
+                { label: 'Rows returned', value: formatNumber(summary.rows_today), detail: `${formatPercent(rowUsage)} of daily budget`, tone: rowUsage > 80 ? 'warning' : 'default' },
+                { label: 'Payload out', value: formatBytes(summary.bytes_today), detail: `${formatPercent(byteUsage)} of daily budget`, tone: byteUsage > 80 ? 'warning' : 'default' },
+                { label: 'P95 latency', value: `${formatNumber(summary.p95_latency_ms)} ms`, detail: 'Today, successful and refused' },
+                { label: 'Refusals', value: formatNumber(summary.refusals_today), detail: summary.refusals_today ? 'Review Activity' : 'No refusals today', tone: summary.refusals_today ? 'warning' : 'success' },
+                { label: 'Active tokens', value: formatNumber(summary.active_tokens), detail: summary.expiring_tokens ? `${summary.expiring_tokens} expire within 7 days` : 'No near-expiry tokens', tone: summary.expiring_tokens ? 'warning' : 'default' },
+            ]} />
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,0.8fr)]">
+                <LiveCallFeed rows={activity.rows || []} />
+                <SelfTest selfTest={selfTest} onSelfTest={onSelfTest} isPending={isSelfTesting} />
+            </div>
+
+            <Section title="Current exposure" description="The active registry is what appears in tools/list for an eligible client.">
+                <div className="grid gap-3 sm:grid-cols-3">
+                    <ExposureFact label="Tools visible" value={`${enabledTools} of ${totalTools}`} detail="Enabled for this account" />
+                    <ExposureFact label="Default row cap" value={formatNumber(settings.sql_hatch?.default_row_limit)} detail="SQL hatch only" />
+                    <ExposureFact label="Retention" value={`${formatNumber(settings.audit?.retain_days)} days`} detail="Audit records" />
+                </div>
+            </Section>
+        </div>
+    );
 }
 
-function Metric({ label, value }) {
-    return <div className="rounded-md border border-slate-200 bg-white p-3"><p className="text-xs uppercase tracking-wide text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold text-slate-900">{value}</p></div>;
+function MetricGrid({ metrics }) {
+    return <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-3 xl:grid-cols-6">{metrics.map((metric) => <Metric key={metric.label} {...metric} />)}</div>;
 }
 
-function Tokens({ tokens, mintMutation }) {
+function Metric({ label, value, detail, tone = 'default' }) {
+    const valueClass = tone === 'warning' ? 'text-amber-700' : tone === 'success' ? 'text-emerald-700' : 'text-slate-950';
+    return <div className="min-h-[104px] bg-white px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p><p className={`mt-2 font-mono text-xl font-semibold ${valueClass}`}>{value ?? 0}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>;
+}
+
+function ExposureFact({ label, value, detail }) {
+    return <div className="border-l-2 border-teal-500 pl-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-lg font-semibold text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-400">{detail}</p></div>;
+}
+
+function LiveCallFeed({ rows }) {
+    return (
+        <Section title="Live call feed" description="Recent requests refresh every five seconds while Overview is open." action={<span className="text-xs text-slate-400">{rows.length ? `${rows.length} recent` : 'Waiting for first call'}</span>}>
+            {rows.length ? <CallTable rows={rows.slice(0, 8)} compact /> : <EmptyState title="No MCP calls yet" message="Once a client connects, the latest requests, latency and refusal reasons will appear here." />}
+        </Section>
+    );
+}
+
+function SelfTest({ selfTest, onSelfTest, isPending }) {
+    return (
+        <Section title="Connection health" description="Each check includes the next operator action when something fails." action={<button type="button" onClick={onSelfTest} disabled={isPending} className={`${secondaryButtonClass} text-xs`}>{isPending ? 'Running...' : 'Run self-test'}</button>}>
+            {selfTest?.checks?.length ? <div className="space-y-2">{selfTest.checks.map((check) => <div key={check.key} className="flex gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm"><StatusDot ok={check.status === 'ok'} /><div><p className="font-medium text-slate-800">{check.message}</p><p className="mt-0.5 text-xs text-slate-500">{check.status === 'ok' ? 'Ready' : check.remediation || 'Review the MCP settings.'}</p></div></div>)}</div> : <EmptyState title="Self-test has not run" message="Verify configuration, database reachability and the active registry before connecting a client." />}
+        </Section>
+    );
+}
+
+function Tokens({ tools, tokens, isLoading, isError, mintMutation, revokeMutation }) {
+    const [mintOpen, setMintOpen] = useState(false);
+    const [issued, setIssued] = useState(null);
+    const [query, setQuery] = useState('');
+    const [status, setStatus] = useState('active');
+    const [revokeToken, setRevokeToken] = useState(null);
+    const filtered = tokens.filter((token) => {
+        const matchesQuery = !query || `${token.label} ${token.owner || ''}`.toLowerCase().includes(query.toLowerCase());
+        const matchesStatus = status === 'all' || (token.status || 'active') === status;
+        return matchesQuery && matchesStatus;
+    });
+
+    const mint = (payload) => mintMutation.mutate(payload, {
+        onSuccess: (data) => { setIssued(data); setMintOpen(false); },
+    });
+
+    return (
+        <div className="space-y-4">
+            <Section title="Access tokens" description="Read-only credentials expire automatically. The plaintext token is shown once and cannot be recovered." action={<button type="button" onClick={() => setMintOpen(true)} className={primaryButtonClass}>Mint token</button>}>
+                <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center">
+                    <label className="flex-1"><span className="sr-only">Search tokens</span><input value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search label or owner" /></label>
+                    <label className="sm:w-44"><span className="sr-only">Token status</span><select value={status} onChange={(event) => setStatus(event.target.value)} className={inputClass}><option value="active">Active tokens</option><option value="expired">Expired tokens</option><option value="all">All statuses</option></select></label>
+                    <button type="button" onClick={() => exportRowsToCsv('mcp-tokens', tokenCsvColumns, filtered)} disabled={!filtered.length} className={`${secondaryButtonClass} shrink-0`}>Export CSV</button>
+                </div>
+                {issued ? <IssuedToken token={issued} /> : null}
+                {isLoading ? <ListSkeleton rows={3} /> : isError ? <EmptyState title="Tokens are unavailable" message="Only administrators can inspect and manage MCP credentials." /> : filtered.length ? <div className="divide-y divide-slate-200">{filtered.map((token) => <TokenRow key={token.id} token={token} onRevoke={() => setRevokeToken(token)} />)}</div> : <EmptyState title="No matching tokens" message="Mint an expiring token for a client, then return here to monitor its use." />}
+            </Section>
+            <McpDialog open={mintOpen} title="Mint an MCP token" onClose={() => setMintOpen(false)}>
+                <MintTokenForm tools={tools} onCancel={() => setMintOpen(false)} onSubmit={mint} isPending={mintMutation.isPending} />
+            </McpDialog>
+            <ConfirmDialog open={Boolean(revokeToken)} title="Revoke this token?" message={revokeToken ? `The ${revokeToken.label} credential will stop working immediately.` : ''} confirmLabel="Revoke token" tone="danger" onCancel={() => setRevokeToken(null)} onConfirm={() => { const id = revokeToken?.id; setRevokeToken(null); if (id) revokeMutation.mutate(id); }} isPending={revokeMutation.isPending} />
+        </div>
+    );
+}
+
+function MintTokenForm({ tools, onCancel, onSubmit, isPending }) {
     const [label, setLabel] = useState('');
     const [ttl, setTtl] = useState(90);
-    const [issued, setIssued] = useState(null);
-    const mint = () => mintMutation.mutate({ label, ttl_days: Number(ttl) }, { onSuccess: (data) => { setIssued(data); setLabel(''); } });
-    return <Section title="Access tokens" action={<button type="button" onClick={mint} disabled={!label || mintMutation.isPending} className="rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Mint token</button>}>
-        <div className="grid gap-3 md:grid-cols-[1fr_120px]"><input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Token label" className="rounded-md border border-slate-300 px-3 py-2 text-sm" /><input type="number" min="1" max="365" value={ttl} onChange={(event) => setTtl(event.target.value)} className="rounded-md border border-slate-300 px-3 py-2 text-sm" aria-label="Token lifetime days" /></div>
-        {issued ? <div className="mt-4 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm"><p className="font-semibold text-teal-900">Token minted. Copy it now; it will not be shown again.</p><code className="mt-2 block break-all text-xs text-teal-950">{issued.token}</code></div> : null}
-        <div className="mt-4 divide-y divide-slate-200 border-y border-slate-200">{tokens.map((token) => <div key={token.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm"><div><p className="font-medium text-slate-900">{token.label}</p><p className="text-xs text-slate-500">{token.owner || 'Unknown owner'} · {token.expires_at || 'No expiry'}</p></div><span className="text-xs text-slate-500">{(token.abilities || []).length} abilities</span></div>)}</div>
-    </Section>;
+    const [scoped, setScoped] = useState(false);
+    const [selectedTools, setSelectedTools] = useState([]);
+    const enabledTools = tools.filter((tool) => tool.enabled);
+    const submit = (event) => {
+        event.preventDefault();
+        onSubmit({ label: label.trim(), ttl_days: Number(ttl), tools: scoped ? selectedTools : [] });
+    };
+    return <form onSubmit={submit} className="space-y-4"><Field label="Token label" hint="Use a device or client name you will recognize later."><input required value={label} onChange={(event) => setLabel(event.target.value)} className={inputClass} placeholder="e.g. Ian MacBook" autoFocus /></Field><Field label="Lifetime" hint="Maximum 365 days."><div className="flex items-center gap-2"><input required type="number" min="1" max="365" value={ttl} onChange={(event) => setTtl(event.target.value)} className={`${inputClass} max-w-32`} /><span className="text-sm text-slate-500">days</span></div></Field><label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" checked={scoped} onChange={(event) => setScoped(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" /><span><span className="font-medium">Limit this token to selected tools</span><span className="mt-0.5 block text-xs text-slate-500">Leave off to follow the owner's full eligible tool set.</span></span></label>{scoped ? <div className="grid max-h-48 gap-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">{enabledTools.map((tool) => <label key={tool.name} className="flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" checked={selectedTools.includes(tool.name)} onChange={(event) => setSelectedTools((current) => event.target.checked ? [...current, tool.name] : current.filter((name) => name !== tool.name))} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />{tool.name}</label>)}</div> : null}<div className="flex justify-end gap-2 border-t border-slate-200 pt-4"><button type="button" onClick={onCancel} className={secondaryButtonClass}>Cancel</button><button type="submit" disabled={isPending || !label.trim()} className={primaryButtonClass}>{isPending ? 'Minting...' : 'Mint token'}</button></div></form>;
 }
 
-function Tools({ tools, settings, onUpdate }) {
-    return <Section title="Tool registry"><div className="divide-y divide-slate-200 border-y border-slate-200">{tools.map((tool) => { const configured = settings.tools?.[tool.name]; const isOn = configured?.enabled !== false; return <div key={tool.name} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><p className="font-mono text-sm text-slate-900">{tool.name}</p><p className="text-xs text-slate-500">{tool.description}</p></div><button type="button" onClick={() => onUpdate({ tools: { [tool.name]: { ...(configured || {}), enabled: !isOn } } })} className={'rounded-md px-3 py-1.5 text-xs font-semibold ' + (isOn ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600')}>{isOn ? 'Enabled' : 'Disabled'}</button></div>; })}</div></Section>;
+function TokenRow({ token, onRevoke }) {
+    const expired = token.status === 'expired';
+    return <div className="flex flex-col gap-3 py-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-900">{token.label}</p><StatusPill tone={expired ? 'neutral' : 'success'} label={expired ? 'Expired' : 'Active'} /></div><p className="mt-1 text-xs text-slate-500">{token.owner || 'Unknown owner'} · {ROLE_LABELS[token.role] || token.role || 'Unknown role'} · {token.abilities?.length || 0} tool scopes</p><p className="mt-1 text-xs text-slate-400">Expires {formatDate(token.expires_at)} · Last used {formatDate(token.last_used_at, 'Never')}</p></div><div className="flex flex-wrap items-center gap-4 text-xs text-slate-500"><span><strong className="font-mono text-slate-800">{formatNumber(token.calls_7d)}</strong> calls / 7d</span><span><strong className="font-mono text-slate-800">{formatBytes(token.bytes_7d)}</strong> out</span><button type="button" onClick={onRevoke} className="font-semibold text-rose-700 hover:text-rose-800">{expired ? 'Delete' : 'Revoke'}</button></div></div>;
 }
 
-function Privacy({ settings }) {
-    return <Section title="Data & Privacy"><div className="grid gap-3 md:grid-cols-2"><div className="rounded-md border border-teal-200 bg-teal-50 p-4"><p className="font-semibold text-teal-900">{settings.pii_mode === 'aggregate_only' ? 'Aggregate only' : 'Pseudonymous'}</p><p className="mt-1 text-sm text-teal-800">No names, phones, emails, bios or raw entity URLs are returned.</p></div><div className="rounded-md border border-slate-200 p-4"><p className="font-semibold text-slate-900">SQL hatch</p><p className="mt-1 text-sm text-slate-500">{settings.sql_hatch?.enabled ? 'Enabled for aggregate wrappers.' : 'Disabled until explicitly enabled.'}</p></div></div></Section>;
+function IssuedToken({ token }) {
+    const endpoint = `${window.location.origin}/api/mcp`;
+    const claude = `claude mcp add --transport http exotic ${endpoint} --header "Authorization: Bearer ${token.token}"`;
+    const codex = `[mcp_servers.exotic]\nurl = "${endpoint}"\nheaders = { Authorization = "Bearer ${token.token}" }`;
+    return <div className="my-4 rounded-md border border-teal-200 bg-teal-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-teal-950">Token minted: copy it now</p><p className="mt-1 text-xs text-teal-800">This plaintext credential will not be shown again. Expires {formatDate(token.expires_at)}.</p></div><CopyButton value={token.token} label="Copy token" /></div><code className="mt-3 block max-h-20 overflow-auto break-all rounded bg-white/70 p-2 font-mono text-xs text-teal-950">{token.token}</code><div className="mt-3 grid gap-2 md:grid-cols-2"><CommandBlock label="Claude Code" value={claude} /><CommandBlock label="Codex CLI" value={codex} /></div></div>;
 }
 
-function Limits({ settings, onUpdate }) {
-    const limits = settings.limits || {};
-    return <Section title="Limits"><div className="grid gap-3 md:grid-cols-3">{[['rate_per_minute', 'Calls / minute'], ['daily_row_budget', 'Daily rows'], ['daily_bytes_budget', 'Daily bytes']].map(([key, label]) => <label key={key} className="text-sm text-slate-600">{label}<input type="number" value={limits[key] || 0} onChange={(event) => onUpdate({ limits: { [key]: Number(event.target.value) } })} className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>)}</div></Section>;
+function Tools({ tools, activity, canManage, isSaving, onUpdate, previewMutation }) {
+    const [domain, setDomain] = useState('all');
+    const [status, setStatus] = useState('all');
+    const [selectedName, setSelectedName] = useState(tools[0]?.name || '');
+    const [previewOpen, setPreviewOpen] = useState(false);
+    useEffect(() => { if (!tools.some((tool) => tool.name === selectedName)) setSelectedName(tools[0]?.name || ''); }, [selectedName, tools]);
+    const filtered = tools.filter((tool) => (domain === 'all' || tool.domain === domain) && (status === 'all' || (status === 'enabled' ? tool.enabled : !tool.enabled)));
+    const selected = tools.find((tool) => tool.name === selectedName) || filtered[0];
+    const stats = selected ? activity.tool_stats?.[selected.name] || {} : {};
+    return <div className="space-y-4"><Section title="Tool registry" description={`${tools.filter((tool) => tool.enabled).length} of ${tools.length} tools enabled. Disabled tools disappear from the next tools/list response.`} action={<button type="button" onClick={() => exportRowsToCsv('mcp-tools', toolCsvColumns, tools)} className={secondaryButtonClass}>Export CSV</button>}><div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row"><label className="sm:w-48"><span className="sr-only">Tool domain</span><select value={domain} onChange={(event) => setDomain(event.target.value)} className={inputClass}><option value="all">All domains</option>{Object.entries(DOMAIN_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="sm:w-48"><span className="sr-only">Tool status</span><select value={status} onChange={(event) => setStatus(event.target.value)} className={inputClass}><option value="all">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label></div><div className="grid gap-4 pt-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.8fr)]"><div className="overflow-hidden rounded-md border border-slate-200"><div className="hidden grid-cols-[minmax(220px,2fr)_110px_80px_80px_72px] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 md:grid"><span>Tool</span><span>Minimum role</span><span>Calls / 7d</span><span>Avg ms</span><span>Status</span></div>{filtered.map((tool) => { const toolStats = activity.tool_stats?.[tool.name] || {}; const active = selected?.name === tool.name; return <button type="button" key={tool.name} onClick={() => setSelectedName(tool.name)} className={`grid w-full gap-2 border-b border-slate-200 px-3 py-3 text-left transition last:border-b-0 md:grid-cols-[minmax(220px,2fr)_110px_80px_80px_72px] md:items-center md:gap-3 ${active ? 'bg-teal-50/70' : 'bg-white hover:bg-slate-50'}`}><span className="min-w-0"><span className="flex flex-wrap items-center gap-2"><span className="truncate font-mono text-xs font-semibold text-slate-900">{tool.name}</span><span className="text-[10px] text-slate-400">{DOMAIN_LABELS[tool.domain] || tool.domain}</span></span><span className="mt-1 block text-xs text-slate-500">{tool.description}</span></span><span className="text-xs text-slate-500"><span className="md:hidden">Role: </span>{ROLE_LABELS[tool.configured_role] || tool.configured_role}</span><span className="font-mono text-xs text-slate-700"><span className="md:hidden">7d: </span>{formatNumber(toolStats.calls_7d)}</span><span className="font-mono text-xs text-slate-700"><span className="md:hidden">Avg: </span>{formatNumber(toolStats.avg_latency_ms)}</span><span><StatusPill tone={tool.enabled ? 'success' : 'neutral'} label={tool.enabled ? 'On' : 'Off'} /></span></button>; })}</div>{selected ? <ToolInspector tool={selected} stats={stats} canManage={canManage} isSaving={isSaving} onToggle={() => onUpdate({ tools: { [selected.name]: { enabled: !selected.enabled, min_role: selected.configured_role } } })} onPreview={() => setPreviewOpen(true)} /> : <EmptyState title="No tools match" message="Change the domain or status filters." />}</div></Section><McpDialog open={previewOpen} title={`Preview ${selected?.name || 'tool'}`} onClose={() => setPreviewOpen(false)}><ToolPreviewForm tool={selected} previewMutation={previewMutation} onClose={() => setPreviewOpen(false)} /></McpDialog></div>;
 }
 
-function Activity({ rows, summary }) {
-    return <Section title="Activity"><div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4"><Metric label="Calls" value={summary.calls_today || 0} /><Metric label="Rows" value={summary.rows_today || 0} /><Metric label="Bytes" value={summary.bytes_today || 0} /><Metric label="Refusals" value={summary.refusals_today || 0} /></div><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase text-slate-500"><tr><th className="py-2 pr-3">Tool</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Reason</th><th className="py-2">When</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="border-b border-slate-100"><td className="py-2 pr-3 font-mono text-xs">{row.tool}</td><td className="py-2 pr-3">{row.status}</td><td className="py-2 pr-3 text-slate-500">{row.refusal_reason || '—'}</td><td className="py-2 text-slate-500">{row.created_at}</td></tr>)}</tbody></table></div></Section>;
+function ToolInspector({ tool, stats, canManage, isSaving, onToggle, onPreview }) {
+    return <aside className="rounded-md border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-sm font-semibold text-slate-950">{tool.name}</p><p className="mt-1 text-sm leading-6 text-slate-600">{tool.description}</p></div><StatusPill tone={tool.enabled ? 'success' : 'neutral'} label={tool.enabled ? 'Enabled' : 'Disabled'} /></div><div className="mt-4 grid grid-cols-2 gap-2"><MiniFact label="Min role" value={ROLE_LABELS[tool.configured_role] || tool.configured_role} /><MiniFact label="Calls / 7d" value={formatNumber(stats.calls_7d)} /><MiniFact label="Average" value={`${formatNumber(stats.avg_latency_ms)} ms`} /><MiniFact label="Errors" value={formatNumber(stats.errors_7d)} /></div><div className="mt-4 border-t border-slate-200 pt-4"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Arguments</p><pre className="mt-2 max-h-32 overflow-auto rounded-md bg-white p-3 font-mono text-[11px] leading-5 text-slate-700">{JSON.stringify(tool.inputSchema?.properties || {}, null, 2)}</pre></div><div className="mt-4"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Reads</p><p className="mt-2 text-xs text-slate-600">{tool.backing_service}{tool.views?.length ? ` · ${tool.views.join(', ')}` : ''}</p><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Returns no</p><p className="mt-2 text-xs leading-5 text-slate-600">{(tool.returns_no || []).join(' · ')}</p></div><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={onPreview} disabled={!tool.enabled} className={secondaryButtonClass}>Preview payload</button><button type="button" onClick={onToggle} disabled={!canManage || isSaving} className={`${buttonClass} ${tool.enabled ? 'border border-rose-200 bg-white text-rose-700 hover:bg-rose-50' : 'bg-teal-700 text-white hover:bg-teal-800'}`}>{tool.enabled ? 'Disable tool' : 'Enable tool'}</button></div>{!canManage ? <p className="mt-3 text-xs text-amber-700">Admin permission is required to change the registry.</p> : null}</aside>;
 }
 
-function Guide({ endpoint, tools }) {
-    const command = 'claude mcp add --transport http exotic ' + endpoint + ' --header "Authorization: Bearer $EXOTIC_MCP_TOKEN"';
-    return <Section title="Guide"><div className="space-y-4"><p className="text-sm text-slate-600">Connect a terminal client with an expiring token. The visible tool list is generated from the current server settings.</p><pre className="overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{command}</pre><p className="text-sm text-slate-500">{tools.length} tools currently visible to this account.</p></div></Section>;
+function ToolPreviewForm({ tool, previewMutation, onClose }) {
+    const [argsText, setArgsText] = useState('{}');
+    const [error, setError] = useState('');
+    const result = previewMutation.data;
+    const submit = () => {
+        try { setError(''); previewMutation.mutate({ tool: tool.name, arguments: JSON.parse(argsText || '{}') }); } catch { setError('Arguments must be valid JSON.'); }
+    };
+    return <div className="space-y-4"><p className="text-sm text-slate-600">This executes the selected tool with the same governance and sanitizer used by a real client, then discards the result after previewing it.</p><label className="block"><span className="mb-1 block text-sm font-medium text-slate-700">Arguments JSON</span><textarea value={argsText} onChange={(event) => setArgsText(event.target.value)} className={`${inputClass} min-h-28 font-mono text-xs`} spellCheck="false" /></label>{error ? <p className="text-sm text-rose-700">{error}</p> : null}<div className="flex justify-end gap-2"><button type="button" onClick={onClose} className={secondaryButtonClass}>Close</button><button type="button" onClick={submit} disabled={previewMutation.isPending || !tool.enabled} className={primaryButtonClass}>{previewMutation.isPending ? 'Running...' : 'Run preview'}</button></div>{result ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-emerald-900">PII scan passed</p><span className="text-xs text-emerald-800">{formatBytes(result.bytes)} · {formatNumber(result.row_count)} rows</span></div><pre className="mt-3 max-h-72 overflow-auto rounded bg-white/70 p-3 font-mono text-[11px] leading-5 text-slate-800">{JSON.stringify(result.payload, null, 2)}</pre><p className="mt-2 text-xs text-emerald-800">Checked: {(result.pii_scan?.fields_checked || []).join(', ')}.</p></div> : null}</div>;
 }
+
+function Privacy({ settings, tools, canManage, isSaving, onSave, previewMutation }) {
+    const [mode, setMode] = useState(settings.pii_mode || 'pseudonymous');
+    const [sqlEnabled, setSqlEnabled] = useState(Boolean(settings.sql_hatch?.enabled));
+    const [views, setViews] = useState(settings.sql_hatch?.views || []);
+    const [newView, setNewView] = useState('');
+    const [truncateChars, setTruncateChars] = useState(settings.sanitisation?.truncate_chars || 500);
+    const [stripUrls, setStripUrls] = useState(settings.sanitisation?.strip_urls !== false);
+    const [stripCredentials, setStripCredentials] = useState(settings.sanitisation?.strip_credentials !== false);
+    const [previewTool, setPreviewTool] = useState('exotic_catalog');
+    const activeTools = tools.filter((tool) => tool.enabled);
+    useEffect(() => { setMode(settings.pii_mode || 'pseudonymous'); setSqlEnabled(Boolean(settings.sql_hatch?.enabled)); setViews(settings.sql_hatch?.views || []); setTruncateChars(settings.sanitisation?.truncate_chars || 500); setStripUrls(settings.sanitisation?.strip_urls !== false); setStripCredentials(settings.sanitisation?.strip_credentials !== false); }, [settings]);
+    const save = () => onSave({ pii_mode: mode, sql_hatch: { ...settings.sql_hatch, enabled: sqlEnabled, views }, sanitisation: { ...settings.sanitisation, truncate_chars: Number(truncateChars), strip_urls: stripUrls, strip_credentials: stripCredentials } }, 'Privacy policy saved.');
+    const addView = () => { const value = newView.trim(); if (value && !views.includes(value)) setViews((current) => [...current, value]); setNewView(''); };
+    return <div className="space-y-4"><Section title="Privacy posture" description="Choose whether the model can reason over pseudonymous entity rows or only aggregate results."><div className="grid gap-3 lg:grid-cols-2"><ChoiceCard active={mode === 'pseudonymous'} title="Pseudonymous" description="Stable handles and per-entity rows are allowed. Names, contact details, bios and raw URLs never cross the boundary." onClick={() => setMode('pseudonymous')} /><ChoiceCard active={mode === 'aggregate_only'} title="Aggregate only" description="Counts and sums only. Per-entity tools such as client snapshots are removed from the visible registry." onClick={() => setMode('aggregate_only')} /></div></Section><Section title="Reporting views and SQL-safe wrappers" description="Only explicitly allow-listed views may be queried through the SQL hatch." action={<button type="button" onClick={save} disabled={!canManage || isSaving} className={primaryButtonClass}>{isSaving ? 'Saving...' : 'Save privacy policy'}</button>}><div className="space-y-2">{views.map((view) => <div key={view} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2.5"><code className="font-mono text-xs text-slate-800">{view}</code><button type="button" onClick={() => setViews((current) => current.filter((item) => item !== view))} disabled={!canManage} className="text-xs font-semibold text-rose-700">Remove</button></div>)}<div className="flex gap-2"><input value={newView} onChange={(event) => setNewView(event.target.value)} className={inputClass} placeholder="vw_mcp_example_rollup" /><button type="button" onClick={addView} disabled={!canManage || !newView.trim()} className={secondaryButtonClass}>Add view</button></div></div><label className="mt-4 flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700"><input type="checkbox" checked={sqlEnabled} onChange={(event) => setSqlEnabled(event.target.checked)} disabled={!canManage} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" /><span><span className="font-semibold">Enable SQL hatch</span><span className="mt-0.5 block text-xs text-slate-500">Single-statement SELECTs only, with forced limits and forbidden output fields.</span></span></label></Section><Section title="Sanitisation rules" description="These rules are applied before a tool result leaves the CRM."><div className="grid gap-3 md:grid-cols-3"><Field label="Truncate text at" hint="characters"><input type="number" min="50" max="5000" value={truncateChars} onChange={(event) => setTruncateChars(event.target.value)} disabled={!canManage} className={inputClass} /></Field><CheckField label="Strip URLs" checked={stripUrls} onChange={setStripUrls} disabled={!canManage} /><CheckField label="Strip credential patterns" checked={stripCredentials} onChange={setStripCredentials} disabled={!canManage} /></div></Section><Section title="Payload preview" description="Run a real sanitized response and inspect the exact JSON the client would receive." action={<select value={previewTool} onChange={(event) => setPreviewTool(event.target.value)} className={`${inputClass} w-auto text-xs`}><option value="exotic_catalog">exotic_catalog</option>{activeTools.filter((tool) => tool.name !== 'exotic_catalog').map((tool) => <option key={tool.name} value={tool.name}>{tool.name}</option>)}</select>}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-slate-600">Preview runs with empty arguments. Tools requiring arguments can be inspected from the Tools panel.</p><button type="button" onClick={() => previewMutation.mutate({ tool: previewTool, arguments: {} })} disabled={previewMutation.isPending} className={secondaryButtonClass}>{previewMutation.isPending ? 'Running...' : 'Run payload preview'}</button></div>{previewMutation.data ? <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3"><div className="flex flex-wrap justify-between gap-2 text-sm"><strong className="text-emerald-900">PII scan passed</strong><span className="text-xs text-emerald-800">{formatBytes(previewMutation.data.bytes)} · {formatNumber(previewMutation.data.row_count)} rows</span></div><pre className="mt-3 max-h-72 overflow-auto rounded bg-white/70 p-3 font-mono text-[11px] leading-5 text-slate-800">{JSON.stringify(previewMutation.data.payload, null, 2)}</pre></div> : null}</Section></div>;
+}
+
+function Limits({ settings, activity, canManage, isSaving, onSave }) {
+    const defaults = settings.limits || {};
+    const [draft, setDraft] = useState({ rate_per_minute: defaults.rate_per_minute || 30, daily_row_budget: defaults.daily_row_budget || 200000, daily_bytes_budget: defaults.daily_bytes_budget || 50000000, on_exhaustion: defaults.on_exhaustion || 'throttle' });
+    useEffect(() => setDraft({ rate_per_minute: defaults.rate_per_minute || 30, daily_row_budget: defaults.daily_row_budget || 200000, daily_bytes_budget: defaults.daily_bytes_budget || 50000000, on_exhaustion: defaults.on_exhaustion || 'throttle' }), [defaults.rate_per_minute, defaults.daily_row_budget, defaults.daily_bytes_budget, defaults.on_exhaustion]);
+    const rows = Number(activity.summary?.rows_today || 0);
+    const bytes = Number(activity.summary?.bytes_today || 0);
+    const tokens = Object.values((activity.rows || []).reduce((acc, row) => { const key = row.token_label || 'Session'; acc[key] = acc[key] || { label: key, rows: 0, bytes: 0 }; acc[key].rows += Number(row.row_count || 0); acc[key].bytes += Number(row.bytes_out || 0); return acc; }, {})).sort((a, b) => b.bytes - a.bytes).slice(0, 6);
+    const save = () => onSave({ limits: { ...draft, rate_per_minute: Number(draft.rate_per_minute), daily_row_budget: Number(draft.daily_row_budget), daily_bytes_budget: Number(draft.daily_bytes_budget) } }, 'Limits saved.');
+    return <div className="space-y-4"><Section title="Budgets and throttling" description="Changes are staged locally and applied together, so a partially edited number never reaches the server." action={<div className="flex gap-2"><button type="button" onClick={() => setDraft({ rate_per_minute: defaults.rate_per_minute || 30, daily_row_budget: defaults.daily_row_budget || 200000, daily_bytes_budget: defaults.daily_bytes_budget || 50000000, on_exhaustion: defaults.on_exhaustion || 'throttle' })} className={secondaryButtonClass}>Cancel</button><button type="button" onClick={save} disabled={!canManage || isSaving} className={primaryButtonClass}>{isSaving ? 'Saving...' : 'Save limits'}</button></div>}><div className="grid gap-4 md:grid-cols-3"><Field label="Calls per minute" hint="Rate limit"><input type="number" min="1" max="600" value={draft.rate_per_minute} onChange={(event) => setDraft({ ...draft, rate_per_minute: event.target.value })} disabled={!canManage} className={inputClass} /></Field><Field label="Daily rows" hint="Maximum returned rows"><input type="number" min="1" max="10000000" value={draft.daily_row_budget} onChange={(event) => setDraft({ ...draft, daily_row_budget: event.target.value })} disabled={!canManage} className={inputClass} /></Field><Field label="Daily bytes" hint="Maximum payload out"><input type="number" min="1" max="1000000000" value={draft.daily_bytes_budget} onChange={(event) => setDraft({ ...draft, daily_bytes_budget: event.target.value })} disabled={!canManage} className={inputClass} /></Field></div><div className="mt-4 max-w-sm"><Field label="When a budget is exhausted"><select value={draft.on_exhaustion} onChange={(event) => setDraft({ ...draft, on_exhaustion: event.target.value })} disabled={!canManage} className={inputClass}><option value="throttle">Throttle with 429</option><option value="refuse">Refuse and audit</option></select></Field></div></Section><Section title="Today's consumption" description="Usage is based on recorded MCP calls and resets at the application timezone boundary."><BudgetBar label="Rows returned" used={rows} total={Number(draft.daily_row_budget)} /><BudgetBar label="Payload out" used={bytes} total={Number(draft.daily_bytes_budget)} bytes /><div className="mt-5 border-t border-slate-200 pt-4"><p className="text-sm font-semibold text-slate-800">Top token consumption</p>{tokens.length ? <div className="mt-3 space-y-3">{tokens.map((token) => <div key={token.label}><div className="flex justify-between gap-3 text-xs"><span className="truncate text-slate-600">{token.label}</span><span className="font-mono text-slate-800">{formatBytes(token.bytes)} · {formatNumber(token.rows)} rows</span></div><div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-teal-600" style={{ width: `${Math.min(100, (token.bytes / Math.max(1, bytes)) * 100)}%` }} /></div></div>)}</div> : <EmptyState title="No token usage today" message="Consumption will appear after the first recorded call." compact />}</div></Section></div>;
+}
+
+function BudgetBar({ label, used, total, bytes = false }) {
+    const percent = total ? Math.min(100, (used / total) * 100) : 0;
+    return <div className="mb-4 last:mb-0"><div className="flex justify-between gap-3 text-sm"><span className="text-slate-700">{label}</span><span className="font-mono text-xs text-slate-500">{bytes ? formatBytes(used) : formatNumber(used)} / {bytes ? formatBytes(total) : formatNumber(total)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className={`h-full ${percent > 80 ? 'bg-amber-500' : 'bg-teal-600'}`} style={{ width: `${percent}%` }} /></div><p className="mt-1 text-xs text-slate-400">{formatPercent(percent)} used</p></div>;
+}
+
+function Activity({ rows, summary, tools, filters, setFilters, isLoading, isFetching, onRefresh }) {
+    const exportActivity = () => exportRowsToCsv('mcp-activity', activityCsvColumns, rows);
+    return <div className="space-y-4"><Section title="Activity" description="Searchable audit trail for successful, refused and failed MCP requests." action={<div className="flex flex-wrap gap-2"><button type="button" onClick={onRefresh} disabled={isFetching} className={secondaryButtonClass}>{isFetching ? 'Refreshing...' : 'Refresh'}</button><button type="button" onClick={exportActivity} disabled={!rows.length} className={secondaryButtonClass}>Export CSV</button></div>}><MetricGrid metrics={[{ label: 'Calls today', value: formatNumber(summary.calls_today), detail: 'All requests' }, { label: 'Rows today', value: formatNumber(summary.rows_today), detail: 'Returned rows' }, { label: 'Payload today', value: formatBytes(summary.bytes_today), detail: 'Bytes out' }, { label: 'P95 latency', value: `${formatNumber(summary.p95_latency_ms)} ms`, detail: 'Today' }]} /><div className="mt-4 grid gap-3 md:grid-cols-5"><label><span className="mb-1 block text-xs font-medium text-slate-600">Tool</span><select value={filters.tool} onChange={(event) => setFilters({ ...filters, tool: event.target.value })} className={inputClass}><option value="">All tools</option>{tools.map((tool) => <option key={tool.name} value={tool.name}>{tool.name}</option>)}</select></label><label><span className="mb-1 block text-xs font-medium text-slate-600">Status</span><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className={inputClass}><option value="">All statuses</option><option value="success">Success</option><option value="refused">Refused</option><option value="failed">Failed</option></select></label><label><span className="mb-1 block text-xs font-medium text-slate-600">Reason</span><input value={filters.refusal_reason} onChange={(event) => setFilters({ ...filters, refusal_reason: event.target.value })} className={inputClass} placeholder="e.g. sql_validation" /></label><label><span className="mb-1 block text-xs font-medium text-slate-600">From</span><input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} className={inputClass} /></label><label><span className="mb-1 block text-xs font-medium text-slate-600">To</span><input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} className={inputClass} /></label></div><div className="mt-4">{isLoading ? <ListSkeleton rows={5} /> : rows.length ? <CallTable rows={rows} /> : <EmptyState title="No calls match these filters" message="Try a wider date range or clear the status and reason filters." />}</div></Section></div>;
+}
+
+function CallTable({ rows, compact = false }) {
+    return <div className="overflow-x-auto rounded-md border border-slate-200"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500"><tr><th className="px-3 py-2">Tool</th><th className="px-3 py-2">Token</th><th className="px-3 py-2">Rows</th><th className="px-3 py-2">Bytes</th><th className="px-3 py-2">Latency</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">When</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id || `${row.tool}-${row.created_at}`} className="border-t border-slate-200 bg-white"><td className="max-w-[260px] px-3 py-2.5 font-mono text-xs text-slate-800">{row.tool}</td><td className="px-3 py-2.5 text-xs text-slate-500">{row.token_label || 'Session'}</td><td className="px-3 py-2.5 font-mono text-xs text-slate-700">{formatNumber(row.row_count)}</td><td className="px-3 py-2.5 font-mono text-xs text-slate-700">{formatBytes(row.bytes_out)}</td><td className="px-3 py-2.5 font-mono text-xs text-slate-700">{formatNumber(row.latency_ms)} ms</td><td className="px-3 py-2.5"><StatusPill tone={row.status === 'success' ? 'success' : row.status === 'refused' ? 'warning' : 'danger'} label={row.status} />{row.refusal_reason ? <p className="mt-1 text-[11px] text-slate-400">{row.refusal_reason}</p> : null}</td><td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">{formatRelative(row.created_at)}</td></tr>)}</tbody></table></div>;
+}
+
+function Guide({ endpoint, tools, selfTest, onSelfTest, isSelfTesting }) {
+    const [client, setClient] = useState('claude');
+    const claude = `claude mcp add --transport http exotic ${endpoint} --header "Authorization: Bearer $EXOTIC_MCP_TOKEN"`;
+    const codex = `[mcp_servers.exotic]\nurl = "${endpoint}"\nheaders = { Authorization = "Bearer $EXOTIC_MCP_TOKEN" }`;
+    const examples = [['Why did new-user revenue fall this window?', 'revenue_summary -> market_breakdown -> churn_analysis'], ['Which markets have profiles expiring in 7 days?', 'lifecycle_summary'], ['What errors started after the last deploy?', 'error_digest -> system_vitals']];
+    return <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.8fr)]"><div className="space-y-4"><Section title="Connect your client" description="Mint a token first, store it in your shell environment, then copy the command for your client."><div className="flex gap-1 border-b border-slate-200"><button type="button" onClick={() => setClient('claude')} className={`${buttonClass} rounded-b-none ${client === 'claude' ? 'border-b-2 border-teal-700 text-slate-900' : 'text-slate-500'}`}>Claude Code</button><button type="button" onClick={() => setClient('codex')} className={`${buttonClass} rounded-b-none ${client === 'codex' ? 'border-b-2 border-teal-700 text-slate-900' : 'text-slate-500'}`}>Codex CLI</button></div><CommandBlock label={client === 'claude' ? 'Claude Code command' : 'Codex config.toml'} value={client === 'claude' ? claude : codex} /><p className="mt-3 text-xs text-slate-500">Set <code className="rounded bg-slate-100 px-1 py-0.5 font-mono">EXOTIC_MCP_TOKEN</code> locally. Do not paste the plaintext token into a shared config or commit it.</p></Section><Section title="Ask something useful" description={`${tools.filter((tool) => tool.enabled).length} tools are currently visible to this account.`}><div className="space-y-2">{examples.map(([question, path]) => <div key={question} className="rounded-md border border-slate-200 px-3 py-2.5"><p className="text-sm font-medium text-slate-800">{question}</p><p className="mt-1 font-mono text-[11px] text-slate-400">{path}</p></div>)}</div></Section></div><div className="space-y-4"><Section title="Verify connection" action={<button type="button" onClick={onSelfTest} disabled={isSelfTesting} className={secondaryButtonClass}>{isSelfTesting ? 'Running...' : 'Run self-test'}</button>}>{selfTest?.checks?.length ? <div className="space-y-2">{selfTest.checks.map((check) => <div key={check.key} className="flex gap-2 text-sm"><StatusDot ok={check.status === 'ok'} /><span className="text-slate-700">{check.message}</span></div>)}</div> : <p className="text-sm text-slate-500">Run the self-test to verify the endpoint, registry and database path.</p>}</Section><Section title="Troubleshooting"><div className="space-y-3 text-sm"><Trouble title="401 unauthorized" detail="The token is expired, revoked or missing the MCP read ability. Check Tokens." /><Trouble title="Tool missing from the list" detail="The tool is disabled or your role is below its minimum role. Check Tools." /><Trouble title="429 throttled" detail="A rate or daily budget was reached. Check Limits for the reset window." /><Trouble title="SQL refused" detail="Only allow-listed reporting views are accepted. Check Data & Privacy." /></div></Section><Section title="What MCP can never do"><p className="text-sm leading-6 text-slate-600">Write anything, read names, phones, emails or bios, read a base table, send a message, or cross into markets the token owner cannot see.</p></Section></div></div>;
+}
+
+function Section({ title, description, action, children }) {
+    return <section className="crm-surface overflow-hidden"><div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 sm:px-5"><div><h2 className="text-base font-semibold text-slate-950">{title}</h2>{description ? <p className="mt-1 max-w-3xl text-sm leading-5 text-slate-500">{description}</p> : null}</div>{action ? <div className="shrink-0">{action}</div> : null}</div><div className="p-4 sm:p-5">{children}</div></section>;
+}
+
+function Field({ label, hint, children }) {
+    return <label className="block"><span className="flex items-baseline justify-between gap-2 text-sm font-medium text-slate-700"><span>{label}</span>{hint ? <span className="text-xs font-normal text-slate-400">{hint}</span> : null}</span><span className="mt-1.5 block">{children}</span></label>;
+}
+
+function CheckField({ label, checked, onChange, disabled }) {
+    return <label className="flex min-h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} disabled={disabled} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />{label}</label>;
+}
+
+function ChoiceCard({ active, title, description, onClick }) {
+    return <button type="button" onClick={onClick} className={`w-full rounded-md border p-4 text-left transition ${active ? 'border-teal-500 bg-teal-50/70 ring-1 ring-teal-500' : 'border-slate-200 bg-white hover:border-slate-300'}`}><div className="flex items-center justify-between gap-3"><span className="font-semibold text-slate-900">{title}</span><StatusPill tone={active ? 'success' : 'neutral'} label={active ? 'Active' : 'Select'} /></div><p className="mt-2 text-sm leading-6 text-slate-600">{description}</p></button>;
+}
+
+function MiniFact({ label, value }) { return <div className="rounded-md border border-slate-200 bg-white px-3 py-2"><p className="text-[10px] uppercase tracking-[0.1em] text-slate-400">{label}</p><p className="mt-1 font-mono text-sm font-semibold text-slate-800">{value}</p></div>; }
+function Trouble({ title, detail }) { return <div><p className="font-semibold text-slate-800">{title}</p><p className="mt-1 leading-5 text-slate-500">{detail}</p></div>; }
+function StatusDot({ ok }) { return <span aria-hidden="true" className={`mt-1 h-2 w-2 shrink-0 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />; }
+function StatusPill({ tone, label }) { const classes = tone === 'success' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : tone === 'warning' ? 'bg-amber-50 text-amber-800 ring-amber-200' : tone === 'danger' ? 'bg-rose-50 text-rose-700 ring-rose-200' : 'bg-slate-100 text-slate-600 ring-slate-200'; return <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${classes}`}>{label}</span>; }
+function EmptyState({ title, message, compact = false }) { return <div className={`rounded-md border border-dashed border-slate-300 bg-slate-50 text-center ${compact ? 'px-3 py-5' : 'px-4 py-8'}`}><p className="text-sm font-semibold text-slate-700">{title}</p><p className="mx-auto mt-1 max-w-md text-xs leading-5 text-slate-500">{message}</p></div>; }
+function ListSkeleton({ rows = 3 }) { return <div className="space-y-3">{Array.from({ length: rows }, (_, index) => <div key={index} className="animate-pulse border-b border-slate-200 py-4"><div className="h-3 w-2/5 rounded bg-slate-200" /><div className="mt-2 h-2 w-3/5 rounded bg-slate-100" /></div>)}</div>; }
+
+function CopyButton({ value, label }) {
+    const [copied, setCopied] = useState(false);
+    const copy = async () => { try { await copyText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1600); } catch { setCopied(false); } };
+    return <button type="button" onClick={copy} className={`${secondaryButtonClass} min-h-8 px-2.5 py-1 text-xs`}>{copied ? 'Copied' : label}</button>;
+}
+
+function CommandBlock({ label, value }) { return <div className="mt-3 rounded-md border border-slate-200 bg-slate-950 p-3"><div className="flex items-center justify-between gap-3"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p><CopyButton value={value} label="Copy" /></div><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-100">{value}</pre></div>; }
+
+function McpDialog({ open, title, onClose, children }) {
+    useEffect(() => { if (!open) return undefined; const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown); }, [onClose, open]);
+    if (!open) return null;
+    return <div className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-950/40 p-4" onClick={onClose}><div role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4"><h2 id="mcp-dialog-title" className="text-base font-semibold text-slate-950">{title}</h2><button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Close dialog">Close</button></div><div className="p-5">{children}</div></div></div>;
+}
+
+function formatNumber(value) { return Number(value || 0).toLocaleString(); }
+function formatBytes(value) { const bytes = Number(value || 0); if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`; return `${(bytes / (1024 * 1024)).toFixed(1)} MB`; }
+function formatPercent(value) { return `${Number(value || 0).toFixed(0)}%`; }
+function formatDate(value, fallback = 'No activity') { if (!value) return fallback; const date = new Date(value); return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString(); }
+function formatRelative(value) { if (!value) return 'Never'; const date = new Date(value); if (Number.isNaN(date.getTime())) return value; const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000)); if (seconds < 60) return `${seconds}s ago`; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return date.toLocaleDateString(); }
+async function copyText(value) { if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value); const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+
+const tokenCsvColumns = [{ label: 'Label', value: (row) => row.label }, { label: 'Owner', value: (row) => row.owner }, { label: 'Status', value: (row) => row.status }, { label: 'Expires', value: (row) => row.expires_at }, { label: 'Last used', value: (row) => row.last_used_at }, { label: 'Calls 7d', value: (row) => row.calls_7d }, { label: 'Bytes 7d', value: (row) => row.bytes_7d }];
+const toolCsvColumns = [{ label: 'Tool', value: (row) => row.name }, { label: 'Domain', value: (row) => row.domain }, { label: 'Minimum role', value: (row) => row.configured_role }, { label: 'Enabled', value: (row) => row.enabled ? 'yes' : 'no' }, { label: 'Description', value: (row) => row.description }];
+const activityCsvColumns = [{ label: 'Tool', value: (row) => row.tool }, { label: 'Token', value: (row) => row.token_label }, { label: 'Status', value: (row) => row.status }, { label: 'Reason', value: (row) => row.refusal_reason }, { label: 'Rows', value: (row) => row.row_count }, { label: 'Bytes', value: (row) => row.bytes_out }, { label: 'Latency ms', value: (row) => row.latency_ms }, { label: 'Created at', value: (row) => row.created_at }];

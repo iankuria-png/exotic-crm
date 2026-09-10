@@ -9474,10 +9474,10 @@ export default function Settings() {
 
     return (
         <div className="space-y-4">
-            <PageHeader title="Settings" subtitle="Configure integrations, templates, and operational controls." />
+            {activeTab === 'mcp' ? null : <PageHeader title="Settings" subtitle="Configure integrations, templates, and operational controls." />}
 
-            <section className="crm-surface p-2">
-                <div className="flex flex-wrap gap-1">
+            <section className="crm-surface overflow-hidden p-2">
+                <div className={`flex gap-1 ${activeTab === 'mcp' ? 'min-w-max flex-nowrap overflow-x-auto pb-1' : 'flex-wrap'}`}>
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
@@ -9521,7 +9521,7 @@ export default function Settings() {
             {activeTab === 'my-exotic' ? <CustomerRolloutPanel canWrite={(user?.role || '') === 'admin'} /> : null}
             {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
-            {activeTab === 'mcp' ? <McpWorkspacePanel /> : null}
+            {activeTab === 'mcp' ? <McpWorkspacePanel userRole={user?.role || ''} /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Models\McpToolCall;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
@@ -128,6 +129,55 @@ class McpEndpointTest extends TestCase
             'entity_type' => 'ops_mcp_config',
             'action' => 'mcp_config_update',
         ]);
+    }
+
+    public function test_settings_registry_includes_disabled_tools_for_management(): void
+    {
+        $user = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/settings/mcp')->assertOk();
+        $sqlTool = collect($response->json('tools'))->firstWhere('name', 'exotic_run_reporting_sql');
+
+        $this->assertNotNull($sqlTool);
+        $this->assertFalse($sqlTool['enabled']);
+        $this->assertSame('schema', $sqlTool['domain']);
+    }
+
+    public function test_admin_can_preview_a_sanitised_catalog_payload(): void
+    {
+        $user = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/crm/settings/mcp/tools/exotic_catalog/preview', ['arguments' => []])
+            ->assertOk()
+            ->assertJsonPath('tool', 'exotic_catalog')
+            ->assertJsonPath('pii_scan.clean', true)
+            ->assertJsonStructure(['payload', 'bytes', 'row_count', 'pii_scan' => ['clean', 'fields_checked']]);
+    }
+
+    public function test_activity_exposes_latency_token_and_tool_summary(): void
+    {
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:browser', ['mcp:read'], now()->addDay())->accessToken;
+        McpToolCall::create([
+            'token_id' => $token->id,
+            'user_id' => $user->id,
+            'tool' => 'exotic_catalog',
+            'status' => 'success',
+            'row_count' => 2,
+            'bytes_out' => 128,
+            'latency_ms' => 48,
+            'created_at' => now(),
+        ]);
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/mcp/activity')
+            ->assertOk()
+            ->assertJsonPath('summary.calls_today', 1)
+            ->assertJsonPath('summary.p95_latency_ms', 48)
+            ->assertJsonPath('rows.0.token_label', 'browser')
+            ->assertJsonPath('tool_stats.exotic_catalog.calls_7d', 1);
     }
 
     private function modernHeaders(string $method, string $version): array

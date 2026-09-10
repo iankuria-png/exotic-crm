@@ -296,6 +296,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::get('/settings/mcp', [McpSettingsController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::put('/settings/mcp', [McpSettingsController::class, 'update'])->middleware('role:admin');
     Route::post('/settings/mcp/self-test', [McpSettingsController::class, 'selfTest'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/mcp/tools/{tool}/preview', [McpSettingsController::class, 'preview'])->middleware('role:admin,sub_admin');
     Route::get('/settings/mcp/tokens', [McpTokenController::class, 'index'])->middleware('role:admin');
     Route::post('/settings/mcp/tokens', [McpTokenController::class, 'store'])->middleware('role:admin');
     Route::delete('/settings/mcp/tokens/{token}', [McpTokenController::class, 'destroy'])->middleware('role:admin');
