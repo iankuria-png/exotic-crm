@@ -253,7 +253,7 @@ class ForecastBaselineService
         $roots = [];
         Client::query()
             ->whereIn('id', $clientIds)
-            ->select(['id', 'platform_id', 'phone', 'phone_normalized'])
+            ->select(['id', 'platform_id', 'phone_normalized'])
             ->chunkById(1000, function ($clients) use (&$roots, $resolver, $prefixFor) {
                 foreach ($clients as $client) {
                     $roots[] = $resolver->rootForClient($client, $prefixFor($client->platform_id));

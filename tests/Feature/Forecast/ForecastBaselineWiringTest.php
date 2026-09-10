@@ -16,7 +16,7 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * These two guard the failures that shipped once already: the claim resolver
+ * These guard the failures that shipped once already: the claim resolver
  * existing but never being called, and per-market baselines re-running the full
  * recovery pass once per market. Both are invisible to tests that mock the
  * baseline service, so these exercise the real build().
