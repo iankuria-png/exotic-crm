@@ -148,22 +148,25 @@ class ForecastBaselineService
             $excluded = (int) ($claimStats['excluded'][$key] ?? 0);
             $originalEligible = (int) ($levers[$key]['eligible_units'] ?? 0);
 
-            // Claims are counted in identity roots - one per person. A lever measured in
-            // another unit (renewal counts expiring subscriptions, of which a client can
-            // hold several) must not have its denominator replaced by a headcount, or the
-            // rate is computed across mismatched units. Renewal read 2,769 of 2,102 that
-            // way: 131%, clamped to a meaningless 100. Apply the claim as a proportion so
-            // the double-counted share is removed without changing the unit.
-            if ($claimed + $excluded > 0 && $originalEligible > 0) {
-                $retained = $claimed / ($claimed + $excluded);
-                $levers[$key]['eligible_units'] = max(0, (int) round($originalEligible * $retained));
+            // Claim resolution reports overlap; it does not restate a measured figure.
+            //
+            // Every attempt to fold it into the numbers corrupted them, because the claim
+            // sets and the levers count different things. Claims are identity roots - one
+            // per person. Renewal counts expiring subscriptions, of which a client holds
+            // several, so replacing its denominator with a headcount gave 2,769 of 2,102.
+            // Conversion's claim set is only the *unconverted* signups while its
+            // denominator is *all* signups, so scaling the latter by a ratio drawn from
+            // the former shrank a 2,600 lever to 128.
+            //
+            // So the counts are recorded and shown, and the levers keep the denominators
+            // they were measured against. Levers can therefore overlap slightly at the
+            // edges; that is visible in the evidence rather than silently priced in, which
+            // is the honest trade against quietly destroying a lever's value.
+            if ($claimed + $excluded > 0) {
                 $levers[$key]['evidence']['claimed_roots'] = $claimed;
-                $levers[$key]['evidence']['excluded_by_precedence'] = $excluded;
-                $levers[$key]['evidence']['eligible_before_precedence'] = $originalEligible;
+                $levers[$key]['evidence']['also_claimed_by_another_lever'] = $excluded;
+                $levers[$key]['evidence']['eligible_units'] = $originalEligible;
             }
-
-            // The measured rate stands on its own denominator. Recomputing it here was
-            // what produced the impossible figure.
         }
 
         foreach ($levers as $key => $lever) {

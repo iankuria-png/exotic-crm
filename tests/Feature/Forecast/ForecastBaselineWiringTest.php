@@ -171,11 +171,16 @@ class ForecastBaselineWiringTest extends TestCase
             'excluded' => ['renewal' => 199],
         ]);
 
+        // Claim sets count people; levers count subscriptions or signups. Folding one
+        // into the other broke this twice - once inflating a rate past 100%, once
+        // shrinking a lever's value twentyfold. Claim resolution reports, it does not
+        // restate.
         $this->assertSame(75.6, $result['renewal']['actual'], 'A measured rate must survive claim resolution unchanged.');
-        $this->assertLessThanOrEqual(100.0, (float) $result['renewal']['actual']);
+        $this->assertSame(3661, (int) $result['renewal']['eligible_units'], 'A measured denominator must survive claim resolution unchanged.');
+        $this->assertSame(199, (int) $result['renewal']['evidence']['also_claimed_by_another_lever'], 'Overlap is reported as evidence.');
         $this->assertGreaterThanOrEqual(
             (int) $result['renewal']['evidence']['renewed'],
-            (int) $result['renewal']['evidence']['eligible'],
+            (int) $result['renewal']['eligible_units'],
             'The renewed count must never exceed the denominator it was measured against.'
         );
     }
