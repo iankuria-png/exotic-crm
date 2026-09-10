@@ -35,6 +35,7 @@ use App\Http\Controllers\CRM\CustomerSafetyAdminController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
+use App\Http\Controllers\CRM\PulseExportController;
 use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
 use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
 use App\Http\Controllers\CRM\Faq\ContextController as FaqContextController;
@@ -964,6 +965,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     });
     Route::middleware('role:admin')->group(function () {
         Route::get('/settings/error-logs', [ErrorLogController::class, 'index']);
+        // Registered before the {group} binding so "export" is not read as an id.
+        Route::get('/settings/error-logs/export', [ErrorLogController::class, 'export']);
+        Route::get('/settings/pulse/export', [PulseExportController::class, 'export']);
         Route::get('/settings/error-logs/{group}', [ErrorLogController::class, 'show']);
         Route::post('/settings/error-logs/{group}/resolve', [ErrorLogController::class, 'resolve']);
         Route::post('/settings/error-logs/{group}/reopen', [ErrorLogController::class, 'reopen']);

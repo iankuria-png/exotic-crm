@@ -26,6 +26,7 @@ import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
+import DiagnosticsExportModal from '../components/settings/DiagnosticsExportModal';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import OperationsWorkspace from '../components/OperationsWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
@@ -7024,6 +7025,7 @@ function ErrorLogsWorkspace() {
     const [sourceFilter, setSourceFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState('unresolved');
     const [selectedGroupId, setSelectedGroupId] = useState(null);
+    const [exportOpen, setExportOpen] = useState(false);
 
     const listQuery = useQuery({
         queryKey: ['settings-error-logs', page, search, levelFilter, sourceFilter, statusFilter],
@@ -7238,6 +7240,16 @@ function ErrorLogsWorkspace() {
                             Reset
                         </button>
                     ) : null}
+                    <button
+                        type="button"
+                        className="crm-btn-secondary ml-auto inline-flex items-center gap-2 px-3 py-2"
+                        onClick={() => setExportOpen(true)}
+                    >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                        </svg>
+                        Export
+                    </button>
                 </div>
                 <p className="mt-2 text-xs text-slate-500">Errors are deduplicated by signature. Click Inspect for the full stack trace and last 20 occurrences.</p>
             </section>
@@ -7251,6 +7263,13 @@ function ErrorLogsWorkspace() {
                 isLoading={listQuery.isLoading}
                 compact
                 emptyMessage="No errors match the current filters."
+            />
+
+            <DiagnosticsExportModal
+                open={exportOpen}
+                onClose={() => setExportOpen(false)}
+                matchedCount={listQuery.data?.total || 0}
+                errorFilters={{ search, level: levelFilter, source: sourceFilter, status: statusFilter }}
             />
 
             {selectedGroupId ? (
