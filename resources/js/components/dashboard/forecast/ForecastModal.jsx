@@ -38,6 +38,16 @@ function ModeButton({ active, children, onClick }) {
     );
 }
 
+const MODE_LEVER_SUPPORT = {
+    replay: (lever) => !['churn_winback', 'new_market'].includes(lever?.key),
+    project: () => true,
+    target: () => true,
+};
+
+function leverSupportsMode(lever, mode) {
+    return (MODE_LEVER_SUPPORT[mode] || (() => true))(lever);
+}
+
 const MODE_COPY = {
     replay: 'What this window would have produced at different rates. The starting figure is the collected revenue on the dashboard behind this.',
     project: 'The selected window extended forward at its own daily rate. Nothing is assumed to grow on its own.',
@@ -99,6 +109,7 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
     const [activeRoute, setActiveRoute] = useState('balanced');
     const [computed, setComputed] = useState(null);
     const [rangeOverride, setRangeOverride] = useState(null);
+    const [computeError, setComputeError] = useState(null);
 
     const effectiveParams = useMemo(
         () => (rangeOverride ? { ...params, ...rangeOverride } : params),
@@ -170,22 +181,30 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
 
         const controller = new AbortController();
         const timer = window.setTimeout(() => {
+            // A lever the mode does not support makes the whole request 422, which used
+            // to blank the outcome and fall back to a projected total - so a moved
+            // slider silently tripled the headline. Never send one.
             const payload = Object.fromEntries(
                 Object.entries(targets)
                     .filter(([key, value]) => Number(value) !== Number(levers[key]?.actual || 0))
+                    .filter(([key]) => leverSupportsMode(levers[key], mode))
                     .map(([key, value]) => [key, { target: Number(value) }])
             );
 
             api.post('/crm/dashboard/ceo/forecast/compute', {
-                ...params,
+                ...effectiveParams,
                 currency,
                 mode,
                 levers: payload,
             }, { signal: controller.signal })
-                .then((response) => setComputed(response.data))
+                .then((response) => {
+                    setComputed(response.data);
+                    setComputeError(null);
+                })
                 .catch((error) => {
                     if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
                         setComputed(null);
+                        setComputeError(error?.response?.data?.message || 'This scenario could not be computed.');
                     }
                 });
         }, 250);
@@ -194,7 +213,7 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
             window.clearTimeout(timer);
             controller.abort();
         };
-    }, [baseline, currency, levers, mode, open, params, targets]);
+    }, [baseline, currency, effectiveParams, levers, mode, open, targets]);
 
     const solveMutation = useMutation({
         mutationFn: () => api.post('/crm/dashboard/ceo/forecast/solve', {
@@ -245,6 +264,12 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
         if (!solveMutation.data?.routes) return null;
         return solveMutation.data.routes.find((route) => route.band === activeRoute) || solveMutation.data.routes[0];
     }, [activeRoute, solveMutation.data]);
+    // Replay must never fall back to a projected total - that is how an unusable
+    // response turned 64k into 193k on screen.
+    const modeBaseTotal = mode === 'replay'
+        ? Number(baseline?.baseline_revenue?.normalized_total || 0)
+        : Number(baseline?.projection?.horizon_run_rate_total || 0);
+
     const bridgeRows = useMemo(() => (
         mode === 'target'
             ? activeRouteData?.moves || []
@@ -316,29 +341,50 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                     if (!lever) return null;
                                     const target = targets[key] ?? lever.actual ?? 0;
                                     const delta = leverDelta(lever, target);
-                                    const max = lever.unit === 'count' ? Math.max(Number(lever.suggested || 0), Number(lever.actual || 0) + 20) : 100;
+                                    const supported = leverSupportsMode(lever, mode);
+                                    const isMoney = key === 'new_market';
+                                    const max = isMoney
+                                        ? 5000
+                                        : lever.unit === 'count'
+                                            ? Math.max(Number(lever.suggested || 0), Number(lever.actual || 0) + 20)
+                                            : 100;
 
                                     return (
-                                        <label key={key} className="block rounded-lg border border-slate-200 bg-white p-3">
+                                        <label key={key} className={`block rounded-lg border p-3 ${supported ? 'border-slate-200 bg-white' : 'border-slate-200 bg-slate-50 opacity-70'}`}>
                                             <span className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-800">
                                                 <span>{lever.label}</span>
-                                                <span>{lever.unit === 'count' ? Number(target).toFixed(0) : `${Number(target).toFixed(1)}%`}</span>
+                                                <span>
+                                                    {isMoney
+                                                        ? `${formatCurrency(Number(target), currency)}/mo`
+                                                        : lever.unit === 'count' ? Number(target).toFixed(0) : `${Number(target).toFixed(1)}%`}
+                                                </span>
                                             </span>
                                             <input
                                                 type="range"
                                                 min="0"
                                                 max={max}
-                                                step={lever.unit === 'count' ? 1 : 0.5}
+                                                step={isMoney ? 50 : lever.unit === 'count' ? 1 : 0.5}
+                                                disabled={!supported}
                                                 value={target}
                                                 onChange={(event) => setTargets((current) => ({ ...current, [key]: Number(event.target.value) }))}
                                                 className="mt-2 w-full accent-teal-600"
                                             />
                                             <span className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-                                                <span>now {Number(lever.actual || 0).toFixed(lever.unit === 'count' ? 0 : 1)}{lever.unit === 'count' ? '' : '%'}</span>
+                                                <span>
+                                                    {isMoney
+                                                        ? 'monthly target for a market not yet in the book'
+                                                        : `now ${Number(lever.actual || 0).toFixed(lever.unit === 'count' ? 0 : 1)}${lever.unit === 'count' ? '' : '%'}`}
+                                                </span>
                                                 <span className={delta > 0 ? 'font-semibold text-emerald-700' : 'text-slate-400'}>
                                                     {delta > 0 ? `+${formatCurrency(delta, currency)}` : 'no change'}
                                                 </span>
                                             </span>
+                                            {!supported ? (
+                                                <span className="mt-1 block text-[10px] leading-relaxed text-slate-500">
+                                                    Only available when projecting forward — you cannot win back, inside a window,
+                                                    a client who churned during it.
+                                                </span>
+                                            ) : null}
                                             {evidenceLine(key, lever) ? (
                                                 <span className="mt-1 block text-[10px] leading-relaxed text-slate-400">{evidenceLine(key, lever)}</span>
                                             ) : null}
@@ -407,17 +453,22 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                 <OutcomeTabs
                                     params={effectiveParams}
                                     currency={currency}
-                                    scenarioTotal={outcome?.scenario_total ?? baseline?.projection?.horizon_run_rate_total ?? 0}
+                                    scenarioTotal={outcome?.scenario_total ?? modeBaseTotal}
                                     summary={(
                                 <div className="space-y-3 pt-3">
                                     <div>
                                         <p className="text-2xl font-semibold tracking-tight text-slate-950">
-                                            {formatCurrency(outcome?.scenario_total ?? baseline?.projection?.horizon_run_rate_total ?? 0, currency)}
+                                            {formatCurrency(outcome?.scenario_total ?? modeBaseTotal, currency)}
                                         </p>
                                         <p className="mt-1 text-xs font-semibold text-emerald-700">
                                             {formatCurrency(outcome?.incremental_total || 0, currency)} upside
                                         </p>
                                     </div>
+                                    {computeError ? (
+                                        <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                                            {computeError} The figure above is the untouched baseline.
+                                        </p>
+                                    ) : null}
                                     <FxNormalizationNotice meta={outcome?.normalization_meta || baseline?.normalization_meta} />
                                     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
                                         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">What this asks for</p>
