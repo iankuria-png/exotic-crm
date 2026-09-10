@@ -9,6 +9,7 @@ use App\Models\Platform;
 use App\Models\Product;
 use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Support\ClientLifecycleState;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -462,6 +463,60 @@ class ClientControllerTest extends TestCase
                 ->assertJsonPath('wp_profile_slug', 'faithvideossquirtingnudes');
 
             $this->assertNotEmpty($response->json('active_deal.expires_at'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_show_payload_does_not_treat_past_dated_active_deal_as_current_subscription(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 9, 12, 0, 0, 'Africa/Nairobi'));
+
+        try {
+            $platform = Platform::factory()->create([
+                'name' => 'Kenya',
+                'domain' => 'kenya.example.test',
+                'country' => 'Kenya',
+                'phone_prefix' => '254',
+                'currency_code' => 'KES',
+                'timezone' => 'Africa/Nairobi',
+                'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            ]);
+            $product = Product::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'VIP',
+                'display_name' => 'VIP',
+                'slug' => 'vip',
+                'tier' => 'vip',
+            ]);
+            $client = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'wp_post_id' => 103431,
+                'wp_user_id' => 35190,
+                'name' => 'Jessie',
+                'profile_status' => 'publish',
+                'lifecycle_state' => ClientLifecycleState::ARCHIVED,
+                'escort_expire' => Carbon::create(2026, 6, 2, 0, 0, 0, 'Africa/Nairobi')->timestamp,
+            ]);
+
+            Deal::factory()->create([
+                'platform_id' => $platform->id,
+                'client_id' => $client->id,
+                'product_id' => $product->id,
+                'plan_type' => 'vip',
+                'status' => 'active',
+                'expires_at' => Carbon::create(2026, 6, 2, 0, 0, 0, 'Africa/Nairobi'),
+            ]);
+
+            Sanctum::actingAs($this->adminUser());
+
+            $response = $this->getJson("/api/crm/clients/{$client->id}");
+
+            $response->assertOk()
+                ->assertJsonPath('active_deal', null)
+                ->assertJsonPath('deals.0.status', 'active')
+                ->assertJsonPath('deals.0.effective_status', 'expired')
+                ->assertJsonPath('lifecycle_state', ClientLifecycleState::ARCHIVED);
         } finally {
             Carbon::setTestNow();
         }

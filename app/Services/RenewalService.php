@@ -20,6 +20,7 @@ use App\Services\Messaging\MessageRecipient;
 use App\Services\Messaging\MessagingDispatcher;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -186,7 +187,7 @@ class RenewalService
                     && ! $expiryDate
                     && $client->profile_status === 'publish'
                     && ! $hasWpStateConflict;
-                $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
+                $status = $this->effectiveOverviewStatus($client->deal_status, $expiryDate, $daysLeft);
                 $remindersPaused = $client->activeDeal ? $this->isReminderPaused($client->activeDeal) : false;
 
                 $renewalBucket = $remindersPaused
@@ -307,6 +308,7 @@ class RenewalService
                     'duration_is_estimate' => ! $isUntracked && ! $client->deal_id && $client->deal_duration === null && ! empty($legacyEstimate['duration']),
                     'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
                     'status' => $status,
+                    'effective_status' => $status,
                     'days_left' => $daysLeft,
                     'renewal_bucket' => $renewalBucket,
                     'reminders_sent_count' => (int) $telemetry['reminders_sent_count'],
@@ -378,19 +380,22 @@ class RenewalService
 
         $nowTs = now()->timestamp;
         $dateExpr = $this->expiryDateExpr();
+        $currentDealExpr = "deals.status = 'active' AND ({$dateExpr} IS NULL OR {$dateExpr} >= ?)";
         $summaryRow = (clone $summaryBase)
             ->selectRaw(
-                "SUM(CASE WHEN (deals.status = 'active' OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
-                 SUM(CASE WHEN (deals.status = 'active' AND deals.id IS NOT NULL) THEN 1 ELSE 0 END) as modern_active_count,
+                "SUM(CASE WHEN (({$currentDealExpr}) OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
+                 SUM(CASE WHEN (({$currentDealExpr}) AND deals.id IS NOT NULL) THEN 1 ELSE 0 END) as modern_active_count,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as risk,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
                  SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' AND COALESCE(clients.needs_payment, 0) = 0 AND COALESCE(clients.notactive, 0) = 0 THEN 1 ELSE 0 END) as untracked_active,
                  SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
-                 SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
-                 SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
+                 SUM(CASE WHEN (deals.status IN ('pending','awaiting_payment','paid') OR ({$currentDealExpr})) THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
+                 SUM(CASE WHEN (({$currentDealExpr}) AND deals.payment_id IS NOT NULL) THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
                 [
+                    $nowTs,
+                    $nowTs,
                     $nowTs,
                     $nowTs,
                     $nowTs + (3 * 86400),
@@ -399,6 +404,8 @@ class RenewalService
                     $nowTs - (14 * 86400),
                     $nowTs - 1,
                     $nowTs - (14 * 86400),
+                    $nowTs,
+                    $nowTs,
                 ]
             )
             ->first();
@@ -511,19 +518,22 @@ class RenewalService
 
         $nowTs = now()->timestamp;
         $dateExpr = $this->expiryDateExpr();
+        $currentDealExpr = "deals.status = 'active' AND ({$dateExpr} IS NULL OR {$dateExpr} >= ?)";
         $summaryRow = (clone $summaryBase)
             ->selectRaw(
-                "SUM(CASE WHEN (deals.status = 'active' OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
-                 SUM(CASE WHEN (deals.status = 'active' AND deals.id IS NOT NULL) THEN 1 ELSE 0 END) as modern_active_count,
+                "SUM(CASE WHEN (({$currentDealExpr}) OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
+                 SUM(CASE WHEN (({$currentDealExpr}) AND deals.id IS NOT NULL) THEN 1 ELSE 0 END) as modern_active_count,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as risk,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
                  SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' AND COALESCE(clients.needs_payment, 0) = 0 AND COALESCE(clients.notactive, 0) = 0 THEN 1 ELSE 0 END) as untracked_active,
                  SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
-                 SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
-                 SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
+                 SUM(CASE WHEN (deals.status IN ('pending','awaiting_payment','paid') OR ({$currentDealExpr})) THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
+                 SUM(CASE WHEN (({$currentDealExpr}) AND deals.payment_id IS NOT NULL) THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
                 [
+                    $nowTs,
+                    $nowTs,
                     $nowTs,
                     $nowTs,
                     $nowTs + (3 * 86400),
@@ -532,6 +542,8 @@ class RenewalService
                     $nowTs - (14 * 86400),
                     $nowTs - 1,
                     $nowTs - (14 * 86400),
+                    $nowTs,
+                    $nowTs,
                 ]
             )
             ->first();
@@ -1853,7 +1865,10 @@ class RenewalService
 
         if ($status === 'active') {
             $query->where(function ($builder) use ($dateExpr, $nowTs) {
-                $builder->where('deals.status', 'active')
+                $builder->where(function ($deal) use ($dateExpr, $nowTs) {
+                    $deal->where('deals.status', 'active')
+                        ->whereRaw("({$dateExpr} IS NULL OR {$dateExpr} >= ?)", [$nowTs]);
+                })
                     ->orWhere(function ($virtual) use ($dateExpr, $nowTs) {
                         $virtual->whereNull('deals.id')
                             ->where(DB::raw($dateExpr), '>=', $nowTs);
@@ -1866,6 +1881,10 @@ class RenewalService
         if ($status === 'expired') {
             $query->where(function ($builder) use ($dateExpr, $nowTs) {
                 $builder->where('deals.status', 'expired')
+                    ->orWhere(function ($deal) use ($dateExpr, $nowTs) {
+                        $deal->where('deals.status', 'active')
+                            ->whereRaw("{$dateExpr} < ?", [$nowTs]);
+                    })
                     ->orWhere(function ($virtual) use ($dateExpr, $nowTs) {
                         $virtual->whereNull('deals.id')
                             ->where(DB::raw($dateExpr), '<', $nowTs);
@@ -1890,6 +1909,19 @@ class RenewalService
         }
 
         $query->where('deals.status', $status);
+    }
+
+    private function effectiveOverviewStatus(?string $dealStatus, ?CarbonInterface $expiryDate, ?int $daysLeft): string
+    {
+        $status = trim(strtolower((string) $dealStatus));
+
+        if ($status === 'active' && $expiryDate !== null && $daysLeft !== null && $daysLeft < 0) {
+            return 'expired';
+        }
+
+        return $status !== ''
+            ? $status
+            : ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
     }
 
     private function expiryDateExpr(): string

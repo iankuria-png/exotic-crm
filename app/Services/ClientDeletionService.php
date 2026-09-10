@@ -32,7 +32,7 @@ class ClientDeletionService
             'timeline_events_count' => TimelineEvent::query()
                 ->forEntity('client', (int) $client->id)
                 ->count(),
-            'has_active_deal' => $client->deals()->where('status', 'active')->exists(),
+            'has_active_deal' => $client->deals()->currentlyActive()->exists(),
             'wp_post_id' => (int) ($client->wp_post_id ?? 0),
             'can_delete' => (string) ($client->client_type ?? 'escort') !== 'agency',
             'delete_blocked_reason' => (string) ($client->client_type ?? 'escort') === 'agency'

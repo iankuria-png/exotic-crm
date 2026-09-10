@@ -36,7 +36,8 @@ function getDeactivationScope(row) {
         return explicitScope;
     }
 
-    if (!row.is_virtual && (row.status === 'active' || row.status === 'expired')) {
+    const status = resolveDealStatus(row);
+    if (!row.is_virtual && (status === 'active' || status === 'expired')) {
         return 'deal';
     }
 
@@ -45,6 +46,19 @@ function getDeactivationScope(row) {
     }
 
     return null;
+}
+
+function resolveDealStatus(row) {
+    const status = String(row?.effective_status || row?.status || '').toLowerCase();
+
+    if (status === 'active' && row?.expires_at) {
+        const expiresAt = new Date(row.expires_at);
+        if (!Number.isNaN(expiresAt.getTime()) && expiresAt < new Date()) {
+            return 'expired';
+        }
+    }
+
+    return status;
 }
 
 function canBulkDeactivateRow(row) {
@@ -906,7 +920,7 @@ export default function Deals() {
             label: 'Status',
             render: (row) => (
                 <div className="flex flex-col items-start gap-1">
-                    <StatusBadge status={row.status} />
+                    <StatusBadge status={resolveDealStatus(row)} />
                     {row.has_wp_state_conflict ? (
                         <StatusBadge
                             status="manual_review"
@@ -976,6 +990,7 @@ export default function Deals() {
             render: (row) => {
                 let primaryAction = null;
                 const overflowActions = [];
+                const rowStatus = resolveDealStatus(row);
 
                 if (row.is_virtual) {
                     const canDeactivateClient = getDeactivationScope(row) === 'client';
@@ -998,7 +1013,7 @@ export default function Deals() {
                     } : null;
 
                     const shouldPrioritizeDeactivation = canDeactivateClient
-                        && (row.origin_type === 'legacy' || row.has_wp_state_conflict || row.status === 'expired');
+                        && (row.origin_type === 'legacy' || row.has_wp_state_conflict || rowStatus === 'expired');
 
                     primaryAction = shouldPrioritizeDeactivation
                         ? deactivateClientAction
@@ -1019,9 +1034,9 @@ export default function Deals() {
                         disabled: !row.client_id,
                         onClick: () => row.client_id && navigate(`/clients/${row.client_id}`),
                     });
-                } else if (row.status === 'pending') {
+                } else if (rowStatus === 'pending') {
                     primaryAction = { label: 'Activate', variant: 'primary', onClick: () => openDialog('activate', row) };
-                } else if (row.status === 'active') {
+                } else if (rowStatus === 'active') {
                     primaryAction = { label: 'Extend', variant: 'default', onClick: () => openDialog('extend', row) };
                     overflowActions.push({ key: 'deactivate', label: 'Deactivate', variant: 'warning', onClick: () => openDialog('deactivate', row) });
                 } else {

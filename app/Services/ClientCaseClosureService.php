@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Exceptions\ClientCaseClosureException;
-use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\TimelineEvent;
@@ -24,8 +23,7 @@ class ClientCaseClosureService
         private readonly AuditService $auditService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly ClientChurnStamper $churnStamper,
-    ) {
-    }
+    ) {}
 
     public function close(
         Client $client,
@@ -42,7 +40,7 @@ class ClientCaseClosureService
             throw ClientCaseClosureException::alreadyClosed($client);
         }
 
-        $activeDeal = $client->deals()->where('status', 'active')->first();
+        $activeDeal = $client->deals()->currentlyActive()->first();
         if ($activeDeal !== null) {
             throw ClientCaseClosureException::activeSubscription($client, $activeDeal);
         }
@@ -103,7 +101,7 @@ class ClientCaseClosureService
                 'created_at' => $now,
             ]);
 
-            $auditReason = $reasonLabel . ($trimmedNote !== null ? ' — ' . $trimmedNote : '');
+            $auditReason = $reasonLabel.($trimmedNote !== null ? ' — '.$trimmedNote : '');
 
             $audit = $this->auditService->fromRequest(
                 $request,
@@ -272,7 +270,7 @@ class ClientCaseClosureService
         $foundIds = $clients->pluck('id')->map(fn ($id) => (int) $id)->all();
         foreach ($clientIds as $requestedId) {
             $requestedId = (int) $requestedId;
-            if (!in_array($requestedId, $foundIds, true)) {
+            if (! in_array($requestedId, $foundIds, true)) {
                 $results[] = [
                     'client_id' => $requestedId,
                     'success' => false,
@@ -369,7 +367,7 @@ class ClientCaseClosureService
                 [
                     'provider' => 'crm_operator',
                     'error_code' => 'closed_via_client',
-                    'error_message' => $reasonLabel . ($note ? ' — ' . $note : ''),
+                    'error_message' => $reasonLabel.($note ? ' — '.$note : ''),
                     'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
                         'client_id' => (int) $client->id,
                         'reason_code' => $reasonCode,
@@ -405,7 +403,7 @@ class ClientCaseClosureService
 
     private function validateReason(string $reasonCode, ?string $note): void
     {
-        if (!CrmClientCloseReason::isValid($reasonCode)) {
+        if (! CrmClientCloseReason::isValid($reasonCode)) {
             throw ClientCaseClosureException::invalidReason($reasonCode);
         }
 

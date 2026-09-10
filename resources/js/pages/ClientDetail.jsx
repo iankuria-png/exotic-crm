@@ -513,6 +513,17 @@ function resolveClientExpiryDate(client) {
         || null;
 }
 
+function resolveDealStatus(deal) {
+    const status = String(deal?.effective_status || deal?.status || '').toLowerCase();
+    const expiresAt = parseDateValue(deal?.expires_at);
+
+    if (status === 'active' && expiresAt && expiresAt < new Date()) {
+        return 'expired';
+    }
+
+    return status;
+}
+
 function buildSubscriptionExpiryMessage(client, isForeverPlan = false) {
     const expiryDate = resolveClientExpiryDate(client);
 
@@ -3659,7 +3670,7 @@ export default function ClientDetail() {
     const closeReasonLabel = isCaseClosed
         ? (closeReasonLabelMap[client.close_reason_code] || client.close_reason_code || 'Closed')
         : null;
-    const activeDealForClose = (client?.deals || []).find((d) => d.status === 'active') || null;
+    const activeDealForClose = (client?.deals || []).find((d) => resolveDealStatus(d) === 'active') || null;
 
     return (
         <div className="space-y-4" data-tour="client-detail-root">
@@ -4558,7 +4569,7 @@ export default function ClientDetail() {
                                             </p>
                                             {renderWalletAutoRenewState(deal, true)}
                                         </div>
-                                        <StatusBadge status={deal.status} />
+                                        <StatusBadge status={resolveDealStatus(deal)} />
                                     </div>
                                 ))}
                             </div>
@@ -4690,7 +4701,7 @@ export default function ClientDetail() {
                                 <div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <h4 className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type}</h4>
-                                        <StatusBadge status={deal.status} />
+                                        <StatusBadge status={resolveDealStatus(deal)} />
                                         {deal.origin === 'mpesa_import' && (
                                             <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA Import</span>
                                         )}
@@ -4712,7 +4723,7 @@ export default function ClientDetail() {
 
                                 {!isReadOnly ? (
                                     <div className="flex items-center gap-2">
-                                        {deal.status === 'pending' ? (
+                                        {resolveDealStatus(deal) === 'pending' ? (
                                             <button
                                                 onClick={() => openActivationDialog(deal)}
                                                 disabled={activateDealMutation.isPending}
@@ -4720,7 +4731,7 @@ export default function ClientDetail() {
                                             >
                                                 {activateDealMutation.isPending ? 'Submitting...' : 'Activate'}
                                             </button>
-                                        ) : deal.status === 'active' ? (
+                                        ) : resolveDealStatus(deal) === 'active' ? (
                                             <>
                                                 <button
                                                     onClick={() => openDealActionDialog('extend', deal)}
@@ -4735,7 +4746,7 @@ export default function ClientDetail() {
                                                     Deactivate
                                                 </button>
                                             </>
-                                        ) : ['expired', 'cancelled', 'deactivated'].includes(deal.status) ? (
+                                        ) : ['expired', 'cancelled', 'deactivated'].includes(resolveDealStatus(deal)) ? (
                                             <button
                                                 onClick={() => openDealActionDialog('renew', deal)}
                                                 className="rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 hover:border-teal-300 hover:bg-teal-100"

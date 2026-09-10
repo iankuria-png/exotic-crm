@@ -22,7 +22,7 @@ class RenewalCadenceTest extends TestCase
     {
         return Template::query()->create([
             'platform_id' => $platformId,
-            'title' => 'Renewal ' . strtoupper($channel),
+            'title' => 'Renewal '.strtoupper($channel),
             'category' => 'renewal',
             'channel' => $channel,
             'subject' => null,
@@ -60,8 +60,8 @@ class RenewalCadenceTest extends TestCase
     private function createUser(string $role, array $assignedMarketIds = []): User
     {
         return User::query()->create([
-            'name' => ucfirst($role) . ' User',
-            'email' => strtolower($role) . Str::random(6) . '@example.test',
+            'name' => ucfirst($role).' User',
+            'email' => strtolower($role).Str::random(6).'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'assigned_market_ids' => $assignedMarketIds,
@@ -87,6 +87,50 @@ class RenewalCadenceTest extends TestCase
         $this->assertNotNull($event, 'renewal send should record a lifecycle telemetry event');
         $this->assertSame('renewal', $event->content['flow']);
         $this->assertSame('sent', $event->content['status']);
+    }
+
+    public function test_overview_treats_past_dated_active_deals_as_expired(): void
+    {
+        $platform = Platform::factory()->create();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+        ]);
+
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+            'expires_at' => now()->subDays(3),
+        ]);
+
+        $service = app(RenewalService::class);
+        $overview = $service->buildOverview([
+            'platform_ids' => [$platform->id],
+            'include_untracked' => true,
+        ], 25);
+        $row = collect($overview['targets']->items())->firstWhere('client_id', $client->id);
+
+        $this->assertSame('expired', $row['status']);
+        $this->assertSame('expired', $row['effective_status']);
+        $this->assertSame(0, $overview['summary']['active_deals']);
+        $this->assertSame(0, $overview['summary']['modern_active_count']);
+
+        $activeOverview = $service->buildOverview([
+            'platform_ids' => [$platform->id],
+            'status' => 'active',
+            'include_untracked' => true,
+        ], 25);
+        $expiredOverview = $service->buildOverview([
+            'platform_ids' => [$platform->id],
+            'status' => 'expired',
+            'include_untracked' => true,
+        ], 25);
+
+        $this->assertCount(0, $activeOverview['targets']->items());
+        $this->assertCount(1, $expiredOverview['targets']->items());
     }
 
     public function test_renewal_skips_client_who_already_renewed_to_a_later_subscription(): void
@@ -269,7 +313,7 @@ class RenewalCadenceTest extends TestCase
         $template = $this->renewalTemplate($platform->id);
         $this->campaign($platform->id, -2, $template->id);
 
-        $this->getJson('/api/crm/renewals/cadence?platform_id=' . $platform->id)
+        $this->getJson('/api/crm/renewals/cadence?platform_id='.$platform->id)
             ->assertOk()
             ->assertJson([
                 'has_market_override' => true,

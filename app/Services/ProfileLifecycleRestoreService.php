@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\LifecycleRestoreRun;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
@@ -189,6 +190,7 @@ class ProfileLifecycleRestoreService
                         'lifecycle_restored_at' => now(),
                         'lifecycle_restore_run_id' => $run->id,
                     ])->save();
+                    $expiredDealCount = $this->expireStaleActiveDeals($fresh);
 
                     // A republished bio may still carry phone/WhatsApp/email —
                     // restricted profiles must not generate leads.
@@ -205,6 +207,7 @@ class ProfileLifecycleRestoreService
                             'landing_state' => $state,
                             'resolved_expiry' => $expiredAt->toDateTimeString(),
                             'expiry_source' => $this->resolveExpirySource($client),
+                            'deals_expired' => $expiredDealCount,
                         ],
                         'created_at' => now(),
                     ]);
@@ -489,6 +492,16 @@ class ProfileLifecycleRestoreService
         }
 
         return 'updated_at';
+    }
+
+    private function expireStaleActiveDeals(Client $client): int
+    {
+        return Deal::query()
+            ->where('client_id', (int) $client->id)
+            ->where('status', 'active')
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '<=', now())
+            ->update(['status' => 'expired']);
     }
 
     /**

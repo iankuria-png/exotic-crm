@@ -307,7 +307,7 @@ class Client extends Model
 
     public function activeDeal()
     {
-        return $this->hasOne(Deal::class)->where('status', 'active')->latest();
+        return $this->hasOne(Deal::class)->currentlyActive()->latest();
     }
 
     /** The SEO Recovery batch that republished this profile, if any. */

@@ -116,6 +116,10 @@ class Deal extends Model
         'pending_subsidiary_trial' => 'array',
     ];
 
+    protected $appends = [
+        'effective_status',
+    ];
+
     public function platform()
     {
         return $this->belongsTo(Platform::class);
@@ -190,6 +194,26 @@ class Deal extends Model
     public function scopeActive($query)
     {
         return $query->where('status', 'active');
+    }
+
+    public function scopeCurrentlyActive($query)
+    {
+        return $query->where('status', 'active')
+            ->where(function ($builder): void {
+                $builder->whereNull('expires_at')
+                    ->orWhere('expires_at', '>', now());
+            });
+    }
+
+    public function getEffectiveStatusAttribute(): string
+    {
+        $status = (string) $this->status;
+
+        if ($status === 'active' && $this->expires_at !== null && $this->expires_at->lte(now())) {
+            return 'expired';
+        }
+
+        return $status;
     }
 
     public function scopeExpiringSoon($query, $days = 7)

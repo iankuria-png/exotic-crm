@@ -93,12 +93,18 @@ class LifecycleRestoreTest extends TestCase
     {
         $platform = $this->createPlatform();
         $client = $this->createOfflineClient($platform, 7003);
-        $this->createPaidDeal($client, now()->subDays(400)); // > 90 days → Archived
+        $deal = Deal::factory()->create([
+            'client_id' => $client->id,
+            'platform_id' => $client->platform_id,
+            'status' => 'active',
+            'expires_at' => now()->subDays(400),
+        ]); // > 90 days → Archived
         $this->fakeWp($platform, 7003);
 
         app(ProfileLifecycleRestoreService::class)->execute($this->makeRun($platform, LifecycleRestoreRun::MODE_LIVE));
 
         $this->assertSame(ClientLifecycleState::ARCHIVED, $client->fresh()->lifecycle_state);
+        $this->assertSame('expired', $deal->fresh()->status);
     }
 
     public function test_revert_puts_the_cohort_back_offline(): void
