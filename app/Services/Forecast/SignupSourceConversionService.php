@@ -27,7 +27,11 @@ class SignupSourceConversionService
                     ? $query->whereRaw('1 = 0')
                     : $query->whereIn('platform_id', $platformScope);
             })
-            ->groupByRaw('COALESCE(signup_source, ?)', [SignupSource::EXISTING])
+            // Group by the select alias, never by a repeated raw expression carrying a
+            // bind placeholder: MySQL matches GROUP BY to SELECT on the parse tree, and
+            // two separate `?` markers are not provably equal, so it reports the bare
+            // column as ungrouped under ONLY_FULL_GROUP_BY.
+            ->groupBy('signup_source')
             ->get();
 
         $firstPaidSubquery = Payment::query()
@@ -60,10 +64,8 @@ class SignupSourceConversionService
                     ? $query->whereRaw('1 = 0')
                     : $query->whereIn('clients.platform_id', $platformScope);
             })
-            ->groupByRaw('COALESCE(clients.signup_source, ?), COALESCE(payments.currency, platforms.currency_code, ?)', [
-                SignupSource::EXISTING,
-                $targetCurrency,
-            ])
+            // Aliases again - see the note on the cohort query above.
+            ->groupBy('signup_source', 'currency')
             ->get();
 
         $convertedBySource = [];

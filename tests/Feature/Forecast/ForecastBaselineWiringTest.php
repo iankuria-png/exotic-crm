@@ -123,6 +123,17 @@ class ForecastBaselineWiringTest extends TestCase
                 $sql,
                 'A grouped select correlates a subquery on clients.platform_id - MySQL rejects this with 1055.'
             );
+
+            // MySQL matches GROUP BY to SELECT on the parse tree, and two separate `?`
+            // markers are not provably equal - so a placeholder inside GROUP BY makes
+            // the bare column read as ungrouped. Group by the select alias instead.
+            // strrpos, not strpos: the first 'group by' belongs to the joined subquery.
+            $groupBy = substr($sql, strrpos($sql, 'group by'));
+            $this->assertStringNotContainsString(
+                '?',
+                $groupBy,
+                'GROUP BY carries a bind placeholder - MySQL cannot match it to the SELECT expression.'
+            );
         }
     }
 
