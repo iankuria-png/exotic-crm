@@ -15,10 +15,25 @@ class SignupSourceConversionService
         private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
 
+    /** Quote a short identifier-like value for safe inlining into a GROUP BY expression. */
+    private function sqlLiteral(string $value): string
+    {
+        $clean = preg_replace('/[^A-Za-z0-9_]/', '', $value);
+
+        return "'".($clean !== '' ? $clean : 'unknown')."'";
+    }
+
     public function summarize(Carbon $from, Carbon $to, int|array|null $platformScope, string $targetCurrency): array
     {
+        // MariaDB does not resolve a GROUP BY alias back to its expression for the
+        // ONLY_FULL_GROUP_BY dependency check, and it cannot match two separate bind
+        // placeholders either. So group by the expression itself with the literal
+        // inlined - the shape ChurnAggregatorService already uses on this database.
+        $existing = $this->sqlLiteral(SignupSource::EXISTING);
+        $currency = $this->sqlLiteral($targetCurrency);
+
         $signupRows = Client::query()
-            ->selectRaw('COALESCE(signup_source, ?) as signup_source', [SignupSource::EXISTING])
+            ->selectRaw("COALESCE(signup_source, {$existing}) as signup_source")
             ->selectRaw('COUNT(*) as signups')
             ->whereBetween('created_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
             ->when(is_int($platformScope), fn (Builder $query) => $query->where('platform_id', $platformScope))
@@ -31,7 +46,7 @@ class SignupSourceConversionService
             // bind placeholder: MySQL matches GROUP BY to SELECT on the parse tree, and
             // two separate `?` markers are not provably equal, so it reports the bare
             // column as ungrouped under ONLY_FULL_GROUP_BY.
-            ->groupBy('signup_source')
+            ->groupByRaw("COALESCE(signup_source, {$existing})")
             ->get();
 
         $firstPaidSubquery = Payment::query()
@@ -52,9 +67,9 @@ class SignupSourceConversionService
             // under MySQL's ONLY_FULL_GROUP_BY that column is neither grouped nor
             // aggregated, which is a 1055 on prod and silently fine on SQLite.
             ->leftJoin('platforms', 'platforms.id', '=', 'clients.platform_id')
-            ->selectRaw('COALESCE(clients.signup_source, ?) as signup_source', [SignupSource::EXISTING])
+            ->selectRaw("COALESCE(clients.signup_source, {$existing}) as signup_source")
             ->selectRaw('COUNT(DISTINCT clients.id) as converted')
-            ->selectRaw('COALESCE(payments.currency, platforms.currency_code, ?) as currency', [$targetCurrency])
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, {$currency}) as currency")
             ->selectRaw('SUM(COALESCE(payments.amount, 0)) as amount')
             ->whereBetween('clients.created_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
             ->whereBetween('first_paid.first_paid_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
@@ -64,8 +79,10 @@ class SignupSourceConversionService
                     ? $query->whereRaw('1 = 0')
                     : $query->whereIn('clients.platform_id', $platformScope);
             })
-            // Aliases again - see the note on the cohort query above.
-            ->groupBy('signup_source', 'currency')
+            ->groupByRaw(
+                "COALESCE(clients.signup_source, {$existing}), ".
+                "COALESCE(payments.currency, platforms.currency_code, {$currency})"
+            )
             ->get();
 
         $convertedBySource = [];

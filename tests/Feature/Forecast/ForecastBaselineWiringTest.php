@@ -132,7 +132,17 @@ class ForecastBaselineWiringTest extends TestCase
             $this->assertStringNotContainsString(
                 '?',
                 $groupBy,
-                'GROUP BY carries a bind placeholder - MySQL cannot match it to the SELECT expression.'
+                'GROUP BY carries a bind placeholder - MariaDB cannot match it to the SELECT expression.'
+            );
+
+            // MariaDB, unlike MySQL, does not resolve a GROUP BY alias back to its
+            // expression for the ONLY_FULL_GROUP_BY check - it binds the name to a real
+            // column and then reports every other column in the expression as ungrouped.
+            // The expression has to be repeated, with its literal inlined.
+            $this->assertStringContainsString(
+                'coalesce(',
+                $groupBy,
+                'GROUP BY uses bare aliases - MariaDB resolves those to columns and rejects the select with 1055.'
             );
         }
     }
