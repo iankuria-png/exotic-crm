@@ -74,13 +74,13 @@ class ContactUnlockPulseService
                 'renewed_after_paid_demand' => $this->renewedAfterDemand($platformIds, $from, $to),
             ],
             'top_cities' => $this->topCities($platformIds, $from, $to),
-            'top_profiles' => $this->topProfiles($platformIds, $from, $to),
+            'top_profiles' => $this->topProfiles($platformIds, $from, $to, $resolvedTargetCurrency),
             'top_sources' => $this->topSources($platformIds, $from, $to),
             'top_hours' => $this->topHours($platformIds, $from, $to),
         ];
     }
 
-    private function window(string $range, ?string $timezone, ?string $fromDate, ?string $toDate): array
+    public function window(string $range, ?string $timezone, ?string $fromDate, ?string $toDate): array
     {
         $tz = $timezone ?: config('app.timezone', 'UTC');
         $now = CarbonImmutable::now($tz);
@@ -245,21 +245,53 @@ class ContactUnlockPulseService
             ->all();
     }
 
-    private function topProfiles(int|array|null $platformIds, $from, $to): array
+    /**
+     * Most-bought profiles, by paid unlock count. Revenue is grouped by currency and
+     * normalized before it leaves here — summing raw payments.amount across markets adds
+     * KES to XOF and produces a number that means nothing.
+     */
+    private function topProfiles(int|array|null $platformIds, $from, $to, string $targetCurrency): array
     {
         $query = VisitorContactUnlock::query()
             ->join('payments', 'payments.id', '=', 'visitor_contact_unlocks.payment_id')
             ->leftJoin('clients', 'clients.id', '=', 'visitor_contact_unlocks.client_id')
             ->whereBetween('visitor_contact_unlocks.created_at', [$from, $to])
             ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
-            ->groupBy('visitor_contact_unlocks.client_id', 'clients.name')
-            ->orderByDesc('aggregate_count')
-            ->limit(6);
+            ->groupBy('visitor_contact_unlocks.client_id', 'clients.name', 'payments.currency')
+            ->orderByDesc('aggregate_count');
         $this->applyQualifiedPlatformScope($query, 'visitor_contact_unlocks.platform_id', $platformIds);
 
-        return $query
-            ->get(['clients.name as label', DB::raw('COUNT(*) as aggregate_count'), DB::raw('SUM(payments.amount) as aggregate_amount')])
-            ->map(fn ($row) => ['label' => (string) ($row->label ?: 'All inactive contacts'), 'count' => (int) $row->aggregate_count, 'amount' => (float) $row->aggregate_amount])
+        $rows = $query->get([
+            'visitor_contact_unlocks.client_id as client_id',
+            'clients.name as label',
+            'payments.currency as currency',
+            DB::raw('COUNT(*) as aggregate_count'),
+            DB::raw('SUM(payments.amount) as aggregate_amount'),
+        ]);
+
+        return $rows
+            ->groupBy(fn ($row) => (int) ($row->client_id ?: 0))
+            ->map(function ($group) use ($targetCurrency, $to) {
+                $breakdown = [];
+                foreach ($group as $row) {
+                    $currency = strtoupper((string) ($row->currency ?: $targetCurrency));
+                    $breakdown[$currency] = ($breakdown[$currency] ?? 0) + (float) $row->aggregate_amount;
+                }
+
+                $normalized = $this->reportingCurrencyService->normalizeBreakdown($breakdown, $to, $targetCurrency);
+
+                return [
+                    'client_id' => (int) ($group->first()->client_id ?: 0),
+                    'label' => (string) ($group->first()->label ?: 'All inactive contacts'),
+                    'count' => (int) $group->sum('aggregate_count'),
+                    'amount_normalized' => $normalized['normalized_total'],
+                    'amount_display' => $normalized['normalized_display'],
+                    'normalized_currency' => $targetCurrency,
+                    'source_breakdown' => $breakdown,
+                ];
+            })
+            ->sortByDesc('count')
+            ->take(6)
             ->values()
             ->all();
     }

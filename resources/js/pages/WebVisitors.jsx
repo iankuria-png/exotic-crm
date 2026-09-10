@@ -17,6 +17,7 @@ import VisitorSafetyPanel from '../components/visitors/VisitorSafetyPanel';
 import VisitorRevenueTrendWidget from '../components/visitors/VisitorRevenueTrendWidget';
 import VisitorMarketRevenueWidget from '../components/visitors/VisitorMarketRevenueWidget';
 import VisitorMetricDrawer from '../components/visitors/VisitorMetricDrawer';
+import VisitorDemandDetailDrawer from '../components/visitors/VisitorDemandDetailDrawer';
 
 const VALID_TABS = ['overview', 'demand', 'unlocks', 'safety', 'setup'];
 const DEFAULT_TRAIL_FILTERS = {
@@ -73,6 +74,7 @@ export default function WebVisitors() {
     const [insightPlatformId, setInsightPlatformId] = useState(sharedPlatformId);
     const [trendBucket, setTrendBucket] = useState('auto');
     const [activeMetric, setActiveMetric] = useState(null);
+    const [demandMetric, setDemandMetric] = useState(null);
     const requestedTab = searchParams.get('tab') || 'overview';
     const activeTab = VALID_TABS.includes(requestedTab) ? requestedTab : 'overview';
     const trailFilters = useMemo(() => readTrailFilters(searchParams, sharedPlatformId), [searchParams, sharedPlatformId]);
@@ -147,6 +149,20 @@ export default function WebVisitors() {
         queryKey: ['contact-unlock-analytics', analyticsParams],
         queryFn: () => contactUnlocks.getAnalytics(analyticsParams),
         enabled: Boolean(unlockQuery.data),
+        staleTime: 30_000,
+    });
+
+    // The Demand KPIs are counts with no list behind them. This fetches that list on demand,
+    // under the same market/currency/date scope the card was drawn with, so the two agree.
+    const demandDetailParams = useMemo(() => ({
+        ...pulseParams,
+        metric: demandMetric?.key || '',
+    }), [demandMetric?.key, pulseParams]);
+
+    const demandDetailQuery = useQuery({
+        queryKey: ['contact-unlock-demand-detail', demandDetailParams],
+        queryFn: () => contactUnlocks.getDemandDetail(demandDetailParams),
+        enabled: Boolean(demandMetric?.key),
         staleTime: 30_000,
     });
 
@@ -365,7 +381,13 @@ export default function WebVisitors() {
                                         className="max-w-sm"
                                         allowClear={false}
                                     />
-                                    <VisitorDemandPanel pulse={pulseQuery.data || {}} toast={toast} />
+                                    <VisitorDemandPanel
+                                        pulse={pulseQuery.data || {}}
+                                        reportingCurrency={reportingCurrency}
+                                        isLoading={pulseQuery.isLoading}
+                                        onOpenMetric={setDemandMetric}
+                                        toast={toast}
+                                    />
                                 </div>
                             ) : null}
 
@@ -403,6 +425,17 @@ export default function WebVisitors() {
                     )}
                 </div>
             </div>
+
+            <VisitorDemandDetailDrawer
+                metric={demandMetric}
+                data={demandDetailQuery.data}
+                isLoading={demandDetailQuery.isLoading || demandDetailQuery.isFetching}
+                isError={demandDetailQuery.isError}
+                errorMessage={demandDetailQuery.error?.response?.data?.message}
+                onRetry={() => demandDetailQuery.refetch()}
+                onClose={() => setDemandMetric(null)}
+                toast={toast}
+            />
 
             <VisitorMetricDrawer
                 metric={activeMetric}
