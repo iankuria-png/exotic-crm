@@ -148,17 +148,22 @@ class ForecastBaselineService
             $excluded = (int) ($claimStats['excluded'][$key] ?? 0);
             $originalEligible = (int) ($levers[$key]['eligible_units'] ?? 0);
 
-            if ($claimed + $excluded > 0) {
-                $levers[$key]['eligible_units'] = $claimed;
+            // Claims are counted in identity roots - one per person. A lever measured in
+            // another unit (renewal counts expiring subscriptions, of which a client can
+            // hold several) must not have its denominator replaced by a headcount, or the
+            // rate is computed across mismatched units. Renewal read 2,769 of 2,102 that
+            // way: 131%, clamped to a meaningless 100. Apply the claim as a proportion so
+            // the double-counted share is removed without changing the unit.
+            if ($claimed + $excluded > 0 && $originalEligible > 0) {
+                $retained = $claimed / ($claimed + $excluded);
+                $levers[$key]['eligible_units'] = max(0, (int) round($originalEligible * $retained));
                 $levers[$key]['evidence']['claimed_roots'] = $claimed;
                 $levers[$key]['evidence']['excluded_by_precedence'] = $excluded;
-                $levers[$key]['evidence']['unclaimed_eligible_units'] = $originalEligible;
+                $levers[$key]['evidence']['eligible_before_precedence'] = $originalEligible;
             }
 
-            if (($levers[$key]['unit'] ?? null) === 'percentage_points' && $claimed > 0 && isset($levers[$key]['evidence']['renewed'])) {
-                $levers[$key]['actual'] = round(min(100, ((int) $levers[$key]['evidence']['renewed'] / $claimed) * 100), 1);
-                $levers[$key]['suggested'] = min(85.0, $levers[$key]['actual'] + 5.0);
-            }
+            // The measured rate stands on its own denominator. Recomputing it here was
+            // what produced the impossible figure.
         }
 
         foreach ($levers as $key => $lever) {

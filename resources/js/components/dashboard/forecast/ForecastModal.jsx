@@ -66,7 +66,9 @@ function evidenceLine(key, lever) {
         return `${n(e.converted)} of ${n(e.signups)} signups converted · ${n(Math.round(e.avg_ticket || 0))} avg per conversion`;
     }
     if (key === 'renewal') {
-        return `${n(e.renewed)} renewed of ${n(lever.eligible_units)} subscriptions that expired`;
+        // The lever's own denominator, not the claim-scaled eligible count - renewed is
+        // measured against expiries, and mixing the two produced "2,769 of 2,102".
+        return `${n(e.renewed)} renewed of ${n(e.eligible ?? lever.eligible_units)} subscriptions that expired`;
     }
     if (key === 'churn_winback') {
         return `${n(lever.eligible_units)} clients churned in this window`;

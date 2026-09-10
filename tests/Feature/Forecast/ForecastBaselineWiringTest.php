@@ -147,6 +147,39 @@ class ForecastBaselineWiringTest extends TestCase
         }
     }
 
+    public function test_claim_precedence_never_makes_a_rate_exceed_its_own_denominator(): void
+    {
+        // Claims are counted per person; renewal counts expiring subscriptions, of which
+        // one client can hold several. Replacing the denominator with a headcount made
+        // renewal read 2,769 of 2,102 - 131%, clamped to a meaningless 100.
+        $service = app(ForecastBaselineService::class);
+        $apply = new \ReflectionMethod($service, 'applyClaimStats');
+        $apply->setAccessible(true);
+
+        $levers = [
+            'renewal' => [
+                'key' => 'renewal',
+                'unit' => 'percentage_points',
+                'actual' => 75.6,
+                'eligible_units' => 3661,
+                'evidence' => ['eligible' => 3661, 'renewed' => 2768],
+            ],
+        ];
+
+        $result = $apply->invoke($service, $levers, [
+            'sets' => ['renewal' => array_fill(0, 2102, 'root')],
+            'excluded' => ['renewal' => 199],
+        ]);
+
+        $this->assertSame(75.6, $result['renewal']['actual'], 'A measured rate must survive claim resolution unchanged.');
+        $this->assertLessThanOrEqual(100.0, (float) $result['renewal']['actual']);
+        $this->assertGreaterThanOrEqual(
+            (int) $result['renewal']['evidence']['renewed'],
+            (int) $result['renewal']['evidence']['eligible'],
+            'The renewed count must never exceed the denominator it was measured against.'
+        );
+    }
+
     public function test_baseline_work_does_not_scale_with_market_count(): void
     {
         Platform::factory()->count(2)->create(['phone_prefix' => '254']);
