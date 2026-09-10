@@ -21,7 +21,7 @@ abstract class BaseLever implements ForecastLever
         $actual = (float) ($baseline['actual'] ?? 0);
         $eligible = (int) ($baseline['eligible_units'] ?? 0);
         $unitValue = (float) ($baseline['unit_value'] ?? 0);
-        $deltaUnits = $this->deltaUnits($actual, $target, $eligible);
+        $deltaUnits = $this->deltaUnits($actual, $target, $eligible, (string) ($baseline['unit'] ?? 'percentage_points'));
         $contribution = round(max(0, $deltaUnits) * $unitValue, 2);
 
         return [
@@ -41,7 +41,9 @@ abstract class BaseLever implements ForecastLever
     {
         $unitValue = (float) ($baseline['unit_value'] ?? 0);
 
-        return $this->isRateLever() ? $unitValue * max(1, (int) ($baseline['eligible_units'] ?? 0)) / 100 : $unitValue;
+        return $this->isRateUnit((string) ($baseline['unit'] ?? 'percentage_points'))
+            ? $unitValue * max(1, (int) ($baseline['eligible_units'] ?? 0)) / 100
+            : $unitValue;
     }
 
     protected function targetValue(array $baseline, mixed $input): float
@@ -57,17 +59,24 @@ abstract class BaseLever implements ForecastLever
         return (float) ($baseline['actual'] ?? 0);
     }
 
-    protected function deltaUnits(float $actual, float $target, int $eligible): float
+    protected function deltaUnits(float $actual, float $target, int $eligible, string $unit): float
     {
-        if ($this->isRateLever()) {
+        if ($this->isRateUnit($unit)) {
             return max(0, $target - $actual) / 100 * $eligible;
         }
 
         return max(0, $target - $actual);
     }
 
-    protected function isRateLever(): bool
+    /**
+     * Read from the baseline payload, never declared on the class.
+     *
+     * A class flag saying "this is a count" outlived the lever being re-based as a
+     * rate, so an 11.9 point conversion change was priced as 11.9 extra customers
+     * instead of 11.9% of 1,997 - a lever worth 2,600 reported 127.
+     */
+    protected function isRateUnit(string $unit): bool
     {
-        return true;
+        return $unit === 'percentage_points';
     }
 }

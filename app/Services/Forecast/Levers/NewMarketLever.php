@@ -18,9 +18,4 @@ class NewMarketLever extends BaseLever
     {
         return ['project', 'target'];
     }
-
-    protected function isRateLever(): bool
-    {
-        return false;
-    }
 }

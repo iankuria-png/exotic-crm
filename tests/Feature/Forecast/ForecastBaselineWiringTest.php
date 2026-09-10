@@ -185,6 +185,41 @@ class ForecastBaselineWiringTest extends TestCase
         );
     }
 
+    public function test_a_rate_lever_prices_points_against_its_base_not_as_units(): void
+    {
+        // A class flag saying "count" outlived the lever being re-based as a rate, so
+        // 11.9 points of conversion was priced as 11.9 extra customers rather than 11.9%
+        // of 1,997 - reporting 127 where the arithmetic says about 2,600. Nature is read
+        // from the payload now, so a class can no longer disagree with it.
+        $lever = new \App\Services\Forecast\Levers\NewActivationsLever;
+
+        $outcome = $lever->apply([
+            'key' => 'new_activations',
+            'unit' => 'percentage_points',
+            'actual' => 41.6,
+            'eligible_units' => 1997,
+            'unit_value' => 11.0,
+        ], ['target' => 53.5], 'replay');
+
+        $this->assertEqualsWithDelta(237.6, $outcome['delta_units'], 0.5, 'A point change must scale by the eligible base.');
+        $this->assertEqualsWithDelta(2613.6, $outcome['contribution'], 10.0, 'Contribution must be units x ticket.');
+    }
+
+    public function test_a_non_rate_lever_prices_its_input_directly(): void
+    {
+        $lever = new \App\Services\Forecast\Levers\NewMarketLever;
+
+        $outcome = $lever->apply([
+            'key' => 'new_market',
+            'unit' => 'monthly_target',
+            'actual' => 0.0,
+            'eligible_units' => 0,
+            'unit_value' => 1.0,
+        ], ['target' => 500], 'project');
+
+        $this->assertEqualsWithDelta(500.0, $outcome['contribution'], 0.01, 'A monthly target is an amount, not a percentage.');
+    }
+
     public function test_baseline_work_does_not_scale_with_market_count(): void
     {
         Platform::factory()->count(2)->create(['phone_prefix' => '254']);

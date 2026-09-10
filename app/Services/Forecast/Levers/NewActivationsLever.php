@@ -13,9 +13,4 @@ class NewActivationsLever extends BaseLever
     {
         return 'New user conversion';
     }
-
-    protected function isRateLever(): bool
-    {
-        return false;
-    }
 }
