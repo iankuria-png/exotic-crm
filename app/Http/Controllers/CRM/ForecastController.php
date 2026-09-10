@@ -28,8 +28,28 @@ class ForecastController extends Controller
         private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
 
+    /**
+     * A query string carries booleans as the words "true"/"false", but Laravel's
+     * `boolean` rule accepts only real booleans and 1/0/"1"/"0" - so a GET flag
+     * that reads perfectly well to $request->boolean() is rejected by the gate in
+     * front of it. Coerce only the two recognised words, so genuine rubbish still
+     * fails validation rather than being silently read as false.
+     */
+    private function normalizeBooleanQuery(Request $request, string ...$keys): void
+    {
+        foreach ($keys as $key) {
+            $value = $request->input($key);
+
+            if (is_string($value) && in_array(strtolower($value), ['true', 'false'], true)) {
+                $request->merge([$key => strtolower($value) === 'true']);
+            }
+        }
+    }
+
     public function baseline(Request $request): JsonResponse
     {
+        $this->normalizeBooleanQuery($request, 'cache_only');
+
         $request->validate([
             'cache_only' => 'nullable|boolean',
         ]);
@@ -99,6 +119,8 @@ class ForecastController extends Controller
 
     public function scenarios(Request $request): JsonResponse
     {
+        $this->normalizeBooleanQuery($request, 'scored');
+
         $validated = $request->validate([
             'mode' => 'nullable|in:replay,project,target',
             'scored' => 'nullable|boolean',

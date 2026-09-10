@@ -10,7 +10,9 @@ use App\Services\Forecast\ForecastBaselineService;
 use App\Services\Forecast\ForecastContext;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
@@ -66,6 +68,23 @@ class ForecastBaselineWiringTest extends TestCase
             $excluded,
             'The same client was claimed by more than one lever - contributions are double counted.'
         );
+    }
+
+    public function test_baseline_accepts_the_string_boolean_a_query_string_actually_sends(): void
+    {
+        // The widget sends cache_only as a GET param, so it arrives as the string
+        // "true". Laravel's boolean rule rejects that, which 422'd every widget
+        // request in production before any forecast code ran.
+        Sanctum::actingAs(User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+            'is_ceo' => true,
+        ]));
+
+        $this->getJson('/api/crm/dashboard/ceo/forecast/baseline'
+            .'?from=2026-08-12&to=2026-09-10&currency=USD&horizon_days=90&cache_only=true')
+            ->assertOk()
+            ->assertJsonPath('state', 'cold');
     }
 
     public function test_baseline_work_does_not_scale_with_market_count(): void
