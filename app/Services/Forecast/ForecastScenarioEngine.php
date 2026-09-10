@@ -103,22 +103,17 @@ class ForecastScenarioEngine
         return array_keys($this->levers);
     }
 
+    /**
+     * Deliberately not a split.
+     *
+     * Dividing the scenario total by market count produced a number for every market
+     * that was true of none of them. A real split has to weight by each market's own
+     * revenue share, which the CEO market-pie endpoint already computes - so the UI
+     * reads that rather than being handed a fabricated even share here.
+     */
     private function marketSplit(array $baseline, float $scenarioTotal): array
     {
-        $markets = $baseline['per_market'] ?? [];
-        if (! is_array($markets) || empty($markets)) {
-            return [];
-        }
-
-        $count = count($markets);
-
-        return collect($markets)
-            ->map(fn (array $market) => [
-                'platform_id' => $market['platform_id'] ?? null,
-                'market_label' => $market['market_label'] ?? 'Market',
-                'scenario_total' => round($scenarioTotal / max(1, $count), 2),
-            ])
-            ->all();
+        return [];
     }
 
     private function agentDecomposition(float $scenarioTotal): array

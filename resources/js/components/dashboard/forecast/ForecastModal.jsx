@@ -5,6 +5,7 @@ import {
     ForecastLoadingState,
     ForecastRefusedState,
 } from './ForecastStates';
+import { OutcomeTabs, TargetPanel } from './ForecastPanels';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../../services/api';
 import FxNormalizationNotice from '../../FxNormalizationNotice';
@@ -381,72 +382,34 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
 
                         <aside className="p-4">
                             {mode === 'target' ? (
-                                <div className="space-y-3">
-                                    <div className="grid grid-cols-[1fr_auto] gap-2">
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            value={targetAmount}
-                                            onChange={(event) => setTargetAmount(event.target.value)}
-                                            placeholder="90000"
-                                            className="h-9 rounded-md border border-slate-300 px-3 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
-                                        />
-                                        <select
-                                            value={reachByMonths}
-                                            onChange={(event) => setReachByMonths(Number(event.target.value))}
-                                            className="h-9 rounded-md border border-slate-300 px-2 text-sm"
-                                        >
-                                            {[1, 2, 3, 4, 6, 9, 12].map((months) => <option key={months} value={months}>{months} mo</option>)}
-                                        </select>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => solveMutation.mutate()}
-                                        disabled={!Number(targetAmount) || solveMutation.isPending}
-                                        className="w-full rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        Solve target
-                                    </button>
-                                    {solveMutation.error ? <p className="text-xs text-rose-600">{solveMutation.error?.response?.data?.message || 'Target could not be solved.'}</p> : null}
-                                    {solveMutation.data ? (
-                                        <>
-                                            <div className="grid grid-cols-4 overflow-hidden rounded-lg border border-slate-200">
-                                                {solveMutation.data.routes.map((route) => (
-                                                    <button
-                                                        key={route.band}
-                                                        type="button"
-                                                        onClick={() => setActiveRoute(route.band)}
-                                                        className={`border-r border-slate-200 px-2 py-2 text-left last:border-r-0 ${activeRoute === route.band ? 'bg-teal-50' : 'bg-white'}`}
-                                                    >
-                                                        <span className="block text-[10px] font-semibold uppercase text-slate-400">{route.band}</span>
-                                                        <span className="block text-xs font-bold text-slate-900">{formatCurrency(route.reached_monthly, currency)}</span>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                            <div className="rounded-lg border border-slate-200 p-3">
-                                                <p className="text-sm font-semibold text-slate-950">{activeRouteData?.verdict}</p>
-                                                <p className="mt-1 text-xs text-slate-500">Shortfall {formatCurrency(activeRouteData?.shortfall || 0, currency)} / month</p>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        const routeTargets = Object.fromEntries(
-                                                            Object.entries(activeRouteData?.lever_inputs || {})
-                                                                .map(([key, value]) => [key, Number(value?.target ?? value ?? 0)])
-                                                        );
-                                                        setTargets((current) => ({ ...current, ...routeTargets }));
-                                                        setMode('project');
-                                                    }}
-                                                    className="mt-3 rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800"
-                                                >
-                                                    Open in forward mode
-                                                </button>
-                                            </div>
-                                        </>
-                                    ) : null}
-                                </div>
+                                <TargetPanel
+                                    targetAmount={targetAmount}
+                                    onTargetAmountChange={setTargetAmount}
+                                    reachByMonths={reachByMonths}
+                                    onReachByMonthsChange={setReachByMonths}
+                                    onSolve={() => solveMutation.mutate()}
+                                    solving={solveMutation.isPending}
+                                    routes={solveMutation.data?.routes}
+                                    activeRoute={activeRoute}
+                                    onActiveRouteChange={setActiveRoute}
+                                    activeRouteData={activeRouteData}
+                                    currency={currency}
+                                    onOpenForward={() => {
+                                        const routeTargets = Object.fromEntries(
+                                            Object.entries(activeRouteData?.lever_inputs || {})
+                                                .map(([key, value]) => [key, Number(value?.target ?? value ?? 0)])
+                                        );
+                                        setTargets((current) => ({ ...current, ...routeTargets }));
+                                        setMode('project');
+                                    }}
+                                />
                             ) : (
-                                <div className="space-y-3">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Outcome</p>
+                                <OutcomeTabs
+                                    params={effectiveParams}
+                                    currency={currency}
+                                    scenarioTotal={outcome?.scenario_total ?? baseline?.projection?.horizon_run_rate_total ?? 0}
+                                    summary={(
+                                <div className="space-y-3 pt-3">
                                     <div>
                                         <p className="text-2xl font-semibold tracking-tight text-slate-950">
                                             {formatCurrency(outcome?.scenario_total ?? baseline?.projection?.horizon_run_rate_total ?? 0, currency)}
@@ -493,6 +456,8 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                     </button>
                                     {saveMutation.data ? <p className="text-xs text-emerald-700">Saved.</p> : null}
                                 </div>
+                                    )}
+                                />
                             )}
                         </aside>
                     </div>
