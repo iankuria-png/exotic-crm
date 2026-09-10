@@ -27,7 +27,7 @@ class SignupSourceConversionService
                     ? $query->whereRaw('1 = 0')
                     : $query->whereIn('platform_id', $platformScope);
             })
-            ->groupBy('signup_source')
+            ->groupByRaw('COALESCE(signup_source, ?)', [SignupSource::EXISTING])
             ->get();
 
         $firstPaidSubquery = Payment::query()
@@ -44,9 +44,13 @@ class SignupSourceConversionService
                 $join->on('payments.client_id', '=', 'clients.id')
                     ->whereRaw('COALESCE(payments.completed_at, payments.created_at) = first_paid.first_paid_at');
             })
+            // Join platforms rather than correlating a subquery on clients.platform_id:
+            // under MySQL's ONLY_FULL_GROUP_BY that column is neither grouped nor
+            // aggregated, which is a 1055 on prod and silently fine on SQLite.
+            ->leftJoin('platforms', 'platforms.id', '=', 'clients.platform_id')
             ->selectRaw('COALESCE(clients.signup_source, ?) as signup_source', [SignupSource::EXISTING])
             ->selectRaw('COUNT(DISTINCT clients.id) as converted')
-            ->selectRaw('COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = clients.platform_id LIMIT 1), ?) as currency', [$targetCurrency])
+            ->selectRaw('COALESCE(payments.currency, platforms.currency_code, ?) as currency', [$targetCurrency])
             ->selectRaw('SUM(COALESCE(payments.amount, 0)) as amount')
             ->whereBetween('clients.created_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
             ->whereBetween('first_paid.first_paid_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
@@ -56,7 +60,10 @@ class SignupSourceConversionService
                     ? $query->whereRaw('1 = 0')
                     : $query->whereIn('clients.platform_id', $platformScope);
             })
-            ->groupBy('signup_source', 'currency')
+            ->groupByRaw('COALESCE(clients.signup_source, ?), COALESCE(payments.currency, platforms.currency_code, ?)', [
+                SignupSource::EXISTING,
+                $targetCurrency,
+            ])
             ->get();
 
         $convertedBySource = [];

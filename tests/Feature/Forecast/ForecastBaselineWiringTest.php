@@ -9,6 +9,7 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Services\Forecast\ForecastBaselineService;
 use App\Services\Forecast\ForecastContext;
+use App\Services\Forecast\SignupSourceConversionService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -85,6 +86,44 @@ class ForecastBaselineWiringTest extends TestCase
             .'?from=2026-08-12&to=2026-09-10&currency=USD&horizon_days=90&cache_only=true')
             ->assertOk()
             ->assertJsonPath('state', 'cold');
+    }
+
+    public function test_signup_source_conversion_never_correlates_a_subquery_inside_a_grouped_select(): void
+    {
+        // SQLite does not enforce ONLY_FULL_GROUP_BY, so the rule itself cannot be
+        // asserted here - but the shape that violates it can. A correlated subquery
+        // on clients.platform_id inside a grouped select is a 1055 on prod.
+        $platform = Platform::factory()->create(['phone_prefix' => '254']);
+        Client::factory()->create(['platform_id' => $platform->id]);
+
+        $statements = [];
+        DB::listen(function ($query) use (&$statements) {
+            $statements[] = strtolower($query->sql);
+        });
+
+        app(SignupSourceConversionService::class)->summarize(
+            Carbon::parse('2026-08-12')->startOfDay(),
+            Carbon::parse('2026-09-10')->endOfDay(),
+            [$platform->id],
+            'USD'
+        );
+
+        // Identifier quoting differs between raw and builder-generated SQL, so compare
+        // on a normalised form or the assertion silently matches nothing.
+        $normalised = array_map(
+            fn (string $sql) => str_replace(['"', '`', '[', ']'], '', $sql),
+            $statements
+        );
+        $grouped = array_values(array_filter($normalised, fn (string $sql) => str_contains($sql, 'group by')));
+        $this->assertNotEmpty($grouped, 'Expected the conversion query to be grouped.');
+
+        foreach ($grouped as $sql) {
+            $this->assertStringNotContainsString(
+                'from platforms where',
+                $sql,
+                'A grouped select correlates a subquery on clients.platform_id - MySQL rejects this with 1055.'
+            );
+        }
     }
 
     public function test_baseline_work_does_not_scale_with_market_count(): void
