@@ -274,6 +274,72 @@ class CeoDashboardTest extends TestCase
         $this->assertSame(75.0, (float) data_get($summary, 'customer_mix.buckets.existing_active.share_percent'));
     }
 
+    public function test_new_user_revenue_delta_is_not_inflated_by_clients_that_churned_after_the_window(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Nairobi',
+            'country' => 'Kenya',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        Sanctum::actingAs($ceo);
+
+        // Window 2026-05-01..2026-05-31 compares against 2026-03-31..2026-04-30.
+        // Both windows earn USD 500 from clients that were brand new at the time, so the
+        // delta must be flat — even though one of the prior window's clients has since
+        // gone inactive. Judging the prior window by today's active status used to hide
+        // half its new-user revenue and report the result as +100% growth.
+        $currentNewClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-03 10:00:00',
+        ]);
+        $priorNewClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-04-05 10:00:00',
+        ]);
+        $priorNewClientSinceChurned = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'needs_payment' => true,
+            'notactive' => true,
+            'created_at' => '2026-04-06 10:00:00',
+        ]);
+
+        $this->payment($platform, $product, [
+            'client_id' => $currentNewClient->id,
+            'amount' => 500,
+            'completed_at' => '2026-05-10 12:00:00',
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $priorNewClient->id,
+            'amount' => 250,
+            'completed_at' => '2026-04-10 12:00:00',
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $priorNewClientSinceChurned->id,
+            'amount' => 250,
+            'completed_at' => '2026-04-11 12:00:00',
+        ]);
+
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=custom&from=2026-05-01&to=2026-05-31&reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(500.0, (float) data_get($summary, 'metrics.new_user_revenue.value.normalized_amount'));
+        $this->assertSame(500.0, (float) data_get($summary, 'metrics.new_user_revenue.prior_value.normalized_amount'));
+        $this->assertSame(0.0, (float) data_get($summary, 'metrics.new_user_revenue.delta_percent'));
+
+        // The churned client's revenue stays in the new-user bucket rather than draining
+        // into other_matched, so the prior window still reconciles to its collected total.
+        $this->assertSame(0.0, (float) data_get($summary, 'customer_mix.buckets.other_matched.normalized_amount'));
+    }
     public function test_collection_channels_use_routing_and_manual_proof_signals(): void
     {
         $platform = Platform::factory()->create([

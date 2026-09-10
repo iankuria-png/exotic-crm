@@ -30,7 +30,7 @@ export function CustomerMixCompact({ mix, currency }) {
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Customer revenue mix</p>
-                    <p className="mt-1 text-xs text-slate-500">Revenue grouped by whether matched active clients were created in this window.</p>
+                    <p className="mt-1 text-xs text-slate-500">Revenue grouped by whether the matched client was first seen in this window.</p>
                 </div>
             </div>
             <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-white ring-1 ring-slate-200">

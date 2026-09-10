@@ -752,7 +752,9 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             'created_at' => '2026-04-15 09:00:00',
             'updated_at' => '2026-04-15 09:00:00',
         ]);
-        $inactiveClient = Client::factory()->create([
+        // Created inside the window, but has since gone inactive. Its revenue must stay
+        // attributed to the window it was earned in, not drift into other_matched.
+        $churnedNewClient = Client::factory()->create([
             'platform_id' => $platform->id,
             'profile_status' => 'private',
             'needs_payment' => false,
@@ -780,9 +782,9 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             'completed_at' => '2026-05-05 11:10:00',
         ]);
         $this->createPayment($platform, [
-            'client_id' => $inactiveClient->id,
-            'transaction_reference' => 'MIX-OTHER-MATCHED-001',
-            'reference_number' => 'MIX-OTHER-MATCHED-001',
+            'client_id' => $churnedNewClient->id,
+            'transaction_reference' => 'MIX-CHURNED-NEW-001',
+            'reference_number' => 'MIX-CHURNED-NEW-001',
             'amount' => 3000,
             'status' => 'completed',
             'created_at' => '2026-05-05 12:00:00',
@@ -826,25 +828,24 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('stats.customer_mix.period.to', '2026-05-07')
             ->assertJsonPath('stats.customer_mix.reconciliation.reconciles_to_confirmed', true)
             ->assertJsonPath('stats.customer_mix.reconciliation.payments_count_delta', 0)
-            ->assertJsonPath('stats.customer_mix.buckets.new_active.payments_count', 1)
-            ->assertJsonPath('stats.customer_mix.buckets.new_active.clients_count', 1)
-            ->assertJsonPath('stats.customer_mix.buckets.new_active.amount', 1000)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.payments_count', 2)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.clients_count', 2)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.amount', 4000)
             ->assertJsonPath('stats.customer_mix.buckets.existing_active.payments_count', 1)
             ->assertJsonPath('stats.customer_mix.buckets.existing_active.amount', 2000)
-            ->assertJsonPath('stats.customer_mix.buckets.other_matched.payments_count', 1)
-            ->assertJsonPath('stats.customer_mix.buckets.other_matched.amount', 3000)
+            ->assertJsonPath('stats.customer_mix.buckets.other_matched.payments_count', 0)
             ->assertJsonPath('stats.customer_mix.buckets.unattributed.payments_count', 1)
             ->assertJsonPath('stats.customer_mix.buckets.unattributed.amount', 4000);
 
         $newSegment = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&from=2026-05-01&to=2026-05-07&customer_mix_segment=new_active');
-        $newSegment->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.reference_number', 'MIX-NEW-ACTIVE-001');
+        $newSegment->assertOk()->assertJsonPath('total', 2);
+        $this->assertEqualsCanonicalizing(
+            ['MIX-NEW-ACTIVE-001', 'MIX-CHURNED-NEW-001'],
+            array_column($newSegment->json('data'), 'reference_number')
+        );
 
         $otherSegment = $this->getJson('/api/crm/payments?platform_id='.$platform->id.'&from=2026-05-01&to=2026-05-07&customer_mix_segment=other_matched');
-        $otherSegment->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.reference_number', 'MIX-OTHER-MATCHED-001');
+        $otherSegment->assertOk()->assertJsonPath('total', 0);
     }
 
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform

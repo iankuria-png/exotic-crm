@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BillingProviderTransaction;
 use App\Models\Payment;
+use App\Services\Revenue\CustomerMixSegments;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -590,39 +591,6 @@ class PaymentQueueQueryBuilder
 
     private function applyCustomerMixBucketScope(Builder $query, string $bucketKey, ?Carbon $from, Carbon $to): Builder
     {
-        return match ($bucketKey) {
-            'new_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from, $to) {
-                $clientQuery->active();
-
-                if ($from) {
-                    $clientQuery->where('created_at', '>=', $from);
-                }
-
-                $clientQuery->where('created_at', '<=', $to);
-            }),
-            'existing_active' => $from
-                ? $query->whereHas('client', function (Builder $clientQuery) use ($from) {
-                    $clientQuery->active()
-                        ->where('created_at', '<', $from);
-                })
-                : $query->whereRaw('1 = 0'),
-            'unattributed' => $query->whereNull('payments.client_id'),
-            'other_matched' => $query
-                ->whereNotNull('payments.client_id')
-                ->where(function (Builder $builder) use ($to) {
-                    $builder->whereDoesntHave('client')
-                        ->orWhereHas('client', function (Builder $clientQuery) use ($to) {
-                            $clientQuery->where(function (Builder $nonActiveOrOutOfPeriod) use ($to) {
-                                $nonActiveOrOutOfPeriod
-                                    ->whereNull('profile_status')
-                                    ->orWhere('profile_status', '!=', 'publish')
-                                    ->orWhere('needs_payment', true)
-                                    ->orWhere('notactive', true)
-                                    ->orWhere('created_at', '>', $to);
-                            });
-                        });
-                }),
-            default => $query,
-        };
+        return CustomerMixSegments::apply($query, $bucketKey, $from, $to);
     }
 }

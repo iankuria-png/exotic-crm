@@ -11,6 +11,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\Revenue\CollectedRevenueQuery;
+use App\Services\Revenue\CustomerMixSegments;
 use Carbon\Carbon;
 use Carbon\CarbonTimeZone;
 use Illuminate\Database\Eloquent\Builder;
@@ -1124,7 +1125,7 @@ class CeoDashboardDataService
     private function customerRevenueMix(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
     {
         $baseQuery = $this->baseCollectedPayments($from, $to, $platformId);
-        $bucketKeys = ['new_active', 'existing_active', 'unattributed', 'other_matched'];
+        $bucketKeys = CustomerMixSegments::keys();
         $buckets = [];
 
         foreach ($bucketKeys as $bucketKey) {
@@ -1164,36 +1165,9 @@ class CeoDashboardDataService
         ];
     }
 
-    private function applyCustomerMixBucketScope(Builder $query, string $bucketKey, Carbon $from, Carbon $to): Builder
+    private function applyCustomerMixBucketScope(Builder $query, string $bucketKey, ?Carbon $from, Carbon $to): Builder
     {
-        return match ($bucketKey) {
-            'new_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from, $to) {
-                $clientQuery->active()
-                    ->where('created_at', '>=', $from)
-                    ->where('created_at', '<=', $to);
-            }),
-            'existing_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from) {
-                $clientQuery->active()
-                    ->where('created_at', '<', $from);
-            }),
-            'unattributed' => $query->whereNull('payments.client_id'),
-            'other_matched' => $query
-                ->whereNotNull('payments.client_id')
-                ->where(function (Builder $builder) use ($to) {
-                    $builder->whereDoesntHave('client')
-                        ->orWhereHas('client', function (Builder $clientQuery) use ($to) {
-                            $clientQuery->where(function (Builder $nonActiveOrOutOfPeriod) use ($to) {
-                                $nonActiveOrOutOfPeriod
-                                    ->whereNull('profile_status')
-                                    ->orWhere('profile_status', '!=', 'publish')
-                                    ->orWhere('needs_payment', true)
-                                    ->orWhere('notactive', true)
-                                    ->orWhere('created_at', '>', $to);
-                            });
-                        });
-                }),
-            default => $query,
-        };
+        return CustomerMixSegments::apply($query, $bucketKey, $from, $to);
     }
 
     /**

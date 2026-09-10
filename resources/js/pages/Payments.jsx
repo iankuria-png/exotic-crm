@@ -423,8 +423,8 @@ function customerMixBucketMeta(bucketKey) {
     switch (bucketKey) {
         case 'new_active':
             return {
-                label: 'New active users',
-                helper: 'Active clients created in this period',
+                label: 'New users',
+                helper: 'Clients first seen in this period',
                 dotClassName: 'bg-teal-500',
                 activeClassName: 'border-teal-300 bg-teal-50/70',
                 idleClassName: 'border-slate-200 bg-white hover:border-teal-200 hover:bg-teal-50/40',
@@ -432,8 +432,8 @@ function customerMixBucketMeta(bucketKey) {
             };
         case 'existing_active':
             return {
-                label: 'Existing active users',
-                helper: 'Active clients created before this period',
+                label: 'Existing users',
+                helper: 'Clients first seen before this period',
                 dotClassName: 'bg-indigo-500',
                 activeClassName: 'border-indigo-300 bg-indigo-50/70',
                 idleClassName: 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
@@ -452,7 +452,7 @@ function customerMixBucketMeta(bucketKey) {
         default:
             return {
                 label: 'Other matched',
-                helper: 'Matched payments outside active-client scope',
+                helper: 'Client record missing or created after this period',
                 dotClassName: 'bg-slate-400',
                 activeClassName: 'border-slate-300 bg-slate-100',
                 idleClassName: 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
@@ -3610,7 +3610,7 @@ export default function Payments() {
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
                     <span>
-                        Scope: {customerMix?.period?.from || 'Start'} to {customerMix?.period?.to || 'today'} by payment date; user status uses active client rules.
+                        Scope: {customerMix?.period?.from || 'Start'} to {customerMix?.period?.to || 'today'} by payment date; new vs existing is fixed at payment time.
                     </span>
                     {customerMixSegment ? (
                         <button
