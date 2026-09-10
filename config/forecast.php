@@ -4,6 +4,8 @@ return [
     'history_months' => 6,
     'minimum_qualifying_months' => 3,
     'settle_days' => 14,
+    // Paying a few days before expiry is still a renewal of that subscription.
+    'renewal_early_days' => 7,
     'cache_ttl_seconds' => 600,
     'sync_row_budget' => 250000,
     // Measured on prod (MariaDB, 54 markets, 30-day window): a cold all-markets

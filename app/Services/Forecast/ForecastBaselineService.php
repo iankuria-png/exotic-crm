@@ -539,46 +539,75 @@ class ForecastBaselineService
             });
     }
 
+    /**
+     * Renewal measured per expiry, anchored to the expiry date.
+     *
+     * Counting distinct clients instead overstates it badly: clients hold ~1.6
+     * expiring subscriptions each, so "did this client renew anything in the window"
+     * scores a weekly subscriber who renewed 3 of 4 times the same as one who renewed
+     * once. Anchoring to each expiry also stops an unrelated repeat payment elsewhere
+     * in the window counting as that subscription's renewal.
+     */
     private function renewalStats(ForecastContext $context, int|array|null $platformScope): array
     {
-        $eligible = $this->renewalEligibleQuery($context, $platformScope)
-            ->distinct()
-            ->pluck('deals.client_id')
-            ->filter()
-            ->map(fn ($id) => (int) $id)
-            ->values();
+        $settleDays = (int) config('forecast.settle_days');
+        $earlyDays = (int) config('forecast.renewal_early_days', 7);
+        $eligibleQuery = $this->renewalEligibleQuery($context, $platformScope);
+        $eligible = (int) (clone $eligibleQuery)->count('deals.id');
 
-        $renewed = 0;
-        $avgTicket = 0.0;
-        if ($eligible->isNotEmpty()) {
-            $renewalPayments = Payment::query()
-                ->reportableSuccessful()
-                ->excludingWalletTopups()
-                ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
-                ->where(fn (Builder $query) => $query->whereIn('payments.client_id', $eligible)
-                    ->orWhere(fn (Builder $fallback) => $fallback->whereNull('payments.client_id')->whereIn('deals.client_id', $eligible)))
-                ->whereBetween(DB::raw('COALESCE(payments.completed_at, payments.created_at)'), [
-                    $context->from,
-                    $context->to->copy()->addDays((int) config('forecast.settle_days')),
-                ])
-                ->where(fn (Builder $query) => $query->where('payments.subscription_lifecycle', 'renewal')
-                    ->orWhere('deals.subscription_lifecycle', 'renewal'));
-
-            $renewed = (int) (clone $renewalPayments)
-                ->distinct()
-                ->count(DB::raw('COALESCE(payments.client_id, deals.client_id)'));
-            $normalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $renewalPayments, $context->currency, false);
-            $avgTicket = $renewed > 0 && $normalized['normalized_total'] !== null
-                ? round((float) $normalized['normalized_total'] / $renewed, 2)
-                : 0.0;
+        if ($eligible === 0) {
+            return [
+                'eligible' => 0,
+                'renewed' => 0,
+                'rate' => 0.0,
+                'avg_ticket' => 0.0,
+                'settle_days' => $settleDays,
+                'early_days' => $earlyDays,
+                'basis' => 'per expiring subscription',
+            ];
         }
 
+        $paidAt = 'COALESCE(payments.completed_at, payments.created_at)';
+        // Tests run on SQLite, prod on MariaDB - the date arithmetic differs.
+        $sqlite = DB::connection()->getDriverName() === 'sqlite';
+        $windowOpen = $sqlite
+            ? "datetime(deals.expires_at, '-{$earlyDays} days')"
+            : "DATE_SUB(deals.expires_at, INTERVAL {$earlyDays} DAY)";
+        $windowClose = $sqlite
+            ? "datetime(deals.expires_at, '+{$settleDays} days')"
+            : "DATE_ADD(deals.expires_at, INTERVAL {$settleDays} DAY)";
+
+        $renewalJoin = function ($join) use ($paidAt, $windowOpen, $windowClose) {
+            $join->on(function ($identity) {
+                // payments.client_id is nullable, so accept the deal link as well.
+                $identity->on('payments.client_id', '=', 'deals.client_id')
+                    ->orOn('payments.deal_id', '=', 'deals.id');
+            })
+                ->whereRaw("{$paidAt} >= {$windowOpen}")
+                ->whereRaw("{$paidAt} <= {$windowClose}")
+                ->where('payments.subscription_lifecycle', '=', 'renewal');
+        };
+
+        $renewed = (int) (clone $eligibleQuery)
+            ->joinSub(
+                Payment::query()->reportableSuccessful()->excludingWalletTopups()
+                    ->select(['payments.id', 'payments.client_id', 'payments.deal_id', 'payments.subscription_lifecycle', 'payments.completed_at', 'payments.created_at', 'payments.amount', 'payments.currency', 'payments.platform_id']),
+                'payments',
+                $renewalJoin
+            )
+            ->distinct()
+            ->count('deals.id');
+
+        $avgTicket = $this->averagePaymentTicket($context, $platformScope, 'renewal');
+
         return [
-            'eligible' => (int) $eligible->count(),
+            'eligible' => $eligible,
             'renewed' => $renewed,
-            'rate' => $eligible->count() > 0 ? round(($renewed / $eligible->count()) * 100, 1) : 0.0,
+            'rate' => $eligible > 0 ? round(min(100, ($renewed / $eligible) * 100), 1) : 0.0,
             'avg_ticket' => $avgTicket,
-            'settle_days' => (int) config('forecast.settle_days'),
+            'settle_days' => $settleDays,
+            'early_days' => $earlyDays,
+            'basis' => 'per expiring subscription',
         ];
     }
 
