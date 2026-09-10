@@ -37,8 +37,63 @@ function ModeButton({ active, children, onClick }) {
     );
 }
 
+const MODE_COPY = {
+    replay: 'What this window would have produced at different rates. The starting figure is the collected revenue on the dashboard behind this.',
+    project: 'The selected window extended forward at its own daily rate. Nothing is assumed to grow on its own.',
+    target: 'Name a monthly figure and the solver works backwards to the lever moves that reach it.',
+};
+
+/** The counts behind a lever's current value, so no figure is unexplained. */
+function evidenceLine(key, lever) {
+    const e = lever?.evidence || {};
+    const n = (value) => Number(value || 0).toLocaleString();
+
+    if (key === 'failed_recovery') {
+        return `${n(e.failed_payments)} failed · ${n(e.recovered_payments)} recovered · ${n(e.lost_payments)} lost`;
+    }
+    if (key === 'new_activations') {
+        return `${n(e.new_paid_activations)} first-time payers from ${n(e.created_profiles)} signups`;
+    }
+    if (key === 'renewal') {
+        return `${n(e.renewed)} renewed of ${n(lever.eligible_units)} subscriptions that expired`;
+    }
+    if (key === 'churn_winback') {
+        return `${n(lever.eligible_units)} clients churned in this window`;
+    }
+    if (key === 'signup_source_conversion') {
+        return `${n(lever.eligible_units)} signups across sources`;
+    }
+    return null;
+}
+
+function DerivationNote({ mode, baseline, currency }) {
+    const collected = Number(baseline?.baseline_revenue?.normalized_total || 0);
+    const days = Number(baseline?.context?.days || 0);
+    const daily = Number(baseline?.projection?.daily_run_rate || 0);
+    const horizon = Number(baseline?.projection?.horizon_days || 0);
+
+    if (mode === 'replay') {
+        return (
+            <p className="text-xs leading-relaxed text-slate-500">
+                This is the <span className="font-semibold text-slate-700">{formatCurrency(collected, currency)}</span> actually
+                collected over {days} days — the same figure as Collected Revenue on the dashboard.
+            </p>
+        );
+    }
+
+    return (
+        <p className="text-xs leading-relaxed text-slate-500">
+            <span className="font-semibold text-slate-700">{formatCurrency(collected, currency)}</span> collected over {days} days
+            {' '}= <span className="font-semibold text-slate-700">{formatCurrency(daily, currency)}/day</span>, carried forward{' '}
+            {horizon} days. A straight line — no growth assumed.
+        </p>
+    );
+}
+
 export default function ForecastModal({ open, onClose, params, currency = 'USD' }) {
-    const [mode, setMode] = useState('project');
+    // Replay first: the opening number must equal the dashboard's collected revenue
+    // for the same window, or nothing else in here is trustworthy.
+    const [mode, setMode] = useState('replay');
     const [targets, setTargets] = useState({});
     const [expanded, setExpanded] = useState(false);
     const [targetAmount, setTargetAmount] = useState('');
@@ -86,6 +141,7 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
     };
 
     const baseline = buildState?.baseline || baselineQuery.data?.baseline;
+
     const levers = baseline?.levers || {};
     const visibleKeys = expanded ? Object.keys(levers).filter((key) => key !== 'agent_targets') : DEFAULT_LEVERS;
 
@@ -168,6 +224,11 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
         if (!solveMutation.data?.routes) return null;
         return solveMutation.data.routes.find((route) => route.band === activeRoute) || solveMutation.data.routes[0];
     }, [activeRoute, solveMutation.data]);
+    const bridgeRows = useMemo(() => (
+        mode === 'target'
+            ? activeRouteData?.moves || []
+            : (outcome?.bridge_rows || []).filter((row) => Math.abs(Number(row.contribution || 0)) > 0.005)
+    ), [mode, activeRouteData, outcome]);
 
     if (!open) return null;
 
@@ -253,8 +314,13 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
                                             />
                                             <span className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
                                                 <span>now {Number(lever.actual || 0).toFixed(lever.unit === 'count' ? 0 : 1)}{lever.unit === 'count' ? '' : '%'}</span>
-                                                <span>{formatCurrency(delta, currency)}</span>
+                                                <span className={delta > 0 ? 'font-semibold text-emerald-700' : 'text-slate-400'}>
+                                                    {delta > 0 ? `+${formatCurrency(delta, currency)}` : 'no change'}
+                                                </span>
                                             </span>
+                                            {evidenceLine(key, lever) ? (
+                                                <span className="mt-1 block text-[10px] leading-relaxed text-slate-400">{evidenceLine(key, lever)}</span>
+                                            ) : null}
                                         </label>
                                     );
                                 })}
@@ -263,8 +329,18 @@ export default function ForecastModal({ open, onClose, params, currency = 'USD' 
 
                         <section className="border-b border-slate-200 p-4 xl:border-b-0 xl:border-r">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Where the money comes from</p>
+                            {mode !== 'target' ? <div className="mt-2"><DerivationNote mode={mode} baseline={baseline} currency={currency} /></div> : null}
                             <div className="mt-3 space-y-3">
-                                {(mode === 'target' ? activeRouteData?.moves || [] : outcome?.bridge_rows || []).map((row, index) => {
+                                {bridgeRows.length === 0 ? (
+                                    <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center">
+                                        <p className="text-sm font-semibold text-slate-700">Nothing moved yet</p>
+                                        <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-slate-500">
+                                            Every lever sits at its current rate, so the total is simply the baseline.
+                                            Raise one on the left and its contribution appears here.
+                                        </p>
+                                    </div>
+                                ) : null}
+                                {bridgeRows.map((row, index) => {
                                     const contribution = Number(row.contribution || 0);
                                     const width = Math.max(4, Math.min(100, Math.abs(contribution) / Math.max(1, Number(outcome?.scenario_total || activeRouteData?.reached_monthly || contribution)) * 100));
 
