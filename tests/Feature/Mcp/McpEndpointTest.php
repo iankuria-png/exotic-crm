@@ -21,16 +21,16 @@ class McpEndpointTest extends TestCase
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:test', ['mcp:read'], now()->addDay())->plainTextToken;
 
-        $response = $this->withHeaders($this->modernHeaders('server/discover', '2026-07-28'))
+        $response = $this->withHeaders($this->modernHeaders('server/discover', '2025-06-18'))
             ->withToken($token)
             ->postJson('/api/mcp', [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'server/discover',
                 'params' => [
-                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2026-07-28'],
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
                 ],
-            ], $this->modernHeaders('server/discover', '2026-07-28'));
+            ], $this->modernHeaders('server/discover', '2025-06-18'));
 
         $response->assertOk();
         $this->assertSame('exotic-crm', $response->json('result._meta')['io.modelcontextprotocol/serverInfo']['name']);
@@ -39,6 +39,26 @@ class McpEndpointTest extends TestCase
             'status' => 'success',
             'user_id' => $user->id,
         ]);
+    }
+
+    public function test_unknown_protocol_version_is_rejected_as_unsupported(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:unsupported', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 2,
+                'method' => 'server/discover',
+                'params' => [
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
+                ],
+            ], $this->modernHeaders('server/discover', '2024-11-05'))
+            ->assertStatus(400)
+            ->assertJsonPath('error.code', -32022)
+            ->assertJsonPath('error.message', 'Unsupported MCP protocol version.');
     }
 
     public function test_legacy_initialize_flow_is_isolated_and_wildcard_tokens_are_rejected(): void
@@ -121,12 +141,13 @@ class McpEndpointTest extends TestCase
     {
         IntegrationSetting::query()->create([
             'key' => McpSettingsService::KEY,
-            'value' => ['protocol_versions' => ['2026-07-28', '2025-03-26']],
+            'value' => ['protocol_versions' => ['2024-11-05', '2025-03-26']],
         ]);
 
         $versions = app(McpSettingsService::class)->settings()['protocol_versions'];
 
         $this->assertContains('2025-06-18', $versions);
+        $this->assertNotContains('2024-11-05', $versions);
     }
 
     public function test_tools_list_honours_role_and_token_allowlist(): void
@@ -135,16 +156,16 @@ class McpEndpointTest extends TestCase
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:limited', ['mcp:read', 'mcp:tool:exotic_catalog'], now()->addDay())->plainTextToken;
 
-        $response = $this->withHeaders($this->modernHeaders('tools/list', '2026-07-28'))
+        $response = $this->withHeaders($this->modernHeaders('tools/list', '2025-06-18'))
             ->withToken($token)
             ->postJson('/api/mcp', [
                 'jsonrpc' => '2.0',
                 'id' => 4,
                 'method' => 'tools/list',
                 'params' => [
-                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2026-07-28'],
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
                 ],
-            ], $this->modernHeaders('tools/list', '2026-07-28'));
+            ], $this->modernHeaders('tools/list', '2025-06-18'));
 
         $response->assertOk();
         $names = collect($response->json('result.tools'))->pluck('name')->all();
@@ -157,14 +178,14 @@ class McpEndpointTest extends TestCase
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:expired', ['mcp:read'], now()->subMinute())->plainTextToken;
 
-        $this->withHeaders($this->modernHeaders('server/discover', '2026-07-28'))
+        $this->withHeaders($this->modernHeaders('server/discover', '2025-06-18'))
             ->withToken($token)
             ->postJson('/api/mcp', [
                 'jsonrpc' => '2.0',
                 'id' => 5,
                 'method' => 'server/discover',
                 'params' => [
-                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2026-07-28'],
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
                 ],
             ])
             ->assertUnauthorized();

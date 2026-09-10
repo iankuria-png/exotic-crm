@@ -14,10 +14,11 @@ class McpSettingsService
         $defaults = (array) config('mcp', []);
         $overrides = is_array($stored) ? $stored : [];
         $settings = array_replace_recursive($defaults, $overrides);
-        $settings['protocol_versions'] = array_values(array_unique(array_merge(
-            (array) ($defaults['protocol_versions'] ?? []),
-            (array) ($overrides['protocol_versions'] ?? [])
-        )));
+        $defaultVersions = array_values(array_unique((array) ($defaults['protocol_versions'] ?? [])));
+        $settings['protocol_versions'] = array_values(array_intersect(
+            array_unique(array_merge($defaultVersions, (array) ($overrides['protocol_versions'] ?? []))),
+            $defaultVersions
+        ));
 
         return $settings;
     }

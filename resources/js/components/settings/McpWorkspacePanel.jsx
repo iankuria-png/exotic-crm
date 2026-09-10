@@ -137,6 +137,7 @@ export default function McpWorkspacePanel({ userRole = '' }) {
                 onToggle={toggleServer}
                 onSelfTest={() => selfTestMutation.mutate()}
                 isSelfTesting={selfTestMutation.isPending}
+                protocol={settings.protocol_versions?.[0] || '2025-06-18'}
             />
 
             <nav className="crm-surface overflow-x-auto p-1" aria-label="MCP control station sections">
@@ -163,7 +164,7 @@ export default function McpWorkspacePanel({ userRole = '' }) {
 
             {panel === 'overview' ? (
                 <Overview
-                    settings={settings}
+                settings={settings}
                     tools={tools}
                     activity={activity}
                     selfTest={selfTest}
@@ -204,7 +205,7 @@ export default function McpWorkspacePanel({ userRole = '' }) {
     );
 }
 
-function McpWorkspaceHeader({ endpoint, enabled, canManage, isSaving, onToggle, onSelfTest, isSelfTesting }) {
+function McpWorkspaceHeader({ endpoint, enabled, canManage, isSaving, onToggle, onSelfTest, isSelfTesting, protocol }) {
     return (
         <section className="crm-surface overflow-hidden">
             <div className="flex flex-col gap-4 border-b border-slate-200 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
@@ -229,7 +230,7 @@ function McpWorkspaceHeader({ endpoint, enabled, canManage, isSaving, onToggle, 
             </div>
             {!canManage ? <div className="border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-900">Read-only view. An administrator is required to change MCP settings or credentials.</div> : null}
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-200 sm:grid-cols-4 sm:divide-y-0">
-                <HeaderFact label="Protocol" value="2026-07-28" />
+                <HeaderFact label="Protocol" value={protocol} />
                 <HeaderFact label="Transport" value="Stateless HTTP" />
                 <HeaderFact label="Write access" value="Never" />
                 <HeaderFact label="Policy" value="Pseudonymous" />

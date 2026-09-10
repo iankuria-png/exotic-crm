@@ -6,7 +6,7 @@ const settingsPayload = {
     settings: {
         enabled: true,
         endpoint: '/api/mcp',
-        protocol_versions: ['2026-07-28', '2025-03-26'],
+        protocol_versions: ['2025-06-18', '2025-03-26'],
         pii_mode: 'pseudonymous',
         limits: { rate_per_minute: 30, daily_row_budget: 200000, daily_bytes_budget: 50000000, on_exhaustion: 'throttle' },
         sql_hatch: { enabled: false, views: ['vw_mcp_lifecycle_rollup', 'vw_mcp_revenue_rollup'], default_row_limit: 50, max_row_limit: 500, timeout_seconds: 10 },

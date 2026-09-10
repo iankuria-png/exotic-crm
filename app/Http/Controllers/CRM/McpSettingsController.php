@@ -91,7 +91,7 @@ class McpSettingsController extends Controller
 
         return response()->json([
             'reachable' => true,
-            'protocol' => data_get($settings, 'protocol_versions.0', '2026-07-28'),
+            'protocol' => data_get($settings, 'protocol_versions.0', '2025-06-18'),
             'fallback_protocol' => data_get($settings, 'protocol_versions.1', '2025-03-26'),
             'tools_listed' => $enabledTools,
             'resources_listed' => count((array) data_get($settings, 'resources', [])),

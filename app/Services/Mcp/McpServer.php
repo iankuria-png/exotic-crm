@@ -103,7 +103,7 @@ class McpServer
 
         return match ($method) {
             'server/discover' => [
-                'supportedVersions' => (array) data_get($this->settings->settings(), 'protocol_versions', ['2026-07-28']),
+                'supportedVersions' => (array) data_get($this->settings->settings(), 'protocol_versions', ['2025-06-18', '2025-03-26']),
                 'capabilities' => ['tools' => ['listChanged' => true], 'resources' => ['listChanged' => false]],
                 '_meta' => ['io.modelcontextprotocol/serverInfo' => ['name' => 'exotic-crm', 'version' => '1.0.0']],
             ],
@@ -345,17 +345,17 @@ class McpServer
             ?? data_get($meta, 'io.modelcontextprotocol.protocolVersion');
         $initializeVersion = $method === 'initialize' ? ($params['protocolVersion'] ?? null) : null;
         $bodyVersion = $metaVersion ?? $initializeVersion;
-        $perRequestProtocol = $headerVersion === '2026-07-28';
+        $perRequestProtocol = $headerVersion === '2025-06-18' && $request->header('Mcp-Method') !== null;
         $initializing = $method === 'initialize';
 
         if ($headerVersion === null && ! $initializing) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: MCP-Protocol-Version is required.', 'header_mismatch', 400);
         }
-        if ($headerVersion !== null && ($perRequestProtocol || $initializing) && $headerVersion !== $bodyVersion) {
-            throw McpProtocolException::rpc(-32020, 'Header mismatch: protocol version does not match request metadata.', 'header_mismatch', 400);
-        }
         if ($headerVersion !== null && ! in_array($headerVersion, (array) data_get($this->settings->settings(), 'protocol_versions', []), true)) {
             throw McpProtocolException::rpc(-32022, 'Unsupported MCP protocol version.', 'unsupported_protocol', 400);
+        }
+        if ($headerVersion !== null && ($perRequestProtocol || $initializing) && $headerVersion !== $bodyVersion) {
+            throw McpProtocolException::rpc(-32020, 'MCP-Protocol-Version header does not match the request protocol version.', 'header_mismatch', 400);
         }
         $accept = strtolower((string) $request->header('Accept', ''));
         if ($headerVersion !== null && (! str_contains($accept, 'application/json') || ! str_contains($accept, 'text/event-stream'))) {
@@ -377,7 +377,7 @@ class McpServer
 
     private function initializeProtocolVersion(array $params): string
     {
-        $supported = (array) data_get($this->settings->settings(), 'protocol_versions', ['2025-03-26']);
+        $supported = (array) data_get($this->settings->settings(), 'protocol_versions', ['2025-06-18', '2025-03-26']);
         $requested = (string) ($params['protocolVersion'] ?? '');
 
         if ($requested !== '' && in_array($requested, $supported, true)) {
