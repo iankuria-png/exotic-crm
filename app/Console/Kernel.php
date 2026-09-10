@@ -115,6 +115,22 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_compute_daily_stats.log'));
 
+        $schedule->command('crm:warm-forecast-baselines')
+            ->name('crm_warm_forecast_baselines')
+            ->dailyAt('00:37')
+            ->withoutOverlapping(60)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_warm_forecast_baselines.log'));
+
+        $schedule->command('crm:score-forecast-accuracy')
+            ->name('crm_score_forecast_accuracy')
+            ->hourlyAt(47)
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_score_forecast_accuracy.log'));
+
         // Weekly AI briefings. Poll every minute so Settings can own the actual
         // audience time; the command self-guards on enablement, due time, and
         // duplicate weekly sends.

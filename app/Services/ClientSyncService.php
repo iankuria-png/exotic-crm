@@ -8,6 +8,7 @@ use App\Models\ClientSyncExclusion;
 use App\Models\ClientSyncRun;
 use App\Models\KycSubject;
 use App\Models\Platform;
+use App\Services\Payments\PaymentIdentityTokenizer;
 use App\Support\CityNormalizer;
 use App\Support\SyncSliceBudget;
 use Carbon\Carbon;
@@ -1109,22 +1110,7 @@ class ClientSyncService
      */
     private function normalizePhone(?string $phone, string $prefix = '254'): string
     {
-        if (! $phone) {
-            return '';
-        }
-
-        // Remove all non-digit characters except leading +
-        $phone = preg_replace('/[^\d+]/', '', $phone);
-
-        // Remove leading +
-        $phone = ltrim($phone, '+');
-
-        // If starts with 0, replace with country prefix
-        if (str_starts_with($phone, '0')) {
-            $phone = $prefix.substr($phone, 1);
-        }
-
-        return $phone;
+        return app(PaymentIdentityTokenizer::class)->canonicalPhone($phone, $prefix) ?? '';
     }
 
     private function ensureUnixTimestamp($value): ?int

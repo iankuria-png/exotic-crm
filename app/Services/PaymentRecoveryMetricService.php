@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BillingProviderTransaction;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
+use App\Services\Payments\PaymentIdentityTokenizer;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -12,6 +13,7 @@ use Illuminate\Database\Eloquent\Builder;
 class PaymentRecoveryMetricService
 {
     private const CHUNK_SIZE = 1000;
+
     private const FAILURE_ATTEMPT_TYPES = [
         'callback_update',
         'hosted_checkout_init',
@@ -23,9 +25,9 @@ class PaymentRecoveryMetricService
     ];
 
     public function __construct(
-        private readonly PaymentFailureReasonClassifier $failureReasonClassifier
-    ) {
-    }
+        private readonly PaymentFailureReasonClassifier $failureReasonClassifier,
+        private readonly PaymentIdentityTokenizer $identityTokenizer
+    ) {}
 
     public function compute(?array $platformIds, Carbon $from, Carbon $to): array
     {
@@ -37,6 +39,31 @@ class PaymentRecoveryMetricService
         $result = $this->summarize($data['union_find'], $data['failures'], $data['successes'], $from, $to);
 
         return $result['metrics'];
+    }
+
+    public function computeByPlatform(?array $platformIds, Carbon $from, Carbon $to): array
+    {
+        if (is_array($platformIds) && empty($platformIds)) {
+            return [];
+        }
+
+        $data = $this->collectWindowData($platformIds, $from, $to);
+        $failuresByPlatform = [];
+
+        foreach ($data['failures'] as $failure) {
+            $platformId = (int) ($failure['payment']->platform_id ?? 0);
+            $failuresByPlatform[$platformId][] = $failure;
+        }
+
+        ksort($failuresByPlatform);
+
+        return collect($failuresByPlatform)
+            ->mapWithKeys(function (array $failures, int $platformId) use ($data, $from, $to) {
+                $result = $this->summarize($data['union_find'], $failures, $data['successes'], $from, $to);
+
+                return [$platformId => $result['metrics']];
+            })
+            ->all();
     }
 
     public function report(?array $platformIds, Carbon $from, Carbon $to, int $limit = 100): array
@@ -56,7 +83,7 @@ class PaymentRecoveryMetricService
 
         foreach ($data['successes'] as $success) {
             $eventAt = $success['event_at'];
-            if (!$eventAt instanceof CarbonInterface) {
+            if (! $eventAt instanceof CarbonInterface) {
                 continue;
             }
 
@@ -78,13 +105,13 @@ class PaymentRecoveryMetricService
             }
 
             $failedAt = $failure['created_at'];
-            if (!$failedAt instanceof CarbonInterface) {
+            if (! $failedAt instanceof CarbonInterface) {
                 continue;
             }
 
             $root = $data['union_find']->find($failure['tokens'][0]);
             foreach ($successesByRoot[$root] ?? [] as $success) {
-                if (!$success['event_at']->greaterThan($failedAt)) {
+                if (! $success['event_at']->greaterThan($failedAt)) {
                     continue;
                 }
 
@@ -120,9 +147,8 @@ class PaymentRecoveryMetricService
         Carbon $to,
         bool $withRelations = false,
         bool $withFailureReasons = false
-    ): array
-    {
-        $unionFind = new PaymentRecoveryUnionFind();
+    ): array {
+        $unionFind = new PaymentRecoveryUnionFind;
         $failures = [];
         $successes = [];
 
@@ -196,11 +222,11 @@ class PaymentRecoveryMetricService
             $root = $unionFind->find($success['tokens'][0]);
             $eventAt = $success['event_at'];
 
-            if (!$eventAt instanceof CarbonInterface) {
+            if (! $eventAt instanceof CarbonInterface) {
                 continue;
             }
 
-            if (!isset($latestSuccessByRoot[$root]) || $eventAt->greaterThan($latestSuccessByRoot[$root])) {
+            if (! isset($latestSuccessByRoot[$root]) || $eventAt->greaterThan($latestSuccessByRoot[$root])) {
                 $latestSuccessByRoot[$root] = $eventAt;
             }
         }
@@ -312,22 +338,7 @@ class PaymentRecoveryMetricService
 
     private function identityTokens(Payment $payment): array
     {
-        $tokens = [];
-        $phone = $this->normalizePhone($payment->phone);
-
-        if ($phone !== null) {
-            $tokens[] = 'phone:' . $phone;
-        }
-
-        if ($payment->client_id) {
-            $tokens[] = 'client:' . (int) $payment->client_id;
-        }
-
-        if (empty($tokens)) {
-            $tokens[] = 'payment:' . (int) $payment->id;
-        }
-
-        return $tokens;
+        return $this->identityTokenizer->legacyTokens($payment);
     }
 
     private function registerTokens(PaymentRecoveryUnionFind $unionFind, array $tokens): void
@@ -340,19 +351,6 @@ class PaymentRecoveryMetricService
         foreach (array_slice($tokens, 1) as $token) {
             $unionFind->union($first, $token);
         }
-    }
-
-    private function normalizePhone(?string $phone): ?string
-    {
-        $value = preg_replace('/\D/', '', (string) $phone);
-
-        if (!is_string($value)) {
-            return null;
-        }
-
-        $value = ltrim($value, '0');
-
-        return $value !== '' ? $value : null;
     }
 
     private function rate(int $numerator, int $denominator): float
@@ -471,7 +469,7 @@ class PaymentRecoveryMetricService
                 && isset($latestSuccessByRoot[$root])
                 && $latestSuccessByRoot[$root]->greaterThan($failedAt);
 
-            if (!isset($items[$code])) {
+            if (! isset($items[$code])) {
                 $items[$code] = [
                     'code' => $code,
                     'label' => (string) $reason['label'],
@@ -598,12 +596,12 @@ class PaymentRecoveryMetricService
             $platform = $payment->relationLoaded('platform') ? $payment->platform : null;
             $product = $payment->relationLoaded('product') ? $payment->product : null;
 
-            if (!$product && $payment->relationLoaded('deal') && $payment->deal?->relationLoaded('product')) {
+            if (! $product && $payment->relationLoaded('deal') && $payment->deal?->relationLoaded('product')) {
                 $product = $payment->deal->product;
             }
 
-            $marketKey = $platform ? 'market:' . (int) $platform->id : 'market:unattributed';
-            $packageKey = $product ? 'package:' . (int) $product->id : 'package:unattributed';
+            $marketKey = $platform ? 'market:'.(int) $platform->id : 'market:unattributed';
+            $packageKey = $product ? 'package:'.(int) $product->id : 'package:unattributed';
 
             $this->addFrictionItem($markets, $marketKey, [
                 'platform_id' => $platform ? (int) $platform->id : null,
@@ -634,7 +632,7 @@ class PaymentRecoveryMetricService
         mixed $failedAt,
         bool $recovered
     ): void {
-        if (!isset($items[$key])) {
+        if (! isset($items[$key])) {
             $items[$key] = [
                 ...$identity,
                 'failed_count' => 0,
@@ -749,55 +747,5 @@ class PaymentRecoveryMetricService
             'created_at' => $payment->created_at?->toDateTimeString(),
             'completed_at' => $payment->completed_at?->toDateTimeString(),
         ];
-    }
-}
-
-class PaymentRecoveryUnionFind
-{
-    private array $parents = [];
-    private array $ranks = [];
-
-    public function makeSet(string $token): void
-    {
-        if (isset($this->parents[$token])) {
-            return;
-        }
-
-        $this->parents[$token] = $token;
-        $this->ranks[$token] = 0;
-    }
-
-    public function find(string $token): string
-    {
-        $this->makeSet($token);
-
-        if ($this->parents[$token] !== $token) {
-            $this->parents[$token] = $this->find($this->parents[$token]);
-        }
-
-        return $this->parents[$token];
-    }
-
-    public function union(string $left, string $right): void
-    {
-        $leftRoot = $this->find($left);
-        $rightRoot = $this->find($right);
-
-        if ($leftRoot === $rightRoot) {
-            return;
-        }
-
-        if ($this->ranks[$leftRoot] < $this->ranks[$rightRoot]) {
-            $this->parents[$leftRoot] = $rightRoot;
-            return;
-        }
-
-        if ($this->ranks[$leftRoot] > $this->ranks[$rightRoot]) {
-            $this->parents[$rightRoot] = $leftRoot;
-            return;
-        }
-
-        $this->parents[$rightRoot] = $leftRoot;
-        $this->ranks[$leftRoot]++;
     }
 }

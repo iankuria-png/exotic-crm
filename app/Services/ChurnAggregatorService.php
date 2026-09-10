@@ -7,6 +7,7 @@ use App\Models\ClientActiveSnapshot;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Support\CrmClientChurnReason;
+use App\Support\SignupSource;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Builder;
@@ -14,15 +15,6 @@ use Illuminate\Support\Facades\DB;
 
 class ChurnAggregatorService
 {
-    private const SIGNUP_SOURCE_LABELS = [
-        'fast_signup' => 'Fast signup',
-        'full_registration' => 'Full registration',
-        'crm_manual' => 'CRM manual',
-        'crm_provisioned' => 'Provisioned',
-        'field' => 'Field sales',
-        'existing' => 'Existing / legacy',
-    ];
-
     public function __construct(
         private readonly ReportingCurrencyService $reportingCurrencyService,
     ) {}
@@ -884,7 +876,7 @@ class ChurnAggregatorService
             ->groupBy(fn ($row) => $this->normalizeSignupSource($row->signup_source))
             ->map(fn ($rows, string $key) => [
                 'key' => $key,
-                'label' => self::SIGNUP_SOURCE_LABELS[$key] ?? ucwords(str_replace('_', ' ', $key)),
+                'label' => SignupSource::label($key),
                 'churn_count' => (int) $rows->sum('cnt'),
             ]);
 
@@ -905,9 +897,7 @@ class ChurnAggregatorService
 
     private function normalizeSignupSource(?string $source): string
     {
-        $source = strtolower(trim((string) $source));
-
-        return $source === '' ? 'existing' : $source;
+        return SignupSource::normalize($source);
     }
 
     private function dailyAverageTickets(Carbon $from, Carbon $to, array $platformIds): array

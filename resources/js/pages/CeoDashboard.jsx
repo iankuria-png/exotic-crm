@@ -15,6 +15,8 @@ import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWi
 import MarketHealthWidget from '../components/dashboard/MarketHealthWidget';
 import ProfileMovementWidget from '../components/dashboard/ProfileMovementWidget';
 import ScorecardArchiveModal from '../components/dashboard/ScorecardArchiveModal';
+import ForecastModal from '../components/dashboard/forecast/ForecastModal';
+import ForecastWidget from '../components/dashboard/forecast/ForecastWidget';
 import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
@@ -94,6 +96,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [recentAgentId, setRecentAgentId] = useState('all');
     const [engagementMarket, setEngagementMarket] = useState(null);
     const [scorecardModalOpen, setScorecardModalOpen] = useState(false);
+    const [forecastModalOpen, setForecastModalOpen] = useState(false);
     const canUseScorecards = Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role));
 
     const queryParams = useMemo(() => ({
@@ -230,6 +233,12 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         currency_mode: reporting.displayMode,
         reporting_currency: reporting.targetCurrency,
     }), [platformFilter, reporting.displayMode, reporting.targetCurrency, window?.from, window?.to]);
+    const forecastParams = useMemo(() => ({
+        ...(window?.from ? { from: window.from } : {}),
+        ...(window?.to ? { to: window.to } : {}),
+        ...(platformFilter ? { platform_id: platformFilter } : {}),
+        horizon_days: 90,
+    }), [platformFilter, window?.from, window?.to]);
 
     const handleMarketScope = (marketId) => {
         setPlatformFilter(marketId ? String(marketId) : null);
@@ -363,6 +372,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 scorecardSummary={scorecardsQuery.data}
                 scorecardsLoading={scorecardsQuery.isLoading}
                 onOpenScorecards={canUseScorecards ? () => setScorecardModalOpen(true) : null}
+                onOpenForecast={() => setForecastModalOpen(true)}
+            />
+
+            <ForecastModal
+                open={forecastModalOpen}
+                onClose={() => setForecastModalOpen(false)}
+                params={forecastParams}
+                currency={reporting.targetCurrency}
             />
 
             {canUseScorecards ? (
@@ -452,7 +469,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                     />
                 </div>
 
-                <div className="xl:col-span-5">
+                <div className="space-y-4 xl:col-span-5">
                     <RecentPaymentsWidget
                         data={recentPaymentsQuery.data}
                         isLoading={recentPaymentsQuery.isLoading}
@@ -464,6 +481,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         onChannelChange={setRecentChannel}
                         agentId={recentAgentId}
                         onAgentChange={setRecentAgentId}
+                    />
+                    <ForecastWidget
+                        params={forecastParams}
+                        currency={reporting.targetCurrency}
+                        onOpen={() => setForecastModalOpen(true)}
                     />
                 </div>
             </section>
@@ -517,6 +539,16 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 allowCreate={Boolean(user?.is_ceo || ['admin', 'sub_admin'].includes(user?.role))}
                 markets={marketOptions}
             />
+
+            <div className="flex justify-end px-1">
+                <button
+                    type="button"
+                    onClick={onSwitchAdminView}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                >
+                    Switch to Admin view
+                </button>
+            </div>
         </div>
     );
 }

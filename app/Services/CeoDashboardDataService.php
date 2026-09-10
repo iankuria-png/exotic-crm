@@ -10,6 +10,7 @@ use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
+use App\Services\Revenue\CollectedRevenueQuery;
 use Carbon\Carbon;
 use Carbon\CarbonTimeZone;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,6 +22,7 @@ class CeoDashboardDataService
 {
     public function __construct(
         private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly CollectedRevenueQuery $collectedRevenueQuery,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
         private readonly PaymentPresenter $paymentPresenter,
         private readonly ClientSyncRunService $clientSyncRunService,
@@ -1031,12 +1033,7 @@ class CeoDashboardDataService
 
     private function baseCollectedPayments(Carbon $from, Carbon $to, ?int $platformId = null): Builder
     {
-        return Payment::query()
-            ->reportableSuccessful()
-            ->excludingWalletTopups()
-            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) >= ?', [$from->toDateTimeString()])
-            ->whereRaw('COALESCE(payments.completed_at, payments.created_at) <= ?', [$to->toDateTimeString()])
-            ->when($platformId, fn (Builder $query, int $id) => $query->where('payments.platform_id', $id));
+        return $this->collectedRevenueQuery->builder($from, $to, $platformId);
     }
 
     private function activeClientSnapshot(Carbon $date, ?int $platformId): array

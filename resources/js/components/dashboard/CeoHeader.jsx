@@ -64,6 +64,7 @@ export default function CeoHeader({
     scorecardSummary,
     scorecardsLoading = false,
     onOpenScorecards,
+    onOpenForecast,
 }) {
     const today = new Date().toLocaleDateString(undefined, {
         weekday: 'long',
@@ -106,13 +107,21 @@ export default function CeoHeader({
                             </button>
                         ) : null}
 
-                        <button
-                            type="button"
-                            onClick={onSwitchAdmin}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                        >
-                            Switch to Admin view
-                        </button>
+                        {onOpenForecast ? (
+                            <button
+                                type="button"
+                                onClick={onOpenForecast}
+                                className="group inline-flex min-h-11 items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left shadow-sm transition hover:border-teal-300 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-slate-950 text-[11px] font-bold uppercase text-white">
+                                    F
+                                </span>
+                                <span className="min-w-0">
+                                    <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-teal-700">Revenue forecast</span>
+                                    <span className="block text-sm font-semibold text-slate-950">Model a target</span>
+                                </span>
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             </div>
