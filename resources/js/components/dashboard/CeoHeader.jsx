@@ -1,5 +1,6 @@
 import React from 'react';
 import ReportingCurrencyControl from '../ReportingCurrencyControl';
+import SelectChevron from '../SelectChevron';
 import { marketLabel } from './ceoFormatters';
 
 const HORIZONS = [
@@ -146,19 +147,21 @@ export default function CeoHeader({
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
-                        <select
-                            value={platformFilter || ''}
-                            onChange={(event) => onPlatformChange(event.target.value || null)}
-                            className="h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 sm:h-9 sm:min-w-[220px]"
-                            aria-label="Market scope"
-                        >
-                            <option value="">All accessible markets</option>
-                            {markets.map((market) => (
-                                <option key={market.id || market.platform_id} value={market.id || market.platform_id}>
-                                    {marketLabel({ name: market.name || market.platform_name, country: market.country || market.platform_country })}
-                                </option>
-                            ))}
-                        </select>
+                        <SelectChevron className="w-full sm:min-w-[220px]">
+                            <select
+                                value={platformFilter || ''}
+                                onChange={(event) => onPlatformChange(event.target.value || null)}
+                                className="h-10 w-full min-w-0 appearance-none rounded-md border border-slate-300 bg-white px-3 pr-9 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 sm:h-9"
+                                aria-label="Market scope"
+                            >
+                                <option value="">All accessible markets</option>
+                                {markets.map((market) => (
+                                    <option key={market.id || market.platform_id} value={market.id || market.platform_id}>
+                                        {marketLabel({ name: market.name || market.platform_name, country: market.country || market.platform_country })}
+                                    </option>
+                                ))}
+                            </select>
+                        </SelectChevron>
 
                         {selectedMarket ? (
                             <button

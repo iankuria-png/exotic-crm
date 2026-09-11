@@ -1,3 +1,5 @@
+import SelectChevron from './SelectChevron';
+
 const COMMON_TARGETS = ['USD', 'KES', 'GHS', 'NGN', 'TZS'];
 
 export default function ReportingCurrencyControl({ reporting, className = '' }) {
@@ -29,17 +31,19 @@ export default function ReportingCurrencyControl({ reporting, className = '' }) 
             </div>
 
             {reporting.allowUserOverride ? (
-                <select
-                    value={reporting.targetCurrency}
-                    onChange={(event) => reporting.setTargetCurrency(event.target.value)}
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
-                    aria-label="Reporting currency"
-                    disabled={!reporting.isFlat}
-                >
-                    {COMMON_TARGETS.map((currency) => (
-                        <option key={currency} value={currency}>{currency}</option>
-                    ))}
-                </select>
+                <SelectChevron>
+                    <select
+                        value={reporting.targetCurrency}
+                        onChange={(event) => reporting.setTargetCurrency(event.target.value)}
+                        className="h-9 appearance-none rounded-md border border-slate-300 bg-white px-2 pr-8 text-xs font-semibold text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                        aria-label="Reporting currency"
+                        disabled={!reporting.isFlat}
+                    >
+                        {COMMON_TARGETS.map((currency) => (
+                            <option key={currency} value={currency}>{currency}</option>
+                        ))}
+                    </select>
+                </SelectChevron>
             ) : null}
 
             <span className="inline-flex h-9 items-center rounded border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800">
