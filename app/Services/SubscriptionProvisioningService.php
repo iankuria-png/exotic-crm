@@ -13,6 +13,7 @@ use App\Models\TimelineEvent;
 use App\Support\WpSubscriptionExpiry;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
 class SubscriptionProvisioningService
@@ -21,8 +22,31 @@ class SubscriptionProvisioningService
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService
     ) {}
 
+    /**
+     * Deal ids whose WordPress activation committed during this request.
+     *
+     * A rollback after that point leaves the advertiser live on WordPress with
+     * no CRM record, and the two outcomes are indistinguishable from the
+     * exception alone — every one of the 426 logged activation failures read
+     * identically whether WordPress had been touched or not. Callers consult
+     * this in their catch block so an orphan can be named as an orphan.
+     *
+     * @var array<int, true>
+     */
+    private array $wordPressActivations = [];
+
+    /** Whether this request already activated the deal on WordPress. */
+    public function wordPressActivationCommitted(int $dealId): bool
+    {
+        return isset($this->wordPressActivations[$dealId]);
+    }
+
     public function activateDeal(Deal $deal, array $options = []): Deal
     {
+        // Cleared per invocation so a reused service instance cannot report a
+        // previous request's activation as this one's.
+        unset($this->wordPressActivations[(int) $deal->id]);
+
         $deal->loadMissing(['client.platform', 'product', 'platform']);
 
         $client = $deal->client;
@@ -67,6 +91,20 @@ class SubscriptionProvisioningService
         $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
         $wpActivation = $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
 
+        $this->wordPressActivations[(int) $deal->id] = true;
+
+        // ---- The advertiser is now live on WordPress. ------------------------
+        // There is no compensating call below this line, and three of this
+        // method's callers — DealController::activate, FieldSalesController and
+        // SubsidiaryTrialService — run the whole thing inside a DB transaction.
+        // So anything that throws from here rolls the CRM's record back while
+        // WordPress keeps the activation: a paid, published profile the CRM
+        // believes nothing about.
+        //
+        // Everything below is therefore either essential local bookkeeping or
+        // explicitly guarded. Nothing that merely refreshes a cache is allowed
+        // to undo a completed activation.
+
         $activatedAt = isset($options['activated_at'])
             ? Carbon::parse($options['activated_at'])
             : now();
@@ -110,10 +148,33 @@ class SubscriptionProvisioningService
             'expires_at' => $expiresAt,
         ]));
 
+        $syncedClient = null;
+
         if (($options['sync_client'] ?? true) !== false) {
-            $syncService = new ClientSyncService($platform);
-            $syncedClient = $syncService->syncOne($wpPostId);
-            $deal->setRelation('client', $syncedClient);
+            // The only remote call left after the activation, and the one that
+            // used to orphan it. syncOne is a WordPress read that refreshes the
+            // CRM's cached copy of the profile; on a market that is down it
+            // throws, and before this guard that exception propagated out of a
+            // successful activation and rolled it back.
+            //
+            // Losing it costs nothing durable. The method returns
+            // $deal->fresh(['client', ...]) further down, which re-reads the
+            // client from the database regardless, and the next scheduled sync
+            // picks the profile up. A slightly stale client row is not a reason
+            // to un-activate a paying advertiser.
+            try {
+                $syncService = new ClientSyncService($platform);
+                $syncedClient = $syncService->syncOne($wpPostId);
+                $deal->setRelation('client', $syncedClient);
+            } catch (\Throwable $exception) {
+                Log::warning('Post-activation client sync failed; activation stands.', [
+                    'deal_id' => (int) $deal->id,
+                    'client_id' => (int) $client->id,
+                    'wp_post_id' => $wpPostId,
+                    'platform_id' => (int) $client->platform_id,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
         }
 
         $repairClient = $syncedClient ?? $client->fresh() ?? $client;

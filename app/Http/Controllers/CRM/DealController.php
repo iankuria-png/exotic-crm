@@ -758,10 +758,23 @@ class DealController extends Controller
             ], 422);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('Deal activation failed', [
-                'deal_id' => $deal->id,
-                'error' => $e->getMessage(),
-            ]);
+
+            // If WordPress already activated, the rollback above just undid the
+            // CRM half of a completed activation: the advertiser is live and
+            // paid-for with no local record. That needs reconciling by hand, so
+            // say which case this is rather than leaving both to look alike.
+            $orphaned = $this->subscriptionProvisioningService
+                ->wordPressActivationCommitted((int) $deal->id);
+
+            Log::error($orphaned
+                ? 'Deal activation failed AFTER WordPress activated — profile is live with no CRM record'
+                : 'Deal activation failed', [
+                    'deal_id' => $deal->id,
+                    'client_id' => $deal->client_id,
+                    'wp_post_id' => $deal->client?->wp_post_id,
+                    'wordpress_activated' => $orphaned,
+                    'error' => $e->getMessage(),
+                ]);
             return response()->json([
                 'message' => 'Activation failed: ' . $e->getMessage(),
             ], 500);
