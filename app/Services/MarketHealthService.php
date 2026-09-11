@@ -5,11 +5,14 @@ namespace App\Services;
 use App\Models\Platform;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
 class MarketHealthService
 {
+    private const HEALTH_GATE_CACHE_PREFIX = 'market-health:gate:';
+
     public const STATUS_HEALTHY = 'healthy';
 
     public const STATUS_DOMAIN_UNREACHABLE = 'domain_unreachable';
@@ -21,6 +24,61 @@ class MarketHealthService
     public const STATUS_WP_ERROR = 'wp_error';
 
     public const STATUS_UNCONFIGURED = 'unconfigured';
+
+    /**
+     * Return the small health snapshot used by WordPress callers without
+     * reading the platforms table on every request.
+     *
+     * An empty array is cached for missing platforms too; Cache::remember does
+     * not retain null values, which would turn an unknown platform into a
+     * database query on every call.
+     *
+     * @return array{health_status:string|null,health_consecutive_failures:int}|null
+     */
+    public function cachedPlatformHealth(int $platformId): ?array
+    {
+        if ($platformId <= 0) {
+            return null;
+        }
+
+        $ttl = max(5, (int) config('services.exotic_crm_sync.health_gate_ttl_seconds', 30));
+
+        $snapshot = Cache::remember(
+            self::HEALTH_GATE_CACHE_PREFIX.$platformId,
+            now()->addSeconds($ttl),
+            static function () use ($platformId): array {
+                $platform = Platform::query()
+                    ->whereKey($platformId)
+                    ->first(['health_status', 'health_consecutive_failures']);
+
+                return $platform ? [
+                    'health_status' => $platform->health_status,
+                    'health_consecutive_failures' => (int) ($platform->health_consecutive_failures ?? 0),
+                ] : [];
+            }
+        );
+
+        return $snapshot === [] ? null : $snapshot;
+    }
+
+    public function shouldFailFast(?string $status, int $consecutiveFailures): bool
+    {
+        if (! (bool) config('services.exotic_crm_sync.health_gate_enabled', true)) {
+            return false;
+        }
+
+        $minimumFailures = max(1, (int) config('services.exotic_crm_sync.health_gate_min_failures', 2));
+
+        return $consecutiveFailures >= $minimumFailures
+            && in_array($status, [self::STATUS_DOMAIN_UNREACHABLE, self::STATUS_SERVER_ERROR], true);
+    }
+
+    public function forgetCachedPlatformHealth(int $platformId): void
+    {
+        if ($platformId > 0) {
+            Cache::forget(self::HEALTH_GATE_CACHE_PREFIX.$platformId);
+        }
+    }
 
     public function probe(Platform $platform): array
     {
@@ -141,6 +199,8 @@ class MarketHealthService
             'health_down_since_at' => $currentDown ? $downSince : null,
             'health_last_down_notified_at' => $currentDown ? $platform->health_last_down_notified_at : null,
         ])->save();
+
+        $this->forgetCachedPlatformHealth((int) $platform->id);
 
         return [
             'platform' => $platform->fresh(),

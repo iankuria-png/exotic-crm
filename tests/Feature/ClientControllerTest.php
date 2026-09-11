@@ -22,6 +22,33 @@ class ClientControllerTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_platform_currency_catalogue_fails_soft_and_negative_caches_market_outage(): void
+    {
+        $platform = Platform::factory()->create([
+            'health_status' => 'domain_unreachable',
+            'health_consecutive_failures' => 2,
+        ]);
+
+        Sanctum::actingAs($this->adminUser());
+        Http::fake(function (): void {
+            $this->fail('The health gate and negative cache should prevent a currency request.');
+        });
+
+        $this->getJson("/api/crm/platforms/{$platform->id}/currencies")
+            ->assertOk()
+            ->assertJsonPath('currencies', [])
+            ->assertJsonPath('available', false)
+            ->assertJsonPath('degraded', true);
+
+        $this->getJson("/api/crm/platforms/{$platform->id}/currencies")
+            ->assertOk()
+            ->assertJsonPath('currencies', [])
+            ->assertJsonPath('available', false)
+            ->assertJsonPath('degraded', true);
+
+        Http::assertNothingSent();
+    }
+
     public function test_client_risk_state_can_be_marked_and_cleared_with_reason(): void
     {
         $platform = Platform::factory()->create();

@@ -75,6 +75,8 @@ use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class ClientController extends Controller
 {
+    private const WP_CURRENCY_FAILURE_CACHE_TTL_SECONDS = 60;
+
     private const PLAN_FILTER_NO_ACTIVE_SUBSCRIPTION = 'no-active-subscription';
 
     private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4,mov,qt';
@@ -6318,11 +6320,39 @@ class ClientController extends Controller
             'You do not have access to this client market.'
         );
 
-        $currencies = WpSyncService::forPlatform((int) $platform->id)->getCurrencies();
+        $failureCacheKey = sprintf('crm:platform:%d:currencies:unavailable', (int) $platform->id);
+        if (Cache::has($failureCacheKey)) {
+            return response()->json([
+                'currencies' => [],
+                'default_currency_id' => $platform->wp_currency_id,
+                'available' => false,
+                'degraded' => true,
+            ]);
+        }
+
+        try {
+            $currencies = WpSyncService::forPlatform((int) $platform->id)->getCurrencies();
+            Cache::forget($failureCacheKey);
+        } catch (\Throwable $exception) {
+            Cache::put($failureCacheKey, true, now()->addSeconds(self::WP_CURRENCY_FAILURE_CACHE_TTL_SECONDS));
+            Log::warning('WordPress currency catalogue unavailable; returning a degraded response.', [
+                'platform_id' => (int) $platform->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'currencies' => [],
+                'default_currency_id' => $platform->wp_currency_id,
+                'available' => false,
+                'degraded' => true,
+            ]);
+        }
 
         return response()->json([
             'currencies' => $currencies['currencies'] ?? $currencies,
             'default_currency_id' => $platform->wp_currency_id,
+            'available' => true,
+            'degraded' => false,
         ]);
     }
 

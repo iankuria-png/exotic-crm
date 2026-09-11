@@ -45,8 +45,7 @@ class RunClientSyncJob implements ShouldQueue
     public function __construct(
         public readonly int $runId,
         public readonly int $perPage = 100,
-    ) {
-    }
+    ) {}
 
     /**
      * Headroom on top of the slice budget.
@@ -56,8 +55,6 @@ class RunClientSyncJob implements ShouldQueue
      * to three times with backoff — about 182s worst case — so the headroom has
      * to cover that, or the worker gets killed mid-page on a slow market.
      */
-    private const PAGE_OVERRUN_HEADROOM_SECONDS = 240;
-
     /**
      * Kept just above the slice budget so a wedged HTTP call is still cut off,
      * while staying well inside the connection's `retry_after` — a job that
@@ -66,7 +63,9 @@ class RunClientSyncJob implements ShouldQueue
      */
     public function timeout(): int
     {
-        return SyncSliceBudget::fromConfig()->maxSeconds() + self::PAGE_OVERRUN_HEADROOM_SECONDS;
+        $headroom = max(60, (int) config('services.client_sync.page_overrun_headroom_seconds', 300));
+
+        return SyncSliceBudget::fromConfig()->maxSeconds() + $headroom;
     }
 
     public function handle(ClientSyncRunService $clientSyncRunService): void

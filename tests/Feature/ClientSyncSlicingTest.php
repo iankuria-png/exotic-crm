@@ -216,4 +216,26 @@ class ClientSyncSlicingTest extends TestCase
         $this->assertSame(ClientSyncRun::STATUS_FAILED, $run->fresh()->status);
         Queue::assertNotPushed(RunClientSyncJob::class);
     }
+
+    public function test_reconcile_pruning_stops_before_work_when_slice_time_is_exhausted(): void
+    {
+        $platform = $this->platform();
+        $run = $this->makeRun($platform, 'reconcile');
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 9001,
+            'last_seen_in_reconcile_at' => now()->subDay(),
+        ]);
+
+        $method = new \ReflectionMethod(ClientSyncService::class, 'pruneClientsNotSeenInReconcile');
+        $method->setAccessible(true);
+        $result = $method->invoke(
+            new ClientSyncService($platform),
+            $run,
+            new SyncSliceBudget(0, 25)
+        );
+
+        $this->assertSame(['deleted' => 0, 'complete' => false], $result);
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+    }
 }

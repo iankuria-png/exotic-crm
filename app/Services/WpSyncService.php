@@ -29,6 +29,8 @@ class WpSyncService
 
     private int $defaultTimeout;
 
+    private int $catalogueTimeout;
+
     private int $mediaUploadTimeout;
 
     public function __construct(Platform|WordPressSiteConnection $site)
@@ -44,6 +46,7 @@ class WpSyncService
         );
         $isRemoteEndpoint = $this->isRemoteEndpoint($this->baseUrl);
         $this->defaultTimeout = $isRemoteEndpoint ? 60 : 30;
+        $this->catalogueTimeout = max(1, (int) config('services.exotic_crm_sync.catalogue_timeout_seconds', 10));
         $this->mediaUploadTimeout = $isRemoteEndpoint ? 120 : 60;
     }
 
@@ -119,6 +122,8 @@ class WpSyncService
      */
     public function getClientBiosPool(array $postIds, int $concurrency = 8): array
     {
+        $this->assertMarketAvailable();
+
         $concurrency = max(1, min(20, $concurrency));
         $results = [];
 
@@ -219,7 +224,17 @@ class WpSyncService
             'to' => $to,
         ], fn ($value) => $value !== null && $value !== '');
 
-        return $this->get("/analytics/{$postId}", $params);
+        $cacheKey = $this->site->cacheKey(sprintf(
+            'analytics:%d:%s',
+            $postId,
+            sha1((string) json_encode($params))
+        ));
+
+        return Cache::remember(
+            $cacheKey,
+            now()->addMinutes(5),
+            fn (): array => $this->get("/analytics/{$postId}", $params, $this->catalogueTimeout)
+        );
     }
 
     /**
@@ -232,7 +247,7 @@ class WpSyncService
             fn ($value) => $value !== null && $value !== ''
         );
 
-        return $this->get('/analytics/rankings', $params);
+        return $this->get('/analytics/rankings', $params, $this->catalogueTimeout);
     }
 
     /**
@@ -245,7 +260,7 @@ class WpSyncService
             fn ($value) => $value !== null && $value !== ''
         );
 
-        return $this->get('/analytics/bulk', $params);
+        return $this->get('/analytics/bulk', $params, $this->catalogueTimeout);
     }
 
     /**
@@ -350,7 +365,7 @@ class WpSyncService
         return Cache::remember(
             $this->site->cacheKey('locations'),
             now()->addMinutes(15),
-            fn (): array => $this->get('/locations')
+            fn (): array => $this->get('/locations', [], $this->catalogueTimeout)
         );
     }
 
@@ -359,12 +374,14 @@ class WpSyncService
         return Cache::remember(
             $this->site->cacheKey('currencies'),
             now()->addMinutes(15),
-            fn (): array => $this->get('/currencies')
+            fn (): array => $this->get('/currencies', [], $this->catalogueTimeout)
         );
     }
 
     public function pushKycSubjectStatus(int $postId, array $payload): array
     {
+        $this->assertMarketAvailable();
+
         $path = "/wp-json/exotic-kyc/v1/subjects/{$postId}/status";
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
@@ -634,6 +651,8 @@ class WpSyncService
         }
 
         try {
+            $this->assertMarketAvailable();
+
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->mediaUploadTimeout)
                 ->attach('file', $handle, $fileName, [
@@ -665,15 +684,18 @@ class WpSyncService
         return $this->patch("/clients/{$postId}/media/{$attachmentId}/set-main");
     }
 
-    private function get(string $path, array $params = []): array
+    private function get(string $path, array $params = [], ?int $timeout = null): array
     {
-        $response = $this->getResponse($path, $params);
+        $response = $this->getResponse($path, $params, $timeout);
 
         return $this->decodeResponse($response, 'GET', $path);
     }
 
-    private function getResponse(string $path, array $params = []): Response
+    private function getResponse(string $path, array $params = [], ?int $timeout = null): Response
     {
+        $this->assertMarketAvailable();
+
+        $timeout ??= $this->defaultTimeout;
         $attempt = 0;
 
         beginning:
@@ -681,7 +703,7 @@ class WpSyncService
 
         try {
             $response = Http::withHeaders($this->headers())
-                ->timeout($this->defaultTimeout)
+                ->timeout($timeout)
                 ->get($this->baseUrl.$path, $params);
         } catch (ConnectionException $exception) {
             if ($attempt < 3) {
@@ -692,7 +714,7 @@ class WpSyncService
             throw $exception;
         }
 
-        if (($response->status() === 429 || $response->serverError()) && $attempt < 3) {
+        if ($response->status() === 429 && $attempt < 3) {
             usleep($this->retryDelayMicros($attempt));
             goto beginning;
         }
@@ -703,6 +725,7 @@ class WpSyncService
     private function post(string $path, array $body = []): array
     {
         $this->assertRemoteWriteAllowed($path);
+        $this->assertMarketAvailable();
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
@@ -714,6 +737,7 @@ class WpSyncService
     private function patch(string $path, array $body = []): array
     {
         $this->assertRemoteWriteAllowed($path);
+        $this->assertMarketAvailable();
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
@@ -725,6 +749,7 @@ class WpSyncService
     private function delete(string $path): array
     {
         $this->assertRemoteWriteAllowed($path);
+        $this->assertMarketAvailable();
 
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
@@ -836,6 +861,30 @@ class WpSyncService
         ]);
 
         throw new RuntimeException($message);
+    }
+
+    private function assertMarketAvailable(): void
+    {
+        if ($this->platformId <= 0
+            || ! (bool) config('services.exotic_crm_sync.health_gate_enabled', true)) {
+            return;
+        }
+
+        $healthService = app(MarketHealthService::class);
+        $snapshot = $healthService->cachedPlatformHealth($this->platformId);
+
+        if (! $snapshot || ! $healthService->shouldFailFast(
+            $snapshot['health_status'] ?? null,
+            (int) ($snapshot['health_consecutive_failures'] ?? 0)
+        )) {
+            return;
+        }
+
+        throw new RuntimeException(sprintf(
+            'WordPress market %d is temporarily gated after repeated %s health failures.',
+            $this->platformId,
+            (string) ($snapshot['health_status'] ?? 'unknown')
+        ));
     }
 
     private function decodeResponse($response, string $method, string $path): array

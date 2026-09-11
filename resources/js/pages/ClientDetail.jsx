@@ -2916,7 +2916,9 @@ export default function ClientDetail() {
             .join(' ')
         : (client?.platform?.currency_code || 'KES');
     const isLegacyLocationMode = locationCatalogAvailable === false;
-    const isLegacyCurrencyMode = Boolean(wpProfileCurrenciesError);
+    const isLegacyCurrencyMode = Boolean(
+        wpProfileCurrenciesError || wpProfileCurrenciesData?.available === false
+    );
 
     if (isLoading) {
         return (

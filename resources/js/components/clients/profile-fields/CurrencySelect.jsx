@@ -69,17 +69,18 @@ export default function CurrencySelect({
             return leftKey.localeCompare(rightKey);
         });
     }, [currenciesQuery.data?.currencies]);
+    const catalogUnavailable = currenciesQuery.isError || currenciesQuery.data?.available === false;
     const defaultCurrencyId = currenciesQuery.data?.default_currency_id || null;
     const known = currencies.find((currency) => String(currency.id) === String(value)) || null;
     const defaultCurrency = currencies.find((currency) => String(currency.id) === String(defaultCurrencyId)) || null;
 
     useEffect(() => {
         onCatalogStatusChange?.({
-            available: platformId ? !currenciesQuery.isError : null,
-            error: currenciesQuery.isError,
+            available: platformId ? !catalogUnavailable : null,
+            error: catalogUnavailable,
             loading: currenciesQuery.isLoading,
         });
-    }, [currenciesQuery.isError, currenciesQuery.isLoading, platformId]);
+    }, [catalogUnavailable, currenciesQuery.isLoading, platformId]);
 
     const groups = useMemo(() => {
         const featuredOptions = [];
@@ -133,7 +134,7 @@ export default function CurrencySelect({
             searchPlaceholder="Search currencies"
             loading={currenciesQuery.isLoading}
             disabled={disabled || !platformId}
-            emptyMessage={currenciesQuery.isError ? 'Could not load currencies. Retry in a moment.' : 'No currencies found.'}
+            emptyMessage={catalogUnavailable ? 'Could not load currencies. Retry in a moment.' : 'No currencies found.'}
             hint={hint}
             className={className}
         />

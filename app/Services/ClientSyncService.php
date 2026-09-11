@@ -360,9 +360,12 @@ class ClientSyncService
             ? $this->fullSync($perPage, 'reconcile', $budget)
             : $this->deltaSync($perPage, $budget);
 
+        $pruneComplete = true;
         $pruned = 0;
         if ($isReconcile) {
-            $pruned = (int) $this->pruneClientsNotSeenInReconcile($run)['deleted'];
+            $pruneResult = $this->pruneClientsNotSeenInReconcile($run, $budget);
+            $pruned = (int) $pruneResult['deleted'];
+            $pruneComplete = (bool) $pruneResult['complete'];
         }
 
         $run->forceFill([
@@ -392,7 +395,7 @@ class ClientSyncService
             'tombstones_processed' => 0,
             'pruned' => $pruned,
             'checkpoint_after_run' => null,
-            'complete' => (bool) ($result['complete'] ?? true),
+            'complete' => (bool) ($result['complete'] ?? true) && $pruneComplete,
         ];
     }
 
@@ -1002,23 +1005,21 @@ class ClientSyncService
                     ->orWhere('last_seen_in_reconcile_at', '<', $runStartedAt);
             })
             ->orderBy('id')
-            ->chunkById(100, function ($clients) use (&$deleted, &$chunks, &$complete, $run, $reason, $budget): bool {
+            ->chunkById(25, function ($clients) use (&$deleted, &$complete, $run, $reason, $budget): bool {
                 /** @var Client $client */
                 foreach ($clients as $client) {
+                    if ($budget && $budget->isTimeExhausted()) {
+                        $complete = false;
+
+                        return false;
+                    }
+
                     app(ClientDeletionService::class)->deleteClientFromSourcePrune(
                         $client,
                         $run->initiated_by ? (int) $run->initiated_by : null,
                         $reason
                     );
                     $deleted++;
-                }
-
-                $chunks++;
-
-                if ($budget && $budget->isExhausted($chunks)) {
-                    $complete = false;
-
-                    return false;
                 }
 
                 return true;

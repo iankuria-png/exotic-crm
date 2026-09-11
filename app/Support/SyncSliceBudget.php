@@ -74,7 +74,12 @@ class SyncSliceBudget
     public function isExhausted(int $pagesConsumed): bool
     {
         return $pagesConsumed >= $this->maxPages
-            || $this->elapsedSeconds() >= $this->maxSeconds;
+            || $this->isTimeExhausted();
+    }
+
+    public function isTimeExhausted(): bool
+    {
+        return $this->elapsedSeconds() >= $this->maxSeconds;
     }
 
     public function maxSeconds(): int

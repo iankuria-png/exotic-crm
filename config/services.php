@@ -108,6 +108,10 @@ return [
     'exotic_crm_sync' => [
         'shared_key' => env('EXOTIC_CRM_SYNC_SHARED_KEY'),
         'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),
+        'health_gate_enabled' => filter_var(env('CRM_WP_SYNC_HEALTH_GATE_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'health_gate_ttl_seconds' => (int) env('CRM_WP_SYNC_HEALTH_GATE_TTL_SECONDS', 30),
+        'health_gate_min_failures' => (int) env('CRM_WP_SYNC_HEALTH_GATE_MIN_FAILURES', 2),
+        'catalogue_timeout_seconds' => (int) env('CRM_WP_SYNC_CATALOGUE_TIMEOUT_SECONDS', 10),
     ],
 
     'wp_service_auth' => [
@@ -146,6 +150,7 @@ return [
         'delta_max_platforms_per_run' => (int) env('CRM_CLIENT_SYNC_DELTA_MAX_PLATFORMS', 12),
         'delta_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_DELTA_STAGGER_SECONDS', 20),
         'reconcile_stagger_seconds' => (int) env('CRM_CLIENT_SYNC_RECONCILE_STAGGER_SECONDS', 60),
+        'page_overrun_headroom_seconds' => (int) env('CRM_CLIENT_SYNC_PAGE_OVERRUN_HEADROOM_SECONDS', 300),
     ],
 
     'africastalking' => [
