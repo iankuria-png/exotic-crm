@@ -87,7 +87,7 @@ class McpServer
             'tool' => $name,
             'payload' => is_array($payload) ? $payload : ['value' => $text],
             'bytes' => strlen($text),
-            'row_count' => (int) ($result['row_count'] ?? 0),
+            'row_count' => (int) data_get($result, '_meta.exotic/rowCount', 0),
             'pii_scan' => [
                 'clean' => true,
                 'fields_checked' => ['name', 'phone', 'email', 'bio', 'raw entity ids', 'raw entity URLs'],
@@ -113,8 +113,14 @@ class McpServer
                 'serverInfo' => ['name' => 'exotic-crm', 'version' => '1.0.0'],
             ],
             'notifications/initialized' => [],
-            'tools/list' => ['resultType' => 'complete', 'tools' => $this->registry->definitions($user, $this->settings, $abilities)],
-            'resources/list' => ['resultType' => 'complete', 'resources' => $this->resources($user)],
+            'tools/list' => [
+                'tools' => $this->registry->definitions($user, $this->settings, $abilities),
+                '_meta' => ['exotic/resultType' => 'complete'],
+            ],
+            'resources/list' => [
+                'resources' => $this->resources($user),
+                '_meta' => ['exotic/resultType' => 'complete'],
+            ],
             'resources/read' => $this->readResource($params, $user),
             'tools/call' => $this->callTool($request, $params, $user, $abilities),
             default => throw McpProtocolException::rpc(-32601, 'Method not found: '.$method, 'method_not_found', 404),
@@ -151,10 +157,12 @@ class McpServer
         $safe = $this->sanitizer->sanitize($this->stripUnsafeDashboardKeys($data));
 
         return [
-            'resultType' => 'complete',
             'content' => [['type' => 'text', 'text' => json_encode($safe, JSON_THROW_ON_ERROR)]],
             'isError' => false,
-            'row_count' => is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0,
+            '_meta' => [
+                'exotic/resultType' => 'complete',
+                'exotic/rowCount' => is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0,
+            ],
         ];
     }
 
@@ -340,6 +348,7 @@ class McpServer
     private function validateTransport(Request $request, array $payload, string $method, array $params): void
     {
         $headerVersion = $request->header('MCP-Protocol-Version');
+        $supportedVersions = array_values((array) data_get($this->settings->settings(), 'protocol_versions', []));
         $meta = is_array($params['_meta'] ?? null) ? $params['_meta'] : [];
         $metaVersion = $meta['io.modelcontextprotocol/protocolVersion']
             ?? data_get($meta, 'io.modelcontextprotocol.protocolVersion');
@@ -351,8 +360,12 @@ class McpServer
         if ($headerVersion === null && ! $initializing) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: MCP-Protocol-Version is required.', 'header_mismatch', 400);
         }
-        if ($headerVersion !== null && ! in_array($headerVersion, (array) data_get($this->settings->settings(), 'protocol_versions', []), true)) {
-            throw McpProtocolException::rpc(-32022, 'Unsupported MCP protocol version.', 'unsupported_protocol', 400);
+        if ($headerVersion !== null && ! in_array($headerVersion, $supportedVersions, true)) {
+            throw McpProtocolException::rpc(-32022, sprintf(
+                'Unsupported MCP protocol version "%s" in the MCP-Protocol-Version header. Supported versions: %s.',
+                $headerVersion,
+                implode(', ', $supportedVersions) ?: 'none configured',
+            ), 'unsupported_protocol', 400);
         }
         if ($headerVersion !== null && ($perRequestProtocol || $initializing) && $headerVersion !== $bodyVersion) {
             throw McpProtocolException::rpc(-32020, 'MCP-Protocol-Version header does not match the request protocol version.', 'header_mismatch', 400);
@@ -391,7 +404,9 @@ class McpServer
 
     private function success($id, string $method, array $result): JsonResponse
     {
-        return response()->json(['jsonrpc' => '2.0', 'id' => $id, 'result' => $result]);
+        // A JSON-RPC result must serialise as an object. An empty PHP array would
+        // encode as [] and fail strict client-side schema validation.
+        return response()->json(['jsonrpc' => '2.0', 'id' => $id, 'result' => $result === [] ? (object) [] : $result]);
     }
 
     private function error($id, int $code, string $message, int $status): JsonResponse
@@ -425,7 +440,7 @@ class McpServer
                 'argument_summary' => $this->argumentSummary($params),
                 'status' => $status,
                 'refusal_reason' => $reason,
-                'row_count' => (int) data_get($response, 'result.row_count', 0),
+                'row_count' => (int) data_get($response, 'result._meta.exotic/rowCount', 0),
                 'bytes_out' => strlen(json_encode($response)),
                 'latency_ms' => (int) round((microtime(true) - $started) * 1000),
                 'request_id' => $requestId,

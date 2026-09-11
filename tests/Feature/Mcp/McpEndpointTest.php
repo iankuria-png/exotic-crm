@@ -58,7 +58,7 @@ class McpEndpointTest extends TestCase
             ], $this->modernHeaders('server/discover', '2024-11-05'))
             ->assertStatus(400)
             ->assertJsonPath('error.code', -32022)
-            ->assertJsonPath('error.message', 'Unsupported MCP protocol version.');
+            ->assertJsonPath('error.message', 'Unsupported MCP protocol version "2024-11-05" in the MCP-Protocol-Version header. Supported versions: 2025-06-18, 2025-03-26.');
     }
 
     public function test_legacy_initialize_flow_is_isolated_and_wildcard_tokens_are_rejected(): void
@@ -258,6 +258,130 @@ class McpEndpointTest extends TestCase
             ->assertJsonPath('summary.p95_latency_ms', 48)
             ->assertJsonPath('rows.0.token_label', 'browser')
             ->assertJsonPath('tool_stats.exotic_catalog.calls_7d', 1);
+    }
+
+    public function test_tools_list_result_only_contains_spec_fields(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 7,
+                'method' => 'tools/list',
+                'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
+            ], $this->modernHeaders('tools/list', '2025-06-18'))
+            ->assertOk();
+
+        $result = $response->json('result');
+        $this->assertSame([], array_diff(array_keys($result), ['tools', 'nextCursor', '_meta']));
+        $this->assertArrayNotHasKey('resultType', $result);
+        $this->assertArrayNotHasKey('row_count', $result);
+        $this->assertSame('complete', $result['_meta']['exotic/resultType']);
+    }
+
+    public function test_resources_list_result_only_contains_spec_fields(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 8,
+                'method' => 'resources/list',
+                'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
+            ], $this->modernHeaders('resources/list', '2025-06-18'))
+            ->assertOk();
+
+        $result = $response->json('result');
+        $this->assertSame([], array_diff(array_keys($result), ['resources', 'nextCursor', '_meta']));
+        $this->assertArrayNotHasKey('resultType', $result);
+    }
+
+    public function test_tools_call_result_only_contains_spec_fields_and_still_audits_rows(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $headers = $this->modernHeaders('tools/call', '2025-06-18') + ['Mcp-Name' => 'exotic_catalog'];
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 9,
+                'method' => 'tools/call',
+                'params' => [
+                    'name' => 'exotic_catalog',
+                    'arguments' => [],
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
+                ],
+            ], $headers)
+            ->assertOk();
+
+        $result = $response->json('result');
+        $this->assertSame([], array_diff(array_keys($result), ['content', 'structuredContent', 'isError', '_meta']));
+        $this->assertArrayNotHasKey('resultType', $result);
+        $this->assertArrayNotHasKey('row_count', $result);
+        $this->assertSame('complete', $result['_meta']['exotic/resultType']);
+        $this->assertIsInt($result['_meta']['exotic/rowCount']);
+
+        // The audit trail still records the row count now that it lives under _meta.
+        $this->assertDatabaseHas('mcp_tool_calls', [
+            'tool' => 'exotic_catalog',
+            'status' => 'success',
+            'row_count' => $result['_meta']['exotic/rowCount'],
+        ]);
+    }
+
+    public function test_unsupported_protocol_version_names_the_supported_versions(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 10,
+                'method' => 'tools/list',
+                'params' => [],
+            ], $this->modernHeaders('tools/list', '2026-07-28'))
+            ->assertStatus(400);
+
+        $response->assertJsonPath('error.code', -32022);
+        $message = $response->json('error.message');
+        $this->assertStringContainsString('2026-07-28', $message);
+        $this->assertStringContainsString('2025-06-18', $message);
+        $this->assertStringContainsString('2025-03-26', $message);
+    }
+
+    public function test_parameterless_tools_expose_properties_as_a_json_object(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 11,
+                'method' => 'tools/list',
+                'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
+            ], $this->modernHeaders('tools/list', '2025-06-18'))
+            ->assertOk();
+
+        // exotic_catalog, exotic_system_vitals and exotic_market_health take no arguments.
+        $raw = $response->getContent();
+        $this->assertStringNotContainsString('"properties":[]', $raw);
+        $this->assertStringContainsString('"properties":{}', $raw);
+
+        foreach ($response->json('result.tools') as $tool) {
+            $this->assertIsArray($tool['inputSchema']['properties'], $tool['name'].' decoded to a list, not an object');
+        }
     }
 
     private function modernHeaders(string $method, string $version): array
