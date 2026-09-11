@@ -83,6 +83,47 @@ async function openMediaTab(page) {
 }
 
 test.describe('client detail media background upload', () => {
+    test('recovers preview checks without changing the WordPress media files', async ({ page }) => {
+        await seedBrowserAuth(page);
+        await stubClientDetail(page);
+
+        let mediaGetCount = 0;
+        let previewHeadCount = 0;
+        await page.route(`**/api/crm/clients/${CLIENT_ID}/media`, async (route) => {
+            if (route.request().method() === 'GET') {
+                mediaGetCount += 1;
+            }
+
+            await route.fulfill({
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    data: [{
+                        id: 7101,
+                        url: 'https://ghana.example.test/wp-content/uploads/recoverable-photo.jpeg',
+                        mime_type: 'image/jpeg',
+                        is_main: false,
+                    }],
+                }),
+            });
+        });
+        await page.route('**/api/crm/image-proxy*', async (route) => {
+            if (route.request().method() === 'HEAD') {
+                previewHeadCount += 1;
+            }
+
+            await route.fulfill({ status: 502, body: 'Upstream temporarily unavailable.' });
+        });
+
+        await openMediaTab(page);
+        await expect(page.getByText('File blocked or unavailable')).toBeVisible();
+        expect(previewHeadCount).toBe(1);
+
+        await page.getByRole('button', { name: 'Recover previews' }).click();
+        await expect.poll(() => previewHeadCount).toBe(2);
+        expect(mediaGetCount).toBe(2);
+        await expect(page.getByText('Rechecking 1 media file from WordPress.')).toBeVisible();
+    });
+
     test('clears the picker and keeps the media tab usable while upload is pending', async ({ page }) => {
         await seedBrowserAuth(page);
         await stubClientDetail(page);

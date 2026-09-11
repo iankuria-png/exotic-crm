@@ -1375,6 +1375,7 @@ export default function ClientDetail() {
     const [mediaUploadSetMain, setMediaUploadSetMain] = useState(false);
     const [selectedMediaIds, setSelectedMediaIds] = useState([]);
     const [mediaBulkDeleteOpen, setMediaBulkDeleteOpen] = useState(false);
+    const [mediaPreviewRecoveryVersion, setMediaPreviewRecoveryVersion] = useState(0);
     const lastSelectedMediaIndexRef = useRef(null);
     const mediaUploadInputRef = useRef(null);
     const [healthAction, setHealthAction] = useState('keep_primary');
@@ -1784,7 +1785,13 @@ export default function ClientDetail() {
         };
     }, [showProfileLinkPeek]);
 
-    const { data: mediaData, isLoading: mediaLoading, error: mediaError } = useQuery({
+    const {
+        data: mediaData,
+        isLoading: mediaLoading,
+        isFetching: mediaRefreshing,
+        error: mediaError,
+        refetch: refetchMedia,
+    } = useQuery({
         queryKey: ['client-media', id],
         queryFn: () => api.get(`/crm/clients/${id}/media`).then((r) => r.data),
         enabled: activeTab === 'edit_profile' && profileSection === 'media' && Number(client?.wp_post_id || 0) > 0,
@@ -2991,6 +2998,26 @@ export default function ClientDetail() {
         ({ media, key }) => media.is_main && selectedMediaKeySet.has(key)
     );
     const mediaDeletionRunning = clientMediaDeletions.some((deletion) => deletion.status === 'deleting');
+
+    const recoverMediaPreviews = async () => {
+        const previewUrls = mediaItems
+            .map((media) => proxyImageUrl(media?.url || ''))
+            .filter((url) => url.trim() !== '');
+
+        // An unavailable preview is deliberately cached so a broken market
+        // cannot be re-probed by every render. A staff-triggered recovery is
+        // the explicit escape hatch once the source is available again.
+        previewUrls.forEach((url) => mediaProxyAvailabilityCache.delete(url));
+        setMediaPreviewRecoveryVersion((version) => version + 1);
+
+        const result = await refetchMedia();
+        if (result.error) {
+            toast.error(result.error?.response?.data?.message || 'WordPress media could not be refreshed.');
+            return;
+        }
+
+        toast.success(`Rechecking ${previewUrls.length} media file${previewUrls.length === 1 ? '' : 's'} from WordPress.`);
+    };
 
     const toggleMediaSelection = (mediaKey, index, shiftKey = false) => {
         const lastIndex = lastSelectedMediaIndexRef.current;
@@ -6210,9 +6237,20 @@ export default function ClientDetail() {
                                                             : `Select all (${selectableMediaKeys.length})`}
                                                     </span>
                                                 </label>
-                                                <p className="text-xs text-slate-500">
-                                                    Tip: hold Shift to select a range.
-                                                </p>
+                                                <div className="flex flex-wrap items-center justify-end gap-3">
+                                                    <p className="text-xs text-slate-500">
+                                                        Tip: hold Shift to select a range.
+                                                    </p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void recoverMediaPreviews()}
+                                                        disabled={mediaRefreshing}
+                                                        title="Refresh the WordPress media list and retry previews that previously failed. This does not change or re-upload any files."
+                                                        className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {mediaRefreshing ? 'Recovering…' : 'Recover previews'}
+                                                    </button>
+                                                </div>
                                             </div>
 
                                             {selectedMediaCount > 0 ? (
@@ -6248,7 +6286,7 @@ export default function ClientDetail() {
                                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                                     {visibleMediaItems.map(({ media, key }, index) => (
                                                         <ClientMediaCard
-                                                            key={key}
+                                                            key={`${key}-${mediaPreviewRecoveryVersion}`}
                                                             media={media}
                                                             selected={selectedMediaKeySet.has(key)}
                                                             onToggleSelect={(shiftKey) => toggleMediaSelection(key, index, shiftKey)}
