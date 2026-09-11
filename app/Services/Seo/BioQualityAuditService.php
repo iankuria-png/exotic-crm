@@ -5,6 +5,7 @@ namespace App\Services\Seo;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\SeoBioFeedback;
+use App\Services\WpSyncService;
 use Illuminate\Support\Collection;
 
 class BioQualityAuditService
@@ -24,6 +25,12 @@ class BioQualityAuditService
     private const ALLOWED_REPEATED_TERMS = BioUniquenessAnalyzer::DEFAULT_ALLOWED_REPEATED_TERMS;
 
     private const SLOP_PATTERNS = [
+        'ai_refusal_response' => [
+            '/\bi will not write the escort profile\b/i',
+            '/\bpromotional content for sexual services\b/i',
+            '/\bnot able to provide\b.{0,160}\bsexual services\b/is',
+            '/\bif you have other writing projects\b.{0,180}\badult services\b/is',
+        ],
         'no_no_punchline' => [
             '/\bno\s+[^.!?]{2,40},\s+no\s+[^.!?]{2,40}\.\s+(?:just|only)\b/i',
             '/\bno\s+[^.!?]{2,40},\s+no\s+[^.!?]{2,40}\b/i',
@@ -135,7 +142,37 @@ class BioQualityAuditService
                 ->whereIn('id', $ids->all())
                 ->get()
                 ->sortBy(fn (Client $client): int => array_search((int) $client->id, $ids->all(), true))
-                ->values());
+            ->values());
+    }
+
+    /**
+     * Return explainable candidates before anything is staged or written.
+     * Live content comes from WordPress post_content, not the CRM baseline cache.
+     */
+    public function repairCandidates(int $platformId, int $limit = 100): Collection
+    {
+        $limit = max(1, min(500, $limit));
+
+        return $this->liveClientSamples($platformId, max(500, $limit * 5))
+            ->map(function (array $sample): array {
+                $text = (string) $sample['text'];
+                $flags = $this->slopFlags($text);
+
+                return [
+                    'client_id' => (int) $sample['client_id'],
+                    'wp_post_id' => (int) ($sample['wp_post_id'] ?? 0),
+                    'name' => (string) ($sample['name'] ?? ''),
+                    'profile_slug' => (string) ($sample['profile_slug'] ?? ''),
+                    'issue_score' => $this->clientIssueScore($text, []),
+                    'issues' => array_values(array_unique(array_column($flags, 'label'))),
+                    'refusal_response' => $this->hasRefusalResponse($text),
+                    'snippet' => mb_substr($text, 0, 280),
+                ];
+            })
+            ->filter(fn (array $row): bool => $row['issue_score'] > 0)
+            ->sortByDesc('issue_score')
+            ->take($limit)
+            ->values();
     }
 
     private function scorePlatform(int $platformId, string $source, int $limit, ?Platform $platform = null): array
@@ -261,19 +298,7 @@ class BioQualityAuditService
         $rows = collect();
 
         if (in_array($source, ['all', 'live'], true)) {
-            $rows = $rows->merge(
-                Client::query()
-                    ->where('platform_id', $platformId)
-                    ->whereNotNull('bio_original_html')
-                    ->where('bio_original_html', '<>', '')
-                    ->latest('updated_at')
-                    ->limit($limit)
-                    ->get(['id', 'bio_original_html'])
-                    ->map(fn (Client $client): array => [
-                        'client_id' => (int) $client->id,
-                        'text' => $this->plainText((string) $client->bio_original_html),
-                    ])
-            );
+            $rows = $rows->merge($this->liveClientSamples($platformId, $limit));
         }
 
         if (in_array($source, ['all', 'generated', 'accepted'], true)) {
@@ -308,16 +333,28 @@ class BioQualityAuditService
 
     private function liveClientSamples(int $platformId, int $limit): Collection
     {
-        return Client::query()
+        $clients = Client::query()
             ->where('platform_id', $platformId)
-            ->whereNotNull('bio_original_html')
-            ->where('bio_original_html', '<>', '')
             ->latest('updated_at')
             ->limit($limit)
-            ->get(['id', 'bio_original_html'])
-            ->map(fn (Client $client): array => [
+            ->get(['id', 'wp_post_id', 'name', 'wp_profile_slug', 'bio_original_html']);
+
+        $bios = [];
+        $postIds = $clients->pluck('wp_post_id')->filter()->map(fn ($id): int => (int) $id)->all();
+        if ($postIds !== []) {
+            try {
+                $bios = WpSyncService::forPlatform($platformId)->getClientBiosPool($postIds);
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return $clients->map(fn (Client $client): array => [
                 'client_id' => (int) $client->id,
-                'text' => $this->plainText((string) $client->bio_original_html),
+                'wp_post_id' => (int) $client->wp_post_id,
+                'name' => (string) $client->name,
+                'profile_slug' => (string) $client->wp_profile_slug,
+                'text' => $this->plainText((string) ($bios[(int) $client->wp_post_id] ?? $client->bio_original_html ?? '')),
             ])
             ->filter(fn (array $row): bool => mb_strlen((string) $row['text']) > 20)
             ->unique(fn (array $row): string => (string) $row['client_id'])
@@ -454,6 +491,8 @@ class BioQualityAuditService
         $words = $this->words($text);
         $score = 0;
 
+        $score += $this->hasRefusalResponse($text) ? 100 : 0;
+
         foreach ($this->slopFlags($text) as $flag) {
             $score += match ($flag['type']) {
                 'corpus_cliche' => 24,
@@ -476,6 +515,17 @@ class BioQualityAuditService
         }
 
         return min(100, $score);
+    }
+
+    private function hasRefusalResponse(string $text): bool
+    {
+        foreach (self::SLOP_PATTERNS['ai_refusal_response'] as $pattern) {
+            if (preg_match($pattern, $text)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function words(string $text): array

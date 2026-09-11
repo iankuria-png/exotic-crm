@@ -250,6 +250,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/feedback', [SeoController::class, 'feedback']);
         Route::get('/feedback/summary', [SeoController::class, 'feedbackSummary']);
         Route::get('/quality-audit', [SeoController::class, 'qualityAudit'])->middleware('role:admin,sub_admin');
+        Route::get('/quality-repair-candidates', [SeoController::class, 'qualityRepairCandidates'])->middleware('role:admin,sub_admin');
 
         // Bulk bio generation
         Route::prefix('bulk')->group(function () {

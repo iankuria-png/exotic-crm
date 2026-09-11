@@ -147,6 +147,15 @@ export default function SeoEnginePanel() {
         },
     });
 
+    const repairCandidatesQuery = useQuery({
+        queryKey: ['seo-quality-repair-candidates', auditPlatformId],
+        queryFn: () => api.get('/crm/seo/quality-repair-candidates', {
+            params: { platform_id: auditPlatformId, limit: 100 },
+        }).then((r) => r.data),
+        enabled: !!form && !!auditPlatformId,
+        staleTime: 60_000,
+    });
+
     const saveMutation = useMutation({
         mutationFn: (payload) => api.patch('/crm/settings/seo-engine', payload).then((r) => r.data),
         onSuccess: (data) => {
@@ -458,6 +467,8 @@ export default function SeoEnginePanel() {
                 onRefresh={() => qualityAuditQuery.refetch()}
                 onRunRecovery={() => qualityRecoveryMutation.mutate()}
                 runningRecovery={qualityRecoveryMutation.isPending}
+                candidates={repairCandidatesQuery.data?.candidates || []}
+                candidatesLoading={repairCandidatesQuery.isFetching}
             />
 
             {/* === Save bar === */}
@@ -487,6 +498,8 @@ function BioQualityAuditCard({
     onRefresh,
     onRunRecovery,
     runningRecovery,
+    candidates,
+    candidatesLoading,
 }) {
     const summary = data?.summary || {};
     const platformRows = data?.platforms || [];
@@ -604,6 +617,62 @@ function BioQualityAuditCard({
                             })}
                         </tbody>
                     </table>
+                </div>
+            ) : null}
+
+            {selectedPlatformId ? (
+                <div className="mt-5 border-t border-slate-200 pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <h4 className="text-sm font-semibold text-slate-900">Affected profiles</h4>
+                            <p className="mt-1 text-xs text-slate-500">
+                                Read-only preview from the current WordPress bio. Nothing is changed until staged in Optimizer and approved.
+                            </p>
+                        </div>
+                        <span className="text-xs font-semibold text-slate-500">
+                            {candidatesLoading ? 'Scanning…' : `${candidates.length} found`}
+                        </span>
+                    </div>
+                    {candidates.length > 0 ? (
+                        <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
+                            <table className="min-w-full divide-y divide-slate-200 text-sm">
+                                <thead className="bg-slate-50 text-xs uppercase tracking-[0.08em] text-slate-500">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left font-semibold">Profile</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Detected issue</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Score</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Preview</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white">
+                                    {candidates.slice(0, 25).map((candidate) => (
+                                        <tr key={candidate.client_id}>
+                                            <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-800">
+                                                {candidate.name || `Client #${candidate.client_id}`}
+                                                <span className="ml-2 text-xs font-normal text-slate-400">#{candidate.client_id}</span>
+                                            </td>
+                                            <td className="px-3 py-2 text-xs text-rose-700">
+                                                {candidate.refusal_response ? 'AI refusal response' : (candidate.issues || []).join(', ') || 'quality issue'}
+                                            </td>
+                                            <td className="px-3 py-2 font-semibold text-slate-700">{candidate.issue_score}/100</td>
+                                            <td className="max-w-[360px] truncate px-3 py-2 text-xs text-slate-500" title={candidate.snippet}>
+                                                {candidate.snippet}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {candidates.length > 25 ? (
+                                <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+                                    Showing 25 of {candidates.length}. Stage a run to process the highest-scoring candidates.
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                            No affected profiles found in the scanned WordPress bios.
+                        </div>
+                    )}
                 </div>
             ) : null}
 

@@ -350,6 +350,27 @@ class SeoController extends Controller
         ));
     }
 
+    /**
+     * GET /api/crm/seo/quality-repair-candidates
+     * Preview live WordPress bios that match a known broken-response signature
+     * or an existing quality issue. No profile is changed by this endpoint.
+     */
+    public function qualityRepairCandidates(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'platform_id' => 'required|integer|min:1',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        return response()->json([
+            'platform_id' => (int) $data['platform_id'],
+            'candidates' => $this->qualityAudit->repairCandidates(
+                (int) $data['platform_id'],
+                (int) ($data['limit'] ?? 100),
+            ),
+        ]);
+    }
+
     // -------------------------------------------------------------------------
 
     private function validateGenerationRequest(array $data): void

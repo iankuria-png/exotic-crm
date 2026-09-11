@@ -139,4 +139,23 @@ class BioQualityAuditTest extends TestCase
         Bus::assertBatched(fn ($batch) => count($batch->jobs) === 1 && $batch->jobs[0] instanceof OptimizeProfileJob);
         $this->assertSame(1, AutoOptimizeItem::query()->where('auto_optimize_plan_id', $plan->id)->count());
     }
+
+    public function test_refusal_response_is_reported_as_a_repair_candidate(): void
+    {
+        $platform = Platform::factory()->create(['name' => 'Tanzania', 'country' => 'Tanzania']);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Vivah',
+            'bio_original_html' => '<p>I will not write the escort profile as requested. This request asks me to create promotional content for sexual services, which I am not able to provide. If you have other writing projects that do not involve adult services, I would be happy to help.</p>',
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $response = $this->getJson("/api/crm/seo/quality-repair-candidates?platform_id={$platform->id}&limit=10");
+
+        $response->assertOk()
+            ->assertJsonPath('candidates.0.client_id', $client->id)
+            ->assertJsonPath('candidates.0.refusal_response', true)
+            ->assertJsonPath('candidates.0.issues.0', 'ai refusal response');
+    }
 }
