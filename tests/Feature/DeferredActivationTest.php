@@ -90,7 +90,7 @@ class DeferredActivationTest extends TestCase
     private function gateMarket(Platform $platform): void
     {
         $platform->forceFill([
-            'health_status' => MarketHealthService::STATUS_SERVER_ERROR,
+            'health_status' => MarketHealthService::STATUS_DOMAIN_UNREACHABLE,
             'health_consecutive_failures' => 5,
             'health_checked_at' => now(),
         ])->save();

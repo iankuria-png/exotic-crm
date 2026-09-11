@@ -13,6 +13,15 @@ class MarketHealthService
 {
     private const HEALTH_GATE_CACHE_PREFIX = 'market-health:gate:';
 
+    /**
+     * A connection attempt this long is a real network problem. The old 5s was
+     * short enough that ordinary page weight on an intercontinental link read
+     * as an outage, which then gated real work.
+     */
+    private const PROBE_TIMEOUT_SECONDS = 15;
+
+    private const PROBE_CONNECT_TIMEOUT_SECONDS = 5;
+
     public const STATUS_HEALTHY = 'healthy';
 
     public const STATUS_DOMAIN_UNREACHABLE = 'domain_unreachable';
@@ -61,6 +70,18 @@ class MarketHealthService
         return $snapshot === [] ? null : $snapshot;
     }
 
+    /**
+     * Whether background work should skip this market rather than call it.
+     *
+     * Deliberately narrow. `server_error` used to gate too, but that status is
+     * also what a *timeout* resolves to — see connectionExceptionStatus() — and
+     * a slow market is not a down one. Gating on it meant one slow response
+     * could stop real work against a site that was serving perfectly well.
+     *
+     * Only a connection that never established counts: refused, DNS failure,
+     * no route. That is the one signal the probe cannot get wrong by being
+     * impatient.
+     */
     public function shouldFailFast(?string $status, int $consecutiveFailures): bool
     {
         if (! (bool) config('services.exotic_crm_sync.health_gate_enabled', true)) {
@@ -70,7 +91,7 @@ class MarketHealthService
         $minimumFailures = max(1, (int) config('services.exotic_crm_sync.health_gate_min_failures', 2));
 
         return $consecutiveFailures >= $minimumFailures
-            && in_array($status, [self::STATUS_DOMAIN_UNREACHABLE, self::STATUS_SERVER_ERROR], true);
+            && $status === self::STATUS_DOMAIN_UNREACHABLE;
     }
 
     public function forgetCachedPlatformHealth(int $platformId): void
@@ -96,8 +117,12 @@ class MarketHealthService
         $rootUrl = $this->apiRoot((string) $platform->wp_api_url);
 
         try {
-            $rootResponse = Http::connectTimeout(3)
-                ->timeout(5)
+            // 5s used to be the cutoff, which sat on top of normal: healthy
+            // markets probe at 1.7-3.7s and this pulls a full public homepage
+            // (TZ once timed out at 5s having already received 745KB — it was
+            // mid-transfer, not down). Anything under this is slow, not broken.
+            $rootResponse = Http::connectTimeout(self::PROBE_CONNECT_TIMEOUT_SECONDS)
+                ->timeout(self::PROBE_TIMEOUT_SECONDS)
                 ->get($rootUrl);
         } catch (ConnectionException $exception) {
             return $this->probeResult(
@@ -125,8 +150,8 @@ class MarketHealthService
         $statsUrl = rtrim((string) $platform->wp_api_url, '/').'/stats';
         try {
             $statsResponse = Http::withHeaders($this->headersForPlatform($platform))
-                ->connectTimeout(3)
-                ->timeout(5)
+                ->connectTimeout(self::PROBE_CONNECT_TIMEOUT_SECONDS)
+                ->timeout(self::PROBE_TIMEOUT_SECONDS)
                 ->get($statsUrl);
         } catch (ConnectionException $exception) {
             return $this->probeResult(

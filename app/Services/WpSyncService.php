@@ -904,9 +904,25 @@ class WpSyncService
         return $this;
     }
 
+    /**
+     * Skip a market that background work already knows is unreachable.
+     *
+     * Two rules keep this from ever reaching a person.
+     *
+     * It never applies to an HTTP request. The gate exists so a sweep across
+     * 54 markets does not spend its budget rediscovering a dead one; nobody is
+     * waiting for that. A salesperson clicking Sync or Activate is the opposite
+     * case, and refusing them on a cached verdict is how a five-second blip
+     * became "sales cannot work". Interactive calls go to WordPress and find
+     * out for themselves — bounded by the request timeout, not by a guess.
+     *
+     * And it only trusts `domain_unreachable`. The probe cannot reliably tell
+     * slow from broken, so nothing derived from a timeout gates anything.
+     */
     private function assertMarketAvailable(): void
     {
         if ($this->healthGateBypassed
+            || ! app()->runningInConsole()
             || $this->platformId <= 0
             || ! (bool) config('services.exotic_crm_sync.health_gate_enabled', true)) {
             return;

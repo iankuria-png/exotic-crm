@@ -83,22 +83,45 @@ class WpSyncServiceSharedKeyTest extends TestCase
         }
     }
 
-    public function test_repeated_known_market_failure_is_gated_before_wordpress_is_called(): void
+    public function test_a_market_that_refuses_connections_is_gated_before_wordpress_is_called(): void
     {
         $platform = $this->makePlatform();
         $platform->forceFill([
-            'health_status' => 'server_error',
+            'health_status' => 'domain_unreachable',
             'health_consecutive_failures' => 2,
         ])->save();
 
         Http::fake(function (): void {
-            $this->fail('A repeatedly failed market must be rejected before an HTTP request is made.');
+            $this->fail('A market that refuses connections must be rejected before an HTTP request is made.');
         });
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('temporarily gated');
 
         (new WpSyncService($platform))->getStats();
+    }
+
+    public function test_a_slow_market_is_never_gated(): void
+    {
+        // This assertion used to be the opposite. `server_error` is the status
+        // connectionExceptionStatus() gives a *timeout*, so gating on it meant
+        // a homepage that took 5.001s stopped all work against a site that was
+        // serving fine — exotickenya.com loaded in a browser while the CRM
+        // called it down. Slow is not down, and only background work is gated
+        // at all now, so the call must go through.
+        $platform = $this->makePlatform();
+        $platform->forceFill([
+            'health_status' => 'server_error',
+            'health_consecutive_failures' => 25,
+        ])->save();
+
+        $baseUrl = rtrim($platform->wp_api_url, '/');
+        Http::fake([$baseUrl.'/stats' => Http::response(['profiles' => 7], 200)]);
+
+        $stats = (new WpSyncService($platform))->getStats();
+
+        $this->assertSame(7, (int) ($stats['profiles'] ?? 0));
+        Http::assertSentCount(1);
     }
 
     public function test_http_500_is_not_retried_for_wordpress_reads(): void
