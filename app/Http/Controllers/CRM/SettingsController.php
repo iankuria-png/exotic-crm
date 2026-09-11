@@ -4062,6 +4062,12 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
+        if (! SupportBoardService::isEnabled()) {
+            return response()->json([
+                'message' => 'Support Board is switched off. An admin can turn it back on in Settings → Operations.',
+            ], 422);
+        }
+
         if (! (new SupportBoardService($platform))->isConfigured()) {
             return response()->json([
                 'message' => 'Support Board is not configured for this market.',
@@ -5649,6 +5655,10 @@ class SettingsController extends Controller
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,
             'support_board_token_configured' => ! empty($platform->support_board_token),
+            // The global kill switch, repeated on every market payload so the
+            // integrations screen can say "switched off" rather than leaving the
+            // controls mysteriously inert.
+            'support_board_enabled' => SupportBoardService::isEnabled(),
             'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'support_board_sync' => [
                 'queue' => $this->supportBoardSyncRunService->queueReadiness(),
@@ -5784,6 +5794,10 @@ class SettingsController extends Controller
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,
             'support_board_token_configured' => ! empty($platform->support_board_token),
+            // The global kill switch, repeated on every market payload so the
+            // integrations screen can say "switched off" rather than leaving the
+            // controls mysteriously inert.
+            'support_board_enabled' => SupportBoardService::isEnabled(),
             'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'sync_last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
             'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
@@ -6568,6 +6582,12 @@ class SettingsController extends Controller
             'mode' => 'nullable|string|in:bootstrap,incremental',
             'reason' => 'nullable|string|max:500',
         ]);
+
+        if (! SupportBoardService::isEnabled()) {
+            return response()->json([
+                'message' => 'Support Board is switched off. An admin can turn it back on in Settings → Operations.',
+            ], 422);
+        }
 
         if (! (new SupportBoardService($platform))->isConfigured()) {
             return response()->json([

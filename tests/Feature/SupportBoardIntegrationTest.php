@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use App\Models\SupportBoardSyncRun;
 use App\Models\User;
+use App\Services\Ops\OperationsSettingsService;
 use App\Services\SupportBoardLinkSyncService;
 use App\Services\SupportBoardService;
 use App\Services\SupportBoardSyncRunService;
@@ -29,6 +30,18 @@ class SupportBoardIntegrationTest extends TestCase
         parent::setUp();
 
         Cache::flush();
+
+        // Support Board ships switched off behind the master kill switch
+        // (`ops.support_board.enabled`). This suite exercises the integration's
+        // behaviour when it is on, so it opts in explicitly. The off case has
+        // its own coverage in SupportBoardKillSwitchTest.
+        $settings = app(OperationsSettingsService::class);
+        $settings->update(
+            [['key' => 'ops.support_board.enabled', 'value' => true]],
+            null,
+            'admin'
+        );
+        $settings->forget();
     }
 
     public function test_settings_detail_masks_support_board_token_and_patch_preserves_or_updates_it(): void

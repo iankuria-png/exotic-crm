@@ -6,6 +6,7 @@ use App\Exceptions\SupportBoardUnavailableException;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\User;
+use App\Services\Ops\OperationsSettingsService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
@@ -76,9 +77,29 @@ class SupportBoardService
         Cache::forget(self::failureCacheKey((int) $this->platform->id));
     }
 
-    public function isConfigured(): bool
+    /**
+     * The master switch, read from operations settings.
+     *
+     * Off means the CRM makes no outbound call to Support Board from anywhere.
+     * It is deliberately checked inside isConfigured() rather than alongside it:
+     * every caller in the codebase already gates on isConfigured(), so routing
+     * the switch through it makes the kill total by construction instead of
+     * relying on sixteen call sites each remembering to ask a second question.
+     */
+    public static function isEnabled(): bool
+    {
+        return app(OperationsSettingsService::class)->boolean('ops.support_board.enabled');
+    }
+
+    /** Whether this market has an API URL and token on file, switch aside. */
+    public function hasCredentials(): bool
     {
         return $this->apiUrl !== '' && filled($this->token);
+    }
+
+    public function isConfigured(): bool
+    {
+        return self::isEnabled() && $this->hasCredentials();
     }
 
     public function canReply(User $crmUser): bool
@@ -423,6 +444,14 @@ class SupportBoardService
 
         if (count($variants) === 1) {
             return $this->findUserBy('phone', $variants[0]);
+        }
+
+        // This path builds its own pooled requests instead of going through
+        // request(), so it needs the gate restated. Without it the kill switch
+        // would leak on exactly the multi-variant phone lookups that resolveClient
+        // makes most often.
+        if (! $this->isConfigured()) {
+            throw new RuntimeException('Support Board is not configured for this market.');
         }
 
         $apiUrl = $this->apiUrl;

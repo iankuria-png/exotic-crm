@@ -25,6 +25,7 @@ class OperationsSettingsRegistry
     public const GROUP_LANES = 'lanes';
     public const GROUP_THRESHOLDS = 'thresholds';
     public const GROUP_ALERTS = 'alerts';
+    public const GROUP_INTEGRATIONS = 'integrations';
 
     /**
      * Groups in display order, with the roles allowed to write each.
@@ -57,6 +58,11 @@ class OperationsSettingsRegistry
                 'label' => 'Alert routing',
                 'description' => 'Where a degradation transition is announced, and when the phone is allowed to ring.',
                 'write_roles' => ['admin', 'sub_admin'],
+            ],
+            self::GROUP_INTEGRATIONS => [
+                'label' => 'Third-party integrations',
+                'description' => 'Master switches for outbound integrations. Turning one off stops every call to it across every market, immediately.',
+                'write_roles' => ['admin'],
             ],
         ];
     }
@@ -367,6 +373,17 @@ class OperationsSettingsRegistry
             'min' => 5,
             'max' => 720,
             'unit' => 'minutes',
+        ]);
+
+        // ---- Third-party integrations ----------------------------------------
+        $add([
+            'key' => 'ops.support_board.enabled',
+            'group' => self::GROUP_INTEGRATIONS,
+            'label' => 'Support Board',
+            'description' => 'Master switch for the Support Board chat integration across every market. Off means the CRM makes no outbound call to Support Board at all: no sync, no lead import, no conversation reads, no dashboard chat count. Existing client links and past run history are kept, so turning it back on resumes where it left off.',
+            'type' => self::TYPE_BOOLEAN,
+            'default' => false,
+            'risk' => 'high',
         ]);
 
         return $definitions;

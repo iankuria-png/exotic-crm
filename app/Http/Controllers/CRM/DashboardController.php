@@ -1420,6 +1420,15 @@ class DashboardController extends Controller
 
     private function resolveMissedChatsCount(?array $platformIds): ?int
     {
+        // Short-circuit before touching the database. The per-platform
+        // isConfigured() check below would also refuse, but this is the CRM's
+        // busiest endpoint and there is no reason to query markets and build
+        // twenty service objects to learn the integration is switched off.
+        // null means "no figure available", which the widget already renders.
+        if (! SupportBoardService::isEnabled()) {
+            return null;
+        }
+
         $platformQuery = Platform::query()
             ->whereNotNull('support_board_api_url')
             ->whereNotNull('support_board_token')

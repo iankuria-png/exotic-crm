@@ -3300,8 +3300,13 @@ function IntegrationsWorkspace({
         : 'idle';
     const latestClientPruned = Number(latestSyncResult?.clients?.pruned || 0);
     const canPushActiveWalletCredentials = selectedHasCredentials && selectedWalletEffectiveMode !== 'disabled';
+    // The global kill switch. Off means the CRM makes no Support Board call on
+    // any market, so it gates the controls ahead of the per-market credential
+    // check — a market can be perfectly configured and still be switched off.
+    const supportBoardEnabled = selectedPlatform?.support_board_enabled !== false;
     const selectedSupportBoardConfigured = Boolean(
-        selectedPlatform?.support_board_api_url
+        supportBoardEnabled
+        && selectedPlatform?.support_board_api_url
         && selectedPlatform?.support_board_token_configured
     );
     const supportBoardSyncQueue = supportBoardSyncStatusQuery.data?.platform?.support_board_sync?.queue
@@ -5871,7 +5876,12 @@ function IntegrationsWorkspace({
                                     {!canManageMarkets ? (
                                         <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board link sync.</p>
                                     ) : null}
-                                    {!selectedSupportBoardConfigured ? (
+                                    {!supportBoardEnabled ? (
+                                        <p className="mt-2 text-xs text-amber-700">
+                                            Support Board is switched off for every market. Existing links and run history are kept.
+                                            An admin can turn it back on in Settings → Operations.
+                                        </p>
+                                    ) : !selectedSupportBoardConfigured ? (
                                         <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the link sync.</p>
                                     ) : null}
                                     {latestSupportBoardSyncResult ? (
@@ -6034,7 +6044,12 @@ function IntegrationsWorkspace({
                                     {!canManageMarkets ? (
                                         <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board lead import.</p>
                                     ) : null}
-                                    {!selectedSupportBoardConfigured ? (
+                                    {!supportBoardEnabled ? (
+                                        <p className="mt-2 text-xs text-amber-700">
+                                            Support Board is switched off for every market. Existing links and run history are kept.
+                                            An admin can turn it back on in Settings → Operations.
+                                        </p>
+                                    ) : !selectedSupportBoardConfigured ? (
                                         <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the lead import.</p>
                                     ) : null}
                                     {latestSbLeadImportResult ? (

@@ -559,6 +559,17 @@ export default function SupportBoardChat({ clientId, client }) {
         );
     }
 
+    if (statusDetails && statusDetails.enabled === false) {
+        return renderStateSection(
+            <EmptyStateCard
+                title="Support Board is switched off"
+                description="The CRM is not calling Support Board on any market. Existing chat links are kept, so turning it back on picks up where it left off. An admin can re-enable it in Settings → Operations."
+                actionLabel="Go to Operations"
+                onAction={() => navigate('/settings?tab=operations')}
+            />,
+        );
+    }
+
     if (!statusDetails?.configured) {
         return renderStateSection(
             <EmptyStateCard

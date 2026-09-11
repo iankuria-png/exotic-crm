@@ -29,6 +29,20 @@ class RunSbLeadImportJob implements ShouldQueue
         SbLeadImportRunService $runService,
         SupportBoardLeadImportService $importService
     ): void {
+        // Same standing-down rule as the sync job: an import queued before the
+        // master switch went off must not resume against a disabled integration.
+        if (! SupportBoardService::isEnabled()) {
+            $run = SbLeadImportRun::query()->find($this->runId);
+            if ($run && ! in_array($run->status, [
+                SbLeadImportRun::STATUS_COMPLETED,
+                SbLeadImportRun::STATUS_FAILED,
+            ], true)) {
+                $runService->markFailed($run, 'Support Board is switched off.');
+            }
+
+            return;
+        }
+
         $run = SbLeadImportRun::query()
             ->with('platform:id,name,support_board_api_url,support_board_token,phone_prefix')
             ->find($this->runId);

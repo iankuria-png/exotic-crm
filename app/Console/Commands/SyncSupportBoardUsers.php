@@ -20,6 +20,14 @@ class SyncSupportBoardUsers extends Command
 
     public function handle(): int
     {
+        // Checked before the lock so a stray cron entry exits cleanly and says
+        // why, instead of taking a 10-minute lock to do nothing.
+        if (! SupportBoardService::isEnabled()) {
+            $this->warn('Support Board is switched off. Enable it in Settings → Operations to run this.');
+
+            return self::SUCCESS;
+        }
+
         $lock = Cache::lock('crm:sync-sb-users', 600);
 
         if (!$lock->get()) {

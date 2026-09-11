@@ -39,6 +39,11 @@ class SupportBoardController extends Controller
         if (!$service->isConfigured()) {
             return response()->json([
                 'configured' => false,
+                // Distinguishes "the master switch is off" from "this market has
+                // no credentials". Both leave the tab empty; only one is fixed by
+                // filling in a token, and telling staff the wrong one wastes
+                // their time in the Settings screen.
+                'enabled' => SupportBoardService::isEnabled(),
                 'matched' => false,
                 'can_reply' => false,
                 'sb_user' => null,
@@ -55,6 +60,7 @@ class SupportBoardController extends Controller
 
             $payload = [
                 'configured' => true,
+                'enabled' => true,
                 'matched' => (bool) ($resolved['matched'] ?? false),
                 'can_reply' => $service->canReply($request->user()),
                 'sb_user' => $resolved['sb_user'] ?? null,

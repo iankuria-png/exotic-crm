@@ -6,6 +6,7 @@ use App\Exceptions\SupportBoardUnavailableException;
 use App\Jobs\Concerns\Sheddable;
 use App\Models\SupportBoardSyncRun;
 use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardService;
 use App\Services\SupportBoardSyncRunService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -40,6 +41,21 @@ class RunSupportBoardSyncJob implements ShouldQueue
         // released with a delay rather than failed, so the work is
         // deferred and the worker process is freed immediately.
         if ($this->shedIfDegraded()) {
+            return;
+        }
+
+        // A run already in flight when the master switch is turned off stops
+        // here and says so, rather than spending its whole budget collecting
+        // connection errors against an integration nobody wants called.
+        if (! SupportBoardService::isEnabled()) {
+            $run = SupportBoardSyncRun::query()->find($this->runId);
+            if ($run && ! in_array($run->status, [
+                SupportBoardSyncRun::STATUS_COMPLETED,
+                SupportBoardSyncRun::STATUS_FAILED,
+            ], true)) {
+                $supportBoardSyncRunService->markFailed($run, 'Support Board is switched off.');
+            }
+
             return;
         }
 
