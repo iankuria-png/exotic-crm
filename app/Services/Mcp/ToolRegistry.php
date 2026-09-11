@@ -24,6 +24,15 @@ class ToolRegistry
         'exotic_run_reporting_sql' => ['title' => 'Reporting SQL', 'description' => 'Run a SELECT against explicitly allow-listed aggregate reporting views.', 'min_role' => 'admin', 'domain' => 'schema', 'views' => ['vw_mcp_lifecycle_rollup', 'vw_mcp_revenue_rollup'], 'backing_service' => 'SqlSafetyValidator', 'returns_no' => ['names', 'phones', 'emails', 'bios', 'free text'], 'properties' => ['sql' => ['type' => 'string'], 'limit' => ['type' => 'integer']]],
     ];
 
+    /**
+     * JSON Schema requires "properties" to be an object. A parameterless tool has an
+     * empty PHP array, which would encode as [] and fail strict client validation.
+     */
+    private function schemaProperties(array $properties): array|object
+    {
+        return $properties === [] ? (object) [] : $properties;
+    }
+
     public function definitions(User $user, McpSettingsService $settings, ?array $abilities = null): array
     {
         $rows = [];
@@ -38,7 +47,7 @@ class ToolRegistry
                 'description' => $meta['description'],
                 'inputSchema' => [
                     'type' => 'object',
-                    'properties' => $meta['properties'],
+                    'properties' => $this->schemaProperties($meta['properties']),
                     'additionalProperties' => false,
                 ],
             ];
@@ -65,7 +74,7 @@ class ToolRegistry
                     'min_role' => $meta['min_role'],
                     'configured_role' => (string) data_get($configured, 'min_role', $meta['min_role']),
                     'enabled' => (bool) data_get($configured, 'enabled', false),
-                    'inputSchema' => ['type' => 'object', 'properties' => $meta['properties'], 'additionalProperties' => false],
+                    'inputSchema' => ['type' => 'object', 'properties' => $this->schemaProperties($meta['properties']), 'additionalProperties' => false],
                     'backing_service' => $meta['backing_service'] ?? 'Curated CRM service',
                     'views' => $meta['views'] ?? [],
                     'returns_no' => $meta['returns_no'] ?? ['names', 'phones', 'emails', 'bios', 'free text'],
