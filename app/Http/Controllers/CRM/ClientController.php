@@ -2414,9 +2414,11 @@ class ClientController extends Controller
 
         $rows = DB::table('client_retention_insight_history')
             ->where('client_id', (int) $client->id)
-            ->orderBy('recorded_date')
+            ->orderByDesc('recorded_date')
             ->limit(90)
-            ->get(['score', 'band', 'recorded_date']);
+            ->get(['score', 'band', 'recorded_date'])
+            ->reverse()
+            ->values();
 
         return response()->json([
             'history' => $rows->map(fn ($row) => [

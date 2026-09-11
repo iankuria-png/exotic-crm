@@ -53,6 +53,37 @@ class ClientRetentionInsightTest extends TestCase
         $this->assertContains($riskyClient->id, $behaviorIds);
     }
 
+    public function test_retention_history_returns_the_latest_ninety_points_in_chronological_order(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+        $admin = $this->createAdminUser();
+
+        DB::table('client_retention_insight_history')
+            ->where('client_id', $client->id)
+            ->delete();
+
+        foreach (range(90, 0) as $daysAgo) {
+            DB::table('client_retention_insight_history')->insert([
+                'client_id' => $client->id,
+                'score' => $daysAgo,
+                'band' => 'Stable',
+                'recorded_date' => now()->subDays($daysAgo)->toDateString(),
+                'created_at' => now()->subDays($daysAgo),
+            ]);
+        }
+
+        Sanctum::actingAs($admin);
+
+        $history = $this->getJson("/api/crm/clients/{$client->id}/retention-history")
+            ->assertOk()
+            ->json('history');
+
+        $this->assertCount(90, $history);
+        $this->assertSame(now()->subDays(89)->toDateString(), $history[0]['date']);
+        $this->assertSame(now()->toDateString(), $history[89]['date']);
+    }
+
     public function test_dashboard_summary_includes_retention_watch_and_logo_churn_snapshot(): void
     {
         $platform = $this->createPlatform();
@@ -177,7 +208,7 @@ class ClientRetentionInsightTest extends TestCase
                 'platform_id' => $platform->id,
                 'profile_status' => 'publish',
                 'last_online_at' => now()->subDays(1)->timestamp,
-                'phone_normalized' => '254711' . str_pad((string) $index, 6, '0', STR_PAD_LEFT),
+                'phone_normalized' => '254711'.str_pad((string) $index, 6, '0', STR_PAD_LEFT),
             ]);
 
             $deal = Deal::factory()->create([
@@ -270,7 +301,7 @@ class ClientRetentionInsightTest extends TestCase
             'platform_id' => $platform->id,
             'name' => 'Basic Plan',
             'display_name' => 'Basic Plan',
-            'slug' => 'basic-plan-' . $platform->id,
+            'slug' => 'basic-plan-'.$platform->id,
             'tier' => 'basic',
             'weekly_price' => 500,
             'biweekly_price' => 1000,
@@ -286,7 +317,7 @@ class ClientRetentionInsightTest extends TestCase
             'role' => 'admin',
             'status' => 'active',
             'assigned_market_ids' => [],
-            'email' => 'retention-admin-' . uniqid('', true) . '@example.test',
+            'email' => 'retention-admin-'.uniqid('', true).'@example.test',
         ]);
     }
 }

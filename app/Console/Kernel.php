@@ -190,6 +190,16 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_archive_expired.log'));
 
+        // Bound each run: the shared MariaDB server currently has a large
+        // history backlog, so cleanup must drain it in short transactions.
+        $schedule->command('crm:prune-history')
+            ->name('crm_prune_history')
+            ->dailyAt('03:35')
+            ->withoutOverlapping(60)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_prune_history.log'));
+
         // SEO Recovery: markets on `daily_trickle` pacing work through their
         // backlog of legacy-offline profiles a quota at a time. Markets on
         // manual pacing (the default) are untouched by this.
