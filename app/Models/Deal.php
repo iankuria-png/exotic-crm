@@ -101,6 +101,7 @@ class Deal extends Model
         'origin', 'seo_boost_batch_id', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
         'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
         'linked_deal_id', 'pending_subsidiary_trial',
+        'activation_deferred_at', 'activation_attempts', 'activation_deferred_reason',
     ];
 
     protected $casts = [
@@ -110,6 +111,8 @@ class Deal extends Model
         'original_amount' => 'decimal:2',
         'activated_at' => 'datetime',
         'expires_at' => 'datetime',
+        'activation_deferred_at' => 'datetime',
+        'activation_attempts' => 'integer',
         'is_free_trial' => 'boolean',
         'renewal_reminders_paused' => 'boolean',
         'renewal_paused_until' => 'datetime',

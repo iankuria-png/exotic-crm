@@ -483,6 +483,17 @@ class Kernel extends ConsoleKernel
         // dashboard request never waits on Support Board. runInBackground is
         // mandatory here: this task makes blocking third-party calls, which is
         // precisely what it exists to keep off the request path.
+        // Paid subscriptions whose market was unreachable at the till. Every
+        // five minutes, because an advertiser who has paid is waiting to be
+        // live and markets like TZ flap back within minutes.
+        $schedule->command('crm:retry-deferred-activations')
+            ->name('crm_retry_deferred_activations')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(15)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_retry_deferred_activations.log'));
+
         $schedule->command('crm:refresh-missed-chats')
             ->name('crm_refresh_missed_chats')
             ->cron(sprintf('*/%d * * * *', max(1, min(30, (int) config('crm.missed_chats.refresh_minutes', 10)))))

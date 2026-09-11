@@ -89,6 +89,15 @@ class SubscriptionProvisioningService
         }
 
         $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+
+        // An operator is waiting and the advertiser has paid. The health gate is
+        // built for background work; here it can only turn a market that has
+        // quietly recovered into a refused sale, so the caller may opt out and
+        // let WordPress answer for itself.
+        if (($options['bypass_market_health'] ?? false) === true) {
+            $wpSync->bypassHealthGate();
+        }
+
         $wpActivation = $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
 
         $this->wordPressActivations[(int) $deal->id] = true;

@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Exceptions\MarketUnavailableException;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use App\Models\Deal;
 use App\Models\Client;
@@ -662,6 +665,10 @@ class DealController extends Controller
             $isFreeTrial = $paymentMethod === 'free_trial';
             $fieldAgentId = $this->commissionService->resolveFieldAgentForClient($deal->client);
             $deal = $this->subscriptionProvisioningService->activateDeal($deal, [
+                // A person is waiting and the advertiser has paid. Let
+                // WordPress answer rather than a gate that needs two clean
+                // probes to reopen. If it really is down we defer below.
+                'bypass_market_health' => true,
                 'payment' => $payment,
                 'payment_method' => $paymentMethod,
                 'duration_days' => $durationDays,
@@ -756,6 +763,65 @@ class DealController extends Controller
             return response()->json([
                 'message' => 'Activation failed: ' . $e->getMessage(),
             ], 422);
+        } catch (MarketUnavailableException | ConnectionException | RequestException $e) {
+            // The market is unreachable, not the request wrong. Rolling back
+            // here would also destroy the Payment row created earlier in this
+            // transaction — the salesperson has taken money and the CRM would
+            // keep no record of it. Commit what we have, park the deal as paid,
+            // and let crm:retry-deferred-activations finish the job when the
+            // market answers again.
+            //
+            // Only safe while WordPress has NOT activated: if it had, committing
+            // a non-active deal would contradict a live profile.
+            if ($this->subscriptionProvisioningService->wordPressActivationCommitted((int) $deal->id)) {
+                DB::rollBack();
+                Log::error('Deal activation failed AFTER WordPress activated — profile is live with no CRM record', [
+                    'deal_id' => $deal->id,
+                    'client_id' => $deal->client_id,
+                    'wordpress_activated' => true,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return response()->json([
+                    'message' => 'Activation failed: ' . $e->getMessage(),
+                ], 500);
+            }
+
+            $deal->forceFill([
+                'status' => 'paid',
+                'activation_deferred_at' => now(),
+                'activation_attempts' => (int) $deal->activation_attempts + 1,
+                'activation_deferred_reason' => mb_strimwidth($e->getMessage(), 0, 250, '…'),
+            ])->save();
+
+            TimelineEvent::create([
+                'platform_id' => (int) $deal->platform_id,
+                'entity_type' => 'deal',
+                'entity_id' => (int) $deal->id,
+                'event_type' => 'activation_deferred',
+                'actor_id' => $request->user()?->id,
+                'content' => [
+                    'deal_id' => (int) $deal->id,
+                    'reason' => $e->getMessage(),
+                    'attempt' => (int) $deal->activation_attempts,
+                ],
+                'created_at' => now(),
+            ]);
+
+            DB::commit();
+
+            Log::warning('Deal activation deferred; market unreachable.', [
+                'deal_id' => $deal->id,
+                'client_id' => $deal->client_id,
+                'platform_id' => $deal->platform_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Payment recorded. This market is unreachable right now, so the profile will be activated automatically as soon as it is back.',
+                'deferred' => true,
+                'deal' => $deal->fresh(['client', 'product', 'platform']),
+            ], 202);
         } catch (\Throwable $e) {
             DB::rollBack();
 

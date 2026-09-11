@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\MarketUnavailableException;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Support\BioContactScrubber;
@@ -20,6 +21,9 @@ class WpSyncService
     private const CATALOGUE_FAILURE_CACHE_TTL_SECONDS = 60;
 
     private string $baseUrl;
+
+    /** Set by bypassHealthGate() for operator-initiated work. */
+    private bool $healthGateBypassed = false;
 
     private string $authHeader;
 
@@ -883,9 +887,27 @@ class WpSyncService
         throw new RuntimeException($message);
     }
 
+    /**
+     * Skip the health gate for this instance.
+     *
+     * The gate exists so background and bulk work does not pay a full timeout
+     * rediscovering a market it already knows is down. An operator activating a
+     * subscription is a different case: someone is waiting, money has changed
+     * hands, and the gate needs two consecutive failures to clear, so it can
+     * still be closed after the market has come back. Let the human find out
+     * from WordPress itself.
+     */
+    public function bypassHealthGate(): self
+    {
+        $this->healthGateBypassed = true;
+
+        return $this;
+    }
+
     private function assertMarketAvailable(): void
     {
-        if ($this->platformId <= 0
+        if ($this->healthGateBypassed
+            || $this->platformId <= 0
             || ! (bool) config('services.exotic_crm_sync.health_gate_enabled', true)) {
             return;
         }
@@ -900,11 +922,10 @@ class WpSyncService
             return;
         }
 
-        throw new RuntimeException(sprintf(
-            'WordPress market %d is temporarily gated after repeated %s health failures.',
+        throw MarketUnavailableException::gated(
             $this->platformId,
-            (string) ($snapshot['health_status'] ?? 'unknown')
-        ));
+            $snapshot['health_status'] ?? null
+        );
     }
 
     private function decodeResponse($response, string $method, string $path, ?string $requestUrl = null): array
