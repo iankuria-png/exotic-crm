@@ -17,6 +17,19 @@ class ReconcileExpiredSubscriptions extends Command
 
     protected $description = 'Force-expire profiles that are past their WP expiry but still publicly active (CRM safety net for the WP-cron sweep).';
 
+    /**
+     * Consecutive failures on one market before this run stops trying it.
+     *
+     * Stuck profiles are processed oldest-expiry-first, and a market whose
+     * WordPress is unreachable fails every one of its profiles while leaving
+     * them stuck — so they stay at the head of the queue and consume the whole
+     * budget again next hour. In the seven days to 2026-09-11 the Tanzania pair
+     * alone accounted for 5,916 of 10,030 recorded failures, which is budget
+     * that healthy markets never got. Giving up on a market for the rest of the
+     * run lets the remaining budget reach profiles that can actually be served.
+     */
+    private const MAX_CONSECUTIVE_MARKET_FAILURES = 5;
+
     public function handle(ExpiredSubscriptionReconciler $reconciler): int
     {
         $dryRun = (bool) $this->option('dry-run');
@@ -36,11 +49,28 @@ class ReconcileExpiredSubscriptions extends Command
 
         $processed = 0;
         $failed = 0;
+        $skipped = 0;
         $breakdown = [];
+        $consecutiveFailures = [];
+        $skippedByMarket = [];
 
         foreach ($stuck as $client) {
+            $marketId = (int) $client->platform_id;
+
+            if (($consecutiveFailures[$marketId] ?? 0) >= self::MAX_CONSECUTIVE_MARKET_FAILURES) {
+                $skipped++;
+                $skippedByMarket[$marketId] = ($skippedByMarket[$marketId] ?? 0) + 1;
+
+                continue;
+            }
+
             try {
                 $row = $reconciler->reconcileClient($client, null, $dryRun);
+
+                // Only a success clears the market's failure streak, so one
+                // profile that happens to work does not re-open a dead market
+                // for the rest of the run unless it is genuinely serving again.
+                $consecutiveFailures[$marketId] = 0;
 
                 $market = $row['market'];
                 $breakdown[$market] ??= ['count' => 0, 'sample_post_ids' => []];
@@ -61,6 +91,16 @@ class ReconcileExpiredSubscriptions extends Command
                 ));
             } catch (Throwable $e) {
                 $failed++;
+                $consecutiveFailures[$marketId] = ($consecutiveFailures[$marketId] ?? 0) + 1;
+
+                if ($consecutiveFailures[$marketId] === self::MAX_CONSECUTIVE_MARKET_FAILURES) {
+                    $this->warn(sprintf(
+                        '  Market #%d failed %d profiles in a row — skipping the rest of it this run.',
+                        $marketId,
+                        self::MAX_CONSECUTIVE_MARKET_FAILURES
+                    ));
+                }
+
                 $this->error("  Failed client #{$client->id}: " . $e->getMessage());
                 Log::error('Expired-subscription reconciliation failed for client', [
                     'client_id' => $client->id,
@@ -78,18 +118,30 @@ class ReconcileExpiredSubscriptions extends Command
             'candidates' => $stuck->count(),
             'processed' => $processed,
             'failed' => $failed,
-            'breakdown' => $breakdown,
+            'breakdown' => $skipped > 0
+                ? $breakdown + ['_skipped_after_market_failures' => [
+                    'count' => $skipped,
+                    'by_platform_id' => $skippedByMarket,
+                ]]
+                : $breakdown,
             'started_at' => $startedAt,
             'finished_at' => now(),
         ]);
 
-        $this->info(sprintf('Done. processed=%d failed=%d (%s)', $processed, $failed, $dryRun ? 'dry-run' : 'live'));
+        $this->info(sprintf(
+            'Done. processed=%d failed=%d skipped=%d (%s)',
+            $processed,
+            $failed,
+            $skipped,
+            $dryRun ? 'dry-run' : 'live'
+        ));
         Log::info('Expired-subscription reconciliation complete', [
             'mode' => $dryRun ? 'dry' : 'live',
             'platform_id' => $platformId,
             'candidates' => $stuck->count(),
             'processed' => $processed,
             'failed' => $failed,
+            'skipped' => $skipped,
         ]);
 
         return $failed > 0 ? self::FAILURE : self::SUCCESS;

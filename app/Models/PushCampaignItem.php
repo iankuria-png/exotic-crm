@@ -30,6 +30,7 @@ class PushCampaignItem extends Model
         'provider_meta',
         'replaces_item_id',
         'replacement_round',
+        'dispatch_attempts',
     ];
 
     protected $casts = [
@@ -38,6 +39,7 @@ class PushCampaignItem extends Model
         'delivery_stats' => 'array',
         'provider_meta' => 'array',
         'replacement_round' => 'integer',
+        'dispatch_attempts' => 'integer',
     ];
 
     public function campaign()

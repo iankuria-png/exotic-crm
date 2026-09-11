@@ -182,6 +182,7 @@ class PushCampaignService
 
             $item->forceFill([
                 'status' => 'scheduled',
+                'dispatch_attempts' => (int) $item->dispatch_attempts + 1,
             ])->save();
         }
 
@@ -190,15 +191,31 @@ class PushCampaignService
 
     /**
      * Reset items stuck in item-status 'scheduled' back to 'pending' so the normal
-     * dispatch flow can re-queue them. Only touches rows whose last update predates
-     * SendPushNotificationJob's uniqueness window ({@see SendPushNotificationJob::$uniqueFor}),
-     * so we never race the queue worker on a job that's still in flight.
+     * dispatch flow can re-queue them.
+     *
+     * The 15-minute staleness threshold is longer than SendPushNotificationJob's
+     * $uniqueFor (600s), which means the uniqueness lock has always expired by
+     * the time salvage runs — so this does NOT prevent a re-dispatch racing a
+     * job that is still alive in a backed-up lane, and the replacement starts
+     * with a fresh attempt counter. MAX_DISPATCH_ATTEMPTS is what actually
+     * bounds the cycle; items past it are failed rather than salvaged again.
      */
+    /**
+     * How many times one item may be handed to the queue before it is called
+     * failed rather than salvaged again.
+     *
+     * SendPushNotificationJob bounds a single dispatch with $tries = 3, but
+     * salvage re-dispatches with a fresh counter, so without this the cycle has
+     * no end: an item whose send can never succeed is retried every 15 minutes
+     * for as long as its campaign is running.
+     */
+    private const MAX_DISPATCH_ATTEMPTS = 5;
+
     private function salvageStuckScheduledItems(PushCampaign $campaign, Carbon $referenceAtUtc): int
     {
         $staleThreshold = $referenceAtUtc->copy()->subMinutes(15);
 
-        return PushCampaignItem::query()
+        $stuck = PushCampaignItem::query()
             ->where('campaign_id', (int) $campaign->id)
             ->where('status', 'scheduled')
             ->whereNull('sent_at')
@@ -206,7 +223,25 @@ class PushCampaignService
                 $query->whereNull('scheduled_at')
                     ->orWhere('scheduled_at', '<=', $referenceAtUtc->toDateTimeString());
             })
-            ->where('updated_at', '<', $staleThreshold->toDateTimeString())
+            ->where('updated_at', '<', $staleThreshold->toDateTimeString());
+
+        // An item that has already been round this loop enough times is not
+        // waiting on a lost worker any more. Call it failed so it leaves the
+        // cycle, shows up in the campaign's outcome, and stops consuming a
+        // dispatch slot every quarter of an hour.
+        (clone $stuck)
+            ->where('dispatch_attempts', '>=', self::MAX_DISPATCH_ATTEMPTS)
+            ->update([
+                'status' => 'failed',
+                'error_message' => sprintf(
+                    'Gave up after %d dispatch attempts without a provider response.',
+                    self::MAX_DISPATCH_ATTEMPTS
+                ),
+                'updated_at' => now(),
+            ]);
+
+        return (clone $stuck)
+            ->where('dispatch_attempts', '<', self::MAX_DISPATCH_ATTEMPTS)
             ->update([
                 'status' => 'pending',
                 'updated_at' => now(),

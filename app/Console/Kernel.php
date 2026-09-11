@@ -102,7 +102,11 @@ class Kernel extends ConsoleKernel
         $schedule->command('crm:reconcile-expired-subscriptions')
             ->name('crm_reconcile_expired_subscriptions')
             ->hourlyAt(25)
-            ->withoutOverlapping(30)
+            // The lock has to outlast the run, or a slow run stops blocking the
+            // next one and they pile up against the same sick market. Production
+            // runs to 2026-09-11 averaged 66s but reached 51 minutes, and 12 of
+            // 1,365 crossed the old 30-minute window. 90 leaves real headroom.
+            ->withoutOverlapping(90)
             ->onOneServer()
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_reconcile_expired_subscriptions.log'));
