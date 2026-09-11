@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * A logged-in WordPress member with a My Exotic workspace.
@@ -44,6 +45,16 @@ class CustomerAccount extends Model
     public function activityEvents(): HasMany
     {
         return $this->hasMany(CustomerActivityEvent::class);
+    }
+
+    public function preferenceSignals(): HasMany
+    {
+        return $this->hasMany(CustomerPreferenceSignal::class);
+    }
+
+    public function preferenceProfile(): HasOne
+    {
+        return $this->hasOne(CustomerPreferenceProfile::class);
     }
 
     public function follows(): HasMany

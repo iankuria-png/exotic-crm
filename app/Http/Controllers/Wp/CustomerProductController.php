@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Wp;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerActivityEvent;
 use App\Models\CustomerFollow;
+use App\Models\CustomerPreferenceSignal;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
 use App\Models\CustomerSafetyReport;
@@ -56,6 +57,14 @@ class CustomerProductController extends Controller
                 $account,
                 (int) $request->input('object_ref'),
                 CustomerSavedObject::SOURCE_WORKSPACE
+            );
+            $this->recordOptionalPreferenceSignal(
+                $account,
+                $request,
+                CustomerPreferenceSignal::SIGNAL_BEHAVIOR_SAVED,
+                CustomerPreferenceSignal::OBJECT_PROFILE,
+                (int) $request->input('object_ref'),
+                'recommendation_card'
             );
 
             return response()->json($this->summary($account) + [
@@ -134,6 +143,14 @@ class CustomerProductController extends Controller
     {
         return $this->withAccount($request, function ($account) use ($request) {
             $created = $this->customerProduct->recordView($account, (int) $request->input('object_ref'));
+            $this->recordOptionalPreferenceSignal(
+                $account,
+                $request,
+                CustomerPreferenceSignal::SIGNAL_BEHAVIOR_REVISITED,
+                CustomerPreferenceSignal::OBJECT_PROFILE,
+                (int) $request->input('object_ref'),
+                'profile'
+            );
 
             return response()->json([
                 'success' => true,
@@ -217,6 +234,15 @@ class CustomerProductController extends Controller
                 (string) $request->input('follow_type'),
                 (int) $request->input('object_ref')
             );
+            $followType = (string) $request->input('follow_type');
+            $this->recordOptionalPreferenceSignal(
+                $account,
+                $request,
+                CustomerPreferenceSignal::SIGNAL_BEHAVIOR_FOLLOWED,
+                $followType === CustomerFollow::TYPE_LOCATION ? CustomerPreferenceSignal::OBJECT_LOCATION : CustomerPreferenceSignal::OBJECT_PROFILE,
+                (int) $request->input('object_ref'),
+                'follow'
+            );
 
             return response()->json($this->summary($account) + [
                 'created' => $created,
@@ -267,6 +293,14 @@ class CustomerProductController extends Controller
                 $refinements,
                 $request->input('label') !== null ? (string) $request->input('label') : null
             );
+            $this->recordOptionalPreferenceSignal(
+                $account,
+                $request,
+                CustomerPreferenceSignal::SIGNAL_BEHAVIOR_SAVED_SEARCH,
+                CustomerPreferenceSignal::OBJECT_SAVED_SEARCH,
+                null,
+                'saved_search'
+            );
 
             return response()->json($this->summary($account) + [
                 'created' => $created,
@@ -311,6 +345,14 @@ class CustomerProductController extends Controller
                 (int) $request->input('target_wp_post_id'),
                 $source
             );
+            $this->recordOptionalPreferenceSignal(
+                $account,
+                $request,
+                CustomerPreferenceSignal::SIGNAL_BEHAVIOR_CONTACT_STARTED,
+                CustomerPreferenceSignal::OBJECT_PROFILE,
+                (int) $request->input('target_wp_post_id'),
+                'unlock_claim'
+            );
 
             return response()->json($this->summary($account) + [
                 'claimed' => true,
@@ -345,6 +387,60 @@ class CustomerProductController extends Controller
                 'status' => (string) $feedback->status,
                 'message' => "Reported. We'll check it.",
             ], 201);
+        });
+    }
+
+    // ---------------------------------------------------------- preferences
+
+    public function preferenceSignal(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            $signal = $this->customerProduct->recordPreferenceSignal($account, [
+                'signal_type' => $request->input('signal_type'),
+                'object_type' => $request->input('object_type'),
+                'object_ref' => $request->input('object_ref'),
+                'fact_tokens' => $request->input('fact_tokens'),
+                'context' => $request->input('context'),
+                'source_surface' => $request->input('source_surface'),
+                'occurred_at' => $request->input('occurred_at'),
+            ]);
+
+            $profile = $this->customerProduct->preferenceProfile($account)->fresh();
+
+            return response()->json([
+                'success' => true,
+                'signal_id' => (int) $signal->id,
+                'preference_profile' => $this->customerProduct->serializePreferenceProfile($profile),
+            ], 201);
+        });
+    }
+
+    public function preferences(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) {
+            $profile = $this->customerProduct->preferenceProfile($account);
+
+            return response()->json([
+                'success' => true,
+                'preference_profile' => $this->customerProduct->serializePreferenceProfile($profile),
+            ]);
+        });
+    }
+
+    public function preferencesReset(Request $request): JsonResponse
+    {
+        return $this->withAccount($request, function ($account) use ($request) {
+            if ((string) $request->input('confirm') !== 'reset') {
+                throw new InvalidArgumentException('Reset confirmation is required.');
+            }
+
+            $profile = $this->customerProduct->resetPreferences($account);
+
+            return response()->json([
+                'success' => true,
+                'reset' => true,
+                'preference_profile' => $this->customerProduct->serializePreferenceProfile($profile),
+            ]);
         });
     }
 
@@ -473,5 +569,37 @@ class CustomerProductController extends Controller
             'previous_last_seen_at' => $previousLastSeenAt?->toIso8601String(),
             'last_seen_at' => $account->last_seen_at?->toIso8601String(),
         ];
+    }
+
+    private function recordOptionalPreferenceSignal(
+        $account,
+        Request $request,
+        string $signalType,
+        string $objectType,
+        ?int $objectRef,
+        string $fallbackSurface
+    ): void {
+        $tokens = $request->input('recommendation_fact_tokens');
+        if (! is_array($tokens)) {
+            return;
+        }
+
+        try {
+            $this->customerProduct->recordPreferenceSignal($account, [
+                'signal_type' => $signalType,
+                'object_type' => $objectType,
+                'object_ref' => $objectRef,
+                'fact_tokens' => $tokens,
+                'context' => $request->input('recommendation_context', []),
+                'source_surface' => $request->input('source_surface', $fallbackSurface),
+                'occurred_at' => $request->input('occurred_at'),
+            ]);
+        } catch (\Throwable $exception) {
+            logger()->warning('Optional customer recommendation signal ignored.', [
+                'customer_account_id' => (int) $account->id,
+                'signal_type' => $signalType,
+                'message' => $exception->getMessage(),
+            ]);
+        }
     }
 }

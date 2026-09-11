@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\CustomerActivityEvent;
 use App\Models\CustomerCompareItem;
 use App\Models\CustomerCompareSet;
+use App\Models\CustomerPreferenceSignal;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSafetyReport;
 use Illuminate\Console\Command;
@@ -16,6 +17,7 @@ use Illuminate\Support\Carbon;
  * | Data              | Window                                     |
  * | ----------------- | ------------------------------------------ |
  * | Activity events   | 180 days from `occurred_at`                |
+ * | Preference signals| 180 days from `occurred_at`                |
  * | Recent views      | 90 days from `last_viewed_at`              |
  * | Compare sets      | 30 days after last update                  |
  * | Safety reports    | account link dropped after 730 days        |
@@ -42,6 +44,7 @@ class PurgeCustomerDataCommand extends Command
         $dryRun = (bool) $this->option('dry-run');
 
         $this->purgeActivityEvents($chunk, $dryRun);
+        $this->purgePreferenceSignals($chunk, $dryRun);
         $this->purgeRecentViews($chunk, $dryRun);
         $this->purgeCompareSets($chunk, $dryRun);
         $this->anonymizeSafetyReports($chunk, $dryRun);
@@ -95,6 +98,35 @@ class PurgeCustomerDataCommand extends Command
         } while (true);
 
         $this->info(sprintf('Anonymized %d customer safety reports submitted before %s.', $updated, $cutoff->toDateString()));
+    }
+
+    private function purgePreferenceSignals(int $chunk, bool $dryRun): void
+    {
+        $cutoff = Carbon::now()->subDays(CustomerPreferenceSignal::RETENTION_DAYS);
+        $total = CustomerPreferenceSignal::query()->where('occurred_at', '<', $cutoff)->count();
+
+        if ($total === 0) {
+            $this->info('No customer preference signals past retention.');
+
+            return;
+        }
+
+        if ($dryRun) {
+            $this->info(sprintf('Would delete %d customer preference signals older than %s.', $total, $cutoff->toDateString()));
+
+            return;
+        }
+
+        $deleted = 0;
+        do {
+            $batch = CustomerPreferenceSignal::query()
+                ->where('occurred_at', '<', $cutoff)
+                ->limit($chunk)
+                ->delete();
+            $deleted += $batch;
+        } while ($batch > 0);
+
+        $this->info(sprintf('Deleted %d customer preference signals older than %s.', $deleted, $cutoff->toDateString()));
     }
 
     private function purgeActivityEvents(int $chunk, bool $dryRun): void

@@ -7,6 +7,8 @@ use App\Models\CustomerActivityEvent;
 use App\Models\CustomerCompareItem;
 use App\Models\CustomerCompareSet;
 use App\Models\CustomerFollow;
+use App\Models\CustomerPreferenceProfile;
+use App\Models\CustomerPreferenceSignal;
 use App\Models\CustomerReachabilityFeedback;
 use App\Models\CustomerRecentView;
 use App\Models\CustomerSavedObject;
@@ -50,6 +52,15 @@ class CustomerProductService
 
     /** Unlock claims returned to the workspace in one read. */
     public const UNLOCK_CLAIMS_PAGE = 60;
+
+    /** Recommendation profile is considered personalised only after this much evidence. */
+    public const RECOMMENDATION_SIGNAL_THRESHOLD = 8;
+
+    /** Positive signal count required before commercial boost is relevance-gated. */
+    public const RECOMMENDATION_POSITIVE_THRESHOLD = 3;
+
+    /** Per-token aggregate bound consumed by the WordPress scorer. */
+    public const RECOMMENDATION_TOKEN_WEIGHT_LIMIT = 20;
 
     /** A guest reveal can be claimed only while the handoff is still fresh. */
     public const UNLOCK_CLAIM_HANDOFF_MINUTES = 60;
@@ -736,6 +747,161 @@ class CustomerProductService
         return true;
     }
 
+    // ---------------------------------------------------------- preferences
+
+    public function preferenceProfile(CustomerAccount $account): CustomerPreferenceProfile
+    {
+        return CustomerPreferenceProfile::query()->firstOrCreate(
+            ['customer_account_id' => $account->id],
+            [
+                'platform_id' => $account->platform_id,
+                'facet_weights_json' => [],
+                'signal_count' => 0,
+                'positive_signal_count' => 0,
+            ]
+        );
+    }
+
+    public function serializePreferenceProfile(CustomerPreferenceProfile $profile): array
+    {
+        $signalCount = (int) $profile->signal_count;
+        $positiveSignalCount = (int) $profile->positive_signal_count;
+
+        return [
+            'signal_count' => $signalCount,
+            'positive_signal_count' => $positiveSignalCount,
+            'personalised' => $signalCount >= self::RECOMMENDATION_SIGNAL_THRESHOLD
+                && $positiveSignalCount >= self::RECOMMENDATION_POSITIVE_THRESHOLD,
+            'facet_weights' => is_array($profile->facet_weights_json) ? $profile->facet_weights_json : [],
+            'last_signal_at' => $profile->last_signal_at?->toIso8601String(),
+            'last_rebuilt_at' => $profile->last_rebuilt_at?->toIso8601String(),
+            'reset_at' => $profile->reset_at?->toIso8601String(),
+        ];
+    }
+
+    public function recordPreferenceSignal(CustomerAccount $account, array $payload): CustomerPreferenceSignal
+    {
+        $signalType = $this->normalizePreferenceSignalType($payload['signal_type'] ?? '');
+        $objectType = $this->normalizePreferenceObjectType($payload['object_type'] ?? '');
+        $objectRef = $this->normalizePreferenceObjectRef($objectType, $payload['object_ref'] ?? null);
+        $tokens = $this->normalizePreferenceFactTokens($payload['fact_tokens'] ?? $payload['fact_tokens_json'] ?? null);
+        $context = $this->normalizePreferenceContext($payload['context'] ?? $payload['context_json'] ?? null);
+        $sourceSurface = $this->normalizePreferenceSourceSurface($payload['source_surface'] ?? '');
+        $occurredAt = $this->normalizePreferenceOccurredAt($payload['occurred_at'] ?? null);
+        $weight = $this->preferenceSignalWeight($account, $signalType, $objectType, $objectRef);
+
+        $signal = CustomerPreferenceSignal::query()->create([
+            'customer_account_id' => $account->id,
+            'platform_id' => $account->platform_id,
+            'signal_type' => $signalType,
+            'object_type' => $objectType,
+            'object_ref' => $objectRef,
+            'weight' => $weight,
+            'fact_tokens_json' => $tokens,
+            'context_json' => empty($context) ? null : $context,
+            'source_surface' => $sourceSurface,
+            'occurred_at' => $occurredAt,
+        ]);
+
+        $this->rebuildPreferenceProfile($account);
+
+        return $signal;
+    }
+
+    public function resetPreferences(CustomerAccount $account): CustomerPreferenceProfile
+    {
+        CustomerPreferenceSignal::query()
+            ->where('customer_account_id', $account->id)
+            ->delete();
+
+        $profile = $this->preferenceProfile($account);
+        $profile->forceFill([
+            'platform_id' => $account->platform_id,
+            'facet_weights_json' => [],
+            'signal_count' => 0,
+            'positive_signal_count' => 0,
+            'last_signal_at' => null,
+            'last_rebuilt_at' => Carbon::now(),
+            'reset_at' => Carbon::now(),
+        ])->save();
+
+        return $profile;
+    }
+
+    public function rebuildPreferenceProfile(CustomerAccount $account): CustomerPreferenceProfile
+    {
+        $profile = $this->preferenceProfile($account);
+        $query = CustomerPreferenceSignal::query()
+            ->where('customer_account_id', $account->id);
+
+        if ($profile->reset_at) {
+            $query->where('occurred_at', '>=', $profile->reset_at);
+        }
+
+        $signals = $query
+            ->orderBy('occurred_at')
+            ->orderBy('id')
+            ->get();
+
+        $weights = [];
+        $positive = 0;
+        $lastSignalAt = null;
+        $now = Carbon::now();
+
+        foreach ($signals as $signal) {
+            $weight = (int) $signal->weight;
+            if ($weight > 0) {
+                $positive++;
+            }
+
+            $lastSignalAt = $signal->occurred_at;
+            $ageDays = $signal->occurred_at ? max(0.0, $signal->occurred_at->diffInSeconds($now) / 86400) : 0.0;
+            $sourceMultiplier = str_starts_with((string) $signal->signal_type, 'onboarding.') ? 0.60 : 1.0;
+            $decayedWeight = $weight * $sourceMultiplier * pow(0.5, $ageDays / 90);
+
+            foreach ((array) $signal->fact_tokens_json as $group => $tokens) {
+                $group = $this->normalizePreferenceFacetGroup($group);
+                if ($group === '') {
+                    continue;
+                }
+
+                foreach ((array) $tokens as $token) {
+                    $token = $this->normalizePreferenceToken($token);
+                    if ($token === '') {
+                        continue;
+                    }
+
+                    if (! isset($weights[$group])) {
+                        $weights[$group] = [];
+                    }
+
+                    $current = (float) ($weights[$group][$token] ?? 0);
+                    $weights[$group][$token] = max(
+                        -self::RECOMMENDATION_TOKEN_WEIGHT_LIMIT,
+                        min(self::RECOMMENDATION_TOKEN_WEIGHT_LIMIT, round($current + $decayedWeight, 4))
+                    );
+                }
+            }
+        }
+
+        foreach ($weights as $group => $groupWeights) {
+            arsort($groupWeights);
+            $weights[$group] = array_slice($groupWeights, 0, 80, true);
+        }
+        ksort($weights);
+
+        $profile->forceFill([
+            'platform_id' => $account->platform_id,
+            'facet_weights_json' => $weights,
+            'signal_count' => $signals->count(),
+            'positive_signal_count' => $positive,
+            'last_signal_at' => $lastSignalAt,
+            'last_rebuilt_at' => $now,
+        ])->save();
+
+        return $profile;
+    }
+
     public function removeSavedSearch(CustomerAccount $account, int $savedSearchId): bool
     {
         $savedSearchId = $this->normalizePositiveRef($savedSearchId, 'A saved search id is required.');
@@ -1273,6 +1439,8 @@ class CustomerProductService
         CustomerCompareSet::query()->where('customer_account_id', $account->id)->delete();
         CustomerFollow::query()->where('customer_account_id', $account->id)->delete();
         CustomerSavedSearch::query()->where('customer_account_id', $account->id)->delete();
+        CustomerPreferenceSignal::query()->where('customer_account_id', $account->id)->delete();
+        CustomerPreferenceProfile::query()->where('customer_account_id', $account->id)->delete();
         CustomerActivityEvent::query()->where('customer_account_id', $account->id)->delete();
         CustomerUnlockClaim::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
         CustomerReachabilityFeedback::query()->where('customer_account_id', $account->id)->update(['customer_account_id' => null]);
@@ -1333,6 +1501,206 @@ class CustomerProductService
         }
 
         return mb_substr($value, 0, $max);
+    }
+
+    private function normalizePreferenceSignalType(mixed $value): string
+    {
+        $signalType = is_scalar($value) ? strtolower(trim((string) $value)) : '';
+        if (! array_key_exists($signalType, CustomerPreferenceSignal::signalWeights())) {
+            throw new InvalidArgumentException('A supported preference signal is required.');
+        }
+
+        return $signalType;
+    }
+
+    private function normalizePreferenceObjectType(mixed $value): string
+    {
+        $objectType = is_scalar($value) ? strtolower(trim((string) $value)) : '';
+        if (! in_array($objectType, CustomerPreferenceSignal::objectTypes(), true)) {
+            throw new InvalidArgumentException('A supported preference object is required.');
+        }
+
+        return $objectType;
+    }
+
+    private function normalizePreferenceObjectRef(string $objectType, mixed $value): ?int
+    {
+        $objectRef = is_numeric($value) ? (int) $value : 0;
+        if ($objectType === CustomerPreferenceSignal::OBJECT_SAVED_SEARCH && $objectRef < 1) {
+            return null;
+        }
+
+        if ($objectRef < 1) {
+            throw new InvalidArgumentException('A preference object id is required.');
+        }
+
+        return $objectRef;
+    }
+
+    /**
+     * @return array<string,array<int,string>>
+     */
+    private function normalizePreferenceFactTokens(mixed $value): array
+    {
+        if (! is_array($value)) {
+            throw new InvalidArgumentException('Preference facts are required.');
+        }
+
+        $clean = [];
+        foreach ($value as $group => $tokens) {
+            $group = $this->normalizePreferenceFacetGroup($group);
+            if ($group === '') {
+                continue;
+            }
+
+            $tokenList = [];
+            foreach ((array) $tokens as $token) {
+                $token = $this->normalizePreferenceToken($token);
+                if ($token !== '') {
+                    $tokenList[] = $token;
+                }
+            }
+
+            $tokenList = array_values(array_unique($tokenList));
+            if (! empty($tokenList)) {
+                $clean[$group] = array_slice($tokenList, 0, 40);
+            }
+        }
+
+        if (empty($clean)) {
+            throw new InvalidArgumentException('Preference facts are required.');
+        }
+
+        return array_slice($clean, 0, 12, true);
+    }
+
+    private function normalizePreferenceFacetGroup(mixed $value): string
+    {
+        $group = is_scalar($value) ? strtolower(trim((string) $value)) : '';
+        $group = preg_replace('/[^a-z0-9_]+/', '_', $group) ?? '';
+        $group = trim($group, '_');
+
+        $allowed = [
+            'location',
+            'profile_type',
+            'services',
+            'build',
+            'age_bucket',
+            'ethnicity',
+            'height_bucket',
+            'haircolor',
+            'availability',
+            'trust',
+        ];
+
+        return in_array($group, $allowed, true) ? $group : '';
+    }
+
+    private function normalizePreferenceToken(mixed $value): string
+    {
+        if (! is_scalar($value)) {
+            return '';
+        }
+
+        $token = strtolower(trim((string) $value));
+        $token = preg_replace('/[^a-z0-9_:\\.-]+/', '_', $token) ?? '';
+        $token = trim($token, '_:.-');
+
+        return mb_substr($token, 0, 80);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function normalizePreferenceContext(mixed $value): array
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+
+        if (! is_array($value)) {
+            throw new InvalidArgumentException('Preference context is invalid.');
+        }
+
+        $clean = [];
+        foreach (['route_family', 'route_value', 'surface', 'reason'] as $key) {
+            if (! array_key_exists($key, $value)) {
+                continue;
+            }
+
+            $text = $this->normalizePreferenceToken($value[$key]);
+            if ($text !== '') {
+                $clean[$key] = $text;
+            }
+        }
+
+        if (! empty($value['filters']) && is_array($value['filters'])) {
+            $filters = [];
+            foreach ($value['filters'] as $filter) {
+                $filter = $this->normalizePreferenceToken($filter);
+                if ($filter !== '') {
+                    $filters[] = $filter;
+                }
+            }
+            if (! empty($filters)) {
+                $clean['filters'] = array_slice(array_values(array_unique($filters)), 0, 20);
+            }
+        }
+
+        return $clean;
+    }
+
+    private function normalizePreferenceSourceSurface(mixed $value): string
+    {
+        $surface = $this->normalizePreferenceToken($value);
+
+        return $surface !== '' ? mb_substr($surface, 0, 80) : 'unknown';
+    }
+
+    private function normalizePreferenceOccurredAt(mixed $value): Carbon
+    {
+        if ($value === null || $value === '') {
+            return Carbon::now();
+        }
+
+        try {
+            $occurredAt = Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return Carbon::now();
+        }
+
+        $now = Carbon::now();
+        if ($occurredAt->gt($now->copy()->addMinutes(5))) {
+            return $now;
+        }
+
+        return $occurredAt;
+    }
+
+    private function preferenceSignalWeight(CustomerAccount $account, string $signalType, string $objectType, ?int $objectRef): int
+    {
+        if ($signalType === CustomerPreferenceSignal::SIGNAL_BEHAVIOR_REVISITED) {
+            if ($objectRef === null || $objectRef < 1) {
+                return 0;
+            }
+
+            $acceptedViews = CustomerPreferenceSignal::query()
+                ->where('customer_account_id', $account->id)
+                ->where('signal_type', CustomerPreferenceSignal::SIGNAL_BEHAVIOR_REVISITED)
+                ->where('object_type', $objectType)
+                ->where('object_ref', $objectRef)
+                ->where('weight', '>', 0)
+                ->count();
+
+            return $acceptedViews >= 4 ? 0 : 1;
+        }
+
+        $weights = CustomerPreferenceSignal::signalWeights();
+
+        return max(-self::RECOMMENDATION_TOKEN_WEIGHT_LIMIT, min(
+            self::RECOMMENDATION_TOKEN_WEIGHT_LIMIT,
+            (int) ($weights[$signalType] ?? 0)
+        ));
     }
 
     private function claimStatus(VisitorContactUnlock $unlock): string
