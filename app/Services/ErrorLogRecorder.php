@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\ErrorLogGroup;
 use App\Models\ErrorLogOccurrence;
-use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Request;
@@ -15,6 +14,38 @@ class ErrorLogRecorder
     public const MAX_OCCURRENCES_PER_GROUP = 20;
 
     private bool $recording = false;
+
+    /** @var \WeakMap<Throwable, true> */
+    private \WeakMap $markedExceptions;
+
+    public function __construct()
+    {
+        $this->markedExceptions = new \WeakMap;
+    }
+
+    public function markException(Throwable $exception): void
+    {
+        $this->markedExceptions[$exception] = true;
+    }
+
+    public function takeMarkedException(Throwable $exception): bool
+    {
+        if (! isset($this->markedExceptions[$exception])) {
+            return false;
+        }
+
+        unset($this->markedExceptions[$exception]);
+
+        return true;
+    }
+
+    public function flushMarkedExceptions(): void
+    {
+        foreach ($this->markedExceptions as $exception => $_) {
+            unset($this->markedExceptions[$exception]);
+            $this->recordException($exception);
+        }
+    }
 
     public function record(
         string $level,
@@ -49,28 +80,32 @@ class ErrorLogRecorder
                 $trace,
                 $context
             ) {
-                $group = ErrorLogGroup::firstOrNew(['signature' => $signature]);
+                $now = now();
 
-                if (!$group->exists) {
-                    $group->level = $this->normalizeLevel($level);
-                    $group->exception_class = $exceptionClass;
-                    $group->message = $resolvedMessage;
-                    $group->file = $file;
-                    $group->line = $line;
-                    $group->source = $source;
-                    $group->occurrence_count = 0;
-                    $group->first_seen_at = now();
-                }
+                DB::table('error_log_groups')->upsert([
+                    [
+                        'signature' => $signature,
+                        'level' => $this->normalizeLevel($level),
+                        'exception_class' => $exceptionClass,
+                        'message' => $resolvedMessage,
+                        'file' => $file,
+                        'line' => $line,
+                        'source' => $source,
+                        'occurrence_count' => 1,
+                        'first_seen_at' => $now,
+                        'last_seen_at' => $now,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ],
+                ], ['signature'], [
+                    'occurrence_count' => DB::raw('occurrence_count + 1'),
+                    'last_seen_at' => $now,
+                    'resolved_at' => DB::raw('NULL'),
+                    'resolved_by' => DB::raw('NULL'),
+                    'updated_at' => $now,
+                ]);
 
-                $group->occurrence_count = ($group->occurrence_count ?? 0) + 1;
-                $group->last_seen_at = now();
-
-                if ($group->resolved_at && $group->last_seen_at->gt($group->resolved_at)) {
-                    $group->resolved_at = null;
-                    $group->resolved_by = null;
-                }
-
-                $group->save();
+                $group = ErrorLogGroup::query()->where('signature', $signature)->firstOrFail();
 
                 $occurrence = ErrorLogOccurrence::create([
                     'group_id' => $group->id,
@@ -86,8 +121,6 @@ class ErrorLogRecorder
 
                 $group->last_occurrence_id = $occurrence->id;
                 $group->saveQuietly();
-
-                $this->pruneOccurrences($group->id);
             });
         } catch (Throwable $e) {
             // Swallow — the recorder must never throw or it will recurse through the exception handler.
@@ -219,29 +252,6 @@ class ErrorLogRecorder
             return app()->runningInConsole() ? null : Request::ip();
         } catch (Throwable) {
             return null;
-        }
-    }
-
-    private function pruneOccurrences(int $groupId): void
-    {
-        try {
-            $keepIds = ErrorLogOccurrence::query()
-                ->where('group_id', $groupId)
-                ->orderByDesc('occurred_at')
-                ->orderByDesc('id')
-                ->limit(self::MAX_OCCURRENCES_PER_GROUP)
-                ->pluck('id');
-
-            if ($keepIds->isEmpty()) {
-                return;
-            }
-
-            ErrorLogOccurrence::query()
-                ->where('group_id', $groupId)
-                ->whereNotIn('id', $keepIds)
-                ->delete();
-        } catch (QueryException) {
-            // Best-effort prune; ignore failures.
         }
     }
 }

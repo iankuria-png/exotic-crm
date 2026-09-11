@@ -10,7 +10,9 @@ use App\Models\Product;
 use App\Models\RetentionMetricSnapshot;
 use App\Models\User;
 use App\Services\ClientRetentionInsightService;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -141,6 +143,31 @@ class ClientRetentionInsightTest extends TestCase
         $insight = app(ClientRetentionInsightService::class)->refreshForClient($client);
 
         $this->assertArrayNotHasKey('payments', $insight->component_scores);
+    }
+
+    public function test_market_baseline_is_memoized_per_platform_and_uses_a_sql_average(): void
+    {
+        $platform = $this->createPlatform();
+        $product = $this->createProduct($platform);
+        $firstClient = $this->seedRetentionCohort($platform, $product);
+        $secondClient = Client::query()
+            ->where('platform_id', $platform->id)
+            ->whereKeyNot($firstClient->id)
+            ->firstOrFail();
+        $averageOnlineAgeQueries = 0;
+
+        DB::listen(function (QueryExecuted $query) use (&$averageOnlineAgeQueries): void {
+            if (str_contains(strtolower($query->sql), 'avg(')
+                && str_contains($query->sql, 'last_online_at')) {
+                $averageOnlineAgeQueries++;
+            }
+        });
+
+        $service = app(ClientRetentionInsightService::class);
+        $service->refreshForClient($firstClient);
+        $service->refreshForClient($secondClient);
+
+        $this->assertSame(1, $averageOnlineAgeQueries);
     }
 
     private function seedRetentionCohort(Platform $platform, Product $product): Client

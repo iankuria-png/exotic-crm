@@ -9,6 +9,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class WpSyncServiceSharedKeyTest extends TestCase
@@ -135,6 +136,51 @@ class WpSyncServiceSharedKeyTest extends TestCase
         $this->assertSame(['views' => 12], $first);
         $this->assertSame($first, $second);
         Http::assertSentCount(1);
+    }
+
+    public function test_locations_failure_is_negative_cached_to_avoid_repeated_wordpress_calls(): void
+    {
+        $platform = $this->makePlatform();
+        $baseUrl = rtrim($platform->wp_api_url, '/');
+
+        Http::fake([
+            $baseUrl.'/locations' => Http::response(['message' => 'upstream failure'], 500),
+        ]);
+
+        $sync = new WpSyncService($platform);
+
+        foreach ([1, 2] as $_) {
+            try {
+                $sync->getLocations();
+                $this->fail('Expected the failed WordPress response to throw.');
+            } catch (RequestException|\RuntimeException) {
+                // The second failure should be served by the short negative cache.
+            }
+        }
+
+        Http::assertSentCount(1);
+    }
+
+    public function test_kyc_failure_log_uses_the_actual_request_url_and_truncates_html_body(): void
+    {
+        $platform = $this->makePlatform();
+        $requestUrl = 'https://ug-sync.example.test/wp-json/exotic-kyc/v1/subjects/321/status';
+        $html = '<html>'.str_repeat('failure ', 300).'</html>';
+
+        Http::fake([
+            $requestUrl => Http::response($html, 503),
+        ]);
+
+        Log::shouldReceive('error')->once()->withArgs(function (string $message, array $context) use ($requestUrl, $html): bool {
+            return $message === 'WpSyncService POST failed'
+                && $context['url'] === $requestUrl
+                && mb_strlen($context['body']) <= 1024
+                && $context['body'] !== $html;
+        });
+
+        $this->expectException(RequestException::class);
+
+        (new WpSyncService($platform))->pushKycSubjectStatus(321, ['status' => 'approved']);
     }
 
     private function makePlatform(): Platform

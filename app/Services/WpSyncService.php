@@ -17,6 +17,8 @@ use RuntimeException;
 
 class WpSyncService
 {
+    private const CATALOGUE_FAILURE_CACHE_TTL_SECONDS = 60;
+
     private string $baseUrl;
 
     private string $authHeader;
@@ -362,11 +364,28 @@ class WpSyncService
 
     public function getLocations(): array
     {
-        return Cache::remember(
-            $this->site->cacheKey('locations'),
-            now()->addMinutes(15),
-            fn (): array => $this->get('/locations', [], $this->catalogueTimeout)
-        );
+        $cacheKey = $this->site->cacheKey('locations');
+        $failureCacheKey = $cacheKey.':unavailable';
+
+        if (Cache::has($failureCacheKey)) {
+            throw new RuntimeException('WordPress location catalogue is temporarily unavailable.');
+        }
+
+        try {
+            $locations = Cache::remember(
+                $cacheKey,
+                now()->addMinutes(15),
+                fn (): array => $this->get('/locations', [], $this->catalogueTimeout)
+            );
+        } catch (\Throwable $exception) {
+            Cache::put($failureCacheKey, true, now()->addSeconds(self::CATALOGUE_FAILURE_CACHE_TTL_SECONDS));
+
+            throw $exception;
+        }
+
+        Cache::forget($failureCacheKey);
+
+        return $locations;
     }
 
     public function getCurrencies(): array
@@ -383,11 +402,12 @@ class WpSyncService
         $this->assertMarketAvailable();
 
         $path = "/wp-json/exotic-kyc/v1/subjects/{$postId}/status";
+        $requestUrl = $this->apiRoot().$path;
         $response = Http::withHeaders($this->headers())
             ->timeout($this->defaultTimeout)
-            ->post($this->apiRoot().$path, $payload);
+            ->post($requestUrl, $payload);
 
-        return $this->decodeResponse($response, 'POST', $path);
+        return $this->decodeResponse($response, 'POST', $path, $requestUrl);
     }
 
     /**
@@ -887,23 +907,40 @@ class WpSyncService
         ));
     }
 
-    private function decodeResponse($response, string $method, string $path): array
+    private function decodeResponse($response, string $method, string $path, ?string $requestUrl = null): array
     {
         if ($response->failed()) {
-            $this->logFailedResponse($response, $method, $path);
+            $this->logFailedResponse($response, $method, $path, $requestUrl);
             $response->throw();
         }
 
         return (array) $response->json();
     }
 
-    private function logFailedResponse(Response $response, string $method, string $path): void
+    private function logFailedResponse(Response $response, string $method, string $path, ?string $requestUrl = null): void
     {
         Log::error("WpSyncService {$method} failed", [
-            'url' => $this->baseUrl.$path,
+            'url' => $requestUrl ?? $this->baseUrl.$path,
             'status' => $response->status(),
-            'body' => $response->body(),
+            'body' => $this->failureResponseSummary($response),
         ]);
+    }
+
+    private function failureResponseSummary(Response $response): string
+    {
+        $json = $response->json();
+        if (is_array($json)) {
+            $summary = array_filter([
+                'code' => $json['code'] ?? null,
+                'message' => $json['message'] ?? null,
+            ], static fn ($value): bool => is_string($value) && $value !== '');
+
+            if ($summary !== []) {
+                return (string) json_encode($summary, JSON_UNESCAPED_SLASHES);
+            }
+        }
+
+        return mb_strimwidth($response->body(), 0, 1024, '…');
     }
 
     private function retryDelayMicros(int $attempt): int

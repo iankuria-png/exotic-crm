@@ -42,6 +42,9 @@ class ClientRetentionInsightService
     private const PAYMENT_WINDOW_DAYS = 90;
     private const MIN_MARKET_COHORT = 15;
 
+    /** @var array<int, array{cohort_size: int, average_online_age: float, average_completed_payments: float}|null> */
+    private array $marketBaselines = [];
+
     public function getOrRefreshForClient(Client $client, int $staleAfterMinutes = 720): ClientRetentionInsight
     {
         $client->loadMissing('retentionInsight');
@@ -72,7 +75,7 @@ class ClientRetentionInsightService
     public function refreshForClient(Client|int $client): ?ClientRetentionInsight
     {
         $client = $client instanceof Client
-            ? $client->fresh(['platform'])
+            ? $client->loadMissing('platform')
             : Client::query()->with('platform')->find((int) $client);
 
         if (!$client) {
@@ -737,65 +740,24 @@ class ClientRetentionInsightService
 
     private function buildMarketBaselineComponent(Client $client): array
     {
-        if (!(int) $client->platform_id) {
+        $platformId = (int) $client->platform_id;
+        if (! $platformId) {
+            return $this->unavailableComponent('Market Baseline');
+        }
+
+        if (! array_key_exists($platformId, $this->marketBaselines)) {
+            $this->marketBaselines[$platformId] = $this->buildMarketBaseline($platformId);
+        }
+
+        $baseline = $this->marketBaselines[$platformId];
+        if ($baseline === null) {
             return $this->unavailableComponent('Market Baseline');
         }
 
         $now = now();
-
-        $cohortQuery = Client::query()
-            ->where('platform_id', (int) $client->platform_id)
-            ->where(function ($builder): void {
-                $builder->whereNotNull('last_online_at')
-                    ->orWhereExists(function ($subQuery): void {
-                        $subQuery->selectRaw('1')
-                            ->from('deals')
-                            ->whereColumn('deals.client_id', 'clients.id');
-                    })
-                    ->orWhereExists(function ($subQuery): void {
-                        $subQuery->selectRaw('1')
-                            ->from('payments')
-                            ->whereColumn('payments.client_id', 'clients.id')
-                            ->where(function ($builder): void {
-                                $builder->whereNull('payments.record_classification')
-                                    ->orWhere('payments.record_classification', '!=', Payment::RECORD_CLASSIFICATION_TEST);
-                            })
-                            ->where(function ($builder): void {
-                                $builder->whereNull('payments.provider_environment')
-                                    ->orWhereRaw("LOWER(payments.provider_environment) != ?", ['sandbox']);
-                            })
-                            ->where(function ($builder): void {
-                                $builder->whereNull('payments.payment_data->test_mode')
-                                    ->orWhere('payments.payment_data->test_mode', false);
-                            });
-                    });
-            });
-
-        $cohortSize = (int) $cohortQuery->count();
-        if ($cohortSize < self::MIN_MARKET_COHORT) {
-            return $this->unavailableComponent('Market Baseline');
-        }
-
-        $averageOnlineAge = (float) Client::query()
-            ->where('platform_id', (int) $client->platform_id)
-            ->whereNotNull('last_online_at')
-            ->pluck('last_online_at')
-            ->map(fn ($timestamp): int => Carbon::createFromTimestamp((int) $timestamp)->diffInDays($now))
-            ->avg();
-
-        $averageCompletedPayments = (float) Payment::query()
-            ->reportableSuccessful()
-            ->excludingWalletTopups()
-            ->where('created_at', '>=', now()->subDays(self::PAYMENT_WINDOW_DAYS))
-            ->whereIn('client_id', function ($subQuery) use ($client): void {
-                $subQuery->select('id')
-                    ->from('clients')
-                    ->where('platform_id', (int) $client->platform_id);
-            })
-            ->selectRaw('client_id, COUNT(*) as completed_count')
-            ->groupBy('client_id')
-            ->pluck('completed_count')
-            ->avg();
+        $cohortSize = $baseline['cohort_size'];
+        $averageOnlineAge = $baseline['average_online_age'];
+        $averageCompletedPayments = $baseline['average_completed_payments'];
 
         $clientOnlineAge = $client->last_online_at
             ? Carbon::createFromTimestamp((int) $client->last_online_at)->diffInDays($now)
@@ -851,6 +813,77 @@ class ClientRetentionInsightService
                     'severity' => 66,
                 ] : null,
             ])->filter()->values()->all(),
+        ];
+    }
+
+    /**
+     * Keep one market snapshot for the lifetime of this service instance.
+     * During batch refreshes, later clients intentionally see the baseline as
+     * it stood at batch start rather than a minute-by-minute recalculation.
+     *
+     * @return array{cohort_size: int, average_online_age: float, average_completed_payments: float}|null
+     */
+    private function buildMarketBaseline(int $platformId): ?array
+    {
+        $now = now();
+
+        $cohortQuery = Client::query()
+            ->where('platform_id', $platformId)
+            ->where(function ($builder): void {
+                $builder->whereNotNull('last_online_at')
+                    ->orWhereExists(function ($subQuery): void {
+                        $subQuery->selectRaw('1')
+                            ->from('deals')
+                            ->whereColumn('deals.client_id', 'clients.id');
+                    })
+                    ->orWhereExists(function ($subQuery): void {
+                        $subQuery->selectRaw('1')
+                            ->from('payments')
+                            ->whereColumn('payments.client_id', 'clients.id')
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.record_classification')
+                                    ->orWhere('payments.record_classification', '!=', Payment::RECORD_CLASSIFICATION_TEST);
+                            })
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.provider_environment')
+                                    ->orWhereRaw('LOWER(payments.provider_environment) != ?', ['sandbox']);
+                            })
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.payment_data->test_mode')
+                                    ->orWhere('payments.payment_data->test_mode', false);
+                            });
+                    });
+            });
+
+        $cohortSize = (int) $cohortQuery->count();
+        if ($cohortSize < self::MIN_MARKET_COHORT) {
+            return null;
+        }
+
+        $averageOnlineAge = (float) Client::query()
+            ->where('platform_id', $platformId)
+            ->whereNotNull('last_online_at')
+            ->selectRaw('AVG((? - last_online_at) / 86400.0) as average_online_age', [$now->timestamp])
+            ->value('average_online_age');
+
+        $averageCompletedPayments = (float) Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->where('created_at', '>=', now()->subDays(self::PAYMENT_WINDOW_DAYS))
+            ->whereIn('client_id', function ($subQuery) use ($platformId): void {
+                $subQuery->select('id')
+                    ->from('clients')
+                    ->where('platform_id', $platformId);
+            })
+            ->selectRaw('client_id, COUNT(*) as completed_count')
+            ->groupBy('client_id')
+            ->pluck('completed_count')
+            ->avg();
+
+        return [
+            'cohort_size' => $cohortSize,
+            'average_online_age' => $averageOnlineAge,
+            'average_completed_payments' => $averageCompletedPayments,
         ];
     }
 

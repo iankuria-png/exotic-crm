@@ -14,6 +14,7 @@ use App\Billing\Providers\ProviderSchemaCatalog;
 use App\Billing\Providers\ProviderSchemaRegistry;
 use App\Billing\Routing\BillingRouteResolver;
 use App\Services\Routing\ProviderRoutingDispatcher;
+use App\Services\ErrorLogRecorder;
 use App\Services\Routing\HostedCheckoutRoutingExecutor;
 use App\Services\Routing\MpesaStkRoutingExecutor;
 use App\Services\Routing\SubscriptionRoutingExecutor;
@@ -29,6 +30,10 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $normalizedBilling = $this->normalizedBillingConfig();
+
+        // The recorder carries a small in-process exception marker used to
+        // coordinate Laravel's exception handler with the Monolog tap.
+        $this->app->singleton(ErrorLogRecorder::class);
 
         $this->app->singleton(BillingProviderRegistryContract::class, static fn (): ProviderRegistry => new ProviderRegistry(
             ProviderCatalog::adapters()

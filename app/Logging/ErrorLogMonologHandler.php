@@ -29,12 +29,17 @@ class ErrorLogMonologHandler extends AbstractProcessingHandler
         }
 
         try {
-            app(ErrorLogRecorder::class)->record(
+            $recorder = app(ErrorLogRecorder::class);
+            $source = $exception && $recorder->takeMarkedException($exception)
+                ? 'exception'
+                : 'log';
+
+            $recorder->record(
                 strtolower($record->level->getName()),
                 $exception,
                 $record->message,
                 $context,
-                'log'
+                $source
             );
         } catch (Throwable) {
             // Never let logging recursion crash the request.

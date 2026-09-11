@@ -12,6 +12,8 @@ use Throwable;
 
 class Handler extends ExceptionHandler
 {
+    private bool $errorLogFlushRegistered = false;
+
     /**
      * A list of exception types with their corresponding custom log levels.
      *
@@ -47,9 +49,23 @@ class Handler extends ExceptionHandler
     public function register(): void
     {
         $this->reportable(function (Throwable $e) {
-            app(ErrorLogRecorder::class)->recordException($e, [
-                '__error_log_recorder_skip' => true,
-            ]);
+            $recorder = app(ErrorLogRecorder::class);
+            $recorder->markException($e);
+
+            if (! $this->errorLogFlushRegistered) {
+                $this->errorLogFlushRegistered = true;
+
+                // The normal Monolog path consumes the marker and preserves
+                // its richer request/domain context. These callbacks cover a
+                // logger failure and shutdown before that path can run.
+                app()->terminating(static function () use ($recorder): void {
+                    $recorder->flushMarkedExceptions();
+                });
+
+                register_shutdown_function(static function () use ($recorder): void {
+                    $recorder->flushMarkedExceptions();
+                });
+            }
         });
 
         $this->renderable(function (PostTooLargeException $e, $request) {
