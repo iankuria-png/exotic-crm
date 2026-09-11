@@ -502,23 +502,13 @@ export default function BannerAds() {
     const [metricsRow, setMetricsRow] = useState(null);
 
     const marketsQuery = useQuery({
-        queryKey: ['banner-ad-markets', platformId || 'none'],
-        queryFn: () => api.get('/crm/banner-ads/markets', {
-            params: platformId ? { platform_id: Number(platformId) } : {},
-        }).then((response) => response.data),
+        queryKey: ['banner-ad-markets'],
+        queryFn: () => api.get('/crm/banner-ads/markets').then((response) => response.data),
     });
 
     const markets = marketsQuery.data?.data || [];
     const selectedMarket = markets.find((market) => String(market.id) === String(platformId));
     const canLoadAds = Boolean(platformId && selectedMarket?.banner_ads_ready);
-
-    useEffect(() => {
-        const requested = normalizePlatformId(searchParams.get('platform_id'));
-        if (requested && requested !== platformId) {
-            setPlatformId(requested);
-            setPage(1);
-        }
-    }, [platformId, searchParams]);
 
     useEffect(() => {
         if (typeof window !== 'undefined') {
@@ -541,6 +531,18 @@ export default function BannerAds() {
         }
     }, [platformId, searchParams, setSearchParams]);
 
+    const selectPlatform = (value, { resetPage = true } = {}) => {
+        const nextPlatformId = normalizePlatformId(value);
+        if (nextPlatformId === platformId) {
+            return;
+        }
+
+        setPlatformId(nextPlatformId);
+        if (resetPage) {
+            setPage(1);
+        }
+    };
+
     useEffect(() => {
         if (markets.length === 0) {
             return;
@@ -552,8 +554,7 @@ export default function BannerAds() {
         }
 
         const ready = markets.find((market) => market.banner_ads_ready);
-        setPlatformId(String((ready || markets[0]).id));
-        setPage(1);
+        selectPlatform(String((ready || markets[0]).id));
     }, [markets, platformId]);
 
     const listQuery = useQuery({
@@ -742,7 +743,7 @@ export default function BannerAds() {
                 <div className="grid gap-3 lg:grid-cols-[minmax(220px,320px)_180px_1fr_auto]">
                     <label className="block">
                         <span className="text-xs font-semibold uppercase tracking-[0.10em] text-slate-500">Market</span>
-                        <select className="crm-input mt-1.5" value={platformId} onChange={(event) => { setPlatformId(event.target.value); setPage(1); }}>
+                        <select className="crm-input mt-1.5" value={platformId} onChange={(event) => selectPlatform(event.target.value)}>
                             {platformId && !selectedMarket ? (
                                 <option value={platformId}>Selected market #{platformId}</option>
                             ) : null}
