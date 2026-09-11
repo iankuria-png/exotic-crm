@@ -4,6 +4,7 @@ namespace App\Exceptions;
 
 use App\Http\Middleware\AttachRequestId;
 use App\Services\ErrorLogRecorder;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Http\JsonResponse;
@@ -70,6 +71,27 @@ class Handler extends ExceptionHandler
      * are preserved verbatim so existing frontend readers keep working, and
      * the Ads API (`api/*` outside `api/crm/*`) is never touched.
      */
+    /**
+     * Answer an unauthenticated request with 401, never a redirect.
+     *
+     * The framework default is `redirect()->guest($exception->redirectTo() ?? route('login'))`
+     * for anything that does not look like JSON. This app has no route named
+     * `login` — the SPA owns /login client-side — so that default threw
+     * RouteNotFoundException and produced a 500 for every unauthenticated
+     * request that did not send an explicit JSON Accept header: a bare browser
+     * navigation to an API URL, a fetch() without headers, a retry that dropped
+     * them. Staff saw "something went wrong" instead of being sent to sign in.
+     *
+     * Every route behind this guard is under /api/crm, so a redirect would be
+     * the wrong answer even if the route existed: the caller is code, not a
+     * person. Returning JSON here keeps render()'s CRM normalization intact, so
+     * the response still carries `code` and `request_id` like every other error.
+     */
+    protected function unauthenticated($request, AuthenticationException $exception)
+    {
+        return response()->json(['message' => $exception->getMessage()], 401);
+    }
+
     public function render($request, Throwable $e)
     {
         $response = parent::render($request, $e);
