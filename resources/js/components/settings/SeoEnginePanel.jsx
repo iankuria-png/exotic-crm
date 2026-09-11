@@ -109,6 +109,7 @@ export default function SeoEnginePanel() {
     const [refreshingBalance, setRefreshingBalance] = useState(null);
     const [auditPlatformId, setAuditPlatformId] = useState('');
     const [auditSource, setAuditSource] = useState('all');
+    const [auditScanRequested, setAuditScanRequested] = useState(false);
 
     // Hydrate form when settings load
     useEffect(() => {
@@ -126,7 +127,7 @@ export default function SeoEnginePanel() {
                 ...(auditPlatformId ? { platform_id: auditPlatformId } : {}),
             },
         }).then((r) => r.data),
-        enabled: !!form,
+        enabled: auditScanRequested && !!auditPlatformId,
         staleTime: 60_000,
     });
 
@@ -152,7 +153,7 @@ export default function SeoEnginePanel() {
         queryFn: () => api.get('/crm/seo/quality-repair-candidates', {
             params: { platform_id: auditPlatformId, limit: 100 },
         }).then((r) => r.data),
-        enabled: !!form && !!auditPlatformId,
+        enabled: auditScanRequested && !!auditPlatformId,
         staleTime: 60_000,
     });
 
@@ -458,15 +459,20 @@ export default function SeoEnginePanel() {
             <BioQualityAuditCard
                 platforms={platforms}
                 selectedPlatformId={auditPlatformId}
-                onPlatformChange={setAuditPlatformId}
+                onPlatformChange={(value) => {
+                    setAuditPlatformId(value);
+                    setAuditScanRequested(false);
+                }}
                 source={auditSource}
                 onSourceChange={setAuditSource}
                 data={qualityAuditQuery.data}
                 loading={qualityAuditQuery.isFetching}
                 error={qualityAuditQuery.error}
+                onRunScan={() => setAuditScanRequested(true)}
                 onRefresh={() => qualityAuditQuery.refetch()}
                 onRunRecovery={() => qualityRecoveryMutation.mutate()}
                 runningRecovery={qualityRecoveryMutation.isPending}
+                scanRequested={auditScanRequested}
                 candidates={repairCandidatesQuery.data?.candidates || []}
                 candidatesLoading={repairCandidatesQuery.isFetching}
             />
@@ -495,11 +501,13 @@ function BioQualityAuditCard({
     data,
     loading,
     error,
+    onRunScan,
     onRefresh,
     onRunRecovery,
     runningRecovery,
     candidates,
     candidatesLoading,
+    scanRequested,
 }) {
     const summary = data?.summary || {};
     const platformRows = data?.platforms || [];
@@ -520,18 +528,18 @@ function BioQualityAuditCard({
                 <div className="flex flex-wrap gap-2">
                     <button
                         type="button"
-                        onClick={onRefresh}
-                        disabled={loading}
+                        onClick={onRunScan}
+                        disabled={!selectedPlatformId || loading || candidatesLoading}
                         className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                     >
-                        {loading ? 'Scanning...' : 'Refresh scan'}
+                        {loading || candidatesLoading ? 'Scanning...' : 'Run exact scan'}
                     </button>
                     <button
                         type="button"
                         onClick={onRunRecovery}
-                        disabled={!selectedPlatformId || runningRecovery}
+                        disabled={!selectedPlatformId || !scanRequested || runningRecovery || candidatesLoading}
                         className="rounded-md bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
-                        title={!selectedPlatformId ? 'Select one market before staging optimizer work.' : 'Queue the worst bio-quality profiles into Optimizer approval mode.'}
+                        title={!selectedPlatformId ? 'Select one market before staging optimizer work.' : !scanRequested ? 'Run the exact scan before staging repairs.' : 'Queue the affected profiles into Optimizer approval mode.'}
                     >
                         {runningRecovery ? 'Staging repairs...' : 'Stage exact repairs'}
                     </button>
@@ -570,7 +578,7 @@ function BioQualityAuditCard({
                 <div>
                     <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Sample</span>
                     <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-                        {summary.sample_size || 0} bios
+                        {scanRequested ? `${summary.sample_size || 0} bios` : 'Not run'}
                     </div>
                 </div>
             </div>
@@ -633,7 +641,11 @@ function BioQualityAuditCard({
                             {candidatesLoading ? 'Scanning…' : `${candidates.length} found`}
                         </span>
                     </div>
-                    {candidatesLoading ? (
+                    {!scanRequested ? (
+                        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                            Select this market and click <strong>Run exact scan</strong> when you want to check it.
+                        </div>
+                    ) : candidatesLoading ? (
                         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
                             Searching WordPress for the four known refusal signatures…
                         </div>
@@ -681,7 +693,11 @@ function BioQualityAuditCard({
                         </div>
                     )}
                 </div>
-            ) : null}
+            ) : (
+                <div className="mt-5 border-t border-slate-200 pt-4 text-sm text-slate-600">
+                    Select a market to prepare a manual exact-signature scan. No markets are scanned automatically.
+                </div>
+            )}
 
             {issueSummary ? (
                 <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
