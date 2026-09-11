@@ -152,27 +152,72 @@ class BioQualityAuditService
     public function repairCandidates(int $platformId, int $limit = 100): Collection
     {
         $limit = max(1, min(500, $limit));
+        $matches = collect();
+        $page = 1;
 
-        return $this->liveClientSamples($platformId, max(500, $limit * 5))
-            ->map(function (array $sample): array {
-                $text = (string) $sample['text'];
-                $flags = $this->slopFlags($text);
+        try {
+            while ($matches->count() < $limit) {
+                $scan = WpSyncService::forPlatform($platformId)->scanBioSignatures($page, min(100, $limit));
+                $rows = collect((array) ($scan['data'] ?? []));
+                if ($rows->isEmpty()) {
+                    break;
+                }
 
-                return [
-                    'client_id' => (int) $sample['client_id'],
-                    'wp_post_id' => (int) ($sample['wp_post_id'] ?? 0),
-                    'name' => (string) ($sample['name'] ?? ''),
-                    'profile_slug' => (string) ($sample['profile_slug'] ?? ''),
-                    'issue_score' => $this->clientIssueScore($text, []),
-                    'issues' => array_values(array_unique(array_column($flags, 'label'))),
-                    'refusal_response' => $this->hasRefusalResponse($text),
-                    'snippet' => mb_substr($text, 0, 280),
-                ];
-            })
-            ->filter(fn (array $row): bool => $row['issue_score'] > 0)
-            ->sortByDesc('issue_score')
-            ->take($limit)
-            ->values();
+                $matches = $matches->merge($rows);
+                if ($page >= (int) ($scan['pages'] ?? $page) || $rows->count() < 100) {
+                    break;
+                }
+                $page++;
+            }
+        } catch (\Throwable $exception) {
+            // Local/test installations may not have a configured WP connector.
+            // Keep the deterministic matcher usable against the CRM baseline.
+            report($exception);
+
+            return $this->liveClientSamples($platformId, max(150, $limit * 5))
+                ->map(function (array $sample): array {
+                    $text = (string) $sample['text'];
+
+                    return [
+                        'client_id' => (int) $sample['client_id'],
+                        'wp_post_id' => (int) ($sample['wp_post_id'] ?? 0),
+                        'name' => (string) ($sample['name'] ?? ''),
+                        'profile_slug' => (string) ($sample['profile_slug'] ?? ''),
+                        'issue_score' => 100,
+                        'issues' => ['ai_refusal_response'],
+                        'matched_phrases' => ['known refusal response'],
+                        'refusal_response' => $this->hasRefusalResponse($text),
+                        'snippet' => mb_substr($text, 0, 280),
+                    ];
+                })
+                ->filter(fn (array $row): bool => $row['refusal_response'])
+                ->take($limit)
+                ->values();
+        }
+
+        $wpPostIds = $matches->pluck('wp_post_id')->map(fn ($id): int => (int) $id)->filter()->all();
+        $clients = Client::query()
+            ->where('platform_id', $platformId)
+            ->whereIn('wp_post_id', $wpPostIds)
+            ->get(['id', 'wp_post_id', 'name', 'wp_profile_slug'])
+            ->keyBy('wp_post_id');
+
+        return $matches->map(function (array $row) use ($clients): array {
+            $client = $clients->get((int) ($row['wp_post_id'] ?? 0));
+            $bioMatches = collect((array) ($row['bio_matches'] ?? []));
+
+            return [
+                'client_id' => (int) ($client?->id ?? 0),
+                'wp_post_id' => (int) ($row['wp_post_id'] ?? 0),
+                'name' => (string) ($client?->name ?? $row['name'] ?? ''),
+                'profile_slug' => (string) ($client?->wp_profile_slug ?? $row['wp_profile_slug'] ?? ''),
+                'issue_score' => 100,
+                'issues' => $bioMatches->pluck('key')->values()->all(),
+                'matched_phrases' => $bioMatches->pluck('phrase')->values()->all(),
+                'refusal_response' => true,
+                'snippet' => (string) ($row['bio_preview'] ?? ''),
+            ];
+        })->filter(fn (array $row): bool => $row['client_id'] > 0)->take($limit)->values();
     }
 
     private function scorePlatform(int $platformId, string $source, int $limit, ?Platform $platform = null): array

@@ -533,7 +533,7 @@ function BioQualityAuditCard({
                         className="rounded-md bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
                         title={!selectedPlatformId ? 'Select one market before staging optimizer work.' : 'Queue the worst bio-quality profiles into Optimizer approval mode.'}
                     >
-                        {runningRecovery ? 'Staging...' : 'Stage optimizer run'}
+                        {runningRecovery ? 'Staging repairs...' : 'Stage exact repairs'}
                     </button>
                 </div>
             </div>
@@ -624,16 +624,20 @@ function BioQualityAuditCard({
                 <div className="mt-5 border-t border-slate-200 pt-4">
                     <div className="flex items-center justify-between gap-3">
                         <div>
-                            <h4 className="text-sm font-semibold text-slate-900">Affected profiles</h4>
+                            <h4 className="text-sm font-semibold text-slate-900">Broken AI-response profiles</h4>
                             <p className="mt-1 text-xs text-slate-500">
-                                Read-only preview from the current WordPress bio. Nothing is changed until staged in Optimizer and approved.
+                                Exact signature scan for refusal text in the current WordPress bio. Nothing is changed until staged in Optimizer and approved.
                             </p>
                         </div>
                         <span className="text-xs font-semibold text-slate-500">
                             {candidatesLoading ? 'Scanning…' : `${candidates.length} found`}
                         </span>
                     </div>
-                    {candidates.length > 0 ? (
+                    {candidatesLoading ? (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                            Searching WordPress for the four known refusal signatures…
+                        </div>
+                    ) : candidates.length > 0 ? (
                         <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
                             <table className="min-w-full divide-y divide-slate-200 text-sm">
                                 <thead className="bg-slate-50 text-xs uppercase tracking-[0.08em] text-slate-500">
@@ -653,6 +657,9 @@ function BioQualityAuditCard({
                                             </td>
                                             <td className="px-3 py-2 text-xs text-rose-700">
                                                 {candidate.refusal_response ? 'AI refusal response' : (candidate.issues || []).join(', ') || 'quality issue'}
+                                                {candidate.matched_phrases?.length ? (
+                                                    <div className="mt-1 text-[11px] text-slate-500">“{candidate.matched_phrases.join('” · “')}”</div>
+                                                ) : null}
                                             </td>
                                             <td className="px-3 py-2 font-semibold text-slate-700">{candidate.issue_score}/100</td>
                                             <td className="max-w-[360px] truncate px-3 py-2 text-xs text-slate-500" title={candidate.snippet}>

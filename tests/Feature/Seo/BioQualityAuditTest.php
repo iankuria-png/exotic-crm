@@ -156,6 +156,6 @@ class BioQualityAuditTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('candidates.0.client_id', $client->id)
             ->assertJsonPath('candidates.0.refusal_response', true)
-            ->assertJsonPath('candidates.0.issues.0', 'ai refusal response');
+            ->assertJsonPath('candidates.0.issues.0', 'ai_refusal_response');
     }
 }

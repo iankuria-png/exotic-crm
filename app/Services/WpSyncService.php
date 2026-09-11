@@ -100,6 +100,25 @@ class WpSyncService
     }
 
     /**
+     * Find known broken AI refusal responses in WordPress post_content.
+     * WordPress performs the text filtering server-side, so the CRM does not
+     * need to fetch every full profile just to inspect its bio.
+     */
+    public function scanBioSignatures(int $page = 1, int $perPage = 100, array $types = []): array
+    {
+        $params = [
+            'page' => max(1, $page),
+            'per_page' => max(1, min(100, $perPage)),
+        ];
+
+        if ($types !== []) {
+            $params['types'] = implode(',', array_values(array_unique($types)));
+        }
+
+        return $this->get('/clients/bio-scan', $params);
+    }
+
+    /**
      * Fetch a single client profile
      */
     public function getClient(int $postId): array
