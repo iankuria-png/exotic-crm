@@ -37,6 +37,23 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Missed chats tile
+    |--------------------------------------------------------------------------
+    |
+    | The dashboard reads this figure from cache only. `refresh_minutes` is how
+    | often the scheduled refresh recomputes it, and `max_pages` bounds how far
+    | one market's conversation list is walked — a guard against a pagination
+    | bug becoming an unbounded crawl, not a limit markets are meant to reach.
+    |
+    */
+
+    'missed_chats' => [
+        'max_pages' => (int) env('CRM_MISSED_CHATS_MAX_PAGES', 20),
+        'refresh_minutes' => (int) env('CRM_MISSED_CHATS_REFRESH_MINUTES', 10),
+    ],
+
     'image_proxy' => [
         'connect_timeout' => (int) env('CRM_IMAGE_PROXY_CONNECT_TIMEOUT', 3),
         'timeout' => (int) env('CRM_IMAGE_PROXY_TIMEOUT', 8),

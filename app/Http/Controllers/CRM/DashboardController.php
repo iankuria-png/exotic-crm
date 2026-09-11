@@ -22,7 +22,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\PaymentRecoveryMetricService;
 use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
-use App\Services\SupportBoardService;
+use App\Services\MissedChatsCountService;
 use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Carbon\CarbonInterval;
@@ -1418,65 +1418,17 @@ class DashboardController extends Controller
             ->all();
     }
 
+    /**
+     * Reads the missed-chats figure. Cache only, by design.
+     *
+     * This used to walk up to 50 pages of Support Board conversations per
+     * market, inline, on the CRM's busiest endpoint. MissedChatsCountService
+     * now owns the fetching on a schedule; this is the read side and must never
+     * open a socket. See that class for the full account.
+     */
     private function resolveMissedChatsCount(?array $platformIds): ?int
     {
-        // Short-circuit before touching the database. The per-platform
-        // isConfigured() check below would also refuse, but this is the CRM's
-        // busiest endpoint and there is no reason to query markets and build
-        // twenty service objects to learn the integration is switched off.
-        // null means "no figure available", which the widget already renders.
-        if (! SupportBoardService::isEnabled()) {
-            return null;
-        }
-
-        $platformQuery = Platform::query()
-            ->whereNotNull('support_board_api_url')
-            ->whereNotNull('support_board_token')
-            ->orderBy('id');
-
-        if (is_array($platformIds)) {
-            if (empty($platformIds)) {
-                return 0;
-            }
-
-            $platformQuery->whereIn('id', $platformIds);
-        }
-
-        $platforms = $platformQuery->get();
-        if ($platforms->isEmpty()) {
-            return null;
-        }
-
-        $count = 0;
-        $hasSuccessfulFetch = false;
-
-        foreach ($platforms as $platform) {
-            $service = new SupportBoardService($platform);
-            if (! $service->isConfigured()) {
-                continue;
-            }
-
-            try {
-                $page = 1;
-                while ($page <= 50) {
-                    $batch = $service->getAllConversations($page);
-                    if (empty($batch)) {
-                        break;
-                    }
-
-                    $count += collect($batch)
-                        ->filter(fn (array $conversation) => (int) ($conversation['status_code'] ?? 0) !== 4)
-                        ->count();
-
-                    $hasSuccessfulFetch = true;
-                    $page++;
-                }
-            } catch (\Throwable) {
-                continue;
-            }
-        }
-
-        return $hasSuccessfulFetch ? $count : null;
+        return app(MissedChatsCountService::class)->cachedTotal($platformIds);
     }
 
     private function extractSyncedProfilesTotal(array $result): ?int

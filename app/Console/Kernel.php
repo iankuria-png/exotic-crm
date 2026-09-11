@@ -475,6 +475,18 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_kyc_recompute_exemptions.log'));
 
+        // Every market's missed-chats figure, computed out of band so the
+        // dashboard request never waits on Support Board. runInBackground is
+        // mandatory here: this task makes blocking third-party calls, which is
+        // precisely what it exists to keep off the request path.
+        $schedule->command('crm:refresh-missed-chats')
+            ->name('crm_refresh_missed_chats')
+            ->cron(sprintf('*/%d * * * *', max(1, min(30, (int) config('crm.missed_chats.refresh_minutes', 10)))))
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_refresh_missed_chats.log'));
+
         $schedule->command('crm:prune-error-logs')
             ->name('crm_prune_error_logs')
             ->dailyAt('02:40')
