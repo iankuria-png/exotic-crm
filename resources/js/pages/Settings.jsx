@@ -7033,6 +7033,40 @@ function errorLogSourceLabel(source) {
     }
 }
 
+function errorLogPriority(level) {
+    switch ((level || '').toLowerCase()) {
+        case 'emergency':
+        case 'alert':
+        case 'critical':
+            return {
+                label: 'Urgent',
+                dot: 'bg-rose-400',
+            };
+        case 'error':
+            return {
+                label: 'Error',
+                dot: 'bg-amber-300',
+            };
+        default:
+            return {
+                label: 'Event',
+                dot: 'bg-slate-400',
+            };
+    }
+}
+
+function errorLogTime(value) {
+    if (!value) return 'Never';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+
+    const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function ErrorLogsWorkspace() {
     const queryClient = useQueryClient();
     const [page, setPage] = useState(1);
@@ -7082,123 +7116,96 @@ function ErrorLogsWorkspace() {
 
     const groups = listQuery.data?.data || [];
     const summary = listQuery.data?.summary || {};
-
-    const columns = [
-        {
-            key: 'error',
-            label: 'Error',
-            render: (row) => (
-                <div className="max-w-[460px]">
-                    <p className="text-sm font-semibold text-slate-900">{row.exception_class ? row.exception_class.split('\\').pop() : 'Log entry'}</p>
-                    <p className="truncate text-xs text-slate-600">{row.message}</p>
-                    {row.file ? <p className="truncate text-[11px] text-slate-400">{row.file}{row.line ? `:${row.line}` : ''}</p> : null}
-                </div>
-            ),
-        },
-        {
-            key: 'occurrence_count',
-            label: 'Count',
-            render: (row) => (
-                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
-                    {Number(row.occurrence_count || 0).toLocaleString()}
-                </span>
-            ),
-        },
-        {
-            key: 'level',
-            label: 'Level',
-            render: (row) => (
-                <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${errorLogLevelClasses(row.level)}`}>
-                    {row.level || 'error'}
-                </span>
-            ),
-        },
-        {
-            key: 'source',
-            label: 'Source',
-            render: (row) => <span className="text-xs text-slate-700">{errorLogSourceLabel(row.source)}</span>,
-        },
-        {
-            key: 'first_seen',
-            label: 'First Seen',
-            render: (row) => <span className="text-xs text-slate-600">{row.first_seen_at ? new Date(row.first_seen_at).toLocaleString() : '—'}</span>,
-        },
-        {
-            key: 'last_seen',
-            label: 'Last Seen',
-            render: (row) => <span className="text-xs text-slate-600">{row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '—'}</span>,
-        },
-        {
-            key: 'actions',
-            label: 'Actions',
-            render: (row) => (
-                <div className="flex gap-2">
-                    <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedGroupId(row.id);
-                    }}>
-                        Inspect
-                    </button>
-                    {row.resolved_at ? (
-                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
-                            event.stopPropagation();
-                            reopenMutation.mutate(row.id);
-                        }}>
-                            Reopen
-                        </button>
-                    ) : (
-                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
-                            event.stopPropagation();
-                            resolveMutation.mutate(row.id);
-                        }}>
-                            Resolve
-                        </button>
-                    )}
-                </div>
-            ),
-        },
-    ];
+    const activeCount = Number(summary.unresolved_total || 0);
+    const urgentCount = Number(summary.unresolved_critical || 0);
+    const totalCount = Number(listQuery.data?.total || 0);
+    const filtersActive = Boolean(search || levelFilter || sourceFilter || statusFilter !== 'unresolved');
+    const pagination = listQuery.data || {};
 
     const detail = detailQuery.data;
 
     return (
-        <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-5">
-                <MetricCard
-                    label="Unresolved Critical"
-                    value={Number(summary.unresolved_critical || 0).toLocaleString()}
-                    meta="critical / alert / emergency"
-                    tone={(summary.unresolved_critical || 0) > 0 ? 'danger' : 'success'}
-                />
-                <MetricCard
-                    label="Top Offender"
-                    value={summary.top_offender?.label || '—'}
-                    meta={summary.top_offender ? `${Number(summary.top_offender.count || 0).toLocaleString()} occurrences` : 'no unresolved issues'}
-                    tone={summary.top_offender ? 'warning' : 'success'}
-                />
-                <MetricCard
-                    label="Errors Today"
-                    value={Number(summary.occurrences_today || 0).toLocaleString()}
-                    meta="occurrence count sum"
-                    tone="default"
-                />
-                <MetricCard
-                    label="Resolved This Week"
-                    value={Number(summary.resolved_last_7_days || 0).toLocaleString()}
-                    meta="last 7 days"
-                    tone="success"
-                />
+        <div className="error-pulse space-y-5">
+            <section className="error-pulse-hero">
+                <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="max-w-2xl">
+                        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-200">
+                            <span className={`h-2 w-2 rounded-full ${listQuery.isFetching ? 'animate-pulse bg-teal-300' : 'bg-teal-400'}`} aria-hidden="true" />
+                            Error pulse · refreshes every 30 seconds
+                        </div>
+                        <h2 className="mt-3 text-3xl font-semibold tracking-[-0.045em] text-white">Know what is failing, before it becomes noise.</h2>
+                        <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">A live incident queue for application exceptions, background work, and browser failures. Open an incident to inspect its trace and request context.</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                        <button type="button" className="error-pulse-export" onClick={() => setExportOpen(true)}>
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                            </svg>
+                            Export incidents
+                        </button>
+                    </div>
+                </div>
+
+                <div className="relative z-10 mt-7 grid divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/30 sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
+                    <div className="px-5 py-4">
+                        <p className="error-pulse-stat-label">Open incidents</p>
+                        <p className="error-pulse-stat-value">{activeCount.toLocaleString()}</p>
+                        <p className="mt-1 text-xs text-slate-400">deduplicated signatures</p>
+                    </div>
+                    <div className="px-5 py-4">
+                        <p className="error-pulse-stat-label">Needs attention</p>
+                        <p className={`error-pulse-stat-value ${urgentCount > 0 ? 'text-rose-200' : ''}`}>{urgentCount.toLocaleString()}</p>
+                        <p className="mt-1 text-xs text-slate-400">critical, alert, emergency</p>
+                    </div>
+                    <div className="px-5 py-4">
+                        <p className="error-pulse-stat-label">Occurrences today</p>
+                        <p className="error-pulse-stat-value">{Number(summary.occurrences_today || 0).toLocaleString()}</p>
+                        <p className="mt-1 text-xs text-slate-400">across all error groups</p>
+                    </div>
+                    <div className="px-5 py-4">
+                        <p className="error-pulse-stat-label">Resolved this week</p>
+                        <p className="error-pulse-stat-value text-teal-200">{Number(summary.resolved_last_7_days || 0).toLocaleString()}</p>
+                        <p className="mt-1 text-xs text-slate-400">last seven days</p>
+                    </div>
+                </div>
+
+                <div className="relative z-10 mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-300">
+                    <span className="text-slate-500">Top offender</span>
+                    <span className="font-medium text-white">{summary.top_offender?.label || 'No unresolved errors'}</span>
+                    {summary.top_offender ? <span className="tabular-nums text-xs text-amber-200">{Number(summary.top_offender.count || 0).toLocaleString()} occurrences</span> : null}
+                </div>
             </section>
 
-            <section className="crm-filter-row">
-                <div className="flex flex-wrap items-center gap-3">
+            <section className="error-pulse-controls" aria-label="Filter error incidents">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <h3 className="text-base font-semibold tracking-tight text-slate-900">Incident queue</h3>
+                                <p className="mt-0.5 text-xs text-slate-500">{totalCount.toLocaleString()} {totalCount === 1 ? 'group' : 'groups'} match this view</p>
+                            </div>
+                            {filtersActive ? (
+                                <button type="button" className="text-xs font-semibold text-teal-700 underline-offset-4 hover:underline" onClick={() => {
+                                    setSearch('');
+                                    setSearchInput('');
+                                    setLevelFilter('');
+                                    setSourceFilter('');
+                                    setStatusFilter('unresolved');
+                                    setPage(1);
+                                }}>
+                                    Reset filters
+                                </button>
+                            ) : null}
+                        </div>
+
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1.6fr)_minmax(130px,.7fr)_minmax(130px,.7fr)]">
                     <form
                         onSubmit={(event) => {
                             event.preventDefault();
                             setSearch(searchInput.trim());
                             setPage(1);
                         }}
-                        className="min-w-[240px] flex-1"
+                        className="min-w-0"
                     >
                         <div className="relative">
                             <input
@@ -7236,51 +7243,91 @@ function ErrorLogsWorkspace() {
                         <option value="queue_job">Queue job</option>
                         <option value="client">Browser</option>
                     </select>
-                    <select
-                        value={statusFilter}
-                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
-                        className="crm-input min-w-[140px]"
-                    >
-                        <option value="unresolved">Unresolved</option>
-                        <option value="resolved">Resolved</option>
-                        <option value="">All</option>
-                    </select>
-                    {(search || levelFilter || sourceFilter || statusFilter !== 'unresolved') ? (
-                        <button type="button" className="crm-btn-secondary px-3 py-2" onClick={() => {
-                            setSearch('');
-                            setSearchInput('');
-                            setLevelFilter('');
-                            setSourceFilter('');
-                            setStatusFilter('unresolved');
-                            setPage(1);
-                        }}>
-                            Reset
-                        </button>
-                    ) : null}
-                    <button
-                        type="button"
-                        className="crm-btn-secondary ml-auto inline-flex items-center gap-2 px-3 py-2"
-                        onClick={() => setExportOpen(true)}
-                    >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
-                        </svg>
-                        Export
-                    </button>
+                        </div>
+                    </div>
+                    <div className="flex rounded-lg bg-slate-100 p-1" role="group" aria-label="Incident status">
+                        {[
+                            ['unresolved', 'Open'],
+                            ['resolved', 'Resolved'],
+                            ['', 'All'],
+                        ].map(([value, label]) => (
+                            <button
+                                key={label}
+                                type="button"
+                                onClick={() => { setStatusFilter(value); setPage(1); }}
+                                className={`rounded-md px-3 py-2 text-xs font-semibold transition ${statusFilter === value ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Errors are deduplicated by signature. Click Inspect for the full stack trace and last 20 occurrences.</p>
             </section>
 
-            <DataTable
-                columns={columns}
-                data={groups}
-                pagination={listQuery.data}
-                onPageChange={setPage}
-                onRowClick={(row) => setSelectedGroupId(row.id)}
-                isLoading={listQuery.isLoading}
-                compact
-                emptyMessage="No errors match the current filters."
-            />
+            <section className="error-pulse-queue" aria-live="polite">
+                <header className="hidden grid-cols-[minmax(0,1.6fr)_100px_120px_130px_96px] gap-4 border-b border-slate-200 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:grid">
+                    <span>Incident</span>
+                    <span>Occurrences</span>
+                    <span>Source</span>
+                    <span>Last seen</span>
+                    <span className="text-right">Action</span>
+                </header>
+                {listQuery.isLoading ? (
+                    <div className="space-y-3 p-5" aria-label="Loading incidents">
+                        {[0, 1, 2, 3].map((index) => <div key={index} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}
+                    </div>
+                ) : groups.length === 0 ? (
+                    <div className="px-6 py-16 text-center">
+                        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-teal-50 text-teal-700">✓</div>
+                        <h3 className="mt-4 text-sm font-semibold text-slate-900">No incidents match this view</h3>
+                        <p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500">Try changing the time-independent filters, or return to open incidents to continue triage.</p>
+                    </div>
+                ) : groups.map((row) => {
+                    const priority = errorLogPriority(row.level);
+                    const title = row.exception_class ? row.exception_class.split('\\').pop() : 'Log entry';
+                    const isResolved = Boolean(row.resolved_at);
+
+                    return (
+                        <article key={row.id} className="group grid gap-4 border-b border-slate-100 px-5 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1.6fr)_100px_120px_130px_96px] lg:items-center">
+                            <button type="button" onClick={() => setSelectedGroupId(row.id)} className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2">
+                                <div className="flex items-center gap-2">
+                                    <span className={`h-2 w-2 shrink-0 rounded-full ${isResolved ? 'bg-teal-500' : priority.dot}`} aria-hidden="true" />
+                                    <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${isResolved ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>{isResolved ? 'Resolved' : priority.label}</span>
+                                </div>
+                                <h3 className="mt-2 truncate text-sm font-semibold text-slate-900 group-hover:text-teal-800">{title}</h3>
+                                <p className="mt-1 truncate text-xs text-slate-600">{row.message}</p>
+                                {row.file ? <p className="crm-mono mt-1 truncate text-[10px] text-slate-400">{row.file}{row.line ? `:${row.line}` : ''}</p> : null}
+                            </button>
+                            <div className="flex items-center justify-between gap-3 text-sm lg:block">
+                                <span className="text-xs text-slate-500 lg:hidden">Occurrences</span>
+                                <span className="tabular-nums font-semibold text-slate-800">{Number(row.occurrence_count || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3 text-sm lg:block">
+                                <span className="text-xs text-slate-500 lg:hidden">Source</span>
+                                <span className="text-xs font-medium text-slate-700">{errorLogSourceLabel(row.source)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3 text-sm lg:block" title={row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : undefined}>
+                                <span className="text-xs text-slate-500 lg:hidden">Last seen</span>
+                                <span className="tabular-nums text-xs text-slate-600">{errorLogTime(row.last_seen_at)}</span>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                                <button type="button" className="error-pulse-row-action" onClick={() => setSelectedGroupId(row.id)}>Inspect</button>
+                                {!isResolved ? <button type="button" className="error-pulse-row-action" onClick={() => resolveMutation.mutate(row.id)} disabled={resolveMutation.isPending}>Resolve</button> : null}
+                            </div>
+                        </article>
+                    );
+                })}
+
+                {pagination.total > 0 ? (
+                    <footer className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="tabular-nums text-xs text-slate-500">Showing {((pagination.current_page - 1) * pagination.per_page) + 1}–{Math.min(pagination.current_page * pagination.per_page, pagination.total)} of {Number(pagination.total).toLocaleString()}</p>
+                        <div className="flex gap-2">
+                            <button type="button" className="error-pulse-row-action" onClick={() => setPage(pagination.current_page - 1)} disabled={pagination.current_page <= 1}>Previous</button>
+                            <button type="button" className="error-pulse-row-action" onClick={() => setPage(pagination.current_page + 1)} disabled={pagination.current_page >= pagination.last_page}>Next</button>
+                        </div>
+                    </footer>
+                ) : null}
+            </section>
 
             <DiagnosticsExportModal
                 open={exportOpen}
@@ -9489,10 +9536,10 @@ export default function Settings() {
 
     return (
         <div className="space-y-4">
-            {activeTab === 'mcp' ? null : <PageHeader title="Settings" subtitle="Configure integrations, templates, and operational controls." />}
+            {['mcp', 'error-logs'].includes(activeTab) ? null : <PageHeader title="Settings" subtitle="Configure integrations, templates, and operational controls." />}
 
             <section className="crm-surface overflow-hidden p-2">
-                <div className={`flex gap-1 ${activeTab === 'mcp' ? 'min-w-max flex-nowrap overflow-x-auto pb-1' : 'flex-wrap'}`}>
+                <div className={`flex gap-1 ${['mcp', 'error-logs'].includes(activeTab) ? 'min-w-max flex-nowrap overflow-x-auto pb-1' : 'flex-wrap'}`}>
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}

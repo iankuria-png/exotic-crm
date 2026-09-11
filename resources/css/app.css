@@ -134,6 +134,50 @@
         @apply rounded-xl border border-slate-200 bg-white p-3 shadow-sm;
     }
 
+    .error-pulse-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.5rem;
+        background-color: #101a2d;
+        box-shadow: 0 24px 60px -36px rgba(15, 23, 42, 0.75);
+        @apply border border-slate-800 px-5 py-6 sm:px-7;
+    }
+
+    .error-pulse-hero::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        opacity: 0.38;
+        background-image: radial-gradient(rgba(148, 163, 184, 0.36) 0.7px, transparent 0.7px);
+        background-size: 15px 15px;
+        mask-image: linear-gradient(110deg, black, transparent 74%);
+        pointer-events: none;
+    }
+
+    .error-pulse-stat-label {
+        @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400;
+    }
+
+    .error-pulse-stat-value {
+        @apply mt-2 tabular-nums text-2xl font-semibold tracking-tight text-white;
+    }
+
+    .error-pulse-export {
+        @apply inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3.5 py-2.5 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300;
+    }
+
+    .error-pulse-controls {
+        @apply rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_16px_40px_-32px_rgba(15,23,42,0.46)];
+    }
+
+    .error-pulse-queue {
+        @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_44px_-36px_rgba(15,23,42,0.48)];
+    }
+
+    .error-pulse-row-action {
+        @apply inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-45;
+    }
+
     .crm-kpi {
         @apply rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm;
     }
