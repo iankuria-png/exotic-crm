@@ -585,25 +585,47 @@ class ForecastBaselineService
             ? "datetime(deals.expires_at, '+{$settleDays} days')"
             : "DATE_ADD(deals.expires_at, INTERVAL {$settleDays} DAY)";
 
-        $renewalJoin = function ($join) use ($paidAt, $windowOpen, $windowClose) {
-            $join->on(function ($identity) {
-                // payments.client_id is nullable, so accept the deal link as well.
-                $identity->on('payments.client_id', '=', 'deals.client_id')
-                    ->orOn('payments.deal_id', '=', 'deals.id');
-            })
+        // Asked as two EXISTS rather than one join, because the join had no
+        // access path the engine could use and no index could give it one.
+        //
+        // It matched on `payments.client_id = deals.client_id OR
+        // payments.deal_id = deals.id`, and an index can serve either equality
+        // but never "one or the other" inside an ON clause. The window bounds
+        // made it worse: COALESCE() on the payments side is not sargable, and
+        // DATE_SUB/DATE_ADD(deals.expires_at) makes the range per-row rather
+        // than constant. With no key to seek on it degenerated to comparing
+        // every eligible deal against every reportable payment — roughly 560
+        // million pair evaluations on production data, each running date
+        // arithmetic. Production's slow log measured it at 20.9s.
+        //
+        // EXISTS(A OR B) is EXISTS(A) OR EXISTS(B) over the same predicates, so
+        // the answer is unchanged, but each branch now seeks an index:
+        // payments_deal_status_idx for the deal link, and
+        // payments_forecast_client_lifecycle_idx for the client link — an index
+        // added for this query that the join shape had made unusable. Same
+        // count on a production snapshot, 24.2s down to 0.45s.
+        //
+        // distinct() went with the join that needed it: EXISTS matches a deal
+        // once however many payments satisfy it.
+        $renewalPaymentExists = function (string $linkColumn, string $linkTarget)
+        use ($paidAt, $windowOpen, $windowClose) {
+            return Payment::query()
+                ->reportableSuccessful()
+                ->excludingWalletTopups()
+                ->selectRaw('1')
+                ->whereColumn($linkColumn, $linkTarget)
+                ->where('payments.subscription_lifecycle', '=', 'renewal')
                 ->whereRaw("{$paidAt} >= {$windowOpen}")
                 ->whereRaw("{$paidAt} <= {$windowClose}")
-                ->where('payments.subscription_lifecycle', '=', 'renewal');
+                ->getQuery();
         };
 
         $renewed = (int) (clone $eligibleQuery)
-            ->joinSub(
-                Payment::query()->reportableSuccessful()->excludingWalletTopups()
-                    ->select(['payments.id', 'payments.client_id', 'payments.deal_id', 'payments.subscription_lifecycle', 'payments.completed_at', 'payments.created_at', 'payments.amount', 'payments.currency', 'payments.platform_id']),
-                'payments',
-                $renewalJoin
-            )
-            ->distinct()
+            ->where(function (Builder $outer) use ($renewalPaymentExists) {
+                $outer
+                    ->whereExists($renewalPaymentExists('payments.client_id', 'deals.client_id'))
+                    ->orWhereExists($renewalPaymentExists('payments.deal_id', 'deals.id'));
+            })
             ->count('deals.id');
 
         $avgTicket = $this->averagePaymentTicket($context, $platformScope, 'renewal');
