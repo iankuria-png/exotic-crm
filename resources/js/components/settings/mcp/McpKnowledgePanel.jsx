@@ -36,6 +36,9 @@ export default function McpKnowledgePanel({ canManage }) {
     const active = data.active_release;
     const latestRun = data.runs?.[0];
     const snapshots = data.versions || [];
+    const failure = stageError || (latestRun?.status === 'failed'
+        ? { code: latestRun.error_code || 'sync_failed', message: 'The previous staging run did not complete.' }
+        : null);
 
     return <section className="crm-surface overflow-hidden" data-testid="mcp-knowledge-panel">
         <div className="flex flex-col gap-4 border-b border-slate-200 p-5 sm:flex-row sm:items-end sm:justify-between">
@@ -52,8 +55,7 @@ export default function McpKnowledgePanel({ canManage }) {
             <Fact label="Approved snapshots" value={String(snapshots.filter((version) => version.status === 'ready').length)} />
             <Fact label="Latest run" value={latestRun?.status || 'None'} />
         </div>
-        {stageError ? <FailureNotice error={stageError} /> : null}
-        {!stageError && latestRun?.status === 'failed' ? <FailureNotice error={{ code: latestRun.error_code || 'sync_failed', message: 'The previous staging run did not complete. Review the cause below, then stage again.' }} /> : null}
+        {failure ? <FailureNotice error={failure} canRetry={canManage && Boolean(active)} isRetrying={stage.isPending} onRetry={() => stage.mutate()} /> : null}
         <div className="divide-y divide-slate-100">
             {snapshots.map((version) => <div className="flex flex-wrap items-center justify-between gap-3 p-4" key={version.id}>
                 <div><p className="font-medium text-slate-800">{version.version}</p><p className="mt-1 text-xs text-slate-500">{version.status} · {version.content_sha256?.slice(0, 12)}…</p></div>
@@ -64,11 +66,15 @@ export default function McpKnowledgePanel({ canManage }) {
     </section>;
 }
 
-function FailureNotice({ error }) {
+function FailureNotice({ error, canRetry, isRetrying, onRetry }) {
     return <div className="border-b border-rose-100 bg-rose-50 px-5 py-4 text-sm text-rose-950" role="alert">
-        <p className="font-semibold">Knowledge staging needs attention</p>
+        <p className="font-semibold">Knowledge staging did not finish</p>
         <p className="mt-1 leading-6">{error.message}</p>
-        <p className="mt-1 text-xs font-medium uppercase tracking-[0.1em] text-rose-700">Run code: {error.code}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+            {canRetry ? <button type="button" className="rounded-md bg-rose-700 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={isRetrying} onClick={onRetry}>{isRetrying ? 'Retrying staging…' : 'Retry staging'}</button> : null}
+            <p className="text-xs leading-5 text-rose-800">{canRetry ? 'This starts a fresh staging run. The failed run remains in the audit trail.' : 'Activate the ontology before trying again.'}</p>
+        </div>
+        <p className="mt-3 text-xs font-medium uppercase tracking-[0.1em] text-rose-700">Run code: {error.code}</p>
     </div>;
 }
 
