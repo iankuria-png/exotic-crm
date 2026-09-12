@@ -8,6 +8,7 @@ use App\Models\LifecycleRestoreRun;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Support\ClientLifecycleState;
+use App\Support\LifecyclePolicy;
 use App\Support\LifecycleRestoreEligibility;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -187,6 +188,7 @@ class ProfileLifecycleRestoreService
                         'lifecycle_state' => $state,
                         'lifecycle_expired_at' => $expiredAt,
                         'lifecycle_archived_at' => $state === ClientLifecycleState::ARCHIVED ? now() : null,
+                        'lifecycle_archive_deferred_until' => null,
                         'lifecycle_restored_at' => now(),
                         'lifecycle_restore_run_id' => $run->id,
                     ])->save();
@@ -424,6 +426,7 @@ class ProfileLifecycleRestoreService
                 'lifecycle_state' => ClientLifecycleState::ACTIVE,
                 'lifecycle_expired_at' => null,
                 'lifecycle_archived_at' => null,
+                'lifecycle_archive_deferred_until' => null,
                 'lifecycle_restored_at' => null,
                 'lifecycle_restore_run_id' => null,
             ])->save();
@@ -518,7 +521,7 @@ class ProfileLifecycleRestoreService
             return $run->target_state;
         }
 
-        $archiveAfterDays = (int) config('crm.lifecycle.archive_after_days', 90);
+        $archiveAfterDays = LifecyclePolicy::archiveAfterDays();
 
         return $expiredAt->copy()->addDays($archiveAfterDays)->isPast()
             ? ClientLifecycleState::ARCHIVED

@@ -493,6 +493,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-refresh-display-images', [ClientController::class, 'bulkRefreshDisplayImages'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/archive-recovery/preview', [ClientController::class, 'archiveRecoveryPreview'])->middleware('role:admin,sub_admin');
+    Route::post('/clients/archive-recovery/runs', [ClientController::class, 'startArchiveRecovery'])->middleware('role:admin,sub_admin');
+    Route::get('/clients/archive-recovery/runs/{run}', [ClientController::class, 'showArchiveRecovery'])->middleware('role:admin,sub_admin');
     // Close-case routes — static segments MUST sit before /clients/{client} or route-model binding swallows them.
     Route::get('/clients/close-reasons', [ClientController::class, 'closeReasons'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/closed-reasons-summary', [ClientController::class, 'closedReasonsSummary'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');

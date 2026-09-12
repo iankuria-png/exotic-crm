@@ -1267,6 +1267,7 @@ function IntegrationsWorkspace({
     const [integrationArea, setIntegrationArea] = useState(currentUserRole === 'sales' ? 'pbn' : 'overview');
     const [selectedPlatformId, setSelectedPlatformId] = useState(null);
     const [editor, setEditor] = useState(null);
+    const [archiveAfterDaysDraft, setArchiveAfterDaysDraft] = useState('');
     const [createOpen, setCreateOpen] = useState(false);
     const [createForm, setCreateForm] = useState(defaultPlatformForm());
     const [testReason, setTestReason] = useState('Connection health check from settings');
@@ -1726,14 +1727,27 @@ function IntegrationsWorkspace({
         enabled: canManageMarkets && integrationArea === 'markets',
     });
 
+    useEffect(() => {
+        if (lifecycleSettingsQuery.data?.archive_after_days === undefined) {
+            return;
+        }
+
+        setArchiveAfterDaysDraft(String(lifecycleSettingsQuery.data.archive_after_days));
+    }, [lifecycleSettingsQuery.data?.archive_after_days]);
+
     const updateLifecycleSettingsMutation = useMutation({
         mutationFn: (payload) => api.patch('/crm/settings/lifecycle', payload).then((response) => response.data),
-        onSuccess: (response) => {
+        onSuccess: (response, payload) => {
             queryClient.setQueryData(['settings-lifecycle'], response);
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            toast.success(response?.master_enabled
-                ? 'Profile lifecycle enabled globally (per-market flags apply).'
-                : 'Profile lifecycle disabled everywhere — legacy expiry behaviour active.');
+            if (Object.prototype.hasOwnProperty.call(payload, 'archive_after_days')) {
+                setArchiveAfterDaysDraft(String(response?.archive_after_days || ''));
+                toast.success(`Archive window set to ${response?.archive_after_days} days.`);
+            } else {
+                toast.success(response?.master_enabled
+                    ? 'Profile lifecycle enabled globally (per-market flags apply).'
+                    : 'Profile lifecycle disabled everywhere — legacy expiry behaviour active.');
+            }
             (response?.lifecycle_policy_push_warnings || []).forEach((warning) => toast.error(warning));
         },
         onError: (error) => {
@@ -5036,25 +5050,57 @@ function IntegrationsWorkspace({
                             </p>
                         </div>
                         {canCreateMarkets ? (
-                            <button
-                                type="button"
-                                disabled={updateLifecycleSettingsMutation.isPending}
-                                onClick={() => {
-                                    const next = !lifecycleSettingsQuery.data.master_enabled;
-                                    const prompt = next
-                                        ? 'Re-enable the profile lifecycle globally? Markets with the per-market flag resume keeping expired profiles published.'
-                                        : 'Disable the profile lifecycle EVERYWHERE? All markets revert to legacy behaviour (expiry takes profiles offline) until re-enabled.';
-                                    if (window.confirm(prompt)) {
-                                        updateLifecycleSettingsMutation.mutate({ master_enabled: next });
-                                    }
-                                }}
-                                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${lifecycleSettingsQuery.data.master_enabled ? 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50' : 'border-teal-300 bg-teal-600 text-white hover:bg-teal-700'}`}
-                            >
-                                {updateLifecycleSettingsMutation.isPending
-                                    ? 'Saving…'
-                                    : lifecycleSettingsQuery.data.master_enabled ? 'Disable everywhere' : 'Enable lifecycle'}
-                            </button>
+                            <div className="flex flex-wrap items-end gap-2">
+                                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                                    Archive window
+                                    <span className="flex items-center gap-1.5">
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="3650"
+                                            inputMode="numeric"
+                                            value={archiveAfterDaysDraft}
+                                            onChange={(event) => setArchiveAfterDaysDraft(event.target.value)}
+                                            disabled={updateLifecycleSettingsMutation.isPending}
+                                            aria-describedby="archive-window-help"
+                                            className="w-20 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm font-semibold text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60"
+                                        />
+                                        <span className="font-medium text-slate-500">days expired</span>
+                                    </span>
+                                </label>
+                                <button
+                                    type="button"
+                                    disabled={updateLifecycleSettingsMutation.isPending
+                                        || !/^\d+$/.test(archiveAfterDaysDraft)
+                                        || Number(archiveAfterDaysDraft) < 1
+                                        || Number(archiveAfterDaysDraft) > 3650
+                                        || Number(archiveAfterDaysDraft) === Number(lifecycleSettingsQuery.data.archive_after_days)}
+                                    onClick={() => updateLifecycleSettingsMutation.mutate({ archive_after_days: Number(archiveAfterDaysDraft) })}
+                                    className="rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Save window
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={updateLifecycleSettingsMutation.isPending}
+                                    onClick={() => {
+                                        const next = !lifecycleSettingsQuery.data.master_enabled;
+                                        const prompt = next
+                                            ? 'Re-enable the profile lifecycle globally? Markets with the per-market flag resume keeping expired profiles published.'
+                                            : 'Disable the profile lifecycle EVERYWHERE? All markets revert to legacy behaviour (expiry takes profiles offline) until re-enabled.';
+                                        if (window.confirm(prompt)) {
+                                            updateLifecycleSettingsMutation.mutate({ master_enabled: next });
+                                        }
+                                    }}
+                                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${lifecycleSettingsQuery.data.master_enabled ? 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50' : 'border-teal-300 bg-teal-600 text-white hover:bg-teal-700'}`}
+                                >
+                                    {updateLifecycleSettingsMutation.isPending
+                                        ? 'Saving…'
+                                        : lifecycleSettingsQuery.data.master_enabled ? 'Disable everywhere' : 'Enable lifecycle'}
+                                </button>
+                            </div>
                         ) : null}
+                        <p id="archive-window-help" className="sr-only">Profiles remain published as Expired for this number of days before being archived.</p>
                     </div>
                 ) : null}
 

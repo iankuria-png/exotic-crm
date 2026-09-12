@@ -87,6 +87,17 @@ function createBulkDeleteDialogState(platformId = '') {
     };
 }
 
+function createArchiveRecoveryDialogState(platformId = '', selectedClients = []) {
+    return {
+        open: false,
+        platformId: String(platformId || ''),
+        scope: selectedClients.length > 0 ? 'selected' : 'market_archived',
+        mode: 'policy',
+        selectedClients,
+        preview: null,
+    };
+}
+
 function percentage(part, total) {
     if (!total) return 0;
     return Math.round((Number(part || 0) / Number(total)) * 100);
@@ -543,7 +554,8 @@ export default function Clients() {
     const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canBulkTakeSeoPlaceholdersPrivate = ['admin', 'sub_admin'].includes(String(user?.role || ''));
-    const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
+    const canRunArchiveRecovery = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canSelectClients = canBulkRefreshThumbnails || canDeleteClients || canRunArchiveRecovery;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     // SEO Recovery republishes public content, so it matches the admin-only
@@ -660,6 +672,9 @@ export default function Clients() {
     const [bulkSeoPrivateSelection, setBulkSeoPrivateSelection] = useState([]);
     const [showBulkSeoPrivateConfirm, setShowBulkSeoPrivateConfirm] = useState(false);
     const [bulkDeleteDialog, setBulkDeleteDialog] = useState(() => createBulkDeleteDialogState(''));
+    const [archiveRecoveryDialog, setArchiveRecoveryDialog] = useState(() => createArchiveRecoveryDialogState(''));
+    const [archiveRecoveryRunId, setArchiveRecoveryRunId] = useState(null);
+    const [archiveRecoveryCompletionNotifiedId, setArchiveRecoveryCompletionNotifiedId] = useState(null);
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
         client: null,
@@ -701,7 +716,7 @@ export default function Clients() {
         setCityKeyFilter((current) => (current === nextCityKey ? current : nextCityKey));
     }, [searchParams]);
 
-    const { data, isLoading } = useQuery({
+    const { data, isLoading, isFetching } = useQuery({
         queryKey: [
             'clients',
             page,
@@ -1170,6 +1185,86 @@ export default function Clients() {
         },
     });
 
+    const buildArchiveRecoveryPayload = (dialogState) => ({
+        platform_id: Number(dialogState.platformId),
+        scope: dialogState.scope,
+        mode: dialogState.mode,
+        ...(dialogState.scope === 'selected' ? {
+            client_ids: dialogState.selectedClients
+                .map((client) => Number(client.id))
+                .filter((clientId) => clientId > 0),
+        } : {}),
+    });
+
+    const archiveRecoveryPreviewMutation = useMutation({
+        mutationFn: (dialogState) => api.post(
+            '/crm/clients/archive-recovery/preview',
+            buildArchiveRecoveryPayload(dialogState),
+        ).then((response) => response.data),
+        onSuccess: (preview) => {
+            setArchiveRecoveryDialog((current) => ({ ...current, preview }));
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Recovery preview could not be loaded.');
+        },
+    });
+
+    const archiveRecoveryStartMutation = useMutation({
+        mutationFn: (dialogState) => api.post(
+            '/crm/clients/archive-recovery/runs',
+            buildArchiveRecoveryPayload(dialogState),
+        ).then((response) => response.data),
+        onSuccess: (response) => {
+            const run = response?.data;
+            setArchiveRecoveryDialog(createArchiveRecoveryDialogState(platformFilter));
+            setArchiveRecoveryRunId(run?.id || null);
+            setClearSelectionKey((current) => current + 1);
+            toast.success('Archive recovery queued. It will continue in the background for this market.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Archive recovery could not be started.');
+        },
+    });
+
+    const archiveRecoveryRunQuery = useQuery({
+        queryKey: ['archive-recovery-run', archiveRecoveryRunId],
+        queryFn: () => api.get(`/crm/clients/archive-recovery/runs/${archiveRecoveryRunId}`).then((response) => response.data?.data),
+        enabled: Boolean(archiveRecoveryRunId),
+        refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status) ? 1500 : false,
+    });
+
+    useEffect(() => {
+        const run = archiveRecoveryRunQuery.data;
+        if (!run || ['queued', 'running'].includes(run.status) || archiveRecoveryCompletionNotifiedId === run.id) {
+            return;
+        }
+
+        setArchiveRecoveryCompletionNotifiedId(run.id);
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+        if (run.status === 'completed') {
+            const result = [
+                `${Number(run.restored_count || 0).toLocaleString()} restored`,
+                Number(run.skipped_count || 0) ? `${Number(run.skipped_count).toLocaleString()} skipped` : null,
+                Number(run.failed_count || 0) ? `${Number(run.failed_count).toLocaleString()} failed` : null,
+            ].filter(Boolean).join(' · ');
+            toast.success(`Archive recovery complete: ${result}.`);
+            return;
+        }
+
+        toast.error(run.notes || 'Archive recovery stopped before it could complete.');
+    }, [archiveRecoveryCompletionNotifiedId, archiveRecoveryRunQuery.data, queryClient, toast]);
+
+    const openArchiveRecoveryDialog = (selectedClients = []) => {
+        if (!platformFilter) {
+            toast.warning('Choose one market before recovering archived profiles.');
+            return;
+        }
+
+        const archivedSelection = selectedClients.filter((client) => client?.profile_status === 'archived' || client?.lifecycle_state === 'archived');
+        setArchiveRecoveryDialog(createArchiveRecoveryDialogState(platformFilter, archivedSelection));
+    };
+
     const bulkSeoPrivateMutation = useMutation({
         mutationFn: ({ clientIds, reason }) => api.post('/crm/clients/bulk-seo-placeholder-private', {
             client_ids: clientIds,
@@ -1353,6 +1448,23 @@ export default function Clients() {
                     ? undefined
                     : 'None of the selected clients match the SEO placeholder guard. Check the March import window, no-expiry, no-payment, no-history criteria.'
             ),
+        }] : []),
+        ...(canRunArchiveRecovery ? [{
+            key: 'archive-recovery-selected',
+            label: 'Recover selected',
+            variant: 'primary',
+            onClick: (rowsSelection) => openArchiveRecoveryDialog(rowsSelection),
+            isDisabled: (rowsSelection) => !platformFilter
+                || !rowsSelection.some((row) => row?.profile_status === 'archived' || row?.lifecycle_state === 'archived'),
+            getDisabledReason: (rowsSelection) => {
+                if (!platformFilter) {
+                    return 'Choose one market before recovering archived profiles.';
+                }
+
+                return rowsSelection.some((row) => row?.profile_status === 'archived' || row?.lifecycle_state === 'archived')
+                    ? undefined
+                    : 'Select at least one archived profile to recover.';
+            },
         }] : []),
         ...(canCloseCases ? [{
             key: 'bulk-close-cases',
@@ -2753,6 +2865,51 @@ export default function Clients() {
                 </section>
             ) : null}
 
+            {isFetching && data?.data?.length ? (
+                <div className="mb-2 text-right text-xs text-slate-400" role="status" aria-live="polite">
+                    Refreshing clients…
+                </div>
+            ) : null}
+
+            {canRunArchiveRecovery && statusFilter === 'archived' ? (
+                <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-teal-200 bg-teal-50/70 px-4 py-3">
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">Return archived profiles to Expired</p>
+                        <p className="mt-0.5 text-xs text-slate-600">
+                            {platformFilter
+                                ? 'Preview this market’s archived cohort before queuing a safe, background recovery.'
+                                : 'Choose a market first. Recovery is intentionally limited to one market per run.'}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        disabled={!platformFilter || archiveRecoveryStartMutation.isPending}
+                        onClick={() => openArchiveRecoveryDialog()}
+                        className="rounded-lg border border-teal-300 bg-white px-3 py-2 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Recover archived cohort
+                    </button>
+                </section>
+            ) : null}
+
+            {archiveRecoveryRunQuery.data ? (
+                <section className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${['queued', 'running'].includes(archiveRecoveryRunQuery.data.status) ? 'border-sky-200 bg-sky-50 text-sky-900' : archiveRecoveryRunQuery.data.status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`} aria-live="polite">
+                    <div>
+                        <p className="font-semibold">
+                            Archive recovery {archiveRecoveryRunQuery.data.status === 'running' ? 'in progress' : archiveRecoveryRunQuery.data.status}
+                        </p>
+                        <p className="mt-0.5 text-xs opacity-80">
+                            {Number(archiveRecoveryRunQuery.data.restored_count || 0).toLocaleString()} restored
+                            {' · '}{Number(archiveRecoveryRunQuery.data.skipped_count || 0).toLocaleString()} skipped
+                            {' · '}{Number(archiveRecoveryRunQuery.data.failed_count || 0).toLocaleString()} failed
+                        </p>
+                    </div>
+                    {archiveRecoveryRunQuery.data.mode === 'override' && archiveRecoveryRunQuery.data.archive_deferred_until ? (
+                        <span className="rounded-md bg-white/70 px-2 py-1 text-xs font-semibold">Protected until {new Date(archiveRecoveryRunQuery.data.archive_deferred_until).toLocaleDateString()}</span>
+                    ) : null}
+                </section>
+            ) : null}
+
             <DataTable
                 columns={columns}
                 data={data?.data}
@@ -2813,6 +2970,106 @@ export default function Clients() {
                     }}
                 />
             ) : null}
+
+            <ConfirmDialog
+                open={archiveRecoveryDialog.open}
+                title="Recover archived profiles"
+                message="This restores profiles to Expired and returns them to listings. Contact details stay hidden until the client renews."
+                confirmLabel={archiveRecoveryDialog.mode === 'override' ? 'Run override recovery' : 'Run policy recovery'}
+                confirmDisabled={!archiveRecoveryDialog.preview
+                    || archiveRecoveryPreviewMutation.isPending
+                    || archiveRecoveryStartMutation.isPending
+                    || Number(archiveRecoveryDialog.preview?.summary?.will_restore || 0) === 0}
+                isPending={archiveRecoveryStartMutation.isPending}
+                onCancel={() => {
+                    if (archiveRecoveryPreviewMutation.isPending || archiveRecoveryStartMutation.isPending) {
+                        return;
+                    }
+                    setArchiveRecoveryDialog(createArchiveRecoveryDialogState(platformFilter));
+                }}
+                onConfirm={() => archiveRecoveryStartMutation.mutate(archiveRecoveryDialog)}
+            >
+                <div className="space-y-3 text-sm">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Scope</p>
+                        <div className="mt-2 grid gap-2">
+                            {archiveRecoveryDialog.selectedClients.length > 0 ? (
+                                <label className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                    <input
+                                        type="radio"
+                                        name="archive-recovery-scope"
+                                        checked={archiveRecoveryDialog.scope === 'selected'}
+                                        onChange={() => setArchiveRecoveryDialog((current) => ({ ...current, scope: 'selected', preview: null }))}
+                                        className="mt-0.5"
+                                    />
+                                    <span><span className="font-semibold text-slate-900">Selected profiles</span><br /><span className="text-xs text-slate-500">{archiveRecoveryDialog.selectedClients.length.toLocaleString()} archived profile{archiveRecoveryDialog.selectedClients.length === 1 ? '' : 's'} selected on this page.</span></span>
+                                </label>
+                            ) : null}
+                            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                <input
+                                    type="radio"
+                                    name="archive-recovery-scope"
+                                    checked={archiveRecoveryDialog.scope === 'market_archived'}
+                                    onChange={() => setArchiveRecoveryDialog((current) => ({ ...current, scope: 'market_archived', preview: null }))}
+                                    className="mt-0.5"
+                                />
+                                <span><span className="font-semibold text-slate-900">All archived in this market</span><br /><span className="text-xs text-slate-500">Includes every archived profile in {activeMarketName || 'the selected market'}, not only this page of results.</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Recovery rule</p>
+                        <div className="mt-2 grid gap-2">
+                            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-teal-200 bg-white px-3 py-2">
+                                <input
+                                    type="radio"
+                                    name="archive-recovery-mode"
+                                    checked={archiveRecoveryDialog.mode === 'policy'}
+                                    onChange={() => setArchiveRecoveryDialog((current) => ({ ...current, mode: 'policy', preview: null }))}
+                                    className="mt-0.5"
+                                />
+                                <span><span className="font-semibold text-slate-900">Within the current archive window</span><br /><span className="text-xs text-slate-500">Restores only profiles whose original expiry is within the configured window. Recommended.</span></span>
+                            </label>
+                            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-amber-300 bg-amber-50/60 px-3 py-2">
+                                <input
+                                    type="radio"
+                                    name="archive-recovery-mode"
+                                    checked={archiveRecoveryDialog.mode === 'override'}
+                                    onChange={() => setArchiveRecoveryDialog((current) => ({ ...current, mode: 'override', preview: null }))}
+                                    className="mt-0.5"
+                                />
+                                <span><span className="font-semibold text-amber-950">Override — recover every archived profile</span><br /><span className="text-xs text-amber-800">Preserves original expiry dates and protects recovered profiles from re-archiving for a fresh full archive window from this run.</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    {archiveRecoveryDialog.preview ? (
+                        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-semibold">Preview ready</span>
+                                <span className="crm-mono text-lg font-bold">{Number(archiveRecoveryDialog.preview.summary?.will_restore || 0).toLocaleString()}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-emerald-800">Profiles to restore. {Number(archiveRecoveryDialog.preview.summary?.skipped || 0).toLocaleString()} selected profile{Number(archiveRecoveryDialog.preview.summary?.skipped || 0) === 1 ? '' : 's'} do not meet this recovery rule.</p>
+                            {archiveRecoveryDialog.mode === 'override' && archiveRecoveryDialog.preview.archive_deferred_until ? (
+                                <p className="mt-2 text-xs font-medium text-emerald-900">Override protection ends {new Date(archiveRecoveryDialog.preview.archive_deferred_until).toLocaleDateString()}.</p>
+                            ) : null}
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            disabled={archiveRecoveryPreviewMutation.isPending}
+                            onClick={() => archiveRecoveryPreviewMutation.mutate(archiveRecoveryDialog)}
+                            className="w-full rounded-md border border-teal-300 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {archiveRecoveryPreviewMutation.isPending ? 'Checking archived profiles…' : 'Review recovery cohort'}
+                        </button>
+                    )}
+                    {archiveRecoveryDialog.preview && Number(archiveRecoveryDialog.preview.summary?.will_restore || 0) === 0 ? (
+                        <p className="text-xs text-amber-700">Nothing matches this scope and recovery rule. Adjust the rule or select a different cohort.</p>
+                    ) : null}
+                </div>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={showBulkThumbnailRefreshConfirm}

@@ -26,8 +26,7 @@ class LifecycleRestoreController extends Controller
         private readonly ProfileLifecycleRestoreService $restorer,
         private readonly MarketAuthorizationService $marketAuth,
         private readonly FeatureSettingsService $settings,
-    ) {
-    }
+    ) {}
 
     /**
      * Candidate count + sample for a configuration. No writes — this is what
@@ -264,8 +263,8 @@ class LifecycleRestoreController extends Controller
                 LifecycleRestorePacing::ALL
             ),
             'bad_close_reasons' => LifecycleRestoreEligibility::BAD_CLOSE_REASONS,
-            'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
-            'default_filters' => (new LifecycleRestoreEligibility())->toArray(),
+            'archive_after_days' => \App\Support\LifecyclePolicy::archiveAfterDays(),
+            'default_filters' => (new LifecycleRestoreEligibility)->toArray(),
         ]);
     }
 

@@ -3155,7 +3155,7 @@ class SettingsController extends Controller
 
         return response()->json([
             'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
-            'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
+            'archive_after_days' => \App\Support\LifecyclePolicy::archiveAfterDays(),
             'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
         ]);
     }
@@ -3169,38 +3169,67 @@ class SettingsController extends Controller
         );
 
         $validated = $request->validate([
-            'master_enabled' => 'required|boolean',
+            'master_enabled' => 'sometimes|boolean',
+            'archive_after_days' => [
+                'sometimes',
+                'integer',
+                'min:'.\App\Support\LifecyclePolicy::MIN_ARCHIVE_AFTER_DAYS,
+                'max:'.\App\Support\LifecyclePolicy::MAX_ARCHIVE_AFTER_DAYS,
+            ],
             'reason' => 'nullable|string|max:500',
         ]);
 
-        $before = ['master_enabled' => \App\Support\LifecyclePolicy::masterEnabled()];
-        \App\Support\LifecyclePolicy::setMasterEnabled((bool) $validated['master_enabled'], (int) $request->user()->id);
+        if (! array_key_exists('master_enabled', $validated) && ! array_key_exists('archive_after_days', $validated)) {
+            throw ValidationException::withMessages([
+                'settings' => 'Choose a lifecycle setting to update.',
+            ]);
+        }
+
+        $before = [
+            'master_enabled' => \App\Support\LifecyclePolicy::masterEnabled(),
+            'archive_after_days' => \App\Support\LifecyclePolicy::archiveAfterDays(),
+        ];
+        $actorId = (int) $request->user()->id;
+
+        if (array_key_exists('master_enabled', $validated)) {
+            \App\Support\LifecyclePolicy::setMasterEnabled((bool) $validated['master_enabled'], $actorId);
+        }
+        if (array_key_exists('archive_after_days', $validated)) {
+            \App\Support\LifecyclePolicy::setArchiveAfterDays((int) $validated['archive_after_days'], $actorId);
+        }
+
+        $masterIsEnabled = \App\Support\LifecyclePolicy::masterEnabled();
+        $archiveAfterDays = \App\Support\LifecyclePolicy::archiveAfterDays();
+        $after = [
+            'master_enabled' => $masterIsEnabled,
+            'archive_after_days' => $archiveAfterDays,
+        ];
 
         // Global setting — recorded in the activity log (audit_log rows are
         // platform-scoped and reject platform_id 0), matching auth settings.
         \App\Helpers\LogHelper::record($request->user(), CrmAuditAction::LIFECYCLE_SETTINGS_UPDATE, $request, [
             'before' => $before,
-            'after' => ['master_enabled' => (bool) $validated['master_enabled']],
-            'reason' => $validated['reason'] ?? 'Updated profile lifecycle master switch from CRM settings',
+            'after' => $after,
+            'reason' => $validated['reason'] ?? 'Updated profile lifecycle settings from CRM settings',
         ]);
 
         // The master switch changes the EFFECTIVE policy on every opted-in market —
         // mirror the new effective state to each of their WordPress sites so the
         // legacy expiry sweeps stand down / resume accordingly.
         $pushWarnings = [];
-        $actorId = (int) $request->user()->id;
         $masterWasEnabled = (bool) ($before['master_enabled'] ?? false);
-        $masterIsEnabled = \App\Support\LifecyclePolicy::masterEnabled();
         $optedInPlatforms = Platform::query()->where('lifecycle_policy_enabled', true)->get();
 
-        $optedInPlatforms->each(function (Platform $platform) use (&$pushWarnings): void {
-            $warning = $this->pushLifecyclePolicyToWordPress($platform);
-            if ($warning !== null) {
-                $pushWarnings[] = $warning;
-            }
-        });
+        if (array_key_exists('master_enabled', $validated)) {
+            $optedInPlatforms->each(function (Platform $platform) use (&$pushWarnings): void {
+                $warning = $this->pushLifecyclePolicyToWordPress($platform);
+                if ($warning !== null) {
+                    $pushWarnings[] = $warning;
+                }
+            });
+        }
 
-        if ($masterWasEnabled && ! $masterIsEnabled) {
+        if (array_key_exists('master_enabled', $validated) && $masterWasEnabled && ! $masterIsEnabled) {
             $optedInPlatforms->each(function (Platform $platform) use ($actorId): void {
                 $this->resetLifecycleRestorePacing($platform, $actorId);
                 RollbackLifecycleProfilesJob::dispatch((int) $platform->id, $actorId, 'global_lifecycle_disabled');
@@ -3209,7 +3238,7 @@ class SettingsController extends Controller
 
         return response()->json(array_filter([
             'master_enabled' => $masterIsEnabled,
-            'archive_after_days' => (int) config('crm.lifecycle.archive_after_days', 90),
+            'archive_after_days' => $archiveAfterDays,
             'enabled_market_count' => Platform::query()->where('lifecycle_policy_enabled', true)->count(),
             'lifecycle_policy_push_warnings' => $pushWarnings ?: null,
         ], static fn ($value) => $value !== null));

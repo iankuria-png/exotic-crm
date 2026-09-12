@@ -194,7 +194,7 @@ class ActiveSubscriptionProfileRepairService
     {
         $planType = strtolower((string) $deal->plan_type);
         $client ??= $deal->client ?? $deal->client()->first();
-        $expiryTimestamp = $this->repairExpiryTimestamp($deal, $client ?? new Client());
+        $expiryTimestamp = $this->repairExpiryTimestamp($deal, $client ?? new Client);
         $isPremium = in_array($planType, ['premium', 'vip', 'vvip'], true);
         $isFeatured = in_array($planType, ['vip', 'vvip'], true);
 
@@ -205,6 +205,7 @@ class ActiveSubscriptionProfileRepairService
             'lifecycle_state' => ClientLifecycleState::ACTIVE,
             'lifecycle_expired_at' => null,
             'lifecycle_archived_at' => null,
+            'lifecycle_archive_deferred_until' => null,
             'lifecycle_restored_at' => null,
             'lifecycle_restore_run_id' => null,
             'escort_expire' => $expiryTimestamp,

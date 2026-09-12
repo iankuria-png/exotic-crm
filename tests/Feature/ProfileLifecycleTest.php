@@ -3,11 +3,15 @@
 namespace Tests\Feature;
 
 use App\Jobs\RollbackLifecycleProfilesJob;
+use App\Jobs\RunLifecycleArchiveRecoveryJob;
 use App\Models\Client;
+use App\Models\LifecycleArchiveRecoveryRun;
 use App\Models\Platform;
 use App\Services\ClientLifecycleService;
 use App\Services\FeatureSettingsService;
+use App\Services\LifecycleArchiveRecoveryService;
 use App\Services\WpSyncService;
+use App\Support\LifecyclePolicy;
 use App\Support\LifecycleRestorePacing;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -384,6 +388,90 @@ class ProfileLifecycleTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         app(ClientLifecycleService::class)->archive($client->fresh(), null);
+    }
+
+    public function test_admin_can_configure_the_global_archive_window(): void
+    {
+        $admin = $this->createAdminUser();
+        \Laravel\Sanctum\Sanctum::actingAs($admin);
+
+        $this->patchJson('/api/crm/settings/lifecycle', [
+            'archive_after_days' => 120,
+            'reason' => 'Retention policy adjustment',
+        ])
+            ->assertOk()
+            ->assertJsonPath('archive_after_days', 120);
+
+        $this->assertSame(120, LifecyclePolicy::archiveAfterDays());
+        $this->getJson('/api/crm/settings/lifecycle')
+            ->assertOk()
+            ->assertJsonPath('archive_after_days', 120);
+    }
+
+    public function test_archive_command_respects_a_future_recovery_deferral(): void
+    {
+        $platform = $this->createPlatform();
+        $protected = $this->createExpiredClient($platform, 740, now()->subDays(100));
+        $protected->forceFill(['lifecycle_archive_deferred_until' => now()->addDays(10)])->save();
+        $eligible = $this->createExpiredClient($platform, 741, now()->subDays(100));
+        $this->fakeWpLifecycle($platform, 741, 'archived');
+
+        $this->artisan('crm:archive-expired', ['--days' => 90])->assertExitCode(0);
+
+        $this->assertSame('expired', $protected->fresh()->lifecycle_state);
+        $this->assertSame('archived', $eligible->fresh()->lifecycle_state);
+    }
+
+    public function test_override_recovery_restores_old_archived_profiles_and_sets_a_fresh_deferral(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 750,
+            'name' => 'Historical archive',
+            'profile_status' => 'publish',
+            'lifecycle_state' => 'archived',
+            'lifecycle_expired_at' => now()->subDays(365),
+            'lifecycle_archived_at' => now()->subDays(275),
+        ]);
+        $this->fakeWpLifecycle($platform, 750, 'expired');
+
+        $run = LifecycleArchiveRecoveryRun::query()->create([
+            'platform_id' => $platform->id,
+            'mode' => LifecycleArchiveRecoveryRun::MODE_OVERRIDE,
+            'scope' => LifecycleArchiveRecoveryRun::SCOPE_MARKET_ARCHIVED,
+            'archive_after_days' => 90,
+            'status' => LifecycleArchiveRecoveryRun::STATUS_QUEUED,
+        ]);
+
+        app(LifecycleArchiveRecoveryService::class)->execute($run);
+
+        $fresh = $client->fresh();
+        $this->assertSame('expired', $fresh->lifecycle_state);
+        $this->assertTrue($fresh->lifecycle_expired_at->isBefore(now()->subDays(300)), 'Original expiry date must be preserved.');
+        $this->assertTrue($fresh->lifecycle_archive_deferred_until->isAfter(now()->addDays(89)));
+        $this->assertSame(LifecycleArchiveRecoveryRun::STATUS_COMPLETED, $run->fresh()->status);
+        $this->assertSame(1, $run->fresh()->restored_count);
+    }
+
+    public function test_recovery_start_queues_a_market_scoped_job(): void
+    {
+        Queue::fake();
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        \Laravel\Sanctum\Sanctum::actingAs($admin);
+
+        $this->postJson('/api/crm/clients/archive-recovery/runs', [
+            'platform_id' => $platform->id,
+            'scope' => LifecycleArchiveRecoveryRun::SCOPE_MARKET_ARCHIVED,
+            'mode' => LifecycleArchiveRecoveryRun::MODE_OVERRIDE,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.platform_id', $platform->id)
+            ->assertJsonPath('data.mode', LifecycleArchiveRecoveryRun::MODE_OVERRIDE)
+            ->assertJsonPath('data.status', LifecycleArchiveRecoveryRun::STATUS_QUEUED);
+
+        Queue::assertPushed(RunLifecycleArchiveRecoveryJob::class, fn (RunLifecycleArchiveRecoveryJob $job) => $job->runId > 0);
     }
 
     private function createExpiredClient(Platform $platform, int $wpPostId, $expiredAt = null): Client

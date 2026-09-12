@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Client;
 use App\Services\ClientLifecycleService;
 use App\Support\ClientLifecycleState;
+use App\Support\LifecyclePolicy;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -12,7 +13,8 @@ use Throwable;
 /**
  * Move long-term Expired profiles to Archived. Archived profiles stay published
  * and indexed (URL retains SEO value) but are excluded from city/category
- * listings. The dwell time is configurable via config('crm.lifecycle.archive_after_days').
+ * listings. The dwell time is a runtime lifecycle setting, with the config value
+ * providing its initial fallback.
  */
 class ArchiveExpiredProfiles extends Command
 {
@@ -29,12 +31,12 @@ class ArchiveExpiredProfiles extends Command
         $dryRun = (bool) $this->option('dry-run');
         $days = $this->option('days') !== null
             ? max(0, (int) $this->option('days'))
-            : (int) config('crm.lifecycle.archive_after_days', 90);
+            : LifecyclePolicy::archiveAfterDays();
         $limit = max(1, (int) $this->option('limit'));
         $platformId = $this->option('platform') !== null ? (int) $this->option('platform') : null;
 
         // Global kill switch: with the policy disabled everywhere, there is nothing to archive.
-        if (! \App\Support\LifecyclePolicy::masterEnabled()) {
+        if (! LifecyclePolicy::masterEnabled()) {
             $this->info('Profile lifecycle master switch is off — skipping.');
 
             return self::SUCCESS;
@@ -46,6 +48,10 @@ class ArchiveExpiredProfiles extends Command
             ->lifecycle(ClientLifecycleState::EXPIRED)
             ->whereNotNull('lifecycle_expired_at')
             ->where('lifecycle_expired_at', '<=', $cutoff)
+            ->where(function ($builder): void {
+                $builder->whereNull('lifecycle_archive_deferred_until')
+                    ->orWhere('lifecycle_archive_deferred_until', '<=', now());
+            })
             // Only markets that have opted in to the lifecycle policy.
             ->whereHas('platform', fn ($q) => $q->where('lifecycle_policy_enabled', true))
             ->orderBy('lifecycle_expired_at')
@@ -72,6 +78,7 @@ class ArchiveExpiredProfiles extends Command
             if ($dryRun) {
                 $this->line(sprintf('  would archive #%d %s', $client->id, (string) $client->name));
                 $archived++;
+
                 continue;
             }
 
@@ -81,7 +88,7 @@ class ArchiveExpiredProfiles extends Command
                 $this->line(sprintf('  archived #%d %s', $client->id, (string) $client->name));
             } catch (Throwable $e) {
                 $failed++;
-                $this->error("  Failed client #{$client->id}: " . $e->getMessage());
+                $this->error("  Failed client #{$client->id}: ".$e->getMessage());
                 Log::error('Auto-archive failed for client', [
                     'client_id' => $client->id,
                     'wp_post_id' => $client->wp_post_id,

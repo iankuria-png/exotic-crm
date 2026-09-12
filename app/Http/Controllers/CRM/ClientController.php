@@ -5,11 +5,13 @@ namespace App\Http\Controllers\CRM;
 use App\Exceptions\ClientCaseClosureException;
 use App\Http\Controllers\Controller;
 use App\Jobs\ConvertClientVideoUploadJob;
+use App\Jobs\RunLifecycleArchiveRecoveryJob;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\Lead;
+use App\Models\LifecycleArchiveRecoveryRun;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
@@ -40,6 +42,7 @@ use App\Services\CredentialDeliveryService;
 use App\Services\DealPaymentService;
 use App\Services\ExpiredSubscriptionReconciler;
 use App\Services\LeadAssignmentService;
+use App\Services\LifecycleArchiveRecoveryService;
 use App\Services\MarketAuthorizationService;
 use App\Services\MediaConversionStatusService;
 use App\Services\NotificationService;
@@ -111,6 +114,7 @@ class ClientController extends Controller
         private readonly ClientSegmentService $clientSegmentService,
         private readonly ExpiredSubscriptionReconciler $expiredSubscriptionReconciler,
         private readonly ClientLifecycleService $clientLifecycleService,
+        private readonly LifecycleArchiveRecoveryService $lifecycleArchiveRecoveryService,
         private readonly ChurnAggregatorService $churnAggregatorService,
         private readonly ClientChurnStamper $clientChurnStamper,
         private readonly ClientLifetimeValueService $clientLifetimeValueService,
@@ -1406,6 +1410,13 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
         $client->loadMissing('platform');
 
+        if ($client->lifecycle_expired_at !== null
+            && $client->lifecycle_expired_at->lte(now()->subDays(\App\Support\LifecyclePolicy::archiveAfterDays()))) {
+            return response()->json([
+                'message' => 'This profile is outside the current archive window. An administrator can restore it from Clients → Archived using the recovery override.',
+            ], 422);
+        }
+
         $before = ['lifecycle_state' => $client->lifecycle_state];
 
         try {
@@ -1573,6 +1584,143 @@ class ClientController extends Controller
         }
 
         return response()->json($outcome);
+    }
+
+    /** Preview an Archived -> Expired recovery run without changing WordPress. */
+    public function archiveRecoveryPreview(Request $request)
+    {
+        [$platform, $options] = $this->resolveArchiveRecoveryRequest($request);
+
+        return response()->json([
+            'platform' => [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+            ],
+            'mode' => $options['mode'],
+            'scope' => $options['scope'],
+        ] + $this->lifecycleArchiveRecoveryService->preview($platform, $options));
+    }
+
+    /** Create and queue a market-scoped archive recovery run. */
+    public function startArchiveRecovery(Request $request)
+    {
+        [$platform, $options] = $this->resolveArchiveRecoveryRequest($request);
+
+        if (LifecycleArchiveRecoveryRun::query()
+            ->where('platform_id', (int) $platform->id)
+            ->whereIn('status', [
+                LifecycleArchiveRecoveryRun::STATUS_QUEUED,
+                LifecycleArchiveRecoveryRun::STATUS_RUNNING,
+            ])
+            ->exists()) {
+            throw new ConflictHttpException('An archive recovery run is already in progress for this market.');
+        }
+
+        $run = LifecycleArchiveRecoveryRun::create([
+            'platform_id' => (int) $platform->id,
+            'requested_by' => $request->user()?->id,
+            'mode' => $options['mode'],
+            'scope' => $options['scope'],
+            'client_ids' => $options['client_ids'] ?? null,
+            'archive_after_days' => \App\Support\LifecyclePolicy::archiveAfterDays(),
+            'status' => LifecycleArchiveRecoveryRun::STATUS_QUEUED,
+        ]);
+
+        RunLifecycleArchiveRecoveryJob::dispatch((int) $run->id);
+
+        return response()->json(['data' => $this->presentArchiveRecoveryRun($run)], 201);
+    }
+
+    /** Poll a queued or active archive recovery run from the Clients workspace. */
+    public function showArchiveRecovery(Request $request, LifecycleArchiveRecoveryRun $run)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $run->platform_id,
+            'You do not have access to this market.'
+        );
+
+        return response()->json(['data' => $this->presentArchiveRecoveryRun($run->fresh())]);
+    }
+
+    /** @return array{0: Platform, 1: array{scope:string,mode:string,client_ids?:array<int, int>}} */
+    private function resolveArchiveRecoveryRequest(Request $request): array
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'scope' => 'required|string|in:'.implode(',', [
+                LifecycleArchiveRecoveryRun::SCOPE_SELECTED,
+                LifecycleArchiveRecoveryRun::SCOPE_MARKET_ARCHIVED,
+            ]),
+            'mode' => 'required|string|in:'.implode(',', [
+                LifecycleArchiveRecoveryRun::MODE_POLICY,
+                LifecycleArchiveRecoveryRun::MODE_OVERRIDE,
+            ]),
+            'client_ids' => 'required_if:scope,'.LifecycleArchiveRecoveryRun::SCOPE_SELECTED.'|array|max:150',
+            'client_ids.*' => 'integer|distinct|exists:clients,id',
+        ]);
+
+        $platform = Platform::query()->findOrFail((int) $validated['platform_id']);
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        if (! $platform->lifecycleEnabled()) {
+            throw ValidationException::withMessages([
+                'platform_id' => 'The profile lifecycle is not enabled for this market.',
+            ]);
+        }
+
+        $options = [
+            'scope' => (string) $validated['scope'],
+            'mode' => (string) $validated['mode'],
+        ];
+
+        if ($options['scope'] === LifecycleArchiveRecoveryRun::SCOPE_SELECTED) {
+            $clientIds = array_values(array_unique(array_map('intval', $validated['client_ids'] ?? [])));
+            if ($clientIds === []) {
+                throw ValidationException::withMessages([
+                    'client_ids' => 'Select at least one archived profile to recover.',
+                ]);
+            }
+
+            $matchingCount = Client::query()
+                ->where('platform_id', (int) $platform->id)
+                ->whereIn('id', $clientIds)
+                ->count();
+            if ($matchingCount !== count($clientIds)) {
+                throw ValidationException::withMessages([
+                    'client_ids' => 'Every selected profile must belong to the chosen market.',
+                ]);
+            }
+            $options['client_ids'] = $clientIds;
+        }
+
+        return [$platform, $options];
+    }
+
+    private function presentArchiveRecoveryRun(?LifecycleArchiveRecoveryRun $run): array
+    {
+        abort_if(! $run, 404, 'Archive recovery run not found.');
+
+        return [
+            'id' => (int) $run->id,
+            'platform_id' => (int) $run->platform_id,
+            'mode' => $run->mode,
+            'scope' => $run->scope,
+            'status' => $run->status,
+            'archive_after_days' => (int) $run->archive_after_days,
+            'archive_deferred_until' => optional($run->archive_deferred_until)->toIso8601String(),
+            'candidate_count' => (int) $run->candidate_count,
+            'restored_count' => (int) $run->restored_count,
+            'skipped_count' => (int) $run->skipped_count,
+            'failed_count' => (int) $run->failed_count,
+            'notes' => $run->notes,
+            'started_at' => optional($run->started_at)->toIso8601String(),
+            'finished_at' => optional($run->finished_at)->toIso8601String(),
+        ];
     }
 
     private function hydrateBillingPlatformState(Client $client): void

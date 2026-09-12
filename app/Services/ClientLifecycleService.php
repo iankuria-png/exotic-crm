@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Support\ClientLifecycleState;
+use Carbon\CarbonInterface;
 use InvalidArgumentException;
 
 /**
@@ -51,8 +52,13 @@ class ClientLifecycleService
      * Restore an Archived profile to Expired (back into listings) without granting
      * contact access. Idempotent when already expired.
      */
-    public function unarchive(Client $client, ?int $actorId): Client
-    {
+    public function unarchive(
+        Client $client,
+        ?int $actorId,
+        ?CarbonInterface $archiveDeferredUntil = null,
+        string $trigger = 'manual',
+        ?int $recoveryRunId = null,
+    ): Client {
         $client->refresh()->loadMissing('platform');
 
         if ($client->lifecycle_state === ClientLifecycleState::EXPIRED) {
@@ -66,9 +72,16 @@ class ClientLifecycleService
         return $this->transition(
             $client,
             ClientLifecycleState::EXPIRED,
-            ['lifecycle_archived_at' => null],
+            [
+                'lifecycle_archived_at' => null,
+                'lifecycle_archive_deferred_until' => $archiveDeferredUntil,
+            ],
             'profile_unarchived',
-            [],
+            array_filter([
+                'trigger' => $trigger,
+                'recovery_run_id' => $recoveryRunId,
+                'archive_deferred_until' => optional($archiveDeferredUntil)->toDateTimeString(),
+            ], static fn ($value) => $value !== null),
             $actorId,
         );
     }

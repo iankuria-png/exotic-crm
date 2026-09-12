@@ -220,6 +220,7 @@ class ClientSyncService
         if (($syncData['lifecycle_state'] ?? null) === \App\Support\ClientLifecycleState::ACTIVE) {
             $syncData['lifecycle_expired_at'] = null;
             $syncData['lifecycle_archived_at'] = null;
+            $syncData['lifecycle_archive_deferred_until'] = null;
         }
 
         if (array_key_exists('needs_payment', $wpClient)) {
@@ -234,6 +235,7 @@ class ClientSyncService
             $syncData['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
             $syncData['lifecycle_expired_at'] = null;
             $syncData['lifecycle_archived_at'] = null;
+            $syncData['lifecycle_archive_deferred_until'] = null;
             $syncData['lifecycle_restored_at'] = null;
             $syncData['lifecycle_restore_run_id'] = null;
         }
@@ -882,6 +884,7 @@ class ClientSyncService
                 : ($existing?->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE),
             'lifecycle_expired_at' => $existing?->lifecycle_expired_at,
             'lifecycle_archived_at' => $existing?->lifecycle_archived_at,
+            'lifecycle_archive_deferred_until' => $existing?->lifecycle_archive_deferred_until,
             'lifecycle_restored_at' => $existing?->lifecycle_restored_at,
             'lifecycle_restore_run_id' => $existing?->lifecycle_restore_run_id,
             'premium' => (bool) ($wpClient['premium'] ?? false),
@@ -923,6 +926,7 @@ class ClientSyncService
             $row['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
             $row['lifecycle_expired_at'] = null;
             $row['lifecycle_archived_at'] = null;
+            $row['lifecycle_archive_deferred_until'] = null;
             $row['lifecycle_restored_at'] = null;
             $row['lifecycle_restore_run_id'] = null;
         }
