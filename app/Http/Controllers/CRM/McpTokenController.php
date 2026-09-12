@@ -46,18 +46,26 @@ class McpTokenController extends Controller
             ->with('tokenable:id,name,email,role')
             ->latest('id')
             ->get()
-            ->map(fn (PersonalAccessToken $token) => [
-                'id' => $token->id,
-                'label' => str_starts_with($token->name, 'mcp:') ? substr($token->name, 4) : $token->name,
-                'owner' => $token->tokenable?->name,
-                'role' => $token->tokenable?->role,
-                'abilities' => $token->abilities,
-                'expires_at' => optional($token->expires_at)->toISOString(),
-                'last_used_at' => optional($token->last_used_at)->toISOString(),
-                'status' => $token->expires_at && $token->expires_at->isPast() ? 'expired' : 'active',
-                'calls_7d' => (int) ($stats[$token->id]->calls_7d ?? 0),
-                'bytes_7d' => (int) ($stats[$token->id]->bytes_7d ?? 0),
-            ]);
+            ->map(function (PersonalAccessToken $token) use ($stats): array {
+                $owner = $token->tokenable;
+                $visibleTools = $owner ? $this->registry->definitions($owner, $this->settings, $token->abilities, true) : [];
+                $eligibleTools = $owner ? $this->registry->defaultToolNames($owner, $this->settings) : [];
+
+                return [
+                    'id' => $token->id,
+                    'label' => str_starts_with($token->name, 'mcp:') ? substr($token->name, 4) : $token->name,
+                    'owner' => $owner?->name,
+                    'role' => $owner?->role,
+                    'abilities' => $token->abilities,
+                    'visible_tool_count' => count($visibleTools),
+                    'eligible_tool_count' => count($eligibleTools),
+                    'expires_at' => optional($token->expires_at)->toISOString(),
+                    'last_used_at' => optional($token->last_used_at)->toISOString(),
+                    'status' => $token->expires_at && $token->expires_at->isPast() ? 'expired' : 'active',
+                    'calls_7d' => (int) ($stats[$token->id]->calls_7d ?? 0),
+                    'bytes_7d' => (int) ($stats[$token->id]->bytes_7d ?? 0),
+                ];
+            });
 
         return response()->json(['tokens' => $tokens]);
     }
@@ -78,8 +86,12 @@ class McpTokenController extends Controller
         $ttl = (int) ($data['ttl_days'] ?? 90);
         $owner = isset($data['owner_id']) ? User::query()->findOrFail($data['owner_id']) : $request->user();
         abort_unless($owner->isActive(), 422, 'Token owner must be active.');
+        $requestedTools = (array) ($data['tools'] ?? []);
+        if ($requestedTools === []) {
+            $requestedTools = $this->registry->defaultToolNames($owner, $this->settings);
+        }
         $abilities = ['mcp:read'];
-        foreach ((array) ($data['tools'] ?? []) as $tool) {
+        foreach ($requestedTools as $tool) {
             abort_unless($this->registry->metadata($tool) !== null, 422, 'Unknown MCP tool.');
             $abilities[] = 'mcp:tool:'.$tool;
         }

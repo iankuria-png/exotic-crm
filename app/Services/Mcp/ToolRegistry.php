@@ -6,6 +6,8 @@ use App\Models\User;
 
 class ToolRegistry
 {
+    private const ROLE_RANK = ['marketing' => 1, 'field_sales' => 1, 'sales' => 1, 'sub_admin' => 2, 'admin' => 3];
+
     private const MODERN_TOOLS = [
         'exotic_search_knowledge' => ['title' => 'Search approved knowledge', 'description' => 'Search only administrator-approved product and operating references.', 'roles' => ['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'], 'domain' => 'knowledge', 'properties' => ['query' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 200], 'audience' => ['type' => 'string', 'enum' => ['sales', 'customer_success', 'finance', 'product', 'infrastructure', 'leadership']]], 'required' => ['query']],
         'exotic_get_document' => ['title' => 'Read approved document', 'description' => 'Read an approved document by its exotic:// URI.', 'roles' => ['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'], 'domain' => 'knowledge', 'properties' => ['uri' => ['type' => 'string', 'pattern' => '^exotic://docs/']], 'required' => ['uri']],
@@ -70,22 +72,29 @@ class ToolRegistry
 
     public function managementDefinitions(User $user, McpSettingsService $settings): array
     {
-        $rank = ['marketing' => 1, 'field_sales' => 1, 'sales' => 1, 'sub_admin' => 2, 'admin' => 3];
-        $userRank = $rank[$user->role] ?? 0;
+        $userRank = self::ROLE_RANK[$user->role] ?? 0;
 
-        return collect(self::TOOLS)
-            ->filter(fn (array $meta): bool => $userRank >= ($rank[$meta['min_role']] ?? 99))
+        return collect(array_merge(self::TOOLS, self::MODERN_TOOLS))
+            ->filter(fn (array $meta): bool => $userRank >= (self::ROLE_RANK[$this->minimumRole($meta)] ?? 99))
             ->map(function (array $meta, string $name) use ($settings): array {
-                $configured = $settings->tool($name);
+                $modern = array_key_exists($name, self::MODERN_TOOLS);
+                $configured = $modern ? [] : $settings->tool($name);
+                $enabled = $modern ? $this->modernToolEnabled($name) : (bool) data_get($configured, 'enabled', false);
+                $minimumRole = $this->minimumRole($meta);
 
                 return [
                     'name' => $name,
                     'title' => $meta['title'],
                     'description' => $meta['description'],
                     'domain' => $meta['domain'] ?? 'operations',
-                    'min_role' => $meta['min_role'],
-                    'configured_role' => (string) data_get($configured, 'min_role', $meta['min_role']),
-                    'enabled' => (bool) data_get($configured, 'enabled', false),
+                    'min_role' => $minimumRole,
+                    'configured_role' => (string) data_get($configured, 'min_role', $minimumRole),
+                    'enabled' => $enabled,
+                    'management_mode' => $modern ? 'rollout' : 'registry',
+                    'scope_required' => $modern,
+                    'status_detail' => $modern
+                        ? ($enabled ? 'Live for tokens with this permission.' : 'Unavailable until its rollout is enabled.')
+                        : ($enabled ? 'Enabled in the organisation registry.' : 'Disabled in the organisation registry.'),
                     'inputSchema' => ['type' => 'object', 'properties' => $this->schemaProperties($meta['properties']), 'additionalProperties' => false],
                     'backing_service' => $meta['backing_service'] ?? 'Curated CRM service',
                     'views' => $meta['views'] ?? [],
@@ -96,16 +105,31 @@ class ToolRegistry
             ->all();
     }
 
+    /** @return array<int, string> */
+    public function defaultToolNames(User $user, McpSettingsService $settings): array
+    {
+        return collect($this->managementDefinitions($user, $settings))
+            ->where('enabled', true)
+            ->pluck('name')
+            ->values()
+            ->all();
+    }
+
     public function metadata(string $name): ?array
     {
         return self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
+    }
+
+    public function isEnhanced(string $name): bool
+    {
+        return array_key_exists($name, self::MODERN_TOOLS);
     }
 
     public function available(string $name, User $user, McpSettingsService $settings, ?array $abilities = null): bool
     {
         $meta = self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
         $modernTool = array_key_exists($name, self::MODERN_TOOLS);
-        if (! $meta || ($modernTool && ! (bool) config('mcp.waves.contracts')) || ($modernTool && in_array($name, ['exotic_search_knowledge', 'exotic_get_document'], true) && ! (bool) config('mcp.waves.knowledge')) || ($modernTool && in_array($name, ['exotic_payment_flow_trace', 'exotic_payment_failure_diagnosis', 'exotic_system_vitals_live', 'exotic_error_digest_live'], true) && ! (bool) config('mcp.waves.diagnostics')) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
+        if (! $meta || ($modernTool && ! $this->modernToolEnabled($name)) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
             return false;
         }
 
@@ -118,18 +142,41 @@ class ToolRegistry
             return in_array('mcp:tool:'.$name, $toolAbilities, true);
         }
 
-        $rank = ['marketing' => 1, 'field_sales' => 1, 'sales' => 1, 'sub_admin' => 2, 'admin' => 3];
-        if (($rank[$user->role] ?? 0) < ($rank[$meta['min_role']] ?? 99)) {
+        if ((self::ROLE_RANK[$user->role] ?? 0) < (self::ROLE_RANK[$meta['min_role']] ?? 99)) {
             return false;
         }
 
         $configuredRole = (string) data_get($settings->tool($name), 'min_role', $meta['min_role']);
-        if (($rank[$user->role] ?? 0) < ($rank[$configuredRole] ?? 99)) {
+        if ((self::ROLE_RANK[$user->role] ?? 0) < (self::ROLE_RANK[$configuredRole] ?? 99)) {
             return false;
         }
 
         $toolAbilities = array_values(array_filter((array) ($abilities ?? []), fn ($ability) => str_starts_with((string) $ability, 'mcp:tool:')));
 
         return $toolAbilities === [] || in_array('mcp:tool:'.$name, $toolAbilities, true);
+    }
+
+    private function minimumRole(array $meta): string
+    {
+        if (isset($meta['min_role'])) {
+            return $meta['min_role'];
+        }
+
+        return collect($meta['roles'] ?? [])
+            ->sortBy(fn (string $role) => self::ROLE_RANK[$role] ?? 99)
+            ->first() ?? 'admin';
+    }
+
+    private function modernToolEnabled(string $name): bool
+    {
+        if (! (bool) config('mcp.waves.contracts')) {
+            return false;
+        }
+
+        if (in_array($name, ['exotic_search_knowledge', 'exotic_get_document'], true)) {
+            return (bool) config('mcp.waves.knowledge');
+        }
+
+        return (bool) config('mcp.waves.diagnostics');
     }
 }

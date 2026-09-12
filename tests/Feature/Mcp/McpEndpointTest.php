@@ -224,6 +224,41 @@ class McpEndpointTest extends TestCase
         $this->assertSame('schema', $sqlTool['domain']);
     }
 
+    public function test_enhanced_capabilities_are_visible_in_the_management_registry_and_default_token(): void
+    {
+        Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
+        Config::set('mcp.waves.knowledge', true);
+        Config::set('mcp.waves.diagnostics', true);
+        Config::set('mcp.tools.exotic_run_reporting_sql.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/mcp')
+            ->assertOk()
+            ->assertJsonCount(21, 'tools')
+            ->assertJsonPath('tools.15.name', 'exotic_search_knowledge')
+            ->assertJsonPath('tools.15.management_mode', 'rollout')
+            ->assertJsonPath('tools.15.scope_required', true);
+
+        $minted = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'full access'])
+            ->assertCreated()
+            ->assertJsonCount(22, 'abilities')
+            ->assertJsonPath('abilities.0', 'mcp:read');
+        $token = $minted->json('token');
+
+        $response = $this->withToken($token)->postJson('/api/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 8,
+            'method' => 'tools/list',
+            'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
+        ], $this->modernHeaders('tools/list', '2025-06-18'));
+
+        $response->assertOk()->assertJsonCount(21, 'result.tools');
+        $this->assertContains('exotic_search_knowledge', collect($response->json('result.tools'))->pluck('name')->all());
+        $this->assertContains('exotic_error_digest_live', collect($response->json('result.tools'))->pluck('name')->all());
+    }
+
     public function test_admin_can_preview_a_sanitised_catalog_payload(): void
     {
         $user = User::factory()->create(['role' => 'admin']);

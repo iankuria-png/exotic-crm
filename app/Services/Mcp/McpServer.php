@@ -94,11 +94,14 @@ class McpServer
 
     public function previewTool(Request $request, string $name, array $arguments, User $user): array
     {
-        if (! $this->registry->available($name, $user, $this->settings)) {
+        $abilities = array_merge(['mcp:read'], array_map(fn (string $tool) => 'mcp:tool:'.$tool, $this->registry->defaultToolNames($user, $this->settings)));
+        if (! $this->registry->available($name, $user, $this->settings, $abilities)) {
             throw McpProtocolException::rpc(-32601, 'Tool is unknown, disabled, or unavailable to this account.', 'tool_disabled', 403);
         }
 
-        $result = $this->callTool($request, ['name' => $name, 'arguments' => $arguments], $user, null);
+        $result = $this->registry->isEnhanced($name)
+            ? $this->enhancedToolCall(['name' => $name, 'arguments' => $arguments], McpAuthorizationContext::for($user, $abilities, $this->marketAuth))
+            : $this->callTool($request, ['name' => $name, 'arguments' => $arguments], $user, $abilities);
         $text = (string) data_get($result, 'content.0.text', '{}');
         $payload = json_decode($text, true);
 
