@@ -3,10 +3,11 @@
 namespace Tests\Unit\Mcp;
 
 use App\Models\User;
+use App\Services\Mcp\Knowledge\MintlifyKnowledgeSync;
 use App\Services\Mcp\McpRequestAdapter;
 use App\Services\Mcp\McpResultNormalizer;
 use App\Services\Mcp\Presenters\AgentPerformancePresenter;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class McpResultPresentationTest extends TestCase
 {
@@ -38,5 +39,15 @@ class McpResultPresentationTest extends TestCase
         $request = (new McpRequestAdapter)->build(['limit' => 3], new User);
 
         $this->assertSame(3, $request->query('limit'));
+    }
+
+    public function test_knowledge_chunks_do_not_split_utf8_characters(): void
+    {
+        $method = new \ReflectionMethod(MintlifyKnowledgeSync::class, 'chunks');
+        $chunks = $method->invoke(new MintlifyKnowledgeSync, str_repeat('€', 4501));
+
+        $this->assertSame(2, count($chunks));
+        $this->assertSame(1, preg_match('//u', $chunks[0]));
+        $this->assertSame(1, preg_match('//u', $chunks[1]));
     }
 }

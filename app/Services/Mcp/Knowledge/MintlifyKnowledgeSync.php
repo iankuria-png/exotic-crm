@@ -8,6 +8,8 @@ use App\Models\McpKnowledgeSyncRun;
 use App\Models\McpKnowledgeVersion;
 use App\Models\McpSemanticRelease;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -55,7 +57,7 @@ class MintlifyKnowledgeSync
                 foreach ($contents as $slug => $body) {
                     $meta = config('mcp_knowledge.documents.'.$slug);
                     $doc = McpKnowledgeDocument::create(['version_id' => $version->id, 'canonical_uri' => $meta['uri'], 'source_url' => 'https://'.config('mcp_knowledge.host').'/'.$slug, 'title' => str_replace(['-', '/'], ' ', pathinfo($slug, PATHINFO_FILENAME)), 'audiences' => $meta['audiences'], 'lifecycle_stages' => $meta['stages'], 'departments' => $meta['audiences'], 'content_sha256' => hash('sha256', $body), 'classification_key' => $slug]);
-                    foreach (str_split($body, (int) config('mcp_knowledge.max_chunk_chars')) as $index => $chunk) {
+                    foreach ($this->chunks($body) as $index => $chunk) {
                         McpKnowledgeChunk::create(['document_id' => $doc->id, 'ordinal' => $index, 'heading_path' => $doc->title, 'body' => $chunk, 'token_estimate' => max(1, (int) ceil(mb_strlen($chunk) / 4)), 'search_text' => $doc->title.' '.$chunk]);
                     }
                 }
@@ -71,9 +73,10 @@ class MintlifyKnowledgeSync
             throw $error;
         } catch (\Throwable $error) {
             report($error);
-            $run->update(['status' => 'failed', 'active_slot' => null, 'error_code' => 'sync_failed', 'finished_at' => now()]);
+            $exception = $this->unexpectedFailure($error);
+            $run->update(['status' => 'failed', 'active_slot' => null, 'error_code' => $exception->safeCode, 'finished_at' => now()]);
 
-            throw new McpKnowledgeSyncException('sync_failed', 'Knowledge staging could not complete. Check the latest run and try again.');
+            throw $exception;
         }
     }
 
@@ -97,5 +100,23 @@ class MintlifyKnowledgeSync
         $body = preg_replace('/<script\b[^>]*>.*?<\/script>/is', '', $body) ?? '';
 
         return str_replace(['<iframe', '<object'], ['&lt;iframe', '&lt;object'], $body);
+    }
+
+    /** Split by characters, never through a UTF-8 sequence before a MySQL write. */
+    private function chunks(string $body): array
+    {
+        return mb_str_split($body, (int) config('mcp_knowledge.max_chunk_chars'));
+    }
+
+    private function unexpectedFailure(\Throwable $error): McpKnowledgeSyncException
+    {
+        if ($error instanceof GuzzleException) {
+            return new McpKnowledgeSyncException('source_connection_failed', 'CRM could not reach the approved documentation source. Confirm the production server allows outbound HTTPS, then stage again.');
+        }
+        if ($error instanceof QueryException) {
+            return new McpKnowledgeSyncException('database_write_failed', 'CRM retrieved the documentation but could not save the snapshot. Check the production database log, then stage again.');
+        }
+
+        return new McpKnowledgeSyncException('sync_failed', 'Knowledge staging could not complete. Check the latest run and try again.');
     }
 }
