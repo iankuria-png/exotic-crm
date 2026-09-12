@@ -5,11 +5,15 @@ import AiStateBlock from '../ai/AiStateBlock';
 import ConfirmDialog from '../ConfirmDialog';
 import { useToast } from '../ToastProvider';
 import exportRowsToCsv from '../../utils/csvExport';
+import McpKnowledgePanel from './mcp/McpKnowledgePanel';
+import McpQualityPanel from './mcp/McpQualityPanel';
 
 const PANELS = [
     { id: 'overview', label: 'Overview', summary: 'Live health' },
     { id: 'tokens', label: 'Tokens', summary: 'Credentials' },
     { id: 'tools', label: 'Tools', summary: 'Registry' },
+    { id: 'knowledge', label: 'Knowledge', summary: 'Provenance' },
+    { id: 'quality', label: 'Quality', summary: 'Drift & evaluation' },
     { id: 'privacy', label: 'Data & Privacy', summary: 'Payload policy' },
     { id: 'limits', label: 'Limits', summary: 'Budgets' },
     { id: 'activity', label: 'Activity', summary: 'Audit trail' },
@@ -178,6 +182,8 @@ export default function McpWorkspacePanel({ userRole = '' }) {
             {panel === 'tools' ? (
                 <Tools tools={tools} activity={activity} canManage={canManage} isSaving={updateMutation.isPending} onUpdate={(payload) => saveSettings(payload, 'Tool registry updated.')} previewMutation={previewMutation} />
             ) : null}
+            {panel === 'knowledge' ? <McpKnowledgePanel canManage={canManage} /> : null}
+            {panel === 'quality' ? <McpQualityPanel canManage={canManage} /> : null}
             {panel === 'privacy' ? (
                 <Privacy settings={settings} tools={tools} canManage={canManage} isSaving={updateMutation.isPending} onSave={saveSettings} previewMutation={previewMutation} />
             ) : null}

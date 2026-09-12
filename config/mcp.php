@@ -3,7 +3,14 @@
 return [
     'enabled' => (bool) env('MCP_ENABLED', false),
     'endpoint' => env('MCP_ENDPOINT', '/api/mcp'),
+    // The latest protocol is deliberately opt-in: a legacy mcp:read token
+    // cannot accidentally receive new discovery surfaces after deployment.
     'protocol_versions' => ['2025-06-18', '2025-03-26'],
+    'waves' => [
+        'contracts_2026' => (bool) env('MCP_CONTRACTS_2026', false),
+        'knowledge' => (bool) env('MCP_KNOWLEDGE', false),
+        'diagnostics' => (bool) env('MCP_DIAGNOSTICS', false),
+    ],
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',
         explode(',', (string) env('MCP_ALLOWED_ORIGINS', ''))
@@ -29,6 +36,7 @@ return [
         'exotic://context/who-is-who' => ['enabled' => true, 'path' => 'mcp/who-is-who.md'],
         'exotic://context/reporting-views' => ['enabled' => true, 'path' => 'mcp/reporting-views.md'],
         'exotic://context/conventions' => ['enabled' => true, 'path' => 'mcp/conventions.md'],
+        'exotic://context/metrics' => ['enabled' => true, 'path' => 'mcp/metrics.md'],
     ],
     'sql_hatch' => [
         'enabled' => false,
@@ -47,6 +55,10 @@ return [
         'daily_row_budget' => 200000,
         'daily_bytes_budget' => 50000000,
         'on_exhaustion' => 'throttle',
+        'server_daily_rows' => null,
+        'server_daily_bytes' => null,
+        'default_token_daily_rows' => null,
+        'default_token_daily_bytes' => null,
     ],
     'token_policy' => [
         'default_ttl_days' => 90,

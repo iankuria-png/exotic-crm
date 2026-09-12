@@ -3,6 +3,7 @@
 namespace App\Services\Mcp;
 
 use App\Models\Client;
+use App\Models\ErrorLogGroup;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\Ai\Exceptions\SqlValidationException;
@@ -11,6 +12,11 @@ use App\Services\Ai\SqlValidationPolicy;
 use App\Services\CeoDashboardDataService;
 use App\Services\ChurnAggregatorService;
 use App\Services\MarketAuthorizationService;
+use App\Services\Mcp\Diagnostics\PaymentFlowTraceService;
+use App\Services\Mcp\Knowledge\KnowledgeSearch;
+use App\Services\Mcp\Protocol\McpProtocolContext;
+use App\Services\Mcp\Results\ToolResult;
+use App\Services\Ops\VitalsSampler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -31,12 +37,20 @@ class McpServer
         private readonly CeoDashboardDataService $dashboard,
         private readonly ChurnAggregatorService $churn,
         private readonly MarketAuthorizationService $marketAuth,
+        private readonly ResourceRegistry $resourcesRegistry,
+        private readonly PromptRegistry $prompts,
+        private readonly McpDailyBudget $budget,
+        private readonly McpJsonSerializer $serializer,
+        private readonly McpResultNormalizer $normalizer,
     ) {}
 
     public function handle(Request $request): JsonResponse|Response
     {
         $started = microtime(true);
         $payload = $request->json()->all();
+        if (! is_array($payload) || array_is_list($payload) || ($payload['jsonrpc'] ?? null) !== '2.0' || ! isset($payload['method']) || ! is_string($payload['method']) || (isset($payload['params']) && ! is_array($payload['params'])) || (array_key_exists('id', $payload) && ! is_string($payload['id']) && ! is_int($payload['id']) && $payload['id'] !== null)) {
+            return $this->error(null, -32600, 'Invalid JSON-RPC request.', 400);
+        }
         $id = $payload['id'] ?? null;
         $method = (string) ($payload['method'] ?? '');
         $params = is_array($payload['params'] ?? null) ? $payload['params'] : [];
@@ -45,8 +59,9 @@ class McpServer
         $requestId = (string) ($request->attributes->get('mcp_request_id') ?: Str::uuid());
 
         try {
+            $context = $this->protocolContext($request, $params);
             $this->validateTransport($request, $payload, $method, $params);
-            $result = $this->dispatch($request, $method, $params, $user, $token?->abilities);
+            $result = $this->dispatch($request, $method, $params, $user, $token?->abilities, $context);
 
             if (! array_key_exists('id', $payload)) {
                 $response = response('', Response::HTTP_ACCEPTED);
@@ -55,7 +70,10 @@ class McpServer
                 return $response;
             }
 
-            $response = $this->success($id, $method, $result);
+            $response = $this->success($id, $method, $result, $context);
+            if ($context->modern() && $token && ! $this->budget->reserve($token, (int) data_get($result, '_meta.exotic/rowCount', 0), strlen($response->getContent()))) {
+                throw McpProtocolException::rpc(-32029, 'MCP daily response budget exhausted.', 'daily_budget', 429);
+            }
             $this->audit($request, $method, $params, 'success', null, $response->getData(true), $started, $requestId);
 
             return $response;
@@ -95,10 +113,14 @@ class McpServer
         ];
     }
 
-    private function dispatch(Request $request, string $method, array $params, ?User $user, ?array $abilities): array
+    private function dispatch(Request $request, string $method, array $params, ?User $user, ?array $abilities, McpProtocolContext $context): array
     {
         if (! $user) {
             throw McpProtocolException::auth();
+        }
+
+        if ($context->modern()) {
+            return $this->dispatchModern($request, $method, $params, $user, (array) $abilities);
         }
 
         return match ($method) {
@@ -125,6 +147,46 @@ class McpServer
             'tools/call' => $this->callTool($request, $params, $user, $abilities),
             default => throw McpProtocolException::rpc(-32601, 'Method not found: '.$method, 'method_not_found', 404),
         };
+    }
+
+    private function dispatchModern(Request $request, string $method, array $params, User $user, array $abilities): array
+    {
+        $auth = McpAuthorizationContext::for($user, $abilities, $this->marketAuth);
+
+        return match ($method) {
+            'server/discover' => ['supportedVersions' => ['2026-07-28'], 'capabilities' => ['tools' => ['listChanged' => false], 'resources' => ['listChanged' => false], 'prompts' => ['listChanged' => false]], '_meta' => ['io.modelcontextprotocol/serverInfo' => ['name' => 'exotic-crm', 'version' => '1.0.0'], 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]],
+            'tools/list' => ['tools' => $this->registry->definitions($user, $this->settings, $abilities, true), '_meta' => ['exotic/resultType' => 'complete', 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]],
+            'resources/list' => ['resources' => $this->resourcesRegistry->list($auth, $this->settings, true), '_meta' => ['exotic/resultType' => 'complete', 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]],
+            'resources/read' => ['contents' => [['uri' => (string) ($params['uri'] ?? ''), 'mimeType' => 'text/markdown', 'text' => $this->sanitizer->sanitize($this->resourcesRegistry->read((string) ($params['uri'] ?? ''), $auth, $this->settings, true))]]],
+            'prompts/list' => ['prompts' => $this->prompts->list($auth)],
+            'prompts/get' => $this->prompts->get((string) ($params['name'] ?? ''), $auth, (array) ($params['arguments'] ?? [])),
+            'tools/call' => $this->modernToolCall($params, $auth),
+            default => throw McpProtocolException::rpc(-32601, 'Method not found.', 'method_not_found', 404),
+        };
+    }
+
+    private function modernToolCall(array $params, McpAuthorizationContext $auth): array
+    {
+        $name = (string) ($params['name'] ?? '');
+        $arguments = (array) ($params['arguments'] ?? []);
+        if (! $this->registry->available($name, $auth->user, $this->settings, $auth->abilities)) {
+            throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404);
+        }
+        $this->validateModernArguments($name, $arguments);
+        $data = match ($name) {
+            'exotic_search_knowledge' => ['hits' => app(KnowledgeSearch::class)->search((string) $arguments['query'], $auth, $arguments['audience'] ?? null)],
+            'exotic_get_document' => ['document' => app(ResourceRegistry::class)->read((string) $arguments['uri'], $auth, $this->settings, true)],
+            'exotic_payment_flow_trace' => app(PaymentFlowTraceService::class)->trace((string) $arguments['locator'], $auth),
+            'exotic_payment_failure_diagnosis' => $this->paymentDiagnosis((string) $arguments['locator'], $auth),
+            'exotic_system_vitals_live' => $this->modernVitals(),
+            'exotic_error_digest_live' => $this->modernErrors((int) ($arguments['limit'] ?? 10)),
+            default => $this->legacyData($name, $arguments, $auth->user),
+        };
+        $safe = $this->sanitizer->sanitize($this->normalizer->money($this->stripUnsafeDashboardKeys($data), ['rows.*.amount', 'total', 'revenue']));
+        $envelope = ToolResult::envelope(is_array($safe) ? $safe : ['value' => $safe]);
+        $text = $this->serializer->encode($envelope);
+
+        return ['content' => [['type' => 'text', 'text' => $text]], 'structuredContent' => $envelope, 'isError' => false, '_meta' => ['exotic/resultType' => 'complete', 'exotic/rowCount' => count((array) data_get($safe, 'rows', [])), 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]];
     }
 
     private function callTool(Request $request, array $params, User $user, ?array $abilities): array
@@ -164,6 +226,100 @@ class McpServer
                 'exotic/rowCount' => is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0,
             ],
         ];
+    }
+
+    private function legacyData(string $name, array $arguments, User $user): array
+    {
+        return match ($name) {
+            'exotic_catalog' => $this->catalog($user, null),
+            'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
+            'exotic_revenue_trend' => $this->dashboard->revenueTrend($this->adapter->build($arguments, $user)),
+            'exotic_market_breakdown' => $this->dashboard->marketPie($this->adapter->build($arguments, $user)),
+            'exotic_agent_performance' => $this->dashboard->agentPerformance($this->adapter->build($arguments, $user)),
+            'exotic_peak_hours' => $this->dashboard->peakHours($this->adapter->build($arguments, $user)),
+            'exotic_lifecycle_summary' => $this->lifecycleSummary($arguments, $user),
+            'exotic_churn_analysis' => $this->churnSummary($arguments, $user),
+            'exotic_client_snapshot' => $this->clientSnapshot($arguments, $user),
+            'exotic_market_health' => $this->marketHealth($arguments, $user),
+            'exotic_schema_dictionary' => $this->schemaDictionary($arguments),
+            default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
+        };
+    }
+
+    private function validateModernArguments(string $name, array $arguments): void
+    {
+        $meta = $this->registry->metadata($name) ?: [];
+        $properties = (array) ($meta['properties'] ?? []);
+        foreach ((array) ($meta['required'] ?? []) as $required) {
+            if (! array_key_exists($required, $arguments)) {
+                throw McpProtocolException::rpc(-32602, "Missing required argument: {$required}", 'invalid_params', 422);
+            }
+        }
+        if (array_diff(array_keys($arguments), array_keys($properties))) {
+            throw McpProtocolException::rpc(-32602, 'Unexpected tool argument.', 'invalid_params', 422);
+        }
+        foreach ($arguments as $key => $value) {
+            $schema = $properties[$key];
+            $type = $schema['type'] ?? null;
+            if (($type === 'string' && ! is_string($value)) || ($type === 'integer' && ! is_int($value))) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument type: {$key}", 'invalid_params', 422);
+            }
+            if (isset($schema['minLength']) && mb_strlen((string) $value) < $schema['minLength']) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument length: {$key}", 'invalid_params', 422);
+            }
+            if (isset($schema['maxLength']) && mb_strlen((string) $value) > $schema['maxLength']) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument length: {$key}", 'invalid_params', 422);
+            }
+            if (isset($schema['minimum']) && $value < $schema['minimum'] || isset($schema['maximum']) && $value > $schema['maximum']) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument range: {$key}", 'invalid_params', 422);
+            }
+            if (isset($schema['enum']) && ! in_array($value, $schema['enum'], true)) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument value: {$key}", 'invalid_params', 422);
+            }
+            if (isset($schema['pattern']) && ! preg_match('/'.$schema['pattern'].'/', (string) $value)) {
+                throw McpProtocolException::rpc(-32602, "Invalid argument format: {$key}", 'invalid_params', 422);
+            }
+        }
+    }
+
+    private function modernVitals(): array
+    {
+        $sample = app(VitalsSampler::class)->latest();
+        if (! $sample) {
+            return ['availability' => 'unavailable', 'caveats' => ['No cached vitals sample is available.']];
+        }
+
+        return ['availability' => 'sampled', 'sampled_at' => $sample['sampled_at'] ?? null, 'signals' => collect($sample['signals'] ?? [])->map(fn ($signal) => ['key' => $signal['key'] ?? null, 'value' => $signal['value'] ?? null, 'available' => $signal['available'] ?? false, 'status' => $signal['status'] ?? 'unknown'])->all()];
+    }
+
+    private function modernErrors(int $limit): array
+    {
+        return ['fingerprints' => ErrorLogGroup::query()->latest('last_seen_at')->limit(min(20, max(1, $limit)))->get(['signature', 'level', 'source', 'occurrence_count', 'last_seen_at', 'resolved_at'])->map(fn ($row) => ['fingerprint' => substr(hash('sha256', $row->signature), 0, 16), 'severity' => $row->level, 'source' => $row->source, 'occurrences' => (int) $row->occurrence_count, 'last_seen_at' => optional($row->last_seen_at)->toIso8601String(), 'resolved' => $row->resolved_at !== null])->all()];
+    }
+
+    private function paymentDiagnosis(string $locator, McpAuthorizationContext $auth): array
+    {
+        $trace = app(PaymentFlowTraceService::class)->trace($locator, $auth);
+        $stages = collect($trace['stages']);
+        $provider = $stages->firstWhere('stage', 'provider')['state'] ?? 'unobserved';
+        $callback = $stages->firstWhere('stage', 'callback')['state'] ?? 'unobserved';
+        $classification = $provider === 'failed' ? 'provider_failure' : ($callback === 'failed' ? 'callback_failure' : (($trace['stages'][3]['state'] ?? '') === 'not_observed' ? 'activation_not_observed' : 'healthy_or_pending'));
+
+        return ['locator' => $locator, 'classification' => $classification, 'trace' => $trace, 'recommended_next_step' => 'Use the approved payment activation runbook; this tool does not mutate payment state.'];
+    }
+
+    private function protocolContext(Request $request, array $params): McpProtocolContext
+    {
+        $version = (string) ($request->header('MCP-Protocol-Version') ?: data_get($params, '_meta.io.modelcontextprotocol/protocolVersion') ?: $params['protocolVersion'] ?? '2025-03-26');
+        if ($version === '2026-07-28' && ! config('mcp.waves.contracts_2026')) {
+            throw McpProtocolException::rpc(-32022, 'Unsupported MCP protocol version "2026-07-28". Supported versions: 2026-07-28 (when enabled), 2025-06-18, 2025-03-26.', 'unsupported_protocol', 400);
+        }
+        $abilities = (array) ($request->attributes->get('mcp_token')?->abilities ?? []);
+        if ($version === '2026-07-28' && ! in_array('mcp:protocol:2026-07-28', $abilities, true)) {
+            throw McpProtocolException::rpc(-32022, 'This token is not granted the 2026-07-28 protocol.', 'protocol_not_granted', 403);
+        }
+
+        return new McpProtocolContext($version);
     }
 
     private function runReportingSql(array $arguments, User $user): array
@@ -356,11 +512,44 @@ class McpServer
         $bodyVersion = $metaVersion ?? $initializeVersion;
         $perRequestProtocol = $headerVersion === '2025-06-18' && $request->header('Mcp-Method') !== null;
         $initializing = $method === 'initialize';
+        $modern = $headerVersion === '2026-07-28';
+
+        if ($modern) {
+            if (! str_contains(strtolower((string) $request->header('Content-Type', '')), 'application/json')) {
+                throw McpProtocolException::rpc(-32020, 'Header mismatch: Content-Type must be application/json.', 'header_mismatch', 400);
+            }
+            if ($request->header('Mcp-Method') !== $method) {
+                throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Method does not match request.', 'header_mismatch', 400);
+            }
+            if (($meta['io.modelcontextprotocol/protocolVersion'] ?? null) !== '2026-07-28' || ! is_array($meta['io.modelcontextprotocol/clientCapabilities'] ?? null)) {
+                throw McpProtocolException::rpc(-32602, 'Modern MCP requests require protocolVersion and clientCapabilities metadata.', 'invalid_params', 422);
+            }
+            if (in_array($method, ['initialize', 'notifications/initialized'], true)) {
+                throw McpProtocolException::rpc(-32601, 'Initialize is not used by stateless 2026 MCP requests.', 'method_not_found', 404);
+            }
+            $named = in_array($method, ['tools/call', 'resources/read', 'prompts/get'], true);
+            if ($named) {
+                $expected = (string) ($params[$method === 'tools/call' ? 'name' : ($method === 'resources/read' ? 'uri' : 'name')] ?? '');
+                $received = (string) $request->header('Mcp-Name', '');
+                if (str_starts_with($received, 'base64:')) {
+                    $decoded = base64_decode(substr($received, 7), true);
+                    if ($decoded === false) {
+                        throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Name encoding is invalid.', 'header_mismatch', 400);
+                    }
+                    $received = $decoded;
+                }
+                if ($received !== $expected) {
+                    throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Name does not match request.', 'header_mismatch', 400);
+                }
+            } elseif ($request->header('Mcp-Name') !== null) {
+                throw McpProtocolException::rpc(-32020, 'Header mismatch: Mcp-Name is not valid for this method.', 'header_mismatch', 400);
+            }
+        }
 
         if ($headerVersion === null && ! $initializing) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: MCP-Protocol-Version is required.', 'header_mismatch', 400);
         }
-        if ($headerVersion !== null && ! in_array($headerVersion, $supportedVersions, true)) {
+        if ($headerVersion !== null && ! in_array($headerVersion, $supportedVersions, true) && ! ($headerVersion === '2026-07-28' && config('mcp.waves.contracts_2026'))) {
             throw McpProtocolException::rpc(-32022, sprintf(
                 'Unsupported MCP protocol version "%s" in the MCP-Protocol-Version header. Supported versions: %s.',
                 $headerVersion,
@@ -402,10 +591,14 @@ class McpServer
             : (string) ($supported[0] ?? '2025-03-26');
     }
 
-    private function success($id, string $method, array $result): JsonResponse
+    private function success($id, string $method, array $result, ?McpProtocolContext $context = null): JsonResponse
     {
         // A JSON-RPC result must serialise as an object. An empty PHP array would
         // encode as [] and fail strict client-side schema validation.
+        if ($context?->modern()) {
+            $result['_meta']['io.modelcontextprotocol/serverInfo'] = ['name' => 'exotic-crm', 'version' => '1.0.0'];
+        }
+
         return response()->json(['jsonrpc' => '2.0', 'id' => $id, 'result' => $result === [] ? (object) [] : $result]);
     }
 
@@ -446,7 +639,8 @@ class McpServer
                 'request_id' => $requestId,
                 'created_at' => now(),
                 'generated_sql_sha256' => data_get($request->attributes->get('mcp_sql_audit'), 'hash'),
-                'generated_sql_redacted' => data_get($request->attributes->get('mcp_sql_audit'), 'preview'),
+                // Store only a keyed digest, never an SQL prefix or a scalar input.
+                'generated_sql_redacted' => data_get($request->attributes->get('mcp_sql_audit'), 'hash') ? '[redacted; sha256 recorded]' : null,
                 'platform_scope' => data_get($request->attributes->get('mcp_sql_audit'), 'scope'),
             ]);
         } catch (Throwable) {
@@ -458,7 +652,7 @@ class McpServer
         $arguments = (array) ($params['arguments'] ?? $params);
 
         return collect($arguments)->mapWithKeys(fn ($value, $key) => [
-            $key => is_array($value) ? ['type' => 'array', 'count' => count($value)] : ['type' => gettype($value), 'value' => is_scalar($value) ? mb_substr((string) $value, 0, 80) : null],
+            $key => is_array($value) ? ['type' => 'array', 'count' => count($value)] : ['type' => gettype($value), 'hash' => is_scalar($value) ? hash_hmac('sha256', (string) $value, (string) config('app.key')) : null],
         ])->all();
     }
 }

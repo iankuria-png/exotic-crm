@@ -56,6 +56,8 @@ use App\Http\Controllers\CRM\LifecycleSmsController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\McpActivityController;
 use App\Http\Controllers\CRM\McpController;
+use App\Http\Controllers\CRM\McpKnowledgeController;
+use App\Http\Controllers\CRM\McpQualityController;
 use App\Http\Controllers\CRM\McpSettingsController;
 use App\Http\Controllers\CRM\McpTokenController;
 use App\Http\Controllers\CRM\MessagingController;
@@ -193,7 +195,7 @@ Route::middleware('whatsapp.sidecar.hmac')->group(function () {
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:image-proxy');
 
 // Stateless MCP transport. McpAuthenticate records pre-auth refusals itself.
-Route::post('/mcp', McpController::class)->middleware('mcp.auth');
+Route::post('/mcp', McpController::class)->middleware(['mcp.size', 'mcp.auth']);
 
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);
@@ -299,8 +301,15 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/settings/mcp/self-test', [McpSettingsController::class, 'selfTest'])->middleware('role:admin,sub_admin');
     Route::post('/settings/mcp/tools/{tool}/preview', [McpSettingsController::class, 'preview'])->middleware('role:admin,sub_admin');
     Route::get('/settings/mcp/tokens', [McpTokenController::class, 'index'])->middleware('role:admin');
+    Route::get('/settings/mcp/tokens/options', [McpTokenController::class, 'options'])->middleware('role:admin');
     Route::post('/settings/mcp/tokens', [McpTokenController::class, 'store'])->middleware('role:admin');
     Route::delete('/settings/mcp/tokens/{token}', [McpTokenController::class, 'destroy'])->middleware('role:admin');
+    Route::get('/settings/mcp/knowledge', [McpKnowledgeController::class, 'index'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/mcp/knowledge/stage', [McpKnowledgeController::class, 'stage'])->middleware('role:admin');
+    Route::post('/settings/mcp/knowledge/versions/{version}/promote', [McpKnowledgeController::class, 'promote'])->middleware('role:admin');
+    Route::post('/settings/mcp/knowledge/releases/{release}/rollback', [McpKnowledgeController::class, 'rollback'])->middleware('role:admin');
+    Route::get('/settings/mcp/quality', [McpQualityController::class, 'index'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/mcp/quality/audit', [McpQualityController::class, 'audit'])->middleware('role:admin');
     Route::get('/settings/mcp/activity', [McpActivityController::class, 'index'])->middleware('role:admin,sub_admin');
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales,field_sales');

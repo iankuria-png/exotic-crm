@@ -6,6 +6,15 @@ use App\Models\User;
 
 class ToolRegistry
 {
+    private const MODERN_TOOLS = [
+        'exotic_search_knowledge' => ['title' => 'Search approved knowledge', 'description' => 'Search only administrator-approved product and operating references.', 'roles' => ['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'], 'domain' => 'knowledge', 'properties' => ['query' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 200], 'audience' => ['type' => 'string', 'enum' => ['sales', 'customer_success', 'finance', 'product', 'infrastructure', 'leadership']]], 'required' => ['query']],
+        'exotic_get_document' => ['title' => 'Read approved document', 'description' => 'Read an approved document by its exotic:// URI.', 'roles' => ['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'], 'domain' => 'knowledge', 'properties' => ['uri' => ['type' => 'string', 'pattern' => '^exotic://docs/']], 'required' => ['uri']],
+        'exotic_payment_flow_trace' => ['title' => 'Payment flow trace', 'description' => 'Trace safe payment lifecycle observations from an opaque locator.', 'roles' => ['admin'], 'domain' => 'operations', 'properties' => ['locator' => ['type' => 'string', 'pattern' => '^pay_[A-Za-z0-9_-]{16,}$']], 'required' => ['locator']],
+        'exotic_payment_failure_diagnosis' => ['title' => 'Payment failure diagnosis', 'description' => 'Classify a payment failure without exposing payment identifiers or payloads.', 'roles' => ['admin'], 'domain' => 'operations', 'properties' => ['locator' => ['type' => 'string', 'pattern' => '^pay_[A-Za-z0-9_-]{16,}$']], 'required' => ['locator']],
+        'exotic_system_vitals_live' => ['title' => 'System vitals', 'description' => 'Read the latest cached operational sample and its availability caveats.', 'roles' => ['admin'], 'domain' => 'operations', 'properties' => []],
+        'exotic_error_digest_live' => ['title' => 'Error digest', 'description' => 'Read bounded recent error fingerprints without messages or paths.', 'roles' => ['admin'], 'domain' => 'operations', 'properties' => ['limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 20]]],
+    ];
+
     private const TOOLS = [
         'exotic_catalog' => ['title' => 'CRM catalog', 'description' => 'List enabled MCP tools, markets and reporting coverage.', 'min_role' => 'sales', 'domain' => 'catalog', 'properties' => []],
         'exotic_revenue_summary' => ['title' => 'Revenue summary', 'description' => 'Return CEO-dashboard revenue and customer-mix metrics for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'platform_id' => ['type' => 'integer'], 'reporting_currency' => ['type' => 'string']]],
@@ -33,10 +42,11 @@ class ToolRegistry
         return $properties === [] ? (object) [] : $properties;
     }
 
-    public function definitions(User $user, McpSettingsService $settings, ?array $abilities = null): array
+    public function definitions(User $user, McpSettingsService $settings, ?array $abilities = null, bool $modern = false): array
     {
         $rows = [];
-        foreach (self::TOOLS as $name => $meta) {
+        $catalog = $modern ? array_merge(self::TOOLS, self::MODERN_TOOLS) : self::TOOLS;
+        foreach ($catalog as $name => $meta) {
             if (! $this->available($name, $user, $settings, $abilities)) {
                 continue;
             }
@@ -48,8 +58,10 @@ class ToolRegistry
                 'inputSchema' => [
                     'type' => 'object',
                     'properties' => $this->schemaProperties($meta['properties']),
+                    'required' => $meta['required'] ?? [],
                     'additionalProperties' => false,
                 ],
+                ...($modern ? ['outputSchema' => ['type' => 'object', 'required' => ['data', 'meta'], 'additionalProperties' => false], 'annotations' => ['readOnlyHint' => true, 'destructiveHint' => false]] : []),
             ];
         }
 
@@ -86,14 +98,24 @@ class ToolRegistry
 
     public function metadata(string $name): ?array
     {
-        return self::TOOLS[$name] ?? null;
+        return self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
     }
 
     public function available(string $name, User $user, McpSettingsService $settings, ?array $abilities = null): bool
     {
-        $meta = self::TOOLS[$name] ?? null;
-        if (! $meta || ! (bool) data_get($settings->tool($name), 'enabled', false)) {
+        $meta = self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
+        $modernTool = array_key_exists($name, self::MODERN_TOOLS);
+        if (! $meta || ($modernTool && ! (bool) config('mcp.waves.contracts_2026')) || ($modernTool && in_array($name, ['exotic_search_knowledge', 'exotic_get_document'], true) && ! (bool) config('mcp.waves.knowledge')) || ($modernTool && str_contains($name, 'payment_') && ! (bool) config('mcp.waves.diagnostics')) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
             return false;
+        }
+
+        if ($modernTool) {
+            if (! in_array($user->role, $meta['roles'], true)) {
+                return false;
+            }
+            $toolAbilities = array_values(array_filter((array) ($abilities ?? []), fn ($ability) => str_starts_with((string) $ability, 'mcp:tool:')));
+
+            return in_array('mcp:tool:'.$name, $toolAbilities, true);
         }
 
         $rank = ['marketing' => 1, 'field_sales' => 1, 'sales' => 1, 'sub_admin' => 2, 'admin' => 3];

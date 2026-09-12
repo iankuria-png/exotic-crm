@@ -54,7 +54,6 @@ class Kernel extends HttpKernel
             \App\Http\Middleware\RejectMcpTokenOutsideEndpoint::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
-        
 
     ];
 
@@ -87,20 +86,21 @@ class Kernel extends HttpKernel
         'whatsapp.sidecar.hmac' => \App\Http\Middleware\VerifyWhatsAppSidecarHmac::class,
         'legacy.payment.callback' => \App\Http\Middleware\VerifyLegacyPaymentCallback::class,
         'mcp.auth' => \App\Http\Middleware\McpAuthenticate::class,
+        'mcp.size' => \App\Http\Middleware\McpRequestSize::class,
         'crm.session-token' => \App\Http\Middleware\EnsureCrmSessionToken::class,
     ];
-    
+
     protected function schedule(Schedule $schedule)
     {
         $schedule->call(function () {
             $now = now();
-    
+
             $expiredActivations = \App\Models\Activation::where('expires_at', '<=', $now)->get();
-    
+
             foreach ($expiredActivations as $activation) {
                 // 1. Set post to private
                 WordpressPost::where('ID', $activation->post_id)->update(['post_status' => 'private']);
-    
+
                 // 2. Set notactive = 1
                 \DB::connection('wordpress')->table('postmeta')
                     ->where('post_id', $activation->post_id)
@@ -109,5 +109,4 @@ class Kernel extends HttpKernel
             }
         })->daily();
     }
-
 }

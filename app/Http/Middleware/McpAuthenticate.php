@@ -33,8 +33,9 @@ class McpAuthenticate
         $hasWildcard = in_array('*', $abilities, true);
         $expiresAt = $token->expires_at;
 
-        if (! $isMcp || $hasWildcard || ($expiresAt && now()->greaterThanOrEqualTo($expiresAt))) {
-            $this->record($request, $requestId, $token, $token->tokenable, 'refused', $expiresAt && now()->greaterThanOrEqualTo($expiresAt) ? 'expired' : 'missing_ability');
+        if (! $isMcp || $hasWildcard || ! method_exists($token->tokenable, 'isActive') || ! $token->tokenable->isActive() || ($expiresAt && now()->greaterThanOrEqualTo($expiresAt))) {
+            $reason = ! $token->tokenable->isActive() ? 'inactive_owner' : ($expiresAt && now()->greaterThanOrEqualTo($expiresAt) ? 'expired' : 'missing_ability');
+            $this->record($request, $requestId, $token, $token->tokenable, 'refused', $reason);
 
             return response()->json(['message' => 'MCP token is invalid or expired.'], 401);
         }

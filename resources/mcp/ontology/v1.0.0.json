@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "entities": {
+    "client": {"authority": "WordPress profile state; CRM is a cache"},
+    "customer": {"authority": "reportable payment activity"},
+    "platform": {"authority": "configured CRM platform"},
+    "payment": {"authority": "payments and billing evidence"},
+    "deal": {"authority": "subscription lifecycle evidence"}
+  },
+  "metrics": {
+    "thirty_day_payers": "windowed distinct collected-revenue payer IDs",
+    "active_subscribers": "daily active-deal snapshot",
+    "total_client_profiles": "local cached lifecycle inventory"
+  }
+}
