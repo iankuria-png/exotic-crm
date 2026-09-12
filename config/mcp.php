@@ -3,11 +3,11 @@
 return [
     'enabled' => (bool) env('MCP_ENABLED', false),
     'endpoint' => env('MCP_ENDPOINT', '/api/mcp'),
-    // The latest protocol is deliberately opt-in: a legacy mcp:read token
-    // cannot accidentally receive new discovery surfaces after deployment.
     'protocol_versions' => ['2025-06-18', '2025-03-26'],
     'waves' => [
-        'contracts_2026' => (bool) env('MCP_CONTRACTS_2026', false),
+        // Feature rollout is intentionally independent from MCP protocol
+        // negotiation. Standard clients negotiate 2025-06-18.
+        'contracts' => (bool) env('MCP_CONTRACTS', env('MCP_CONTRACTS_2026', false)),
         'knowledge' => (bool) env('MCP_KNOWLEDGE', false),
         'diagnostics' => (bool) env('MCP_DIAGNOSTICS', false),
     ],

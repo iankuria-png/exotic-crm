@@ -782,6 +782,7 @@ class CeoDashboardDataService
             ];
         })
             ->sortByDesc(fn (array $agent) => (float) ($agent['revenue']['normalized_total'] ?? array_sum($agent['revenue']['source_breakdown'] ?? [])))
+            ->take(max(1, min(100, (int) $request->query('limit', 100))))
             ->values();
 
         return [

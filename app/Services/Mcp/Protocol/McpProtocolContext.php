@@ -4,10 +4,10 @@ namespace App\Services\Mcp\Protocol;
 
 class McpProtocolContext
 {
-    public function __construct(public readonly string $version) {}
+    public function __construct(public readonly string $version, private readonly bool $enhanced = false) {}
 
-    public function modern(): bool
+    public function enhanced(): bool
     {
-        return $this->version === '2026-07-28';
+        return $this->enhanced;
     }
 }

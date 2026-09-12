@@ -263,6 +263,7 @@ class McpEndpointTest extends TestCase
     public function test_tools_list_result_only_contains_spec_fields(): void
     {
         Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
 
@@ -285,6 +286,7 @@ class McpEndpointTest extends TestCase
     public function test_resources_list_result_only_contains_spec_fields(): void
     {
         Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
 
@@ -305,6 +307,7 @@ class McpEndpointTest extends TestCase
     public function test_tools_call_result_only_contains_spec_fields_and_still_audits_rows(): void
     {
         Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
         $user = User::factory()->create(['role' => 'admin']);
         $token = $user->createToken('mcp:spec', ['mcp:read'], now()->addDay())->plainTextToken;
 

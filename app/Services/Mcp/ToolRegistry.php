@@ -20,7 +20,7 @@ class ToolRegistry
         'exotic_revenue_summary' => ['title' => 'Revenue summary', 'description' => 'Return CEO-dashboard revenue and customer-mix metrics for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'platform_id' => ['type' => 'integer'], 'reporting_currency' => ['type' => 'string']]],
         'exotic_revenue_trend' => ['title' => 'Revenue trend', 'description' => 'Return dashboard revenue buckets for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'bucket' => ['type' => 'string'], 'platform_id' => ['type' => 'integer']]],
         'exotic_market_breakdown' => ['title' => 'Market breakdown', 'description' => 'Compare reportable revenue by market.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string']]],
-        'exotic_agent_performance' => ['title' => 'Agent performance', 'description' => 'Return dashboard agent performance rows with pseudonymous handles.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'limit' => ['type' => 'integer']]],
+        'exotic_agent_performance' => ['title' => 'Agent performance', 'description' => 'Return dashboard agent performance rows with staff display names for administrators.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'limit' => ['type' => 'integer']]],
         'exotic_peak_hours' => ['title' => 'Peak hours', 'description' => 'Return payment volume by hour and weekday.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string']]],
         'exotic_lifecycle_summary' => ['title' => 'Lifecycle summary', 'description' => 'Count clients by lifecycle state and market.', 'min_role' => 'sub_admin', 'domain' => 'lifecycle', 'properties' => ['platform_id' => ['type' => 'integer']]],
         'exotic_churn_analysis' => ['title' => 'Churn analysis', 'description' => 'Summarize churn movement and breakdowns.', 'min_role' => 'sub_admin', 'domain' => 'lifecycle', 'properties' => ['from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'breakdown' => ['type' => 'string']]],
@@ -105,7 +105,7 @@ class ToolRegistry
     {
         $meta = self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
         $modernTool = array_key_exists($name, self::MODERN_TOOLS);
-        if (! $meta || ($modernTool && ! (bool) config('mcp.waves.contracts_2026')) || ($modernTool && in_array($name, ['exotic_search_knowledge', 'exotic_get_document'], true) && ! (bool) config('mcp.waves.knowledge')) || ($modernTool && str_contains($name, 'payment_') && ! (bool) config('mcp.waves.diagnostics')) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
+        if (! $meta || ($modernTool && ! (bool) config('mcp.waves.contracts')) || ($modernTool && in_array($name, ['exotic_search_knowledge', 'exotic_get_document'], true) && ! (bool) config('mcp.waves.knowledge')) || ($modernTool && in_array($name, ['exotic_payment_flow_trace', 'exotic_payment_failure_diagnosis', 'exotic_system_vitals_live', 'exotic_error_digest_live'], true) && ! (bool) config('mcp.waves.diagnostics')) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
             return false;
         }
 

@@ -22,7 +22,7 @@ class McpTokenController extends Controller
     {
         return response()->json([
             'owners' => User::query()->where('status', 'active')->whereIn('role', ['admin', 'sub_admin', 'sales', 'field_sales', 'marketing'])->orderBy('name')->get(['id', 'name', 'role'])->map(fn ($user) => ['id' => $user->id, 'label' => $user->name, 'role' => $user->role]),
-            'protocols' => config('mcp.waves.contracts_2026') ? ['2026-07-28'] : [],
+            'protocols' => ['2025-06-18'],
             'tools' => collect(['exotic_search_knowledge', 'exotic_get_document', 'exotic_payment_flow_trace', 'exotic_payment_failure_diagnosis', 'exotic_system_vitals_live', 'exotic_error_digest_live'])->map(fn ($name) => ['name' => $name, 'available' => $this->registry->metadata($name) !== null])->values(),
             'prompts' => array_keys($this->prompts->all()),
         ]);
@@ -70,7 +70,7 @@ class McpTokenController extends Controller
             'tools' => ['nullable', 'array'],
             'tools.*' => ['string', 'max:64'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
-            'protocol' => ['nullable', 'in:2026-07-28'],
+            'protocol' => ['nullable', 'in:2025-06-18'],
             'resources' => ['nullable', 'array'], 'resources.*' => ['string', 'max:255'],
             'prompts' => ['nullable', 'array'], 'prompts.*' => ['string', 'max:80'],
             'daily_rows' => ['nullable', 'integer', 'min:1'], 'daily_bytes' => ['nullable', 'integer', 'min:1'],
@@ -79,10 +79,6 @@ class McpTokenController extends Controller
         $owner = isset($data['owner_id']) ? User::query()->findOrFail($data['owner_id']) : $request->user();
         abort_unless($owner->isActive(), 422, 'Token owner must be active.');
         $abilities = ['mcp:read'];
-        if (isset($data['protocol'])) {
-            abort_unless(config('mcp.waves.contracts_2026'), 422, 'The modern protocol is disabled.');
-            $abilities[] = 'mcp:protocol:2026-07-28';
-        }
         foreach ((array) ($data['tools'] ?? []) as $tool) {
             abort_unless($this->registry->metadata($tool) !== null, 422, 'Unknown MCP tool.');
             $abilities[] = 'mcp:tool:'.$tool;

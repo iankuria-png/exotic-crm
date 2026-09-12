@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\McpKnowledgeSyncRun;
 use App\Models\McpKnowledgeVersion;
 use App\Models\McpSemanticRelease;
+use App\Services\Mcp\Knowledge\McpKnowledgeSyncException;
 use App\Services\Mcp\Knowledge\MintlifyKnowledgeSync;
+use App\Services\Mcp\Knowledge\OntologyReleaseService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -27,9 +29,24 @@ class McpKnowledgeController extends Controller
         }
         abort_if(McpKnowledgeSyncRun::query()->where('active_slot', 1)->exists(), 409, 'A knowledge sync is already running.');
         $run = McpKnowledgeSyncRun::create(['public_id' => (string) Str::uuid(), 'mode' => 'stage', 'status' => 'queued', 'active_slot' => 1, 'idempotency_key' => $data['idempotency_key']]);
-        $version = $sync->stage($run);
+        try {
+            $version = $sync->stage($run);
+        } catch (McpKnowledgeSyncException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'code' => $exception->safeCode,
+                'run' => $run->fresh(),
+            ], $exception->httpStatus);
+        }
 
         return response()->json(['run' => $run->fresh(), 'version' => $version], 201);
+    }
+
+    public function bootstrap(Request $request, OntologyReleaseService $releases)
+    {
+        abort_unless($request->user()?->role === 'admin', 403);
+
+        return response()->json(['release' => $releases->bootstrap($request->user()->id)]);
     }
 
     public function promote(Request $request, McpKnowledgeVersion $version, MintlifyKnowledgeSync $sync)

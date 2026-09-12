@@ -6,4 +6,4 @@
 - A customer is a billing concept tied to reportable payment activity.
 - visitor_contact_unlocks.client_id identifies the advertiser whose contact was unlocked, not the visitor.
 
-MCP responses use stable opaque handles for individual entities. Names, phones, emails, bios and free text do not leave the CRM.
+MCP responses use stable opaque handles for external individual entities. For administrator and sub-admin callers, agent-performance responses may include an operator's `agent_display_name`; internal user IDs, phones, emails, bios and free text do not leave the CRM.
