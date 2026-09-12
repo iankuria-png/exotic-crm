@@ -1262,7 +1262,10 @@ export default function Clients() {
         }
 
         const archivedSelection = selectedClients.filter((client) => client?.profile_status === 'archived' || client?.lifecycle_state === 'archived');
-        setArchiveRecoveryDialog(createArchiveRecoveryDialogState(platformFilter, archivedSelection));
+        setArchiveRecoveryDialog({
+            ...createArchiveRecoveryDialogState(platformFilter, archivedSelection),
+            open: true,
+        });
     };
 
     const bulkSeoPrivateMutation = useMutation({
