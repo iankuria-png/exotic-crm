@@ -11,8 +11,8 @@ class OntologyRegistry
     {
         $release = McpSemanticRelease::query()->where('active_slot', 1)->first();
         $version = $release?->ontology_version ?: 'v1.0.0';
-        $path = resource_path("mcp/ontology/{$version}.json");
-        if (! is_file($path)) {
+        $path = $this->artifactPath($version);
+        if ($path === null) {
             throw new RuntimeException('The active MCP ontology is unavailable.');
         }
         $json = file_get_contents($path);
@@ -23,5 +23,22 @@ class OntologyRegistry
         }
 
         return ['ontology' => $ontology, 'version' => (string) ($ontology['version'] ?? '1.0.0'), 'sha256' => $hash];
+    }
+
+    private function artifactPath(string $version): ?string
+    {
+        $artifactVersions = [$version];
+        if (! str_starts_with($version, 'v')) {
+            $artifactVersions[] = 'v'.$version;
+        }
+
+        foreach (array_unique($artifactVersions) as $artifactVersion) {
+            $path = resource_path("mcp/ontology/{$artifactVersion}.json");
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 }

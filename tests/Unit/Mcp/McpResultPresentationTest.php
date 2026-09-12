@@ -50,4 +50,29 @@ class McpResultPresentationTest extends TestCase
         $this->assertSame(1, preg_match('//u', $chunks[0]));
         $this->assertSame(1, preg_match('//u', $chunks[1]));
     }
+
+    public function test_knowledge_manifest_parser_selects_only_approved_markdown_documents(): void
+    {
+        $method = new \ReflectionMethod(MintlifyKnowledgeSync::class, 'eligibleSlugs');
+        $manifest = implode("\n", [
+            'https://exoticonline.mintlify.app/payments/overview.md',
+            'https://exoticonline.mintlify.app/payments/matching.md',
+            'https://exoticonline.mintlify.app/unapproved/page.md',
+            'https://example.test/product/overview.md',
+        ]);
+
+        $slugs = $method->invoke(new MintlifyKnowledgeSync, $manifest);
+
+        $this->assertSame(['payments/overview.md', 'payments/matching.md'], $slugs);
+    }
+
+    public function test_knowledge_document_map_uses_the_literal_markdown_slug(): void
+    {
+        $method = new \ReflectionMethod(MintlifyKnowledgeSync::class, 'documentMeta');
+        $meta = $method->invoke(new MintlifyKnowledgeSync, [
+            'payments/overview.md' => ['uri' => 'exotic://docs/payments/overview'],
+        ], 'payments/overview.md');
+
+        $this->assertSame('exotic://docs/payments/overview', $meta['uri']);
+    }
 }

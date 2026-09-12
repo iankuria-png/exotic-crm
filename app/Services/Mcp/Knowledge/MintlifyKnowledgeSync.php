@@ -25,9 +25,7 @@ class MintlifyKnowledgeSync
                 throw new McpKnowledgeSyncException('source_unavailable', 'The approved documentation index is unavailable. Please try again shortly.');
             }
             $manifest = (string) $manifestResponse->getBody();
-            $matches = [];
-            preg_match_all('#https://exoticonline\.mintlify\.app/([^\s?#]+\.md)#', $manifest, $matches);
-            $eligible = array_intersect(array_unique($matches[1]), array_keys(config('mcp_knowledge.documents')));
+            $eligible = $this->eligibleSlugs($manifest);
             if ($eligible === []) {
                 throw new McpKnowledgeSyncException('no_approved_documents', 'No approved documentation pages were found. Review the approved-document map before staging again.');
             }
@@ -47,15 +45,16 @@ class MintlifyKnowledgeSync
             if ($contents === []) {
                 throw new McpKnowledgeSyncException('no_retrievable_documents', 'No approved documentation pages could be retrieved. Check the documentation host and try again.');
             }
+            $documents = (array) config('mcp_knowledge.documents');
             $versionName = 'knowledge-'.substr(hash('sha256', $manifest.json_encode($contents)), 0, 16);
-            $version = DB::transaction(function () use ($versionName, $manifest, $contents, $ontology, $eligible) {
+            $version = DB::transaction(function () use ($versionName, $manifest, $contents, $ontology, $eligible, $documents) {
                 $version = McpKnowledgeVersion::query()->where('version', $versionName)->first();
                 if ($version) {
                     return $version;
                 }
                 $version = McpKnowledgeVersion::create(['version' => $versionName, 'status' => 'ready', 'manifest_sha256' => hash('sha256', $manifest), 'content_sha256' => hash('sha256', json_encode($contents)), 'ontology_version' => $ontology['version'], 'ontology_sha256' => $ontology['sha256'], 'validation_report' => ['eligible' => count($eligible), 'staged' => count($contents)]]);
                 foreach ($contents as $slug => $body) {
-                    $meta = config('mcp_knowledge.documents.'.$slug);
+                    $meta = $this->documentMeta($documents, $slug);
                     $doc = McpKnowledgeDocument::create(['version_id' => $version->id, 'canonical_uri' => $meta['uri'], 'source_url' => 'https://'.config('mcp_knowledge.host').'/'.$slug, 'title' => str_replace(['-', '/'], ' ', pathinfo($slug, PATHINFO_FILENAME)), 'audiences' => $meta['audiences'], 'lifecycle_stages' => $meta['stages'], 'departments' => $meta['audiences'], 'content_sha256' => hash('sha256', $body), 'classification_key' => $slug]);
                     foreach ($this->chunks($body) as $index => $chunk) {
                         McpKnowledgeChunk::create(['document_id' => $doc->id, 'ordinal' => $index, 'heading_path' => $doc->title, 'body' => $chunk, 'token_estimate' => max(1, (int) ceil(mb_strlen($chunk) / 4)), 'search_text' => $doc->title.' '.$chunk]);
@@ -106,6 +105,24 @@ class MintlifyKnowledgeSync
     private function chunks(string $body): array
     {
         return mb_str_split($body, (int) config('mcp_knowledge.max_chunk_chars'));
+    }
+
+    private function eligibleSlugs(string $manifest): array
+    {
+        $matches = [];
+        preg_match_all('~https://exoticonline\.mintlify\.app/([^\s?#]+\.md)~', $manifest, $matches);
+
+        return array_values(array_intersect(array_unique($matches[1] ?? []), array_keys(config('mcp_knowledge.documents'))));
+    }
+
+    private function documentMeta(array $documents, string $slug): array
+    {
+        $meta = $documents[$slug] ?? null;
+        if (! is_array($meta)) {
+            throw new McpKnowledgeSyncException('invalid_document_map', 'An approved documentation entry is incomplete. Review the approved-document map before staging again.');
+        }
+
+        return $meta;
     }
 
     private function unexpectedFailure(\Throwable $error): McpKnowledgeSyncException

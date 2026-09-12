@@ -51,6 +51,7 @@ class McpKnowledgeLayerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('release.ontology_version', '1.0.0')
             ->assertJsonPath('release.active_slot', 1);
+        $this->assertSame('1.0.0', app(\App\Services\Mcp\Knowledge\OntologyRegistry::class)->active()['version']);
     }
 
     private function request(string $method): array
