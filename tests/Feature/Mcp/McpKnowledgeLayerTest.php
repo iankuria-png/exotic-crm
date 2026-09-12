@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Models\McpKnowledgeChunk;
+use App\Models\McpKnowledgeDocument;
+use App\Models\McpKnowledgeVersion;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
@@ -52,6 +55,74 @@ class McpKnowledgeLayerTest extends TestCase
             ->assertJsonPath('release.ontology_version', '1.0.0')
             ->assertJsonPath('release.active_slot', 1);
         $this->assertSame('1.0.0', app(\App\Services\Mcp\Knowledge\OntologyRegistry::class)->active()['version']);
+    }
+
+    public function test_admin_can_review_the_complete_staged_snapshot_before_promoting_it(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $version = McpKnowledgeVersion::create([
+            'version' => 'knowledge-review',
+            'status' => 'ready',
+            'manifest_sha256' => str_repeat('a', 64),
+            'content_sha256' => str_repeat('b', 64),
+            'ontology_version' => '1.0.0',
+            'ontology_sha256' => str_repeat('c', 64),
+            'validation_report' => ['eligible' => 1, 'staged' => 1],
+        ]);
+        $document = McpKnowledgeDocument::create([
+            'version_id' => $version->id,
+            'canonical_uri' => 'payments/overview.md',
+            'source_url' => 'https://docs.example.test/payments/overview.md',
+            'title' => 'Payment overview',
+            'summary' => 'How payment matching works.',
+            'audiences' => ['support'],
+            'lifecycle_stages' => ['payment'],
+            'departments' => ['operations'],
+            'content_sha256' => str_repeat('d', 64),
+            'classification_key' => 'payments.overview',
+        ]);
+        McpKnowledgeChunk::create([
+            'document_id' => $document->id,
+            'ordinal' => 1,
+            'heading_path' => 'Overview > Matching',
+            'body' => 'Match the reference before activating a package.',
+            'token_estimate' => 9,
+            'search_text' => 'Match the reference before activating a package.',
+        ]);
+        McpKnowledgeChunk::create([
+            'document_id' => $document->id,
+            'ordinal' => 0,
+            'heading_path' => 'Overview',
+            'body' => 'Payments arrive through the approved provider.',
+            'token_estimate' => 7,
+            'search_text' => 'Payments arrive through the approved provider.',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/settings/mcp/knowledge/versions/{$version->id}/review")
+            ->assertOk()
+            ->assertJsonPath('version.status', 'ready')
+            ->assertJsonPath('documents.0.canonical_uri', 'payments/overview.md')
+            ->assertJsonPath('documents.0.source_url', 'https://docs.example.test/payments/overview.md')
+            ->assertJsonPath('documents.0.chunk_count', 2)
+            ->assertJsonPath('documents.0.body', "Payments arrive through the approved provider.\n\nMatch the reference before activating a package.");
+    }
+
+    public function test_sub_admin_cannot_open_staged_document_content(): void
+    {
+        $version = McpKnowledgeVersion::create([
+            'version' => 'knowledge-private-review',
+            'status' => 'ready',
+            'manifest_sha256' => str_repeat('a', 64),
+            'content_sha256' => str_repeat('b', 64),
+            'ontology_version' => '1.0.0',
+            'ontology_sha256' => str_repeat('c', 64),
+        ]);
+        Sanctum::actingAs(User::factory()->create(['role' => 'sub_admin']));
+
+        $this->getJson("/api/crm/settings/mcp/knowledge/versions/{$version->id}/review")
+            ->assertForbidden();
     }
 
     private function request(string $method): array

@@ -305,6 +305,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/settings/mcp/tokens', [McpTokenController::class, 'store'])->middleware('role:admin');
     Route::delete('/settings/mcp/tokens/{token}', [McpTokenController::class, 'destroy'])->middleware('role:admin');
     Route::get('/settings/mcp/knowledge', [McpKnowledgeController::class, 'index'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/mcp/knowledge/versions/{version}/review', [McpKnowledgeController::class, 'review'])->middleware('role:admin');
     Route::post('/settings/mcp/knowledge/bootstrap', [McpKnowledgeController::class, 'bootstrap'])->middleware('role:admin');
     Route::post('/settings/mcp/knowledge/stage', [McpKnowledgeController::class, 'stage'])->middleware('role:admin');
     Route::post('/settings/mcp/knowledge/versions/{version}/promote', [McpKnowledgeController::class, 'promote'])->middleware('role:admin');
