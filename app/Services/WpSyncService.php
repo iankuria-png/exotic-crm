@@ -596,6 +596,25 @@ class WpSyncService
         return $this->get('/lifecycle-policy');
     }
 
+    /**
+     * Switch the market's first-party profile analytics collection. Off stops
+     * WordPress loading the tracker and writes the flag analytics-guard.php reads
+     * to answer leftover beacons before the database connects. The response
+     * reports enabled, guard_installed, guard_flag_present and guard_flag_synced.
+     */
+    public function setAnalyticsCollection(bool $enabled): array
+    {
+        return $this->post('/analytics-collection', ['enabled' => $enabled ? 1 : 0]);
+    }
+
+    /**
+     * Read back what the market's WordPress is actually running. Read-only.
+     */
+    public function getAnalyticsCollection(): array
+    {
+        return $this->get('/analytics-collection');
+    }
+
     public function deleteClient(int $postId): array
     {
         return $this->delete("/clients/{$postId}/delete");

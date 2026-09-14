@@ -34,6 +34,7 @@ class Platform extends Model
         'health_down_since_at', 'health_last_down_notified_at',
         'lifecycle_policy_enabled',
         'sync_shared_key_enabled',
+        'analytics_collection_enabled',
         'renewal_reminder_guard_enabled',
     ];
 
@@ -47,6 +48,7 @@ class Platform extends Model
         'is_active' => 'boolean',
         'lifecycle_policy_enabled' => 'boolean',
         'sync_shared_key_enabled' => 'boolean',
+        'analytics_collection_enabled' => 'boolean',
         'renewal_reminder_guard_enabled' => 'boolean',
         'sync_last_checked_at' => 'datetime',
         'sync_last_synced_at' => 'datetime',
@@ -157,6 +159,18 @@ class Platform extends Model
         }
 
         return (bool) $this->lifecycle_policy_enabled;
+    }
+
+    /**
+     * First-party profile analytics collection on the market's WordPress site.
+     * On unless switched off from CRM settings; a row predating the column reads
+     * as on, matching what WordPress does when it has never been told.
+     */
+    public function analyticsCollectionEnabled(): bool
+    {
+        return $this->analytics_collection_enabled === null
+            ? true
+            : (bool) $this->analytics_collection_enabled;
     }
 
     public function primaryCurrency(): string

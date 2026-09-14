@@ -3314,6 +3314,7 @@ class SettingsController extends Controller
             'lifecycle_policy_enabled' => 'sometimes|boolean',
             'sync_shared_key_enabled' => 'sometimes|boolean',
             'client_sync_include_agencies' => 'sometimes|boolean',
+            'analytics_collection_enabled' => 'sometimes|boolean',
             'wp_api_url' => 'sometimes|nullable|url|max:255',
             'wp_api_user' => 'sometimes|nullable|string|max:100',
             'wp_api_password' => 'sometimes|nullable|string|max:255',
@@ -3335,6 +3336,7 @@ class SettingsController extends Controller
         ]);
 
         $wasLifecycleFlagEnabled = (bool) $platform->lifecycle_policy_enabled;
+        $wasAnalyticsCollectionEnabled = $platform->analyticsCollectionEnabled();
         $beforeState = $this->platformAuditState($platform);
         $payload = $this->platformWritePayload($validated, true);
         if (
@@ -3396,9 +3398,22 @@ class SettingsController extends Controller
             }
         }
 
+        // Mirror analytics collection to WordPress when it changed, or whenever it
+        // is off so a re-save repairs a market that missed the push. An untouched
+        // default-on market is skipped: saving one still running an older plugin
+        // must not warn about a setting nobody changed.
+        $analyticsCollectionPushWarning = null;
+        if (
+            array_key_exists('analytics_collection_enabled', $validated)
+            && ($wasAnalyticsCollectionEnabled !== $platform->analyticsCollectionEnabled() || ! $platform->analyticsCollectionEnabled())
+        ) {
+            $analyticsCollectionPushWarning = $this->pushAnalyticsCollectionToWordPress($platform);
+        }
+
         return response()->json(array_filter([
             'platform' => $this->serializePlatformIntegration($platform),
             'lifecycle_policy_push_warning' => $lifecyclePushWarning,
+            'analytics_collection_push_warning' => $analyticsCollectionPushWarning,
         ], static fn ($value) => $value !== null));
     }
 
@@ -3424,6 +3439,77 @@ class SettingsController extends Controller
                 $e->getMessage()
             );
         }
+    }
+
+    /**
+     * Push platform->analyticsCollectionEnabled() to the market's WordPress and
+     * keep what WordPress reports back on the capability meta the integrations
+     * screen already reads. Returns a warning on failure, null on success.
+     */
+    private function pushAnalyticsCollectionToWordPress(Platform $platform): ?string
+    {
+        $enabled = $platform->analyticsCollectionEnabled();
+
+        try {
+            $response = WpSyncService::forPlatform((int) $platform->id)->setAnalyticsCollection($enabled);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to push analytics collection flag to WordPress', [
+                'platform_id' => $platform->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return sprintf(
+                'Saved, but pushing analytics collection to %s failed (%s). Upload exotic-crm-sync 1.3.8 or later to this market, then re-save.',
+                $platform->name,
+                $e->getMessage()
+            );
+        }
+
+        // A plugin without the route answers with WordPress's own error body, which
+        // carries no `enabled` key. That is "not applied", not success.
+        if (! array_key_exists('enabled', $response)) {
+            return sprintf(
+                'Saved, but %s did not apply analytics collection: its sync plugin predates the switch. Upload exotic-crm-sync 1.3.8 or later, then re-save.',
+                $platform->name
+            );
+        }
+
+        $meta = is_array($platform->client_sync_capability_meta) ? $platform->client_sync_capability_meta : [];
+        $meta['supports_analytics_collection_toggle'] = true;
+        $meta['analytics_collection'] = [
+            'enabled' => (bool) $response['enabled'],
+            'guard_installed' => (bool) ($response['guard_installed'] ?? false),
+            'guard_flag_present' => (bool) ($response['guard_flag_present'] ?? false),
+            'reported_at' => now()->toDateTimeString(),
+        ];
+        $platform->forceFill(['client_sync_capability_meta' => $meta])->save();
+
+        if (! $enabled && ! (bool) ($response['guard_flag_synced'] ?? true)) {
+            return sprintf(
+                'Analytics collection is off on %s, but WordPress could not write the guard flag (wp-content/exotic-crm-sync-flags). Beacons from open tabs will keep reaching the database until that directory is writable.',
+                $platform->name
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * What the market's WordPress last reported about analytics collection, from
+     * the capability probe or the most recent push. Null means it has not said.
+     */
+    private function analyticsCollectionWordPressState(Platform $platform, array $meta): array
+    {
+        $state = is_array($meta['analytics_collection'] ?? null) ? $meta['analytics_collection'] : [];
+        $flag = static fn (string $key): ?bool => array_key_exists($key, $state) ? (bool) $state[$key] : null;
+
+        return [
+            'supported' => (bool) ($meta['supports_analytics_collection_toggle'] ?? false),
+            'wp_enabled' => $flag('enabled'),
+            'guard_installed' => $flag('guard_installed'),
+            'guard_flag_present' => $flag('guard_flag_present'),
+            'reported_at' => $state['reported_at'] ?? optional($platform->client_sync_capability_checked_at)->toDateTimeString(),
+        ];
     }
 
     private function resetLifecycleRestorePacing(Platform $platform, ?int $actorId): void
@@ -5657,6 +5743,8 @@ class SettingsController extends Controller
             'lifecycle_policy_effective' => $platform->lifecycleEnabled(),
             'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
             'sync_shared_key_configured' => trim((string) config('services.exotic_crm_sync.shared_key', '')) !== '',
+            'analytics_collection_enabled' => $platform->analyticsCollectionEnabled(),
+            'analytics_collection' => $this->analyticsCollectionWordPressState($platform, $clientSyncCapabilityMeta),
             'bio_scrub' => [
                 'pending_count' => $platform->lifecycle_policy_enabled
                     ? Client::query()
@@ -5814,6 +5902,7 @@ class SettingsController extends Controller
             'is_active' => (bool) $platform->is_active,
             'lifecycle_policy_enabled' => (bool) $platform->lifecycle_policy_enabled,
             'sync_shared_key_enabled' => (bool) $platform->sync_shared_key_enabled,
+            'analytics_collection_enabled' => $platform->analyticsCollectionEnabled(),
             'wp_compatibility' => $platform->wpCompatibilitySettings(),
             'wp_api_url' => $platform->wp_api_url,
             'wp_api_user' => $platform->wp_api_user,

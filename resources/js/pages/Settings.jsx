@@ -170,6 +170,8 @@ function summarizeWalletSyncResponse(response) {
     return { tone, message: singleMessage };
 }
 
+const ANALYTICS_GUARD_INCLUDE = "@include __DIR__ . '/wp-content/plugins/exotic-crm-sync/analytics-guard.php';";
+
 function buildPlatformEditor(platform) {
     if (!platform) {
         return null;
@@ -183,6 +185,7 @@ function buildPlatformEditor(platform) {
         lifecycle_policy_enabled: Boolean(platform.lifecycle_policy_enabled),
         client_sync_include_agencies: Boolean(platform.client_sync?.include_agencies),
         sync_shared_key_enabled: Boolean(platform.sync_shared_key_enabled),
+        analytics_collection_enabled: platform.analytics_collection_enabled !== false,
         wp_api_url: platform.wp_sync?.api_url || '',
         wp_api_user: platform.wp_sync?.api_user || '',
         wp_api_password: '',
@@ -1703,6 +1706,9 @@ function IntegrationsWorkspace({
             toast.success('Market integration profile updated.');
             if (response?.lifecycle_policy_push_warning) {
                 toast.error(response.lifecycle_policy_push_warning);
+            }
+            if (response?.analytics_collection_push_warning) {
+                toast.error(response.analytics_collection_push_warning);
             }
         },
         onError: (error) => {
@@ -5351,6 +5357,51 @@ function IntegrationsWorkspace({
                                                 )}
                                             </span>
                                         </label>
+                                        <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(editor.analytics_collection_enabled)}
+                                                onChange={(event) => setEditor((current) => ({ ...current, analytics_collection_enabled: event.target.checked }))}
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <span>
+                                                <span className="font-medium">Collect profile analytics on this market</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    Records profile views, card impressions and contact clicks through the site&apos;s own tracker. Each batch is an uncached
+                                                    WordPress request with database writes, so switch it off where traffic is heavy and GA4 is enough. While off, advertiser
+                                                    analytics, renewal &quot;seen / contacted&quot; counts and momentum streaks stop updating. GA4 and GTM contact tracking are unaffected.
+                                                </span>
+                                                {!editor.analytics_collection_enabled && !selectedPlatform?.analytics_collection?.supported ? (
+                                                    <span className="mt-1 block text-xs font-medium text-amber-700">
+                                                        This market&apos;s sync plugin has not advertised the switch yet. Upload exotic-crm-sync 1.3.8 or later, then save again. Until then, off is only recorded in the CRM.
+                                                    </span>
+                                                ) : null}
+                                                {!editor.analytics_collection_enabled && selectedPlatform?.analytics_collection?.wp_enabled === false ? (
+                                                    <span className="mt-1 block text-xs font-medium text-emerald-700">
+                                                        Collection is off on this market&apos;s WordPress{selectedPlatform.analytics_collection.reported_at ? ` (reported ${selectedPlatform.analytics_collection.reported_at})` : ''}.
+                                                    </span>
+                                                ) : null}
+                                            </span>
+                                        </label>
+                                        {!editor.analytics_collection_enabled && selectedPlatform?.analytics_collection?.supported && selectedPlatform.analytics_collection.guard_installed !== true ? (
+                                            <div className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                                                <p className="font-semibold">The wp-config guard is not installed on this market.</p>
+                                                <p className="mt-0.5">
+                                                    Tabs still running the old tracker keep costing a database connection per beacon until they reload. Add this line to
+                                                    wp-config.php above the wp-settings.php require, then save this market again to confirm.
+                                                </p>
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                    <code className="rounded bg-white px-2 py-1 font-mono text-[11px] text-slate-700 ring-1 ring-amber-200">{ANALYTICS_GUARD_INCLUDE}</code>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyToClipboard(ANALYTICS_GUARD_INCLUDE, 'Guard include line copied.', 'Could not copy the include line.')}
+                                                        className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+                                                    >
+                                                        Copy line
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : null}
                                         {selectedPlatform?.lifecycle_policy_effective ? (
                                             <div className="md:col-span-2 rounded-lg border border-slate-200 bg-white p-3">
                                                 <div className="flex flex-wrap items-start justify-between gap-3">
