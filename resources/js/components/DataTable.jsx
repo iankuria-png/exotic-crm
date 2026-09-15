@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 const EMPTY_SELECTION = [];
 
@@ -13,6 +13,7 @@ function defaultRowId(row, index, rowIdKey) {
 }
 
 const DEFAULT_PER_PAGE_OPTIONS = [50, 100, 150];
+const MAX_STICKY_COLUMNS = 3;
 
 export default function DataTable({
     columns,
@@ -31,10 +32,67 @@ export default function DataTable({
     perPage,
     onPerPageChange,
     perPageOptions = DEFAULT_PER_PAGE_OPTIONS,
+    stickyColumns = 2,
 }) {
     const rows = data || [];
     const { current_page, last_page, total, per_page } = pagination || {};
     const cellPadding = compact ? 'px-4 py-2.5' : 'px-4 py-3';
+
+    // Keep the frozen rail deliberately small: it should preserve row identity,
+    // not turn the table into a second viewport. The columns are always the
+    // leading columns so the left offsets remain deterministic.
+    const requestedStickyColumnCount = Number(stickyColumns);
+    const stickyColumnCount = stickyColumns === false
+        ? 0
+        : Math.min(
+            MAX_STICKY_COLUMNS,
+            Math.max(0, Number.isFinite(requestedStickyColumnCount) ? requestedStickyColumnCount : 2),
+            columns.length,
+        );
+    const stickyColumnKeys = useMemo(
+        () => columns.slice(0, stickyColumnCount).map((column) => column.key),
+        [columns, stickyColumnCount],
+    );
+    const tableRef = useRef(null);
+    const headerCellRefs = useRef([]);
+    const [stickyOffsets, setStickyOffsets] = useState([]);
+
+    useLayoutEffect(() => {
+        if (!tableRef.current || stickyColumnCount === 0) {
+            setStickyOffsets([]);
+            return undefined;
+        }
+
+        const measureStickyOffsets = () => {
+            let offset = selectable ? (tableRef.current.querySelector('[data-selection-column]')?.getBoundingClientRect().width || 44) : 0;
+            const nextOffsets = stickyColumnKeys.map((key, index) => {
+                const currentOffset = offset;
+                const cell = headerCellRefs.current[index];
+                offset += cell?.getBoundingClientRect().width || 0;
+                return { key, left: currentOffset };
+            });
+
+            setStickyOffsets(nextOffsets);
+        };
+
+        measureStickyOffsets();
+
+        if (typeof ResizeObserver === 'undefined') {
+            window.addEventListener('resize', measureStickyOffsets);
+            return () => window.removeEventListener('resize', measureStickyOffsets);
+        }
+
+        const resizeObserver = new ResizeObserver(measureStickyOffsets);
+        resizeObserver.observe(tableRef.current);
+        headerCellRefs.current.slice(0, stickyColumnCount).forEach((cell) => {
+            if (cell) resizeObserver.observe(cell);
+        });
+        return () => resizeObserver.disconnect();
+    }, [selectable, stickyColumnCount, stickyColumnKeys]);
+
+    const stickyOffsetFor = (key) => stickyOffsets.find((item) => item.key === key)?.left;
+    const isStickyColumn = (key) => stickyColumnKeys.includes(key);
+    const isLastStickyColumn = (key) => stickyColumnKeys[stickyColumnKeys.length - 1] === key;
 
     const rowIds = useMemo(() => rows.map((row, index) => defaultRowId(row, index, rowIdKey)), [rows, rowIdKey]);
 
@@ -152,11 +210,15 @@ export default function DataTable({
             ) : null}
 
             <div className="max-h-[68vh] overflow-auto">
-                <table className="min-w-full divide-y divide-slate-200">
+                <table ref={tableRef} className="min-w-full divide-y divide-slate-200">
                     <thead className="bg-slate-50/95 backdrop-blur">
                         <tr>
                             {selectable ? (
-                                <th className="sticky top-0 z-10 w-11 px-3 py-3 text-left bg-slate-50/95">
+                                <th
+                                    data-selection-column
+                                    className={`${stickyColumnCount > 0 ? 'sticky left-0 top-0 z-30 backdrop-blur' : ''} w-11 bg-slate-50/95 px-3 py-3 text-left`}
+                                    style={{ boxShadow: stickyColumnCount > 0 ? '2px 0 4px -3px rgb(15 23 42 / 0.28)' : undefined }}
+                                >
                                     <input
                                         type="checkbox"
                                         checked={allVisibleSelected}
@@ -166,15 +228,27 @@ export default function DataTable({
                                     />
                                 </th>
                             ) : null}
-                            {columns.map((col) => (
-                                <th
-                                    key={col.key}
-                                    className={`sticky top-0 z-10 bg-slate-50/95 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ${col.headerClassName || ''}`}
-                                    style={col.width ? { width: col.width } : {}}
-                                >
-                                    {col.renderHeader ? col.renderHeader() : col.label}
-                                </th>
-                            ))}
+                            {columns.map((col, columnIndex) => {
+                                const sticky = isStickyColumn(col.key);
+                                const stickyStyle = sticky
+                                    ? {
+                                        left: stickyOffsetFor(col.key),
+                                        zIndex: 30,
+                                        boxShadow: isLastStickyColumn(col.key) ? '2px 0 4px -3px rgb(15 23 42 / 0.28)' : undefined,
+                                    }
+                                    : {};
+
+                                return (
+                                    <th
+                                        key={col.key}
+                                        ref={(node) => { headerCellRefs.current[columnIndex] = node; }}
+                                        className={`${sticky ? 'sticky top-0 bg-slate-50/95 backdrop-blur' : 'sticky top-0 z-10 bg-slate-50/95'} px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ${col.headerClassName || ''}`}
+                                        style={{ ...(col.width ? { width: col.width } : {}), ...stickyStyle }}
+                                    >
+                                        {col.renderHeader ? col.renderHeader() : col.label}
+                                    </th>
+                                );
+                            })}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -197,15 +271,19 @@ export default function DataTable({
                             rows.map((row, index) => {
                                 const rowId = defaultRowId(row, index, rowIdKey);
                                 const isSelected = selectedIds.includes(rowId);
+                                const stickyRowBackground = isSelected ? 'bg-teal-50/90' : 'bg-white group-hover:bg-slate-50';
 
                                 return (
                                     <tr
                                         key={rowId}
                                         onClick={() => onRowClick?.(row)}
-                                        className={`${onRowClick ? 'cursor-pointer hover:bg-slate-50' : ''} ${isSelected ? 'bg-teal-50/40' : ''} transition-colors`}
+                                        className={`${onRowClick ? 'group cursor-pointer hover:bg-slate-50' : 'group'} ${isSelected ? 'bg-teal-50/40' : ''} transition-colors`}
                                     >
                                         {selectable ? (
-                                            <td className={`${cellPadding} pl-3`}> 
+                                            <td
+                                                className={`${cellPadding} ${stickyColumnCount > 0 ? 'sticky left-0 z-10' : ''} ${stickyRowBackground} pl-3`}
+                                                style={{ boxShadow: stickyColumnCount > 0 ? '2px 0 4px -3px rgb(15 23 42 / 0.28)' : undefined }}
+                                            >
                                                 <input
                                                     type="checkbox"
                                                     checked={isSelected}
@@ -216,15 +294,25 @@ export default function DataTable({
                                                 />
                                             </td>
                                         ) : null}
-                                        {columns.map((col) => (
-                                            <td
-                                                key={col.key}
-                                                className={`${cellPadding} whitespace-nowrap text-sm text-slate-700 ${col.cellClassName || ''}`}
-                                                style={col.width ? { width: col.width } : {}}
-                                            >
-                                                {col.render ? col.render(row) : row[col.key]}
-                                            </td>
-                                        ))}
+                                        {columns.map((col) => {
+                                            const sticky = isStickyColumn(col.key);
+
+                                            return (
+                                                <td
+                                                    key={col.key}
+                                                    className={`${cellPadding} whitespace-nowrap text-sm text-slate-700 ${sticky ? `sticky z-10 ${stickyRowBackground}` : ''} ${col.cellClassName || ''}`}
+                                                    style={{
+                                                        ...(col.width ? { width: col.width } : {}),
+                                                        ...(sticky ? {
+                                                            left: stickyOffsetFor(col.key),
+                                                            boxShadow: isLastStickyColumn(col.key) ? '2px 0 4px -3px rgb(15 23 42 / 0.28)' : undefined,
+                                                        } : {}),
+                                                    }}
+                                                >
+                                                    {col.render ? col.render(row) : row[col.key]}
+                                                </td>
+                                            );
+                                        })}
                                     </tr>
                                 );
                             })
