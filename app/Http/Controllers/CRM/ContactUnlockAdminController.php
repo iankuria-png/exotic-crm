@@ -8,6 +8,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockAnalyticsService;
+use App\Services\ContactUnlockDateWindowService;
 use App\Services\ContactUnlockDemandDetailService;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockPulseService;
@@ -18,7 +19,6 @@ use App\Services\ReportingCurrencyService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -31,6 +31,7 @@ class ContactUnlockAdminController extends Controller
         private readonly ContactUnlockAnalyticsService $analyticsService,
         private readonly ContactUnlockDemandDetailService $demandDetailService,
         private readonly ContactUnlockQueryService $unlockQueryService,
+        private readonly ContactUnlockDateWindowService $dateWindowService,
         private readonly MarketAuthorizationService $marketAuthorization,
         private readonly ReportingCurrencyService $reportingCurrencyService
     ) {}
@@ -52,6 +53,7 @@ class ContactUnlockAdminController extends Controller
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'currency_mode' => ['nullable', Rule::in(['native', 'flat'])],
             'reporting_currency' => 'nullable|string|min:3|max:8',
+            'timezone' => 'nullable|string|max:80',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
         ]);
@@ -345,24 +347,12 @@ class ContactUnlockAdminController extends Controller
 
     private function applyUnlockDateWindow(Builder $query, array $filters): void
     {
-        if (! empty($filters['from'])) {
-            $query->where('created_at', '>=', Carbon::parse($filters['from'])->startOfDay());
-        }
-
-        if (! empty($filters['to'])) {
-            $query->where('created_at', '<=', Carbon::parse($filters['to'])->endOfDay());
-        }
+        $this->dateWindowService->apply($query, 'created_at', $filters);
     }
 
     private function applyPaymentDateWindow(Builder $query, array $filters): void
     {
-        if (! empty($filters['from'])) {
-            $query->where(DB::raw('COALESCE(completed_at, updated_at, created_at)'), '>=', Carbon::parse($filters['from'])->startOfDay());
-        }
-
-        if (! empty($filters['to'])) {
-            $query->where(DB::raw('COALESCE(completed_at, updated_at, created_at)'), '<=', Carbon::parse($filters['to'])->endOfDay());
-        }
+        $this->dateWindowService->apply($query, DB::raw('COALESCE(completed_at, updated_at, created_at)'), $filters);
     }
 
     private function serializeRule(ContactUnlockPricingRule $rule): array

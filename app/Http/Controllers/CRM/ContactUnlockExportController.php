@@ -33,6 +33,7 @@ class ContactUnlockExportController extends Controller
             'search' => 'nullable|string|max:120',
             'sort' => ['nullable', Rule::in(['id', 'created_at', 'status', 'scope', 'amount', 'payment_status', 'visitor', 'profile', 'market'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
+            'timezone' => 'nullable|string|max:80',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'reporting_currency' => 'nullable|string|min:3|max:8',

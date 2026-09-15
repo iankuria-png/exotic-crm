@@ -7,10 +7,13 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\VisitorContactUnlock;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
 
 class ContactUnlockQueryService
 {
+    public function __construct(
+        private readonly ContactUnlockDateWindowService $dateWindowService
+    ) {}
+
     public function filtered(array $filters, ?array $platformIds): Builder
     {
         $query = VisitorContactUnlock::query()
@@ -47,13 +50,7 @@ class ContactUnlockQueryService
             $query->whereHas('payment', fn ($paymentQuery) => $paymentQuery->where('status', (string) $filters['payment_status']));
         }
 
-        if (! empty($filters['from'])) {
-            $query->where('visitor_contact_unlocks.created_at', '>=', Carbon::parse($filters['from'])->startOfDay());
-        }
-
-        if (! empty($filters['to'])) {
-            $query->where('visitor_contact_unlocks.created_at', '<=', Carbon::parse($filters['to'])->endOfDay());
-        }
+        $this->dateWindowService->apply($query, 'visitor_contact_unlocks.created_at', $filters);
 
         $search = trim((string) ($filters['search'] ?? ''));
         if ($search !== '') {

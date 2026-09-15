@@ -33,13 +33,21 @@ const DEFAULT_TRAIL_FILTERS = {
 };
 
 function todayDate() {
-    return new Date().toISOString().slice(0, 10);
+    return localDateString(new Date());
 }
 
 function dateDaysAgo(days) {
     const date = new Date();
     date.setDate(date.getDate() - days);
-    return date.toISOString().slice(0, 10);
+    return localDateString(date);
+}
+
+function localDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
 }
 
 function readTrailFilters(searchParams, sharedPlatformId) {
@@ -71,6 +79,7 @@ export default function WebVisitors() {
     const sharedPlatformId = searchParams.get('platform_id') || 'all';
     const fromDate = searchParams.get('from') || '';
     const toDate = searchParams.get('to') || '';
+    const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const [insightPlatformId, setInsightPlatformId] = useState(sharedPlatformId);
     const [trendBucket, setTrendBucket] = useState('auto');
     const [activeMetric, setActiveMetric] = useState(null);
@@ -91,8 +100,9 @@ export default function WebVisitors() {
         direction: trailFilters.direction,
         from: fromDate,
         to: toDate,
+        timezone: browserTimezone,
         ...reportingCurrency.queryParams,
-    }), [fromDate, reportingCurrency.queryParams, toDate, trailFilters]);
+    }), [browserTimezone, fromDate, reportingCurrency.queryParams, toDate, trailFilters]);
 
     const unlockQuery = useQuery({
         queryKey: ['contact-unlocks', overviewParams],
@@ -129,9 +139,9 @@ export default function WebVisitors() {
         range: fromDate && toDate ? 'custom' : 'today',
         from: fromDate,
         to: toDate,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezone: browserTimezone,
         reporting_currency: reportingCurrency.targetCurrency,
-    }), [fromDate, insightPlatformId, reportingCurrency.targetCurrency, toDate]);
+    }), [browserTimezone, fromDate, insightPlatformId, reportingCurrency.targetCurrency, toDate]);
 
     const pulseQuery = useQuery({
         queryKey: ['contact-unlock-pulse', pulseParams],

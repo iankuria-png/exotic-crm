@@ -7,6 +7,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use App\Models\VisitorContactUnlock;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -58,6 +59,34 @@ class ContactUnlockDateRangeTest extends TestCase
         $fallback->assertOk();
         $this->assertSame($preset->json('kpis.checkout_starts'), $custom->json('kpis.checkout_starts'));
         $this->assertSame($preset->json('kpis.checkout_starts'), $fallback->json('kpis.checkout_starts'));
+    }
+
+    public function test_index_and_analytics_share_the_requested_timezone_at_a_midnight_boundary(): void
+    {
+        $platform = Platform::factory()->create();
+        $localCompletion = CarbonImmutable::parse('2026-09-13 00:54:00', 'Africa/Nairobi');
+        $this->unlock($platform, $localCompletion->utc(), 'BENIN-REF');
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin', 'status' => 'active']));
+
+        $selectedDay = 'from=2026-09-12&to=2026-09-12&timezone=Africa/Nairobi';
+        $index = $this->getJson('/api/crm/settings/billing/contact-unlock?'.$selectedDay)->assertOk();
+        $analytics = $this->getJson('/api/crm/settings/billing/contact-unlock/analytics?range=custom&'.$selectedDay)->assertOk();
+
+        $index->assertJsonPath('summary.total_unlocks', 0)
+            ->assertJsonPath('summary.completed_payments', 0)
+            ->assertJsonPath('recent_unlocks_meta.total', 0);
+        $analytics->assertJsonPath('totals.payments_count', 0)
+            ->assertJsonPath('totals.unlocks_count', 0);
+
+        $nextDay = 'from=2026-09-12&to=2026-09-13&timezone=Africa/Nairobi';
+        $this->getJson('/api/crm/settings/billing/contact-unlock?'.$nextDay)
+            ->assertOk()
+            ->assertJsonPath('summary.total_unlocks', 1)
+            ->assertJsonPath('summary.completed_payments', 1);
+        $this->getJson('/api/crm/settings/billing/contact-unlock/analytics?range=custom&'.$nextDay)
+            ->assertOk()
+            ->assertJsonPath('totals.payments_count', 1)
+            ->assertJsonPath('totals.unlocks_count', 1);
     }
 
     public function test_export_honors_date_window_and_writes_meta_sheet(): void
