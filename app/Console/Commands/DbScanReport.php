@@ -482,13 +482,15 @@ class DbScanReport extends Command
 
         $wpseo = $this->unserializeSafe($o['wpseo'] ?? null);
         if (is_array($wpseo)) {
+            // The theme answers front-end searches with a real 404. Yoast's emoji and
+            // spam-pattern search filters run earlier and 301 those searches to the
+            // homepage instead, which Google reads as soft 404s, so they stay off.
             $expected = [
                 'remove_feed_search' => true,
                 'deny_search_crawling' => true,
                 'redirect_search_pretty_urls' => true,
-                'search_cleanup' => true,
-                'search_cleanup_emoji' => true,
-                'search_cleanup_patterns' => true,
+                'search_cleanup_emoji' => false,
+                'search_cleanup_patterns' => false,
                 'clean_permalinks' => true,
             ];
             $drift = [];
