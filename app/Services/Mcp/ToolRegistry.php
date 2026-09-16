@@ -22,6 +22,7 @@ class ToolRegistry
         'exotic_revenue_summary' => ['title' => 'Revenue summary', 'description' => 'Return CEO-dashboard revenue and customer-mix metrics for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'platform_id' => ['type' => 'integer'], 'reporting_currency' => ['type' => 'string']]],
         'exotic_revenue_trend' => ['title' => 'Revenue trend', 'description' => 'Return dashboard revenue buckets for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'bucket' => ['type' => 'string'], 'platform_id' => ['type' => 'integer']]],
         'exotic_market_breakdown' => ['title' => 'Market breakdown', 'description' => 'Compare reportable revenue by market.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string']]],
+        'exotic_render_revenue_dashboard' => ['title' => 'Revenue dashboard', 'description' => 'Render a read-only MCP App dashboard for revenue summary, trend and market mix. The data tools remain usable without UI.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'ui_resource' => 'ui://exotic/revenue-dashboard/v1.html', 'properties' => ['window' => ['type' => 'string'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'platform_id' => ['type' => 'integer'], 'reporting_currency' => ['type' => 'string'], 'bucket' => ['type' => 'string']]],
         'exotic_agent_performance' => ['title' => 'Agent performance', 'description' => 'Return dashboard agent performance rows with staff display names for administrators.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'limit' => ['type' => 'integer']]],
         'exotic_peak_hours' => ['title' => 'Peak hours', 'description' => 'Return payment volume by hour and weekday.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string']]],
         'exotic_lifecycle_summary' => ['title' => 'Lifecycle summary', 'description' => 'Count clients by lifecycle state and market.', 'min_role' => 'sub_admin', 'domain' => 'lifecycle', 'properties' => ['platform_id' => ['type' => 'integer']]],
@@ -53,7 +54,7 @@ class ToolRegistry
                 continue;
             }
 
-            $rows[] = [
+            $definition = [
                 'name' => $name,
                 'title' => $meta['title'],
                 'description' => $meta['description'],
@@ -63,11 +64,102 @@ class ToolRegistry
                     'required' => $meta['required'] ?? [],
                     'additionalProperties' => false,
                 ],
-                ...($modern ? ['outputSchema' => ['type' => 'object', 'required' => ['data', 'meta'], 'additionalProperties' => false], 'annotations' => ['readOnlyHint' => true, 'destructiveHint' => false]] : []),
+                ...($modern ? ['outputSchema' => $this->outputSchema($name), 'annotations' => ['readOnlyHint' => true, 'destructiveHint' => false]] : []),
             ];
+            if ($modern && isset($meta['ui_resource'])) {
+                $definition['_meta'] = [
+                    'ui' => [
+                        'resourceUri' => $meta['ui_resource'],
+                        'visibility' => ['model', 'app'],
+                    ],
+                    'openai/outputTemplate' => $meta['ui_resource'],
+                    'openai/toolInvocation/invoking' => 'Building revenue dashboard',
+                    'openai/toolInvocation/invoked' => 'Revenue dashboard ready',
+                ];
+            }
+
+            $rows[] = $definition;
         }
 
         return $rows;
+    }
+
+    private function outputSchema(string $name): array
+    {
+        return [
+            'type' => 'object',
+            'required' => ['data', 'meta'],
+            'additionalProperties' => false,
+            'properties' => [
+                'data' => $this->dataSchema($name),
+                'meta' => [
+                    'type' => 'object',
+                    'required' => ['schema_version', 'generated_at', 'result_state', 'filters', 'coverage', 'row_count', 'caveats', 'citations'],
+                    'additionalProperties' => true,
+                    'properties' => [
+                        'schema_version' => ['type' => 'string'],
+                        'generated_at' => ['type' => 'string'],
+                        'result_state' => ['type' => 'string', 'enum' => ['complete', 'partial', 'no_data', 'unavailable']],
+                        'filters' => ['type' => 'object'],
+                        'coverage' => ['type' => 'array'],
+                        'row_count' => ['type' => 'integer'],
+                        'caveats' => ['type' => 'array', 'items' => ['type' => 'string']],
+                        'citations' => ['type' => 'array'],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function dataSchema(string $name): array
+    {
+        return match ($name) {
+            'exotic_revenue_summary' => [
+                'type' => 'object',
+                'required' => ['window', 'metrics', 'customer_mix', 'visitor_revenue', 'insights'],
+                'additionalProperties' => false,
+                'properties' => [
+                    'window' => ['type' => 'object'],
+                    'metrics' => ['type' => 'object'],
+                    'customer_mix' => ['type' => 'object'],
+                    'visitor_revenue' => ['type' => 'object'],
+                    'insights' => ['type' => 'array'],
+                ],
+            ],
+            'exotic_revenue_trend' => [
+                'type' => 'object',
+                'required' => ['window', 'bucket', 'points'],
+                'additionalProperties' => false,
+                'properties' => [
+                    'window' => ['type' => 'object'],
+                    'bucket' => ['type' => 'string'],
+                    'points' => ['type' => 'array'],
+                ],
+            ],
+            'exotic_market_breakdown' => [
+                'type' => 'object',
+                'required' => ['window', 'total', 'channels', 'markets'],
+                'additionalProperties' => false,
+                'properties' => [
+                    'window' => ['type' => 'object'],
+                    'total' => ['type' => 'number'],
+                    'channels' => ['type' => 'array'],
+                    'markets' => ['type' => 'array'],
+                ],
+            ],
+            'exotic_render_revenue_dashboard' => [
+                'type' => 'object',
+                'required' => ['widget', 'summary', 'trend', 'market_breakdown'],
+                'additionalProperties' => false,
+                'properties' => [
+                    'widget' => ['type' => 'object'],
+                    'summary' => ['type' => 'object'],
+                    'trend' => ['type' => 'object'],
+                    'market_breakdown' => ['type' => 'object'],
+                ],
+            ],
+            default => ['type' => 'object', 'additionalProperties' => true],
+        };
     }
 
     public function managementDefinitions(User $user, McpSettingsService $settings): array

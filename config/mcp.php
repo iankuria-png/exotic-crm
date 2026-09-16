@@ -20,6 +20,7 @@ return [
         'exotic_revenue_summary' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_revenue_trend' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_market_breakdown' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_render_revenue_dashboard' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_agent_performance' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_peak_hours' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_lifecycle_summary' => ['enabled' => true, 'min_role' => 'sub_admin'],

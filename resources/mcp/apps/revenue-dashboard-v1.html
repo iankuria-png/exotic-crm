@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Revenue dashboard</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #ffffff;
+            --ink: #111827;
+            --muted: #64748b;
+            --line: #e2e8f0;
+            --soft: #f8fafc;
+            --teal: #0f766e;
+            --amber: #b45309;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .shell {
+            display: grid;
+            gap: 14px;
+            padding: 14px;
+        }
+
+        .top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 16px;
+            line-height: 1.2;
+        }
+
+        .hint {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .badge {
+            border: 1px solid #99f6e4;
+            border-radius: 999px;
+            background: #f0fdfa;
+            color: #115e59;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .metric,
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--soft);
+            padding: 10px;
+        }
+
+        .label {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
+        .value {
+            margin-top: 4px;
+            font-size: 18px;
+            font-weight: 800;
+        }
+
+        .delta {
+            margin-top: 2px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .grid {
+            display: grid;
+            gap: 10px;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 800;
+        }
+
+        .bars {
+            display: grid;
+            gap: 6px;
+        }
+
+        .bar-row {
+            display: grid;
+            grid-template-columns: minmax(72px, .6fr) minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .bar {
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #e2e8f0;
+        }
+
+        .fill {
+            height: 100%;
+            border-radius: inherit;
+            background: var(--teal);
+        }
+
+        .market {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+            padding: 8px 0;
+            border-top: 1px solid var(--line);
+        }
+
+        .market:first-of-type {
+            border-top: 0;
+            padding-top: 0;
+        }
+
+        .market-name {
+            font-weight: 700;
+        }
+
+        .market-meta {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .warn {
+            border-color: #fed7aa;
+            background: #fff7ed;
+            color: var(--amber);
+        }
+
+        .empty {
+            border: 1px dashed var(--line);
+            border-radius: 8px;
+            padding: 18px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        @media (min-width: 680px) {
+            .metrics {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+
+            .grid {
+                grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <div class="top">
+            <div>
+                <h1>Revenue dashboard</h1>
+                <div class="hint" id="window">Waiting for MCP tool result</div>
+            </div>
+            <div class="badge" id="state">Ready</div>
+        </div>
+        <section class="metrics" id="metrics"></section>
+        <section class="grid">
+            <div class="panel">
+                <div class="panel-title">
+                    <span>Trend</span>
+                    <span class="hint" id="bucket"></span>
+                </div>
+                <div class="bars" id="trend"></div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">
+                    <span>Markets</span>
+                    <span class="hint" id="marketTotal"></span>
+                </div>
+                <div id="markets"></div>
+            </div>
+        </section>
+        <section class="panel warn" id="caveats" hidden></section>
+    </main>
+
+    <script>
+        const state = {
+            latest: null
+        };
+
+        const money = (value, currency) => {
+            const amount = Number(value || 0);
+            return new Intl.NumberFormat(undefined, {
+                style: currency ? "currency" : "decimal",
+                currency: currency || undefined,
+                maximumFractionDigits: 2
+            }).format(amount);
+        };
+
+        const text = (value, fallback = "") => value === null || value === undefined || value === "" ? fallback : String(value);
+
+        function metricValue(metric) {
+            const value = metric?.value;
+            if (value && typeof value === "object") {
+                return {
+                    amount: value.normalized_total ?? value.normalized_amount ?? value.count ?? 0,
+                    currency: value.normalized_currency,
+                    suffix: value.count !== undefined ? "" : ""
+                };
+            }
+
+            return { amount: value ?? 0, currency: null, suffix: "" };
+        }
+
+        function renderMetrics(summary) {
+            const metrics = summary?.metrics || {};
+            const rows = [
+                ["collected_revenue", "Collected"],
+                ["active_clients", "Active"],
+                ["new_user_revenue", "New users"],
+                ["existing_user_revenue", "Existing"]
+            ];
+            document.getElementById("metrics").innerHTML = rows.map(([key, fallback]) => {
+                const metric = metrics[key] || {};
+                const resolved = metricValue(metric);
+                const delta = metric.delta_percent === null || metric.delta_percent === undefined
+                    ? "No prior comparison"
+                    : `${Number(metric.delta_percent).toFixed(1)}% vs prior`;
+
+                return `
+                    <article class="metric">
+                        <div class="label">${text(metric.label, fallback)}</div>
+                        <div class="value">${money(resolved.amount, resolved.currency)}${resolved.suffix}</div>
+                        <div class="delta">${delta}</div>
+                    </article>
+                `;
+            }).join("");
+        }
+
+        function renderTrend(trend) {
+            const points = Array.isArray(trend?.points) ? trend.points.slice(0, 12) : [];
+            const max = points.reduce((carry, point) => Math.max(carry, Number(point.value || 0)), 0);
+            document.getElementById("bucket").textContent = text(trend?.bucket);
+            document.getElementById("trend").innerHTML = points.length ? points.map((point) => {
+                const value = Number(point.value || 0);
+                const width = max > 0 ? Math.max(4, Math.round((value / max) * 100)) : 0;
+                return `
+                    <div class="bar-row">
+                        <span>${text(point.label, "Period")}</span>
+                        <span class="bar"><span class="fill" style="width:${width}%"></span></span>
+                        <span>${money(value, point.normalized_currency)}</span>
+                    </div>
+                `;
+            }).join("") : `<div class="empty">No revenue trend points for this window.</div>`;
+        }
+
+        function renderMarkets(breakdown) {
+            const markets = Array.isArray(breakdown?.markets) ? breakdown.markets.slice(0, 8) : [];
+            document.getElementById("marketTotal").textContent = money(breakdown?.total, breakdown?.window?.reporting_currency);
+            document.getElementById("markets").innerHTML = markets.length ? markets.map((market, index) => `
+                <div class="market">
+                    <div>
+                        <div class="market-name">${text(market.country || market.market_key, `Market ${index + 1}`)}</div>
+                        <div class="market-meta">${Number(market.share_percent || 0).toFixed(1)}% share · ${Number(market.payments_count || 0)} payments</div>
+                    </div>
+                    <strong>${money(market.value ?? market.normalized_total, market.normalized_currency)}</strong>
+                </div>
+            `).join("") : `<div class="empty">No market revenue in this window.</div>`;
+        }
+
+        function render(payload) {
+            const data = payload?.structuredContent?.data || payload?.data || payload || {};
+            const meta = payload?.structuredContent?.meta || payload?.meta || {};
+            state.latest = { data, meta };
+
+            const windowData = data.summary?.window || data.trend?.window || {};
+            document.getElementById("window").textContent = [windowData.from, windowData.to].filter(Boolean).join(" to ") || "Current CRM window";
+            document.getElementById("state").textContent = text(meta.result_state, "complete");
+            renderMetrics(data.summary || {});
+            renderTrend(data.trend || {});
+            renderMarkets(data.market_breakdown || {});
+
+            const caveats = Array.isArray(meta.caveats) ? meta.caveats : [];
+            const caveatEl = document.getElementById("caveats");
+            caveatEl.hidden = caveats.length === 0;
+            caveatEl.innerHTML = caveats.map((item) => `<div>${text(item)}</div>`).join("");
+        }
+
+        function maybeRenderFromOpenAI() {
+            const output = window.openai?.toolOutput;
+            if (output) render(output);
+        }
+
+        window.addEventListener("message", (event) => {
+            const message = event.data;
+            if (!message || message.jsonrpc !== "2.0") return;
+            if (message.method === "ui/notifications/tool-result") {
+                render(message.params?.result || message.params || {});
+            }
+        });
+
+        maybeRenderFromOpenAI();
+        window.addEventListener("DOMContentLoaded", maybeRenderFromOpenAI);
+    </script>
+</body>
+</html>

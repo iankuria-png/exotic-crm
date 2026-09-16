@@ -236,14 +236,14 @@ class McpEndpointTest extends TestCase
 
         $this->getJson('/api/crm/settings/mcp')
             ->assertOk()
-            ->assertJsonCount(21, 'tools')
-            ->assertJsonPath('tools.15.name', 'exotic_search_knowledge')
-            ->assertJsonPath('tools.15.management_mode', 'rollout')
-            ->assertJsonPath('tools.15.scope_required', true);
+            ->assertJsonCount(22, 'tools')
+            ->assertJsonPath('tools.16.name', 'exotic_search_knowledge')
+            ->assertJsonPath('tools.16.management_mode', 'rollout')
+            ->assertJsonPath('tools.16.scope_required', true);
 
         $minted = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'full access'])
             ->assertCreated()
-            ->assertJsonCount(22, 'abilities')
+            ->assertJsonCount(23, 'abilities')
             ->assertJsonPath('abilities.0', 'mcp:read');
         $token = $minted->json('token');
 
@@ -254,7 +254,7 @@ class McpEndpointTest extends TestCase
             'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
         ], $this->modernHeaders('tools/list', '2025-06-18'));
 
-        $response->assertOk()->assertJsonCount(21, 'result.tools');
+        $response->assertOk()->assertJsonCount(22, 'result.tools');
         $this->assertContains('exotic_search_knowledge', collect($response->json('result.tools'))->pluck('name')->all());
         $this->assertContains('exotic_error_digest_live', collect($response->json('result.tools'))->pluck('name')->all());
     }
@@ -420,6 +420,85 @@ class McpEndpointTest extends TestCase
         foreach ($response->json('result.tools') as $tool) {
             $this->assertIsArray($tool['inputSchema']['properties'], $tool['name'].' decoded to a list, not an object');
         }
+    }
+
+    public function test_revenue_tools_advertise_structured_contracts_and_app_template(): void
+    {
+        Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:ui', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 12,
+                'method' => 'tools/list',
+                'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
+            ], $this->modernHeaders('tools/list', '2025-06-18'))
+            ->assertOk();
+
+        $tools = collect($response->json('result.tools'))->keyBy('name');
+        $summary = $tools->get('exotic_revenue_summary');
+        $render = $tools->get('exotic_render_revenue_dashboard');
+
+        $this->assertSame(['window', 'metrics', 'customer_mix', 'visitor_revenue', 'insights'], $summary['outputSchema']['properties']['data']['required']);
+        $this->assertSame('ui://exotic/revenue-dashboard/v1.html', $render['_meta']['ui']['resourceUri']);
+        $this->assertSame(['model', 'app'], $render['_meta']['ui']['visibility']);
+        $this->assertSame('ui://exotic/revenue-dashboard/v1.html', $render['_meta']['openai/outputTemplate']);
+    }
+
+    public function test_revenue_dashboard_app_resource_can_be_read(): void
+    {
+        Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:ui-resource', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $headers = $this->modernHeaders('resources/read', '2025-06-18') + ['Mcp-Name' => 'ui://exotic/revenue-dashboard/v1.html'];
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 13,
+                'method' => 'resources/read',
+                'params' => [
+                    'uri' => 'ui://exotic/revenue-dashboard/v1.html',
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
+                ],
+            ], $headers)
+            ->assertOk();
+
+        $response->assertJsonPath('result.contents.0.mimeType', 'text/html;profile=mcp-app');
+        $this->assertStringContainsString('<main class="shell">', $response->json('result.contents.0.text'));
+        $this->assertSame([], $response->json('result.contents.0._meta.ui.csp.connectDomains'));
+    }
+
+    public function test_revenue_dashboard_render_tool_returns_structured_content(): void
+    {
+        Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:ui-call', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $headers = $this->modernHeaders('tools/call', '2025-06-18') + ['Mcp-Name' => 'exotic_render_revenue_dashboard'];
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 14,
+                'method' => 'tools/call',
+                'params' => [
+                    'name' => 'exotic_render_revenue_dashboard',
+                    'arguments' => ['window' => '7d'],
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18'],
+                ],
+            ], $headers)
+            ->assertOk();
+
+        $response->assertJsonPath('result.structuredContent.data.widget.resource_uri', 'ui://exotic/revenue-dashboard/v1.html');
+        $response->assertJsonPath('result.structuredContent.meta.filters.window', '7d');
+        $this->assertArrayHasKey('metrics', $response->json('result.structuredContent.data.summary'));
+        $this->assertIsArray($response->json('result.structuredContent.data.trend.points'));
+        $this->assertIsArray($response->json('result.structuredContent.data.market_breakdown.markets'));
     }
 
     private function modernHeaders(string $method, string $version): array

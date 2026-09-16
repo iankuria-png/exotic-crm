@@ -163,7 +163,7 @@ class McpServer
             'notifications/initialized' => [],
             'tools/list' => ['tools' => $this->registry->definitions($user, $this->settings, $abilities, true), '_meta' => ['exotic/resultType' => 'complete', 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]],
             'resources/list' => ['resources' => $this->resourcesRegistry->list($auth, $this->settings, true), '_meta' => ['exotic/resultType' => 'complete', 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]],
-            'resources/read' => ['contents' => [['uri' => (string) ($params['uri'] ?? ''), 'mimeType' => 'text/markdown', 'text' => $this->sanitizer->sanitize($this->resourcesRegistry->read((string) ($params['uri'] ?? ''), $auth, $this->settings, true))]]],
+            'resources/read' => $this->readEnhancedResource($params, $auth),
             'prompts/list' => ['prompts' => $this->prompts->list($auth)],
             'prompts/get' => $this->prompts->get((string) ($params['name'] ?? ''), $auth, (array) ($params['arguments'] ?? [])),
             'tools/call' => $this->enhancedToolCall($params, $auth),
@@ -190,10 +190,15 @@ class McpServer
             default => $this->legacyData($name, $arguments, $auth->user),
         };
         $safe = $this->sanitizer->sanitize($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $auth->user))));
-        $envelope = ToolResult::envelope(is_array($safe) ? $safe : ['value' => $safe]);
+        $rowCount = $this->rowCount(is_array($safe) ? $safe : []);
+        $envelope = ToolResult::envelope(is_array($safe) ? $safe : ['value' => $safe], [], [
+            'filters' => $this->resultFilters($arguments),
+            'row_count' => $rowCount,
+            'result_state' => $this->resultState($rowCount, is_array($safe) ? $safe : []),
+        ]);
         $text = $this->serializer->encode($envelope);
 
-        return ['content' => [['type' => 'text', 'text' => $text]], 'structuredContent' => $envelope, 'isError' => false, '_meta' => ['exotic/resultType' => 'complete', 'exotic/rowCount' => count((array) data_get($safe, 'rows', [])), 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]];
+        return ['content' => [['type' => 'text', 'text' => $text]], 'structuredContent' => $envelope, 'isError' => false, '_meta' => ['exotic/resultType' => 'complete', 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]];
     }
 
     private function callTool(Request $request, array $params, User $user, ?array $abilities): array
@@ -209,6 +214,7 @@ class McpServer
             'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
             'exotic_revenue_trend' => $this->dashboard->revenueTrend($this->adapter->build($arguments, $user)),
             'exotic_market_breakdown' => $this->dashboard->marketPie($this->adapter->build($arguments, $user)),
+            'exotic_render_revenue_dashboard' => $this->revenueDashboard($arguments, $user),
             'exotic_agent_performance' => $this->dashboard->agentPerformance($this->adapter->build($arguments, $user)),
             'exotic_peak_hours' => $this->dashboard->peakHours($this->adapter->build($arguments, $user)),
             'exotic_lifecycle_summary' => $this->lifecycleSummary($arguments, $user),
@@ -242,6 +248,7 @@ class McpServer
             'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
             'exotic_revenue_trend' => $this->dashboard->revenueTrend($this->adapter->build($arguments, $user)),
             'exotic_market_breakdown' => $this->dashboard->marketPie($this->adapter->build($arguments, $user)),
+            'exotic_render_revenue_dashboard' => $this->revenueDashboard($arguments, $user),
             'exotic_agent_performance' => $this->dashboard->agentPerformance($this->adapter->build($arguments, $user)),
             'exotic_peak_hours' => $this->dashboard->peakHours($this->adapter->build($arguments, $user)),
             'exotic_lifecycle_summary' => $this->lifecycleSummary($arguments, $user),
@@ -383,6 +390,32 @@ class McpServer
         return $this->dashboard->summary($this->adapter->build($arguments, $user));
     }
 
+    private function revenueDashboard(array $arguments, User $user): array
+    {
+        $trendArguments = $arguments;
+        $trendArguments['bucket'] = (string) ($trendArguments['bucket'] ?? 'day');
+
+        return [
+            'widget' => [
+                'resource_uri' => ResourceRegistry::REVENUE_DASHBOARD_URI,
+                'title' => 'Revenue dashboard',
+                'description' => 'Read-only revenue summary, trend and market mix for the requested CRM window.',
+            ],
+            'summary' => $this->normalizer->forTool(
+                'exotic_revenue_summary',
+                $this->stripUnsafeDashboardKeys($this->presentToolData('exotic_revenue_summary', $this->dashboardSummary($arguments, $user), $user))
+            ),
+            'trend' => $this->normalizer->forTool(
+                'exotic_revenue_trend',
+                $this->stripUnsafeDashboardKeys($this->dashboard->revenueTrend($this->adapter->build($trendArguments, $user)))
+            ),
+            'market_breakdown' => $this->normalizer->forTool(
+                'exotic_market_breakdown',
+                $this->stripUnsafeDashboardKeys($this->dashboard->marketPie($this->adapter->build($arguments, $user)))
+            ),
+        ];
+    }
+
     private function catalog(User $user, ?array $abilities, bool $enhanced = false): array
     {
         $allowed = $this->marketAuth->resolveAccessiblePlatformIds($user);
@@ -508,6 +541,55 @@ class McpServer
         }
 
         return ['contents' => [['uri' => $uri, 'mimeType' => 'text/markdown', 'text' => file_get_contents($path) ?: '']]];
+    }
+
+    private function readEnhancedResource(array $params, McpAuthorizationContext $auth): array
+    {
+        $content = $this->resourcesRegistry->readContent((string) ($params['uri'] ?? ''), $auth, $this->settings, true);
+        if (($content['mimeType'] ?? '') !== ResourceRegistry::MCP_APP_MIME_TYPE) {
+            $content['text'] = $this->sanitizer->sanitize((string) ($content['text'] ?? ''));
+        }
+
+        return ['contents' => [$content]];
+    }
+
+    private function rowCount(array $payload): int
+    {
+        foreach (['rows', 'markets', 'points', 'hits', 'fingerprints', 'tools'] as $key) {
+            $value = $payload[$key] ?? null;
+            if (is_array($value)) {
+                return count($value);
+            }
+        }
+
+        foreach (['market_breakdown.markets', 'trend.points', 'summary.metrics'] as $path) {
+            $value = data_get($payload, $path);
+            if (is_array($value)) {
+                return count($value);
+            }
+        }
+
+        return 0;
+    }
+
+    private function resultState(int $rowCount, array $payload): string
+    {
+        if (($payload['availability'] ?? null) === 'unavailable') {
+            return 'unavailable';
+        }
+
+        if ($rowCount === 0 && array_intersect(array_keys($payload), ['rows', 'markets', 'points', 'hits', 'fingerprints'])) {
+            return 'no_data';
+        }
+
+        return 'complete';
+    }
+
+    private function resultFilters(array $arguments): array|object
+    {
+        $filters = array_intersect_key($arguments, array_flip(['window', 'from', 'to', 'platform_id', 'reporting_currency', 'bucket']));
+
+        return $filters === [] ? (object) [] : $filters;
     }
 
     private function validateTransport(Request $request, array $payload, string $method, array $params): void
