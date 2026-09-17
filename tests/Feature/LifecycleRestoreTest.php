@@ -6,12 +6,15 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\LifecycleRestoreRun;
 use App\Models\Platform;
+use App\Models\User;
 use App\Services\ProfileLifecycleRestoreService;
 use App\Support\ClientLifecycleState;
 use App\Support\LifecycleRestoreEligibility;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class LifecycleRestoreTest extends TestCase
@@ -354,6 +357,129 @@ class LifecycleRestoreTest extends TestCase
         $this->assertGreaterThan(now()->timestamp, (int) $fresh->escort_expire);
 
         Http::assertNothingSent();
+    }
+
+    public function test_cohort_endpoint_supports_operational_search_sort_and_action_eligibility(): void
+    {
+        $platform = $this->createPlatform();
+        $run = $this->makeRun($platform, LifecycleRestoreRun::MODE_LIVE);
+        $run->forceFill(['status' => LifecycleRestoreRun::STATUS_COMPLETED])->save();
+        $eligible = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 71234,
+            'name' => 'Ghost Profile',
+            'phone_normalized' => '263783170092',
+            'city' => 'Harare',
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subMonths(4),
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => $run->id,
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 71235,
+            'name' => 'Active stale stamp',
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::ACTIVE,
+            'lifecycle_restored_at' => now(),
+            'lifecycle_restore_run_id' => $run->id,
+        ]);
+        $manager = User::factory()->create([
+            'role' => 'sub_admin',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        Sanctum::actingAs($manager);
+
+        $this->getJson('/api/crm/lifecycle-restore/cohort?'.http_build_query([
+            'platform_id' => $platform->id,
+            'search' => '71234',
+            'lifecycle_state' => 'expired',
+            'sort_by' => 'lifecycle_expired_at',
+            'sort_direction' => 'asc',
+        ]))->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $eligible->id)
+            ->assertJsonPath('data.0.can_archive', true)
+            ->assertJsonPath('data.0.can_revert', true)
+            ->assertJsonPath('data.0.can_delete', true)
+            ->assertJsonPath('data.0.last_online_at', $eligible->last_online_at);
+    }
+
+    public function test_single_profile_revert_endpoint_rechecks_recovery_and_entitlement(): void
+    {
+        $platform = $this->createPlatform();
+        $run = $this->makeRun($platform, LifecycleRestoreRun::MODE_LIVE);
+        $run->forceFill(['status' => LifecycleRestoreRun::STATUS_COMPLETED])->save();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7050,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_expired_at' => now()->subDays(20),
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => $run->id,
+        ]);
+        $manager = User::factory()->create([
+            'role' => 'sub_admin',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        $this->fakeWpPrivateAfterDeactivate($platform, 7050);
+        Sanctum::actingAs($manager);
+
+        $this->postJson("/api/crm/lifecycle-restore/clients/{$client->id}/revert", [
+            'reason' => 'Spot-check rollback',
+        ])->assertOk()
+            ->assertJsonPath('client.profile_status', 'private')
+            ->assertJsonPath('client.lifecycle_restored_at', null);
+
+        $renewed = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7051,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => $run->id,
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $renewed->id,
+            'status' => 'active',
+            'expires_at' => now()->addWeek(),
+        ]);
+
+        $this->postJson("/api/crm/lifecycle-restore/clients/{$renewed->id}/revert")
+            ->assertStatus(409)
+            ->assertJsonPath('reason_code', 'paid_entitlement');
+    }
+
+    public function test_shared_lifecycle_lock_returns_conflict_for_archive(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7060,
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+        ]);
+        $manager = User::factory()->create([
+            'role' => 'sub_admin',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        $lock = Cache::lock("client-lifecycle-mutation:{$client->id}", 60);
+        $this->assertTrue($lock->get());
+        Sanctum::actingAs($manager);
+
+        try {
+            $this->postJson("/api/crm/clients/{$client->id}/archive")
+                ->assertStatus(409)
+                ->assertJsonPath('reason_code', 'lifecycle_busy');
+        } finally {
+            $lock->release();
+        }
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────

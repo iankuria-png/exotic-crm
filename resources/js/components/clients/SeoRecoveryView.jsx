@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import ConfirmDialog from '../ConfirmDialog';
 import MetricCard from '../MetricCard';
+import SmartDeleteDialog from './SmartDeleteDialog';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -89,6 +90,26 @@ function Pill({ children, tone = 'bg-slate-100 text-slate-700 ring-slate-200' })
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tone}`}>
             {children}
         </span>
+    );
+}
+
+function RowAction({ label, enabled, reason, onClick, tone = 'default' }) {
+    const toneClass = tone === 'danger'
+        ? 'hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
+        : tone === 'warning'
+            ? 'hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
+            : 'hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700';
+
+    return (
+        <button
+            type="button"
+            disabled={!enabled}
+            title={!enabled ? (reason || 'Action unavailable') : label}
+            onClick={onClick}
+            className={`rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition disabled:cursor-not-allowed disabled:opacity-40 ${toneClass}`}
+        >
+            {label}
+        </button>
     );
 }
 
@@ -179,6 +200,7 @@ function SkeletonRows({ rows = 4, cols = 5 }) {
 export default function SeoRecoveryView({ platformId, platforms = [], marketName }) {
     const toast = useToast();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
 
     const [selectedPlatform, setSelectedPlatform] = useState(platformId ? String(platformId) : '');
@@ -192,6 +214,30 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     const [revertTarget, setRevertTarget] = useState(null);
     const [cohortRunFilter, setCohortRunFilter] = useState('');
     const [activeRunId, setActiveRunId] = useState(null);
+    const [activeView, setActiveView] = useState(() => searchParams.get('seo_view') || 'recover');
+    const [cohortSearch, setCohortSearch] = useState(() => searchParams.get('seo_search') || '');
+    const [debouncedCohortSearch, setDebouncedCohortSearch] = useState(cohortSearch);
+    const [cohortState, setCohortState] = useState(() => searchParams.get('seo_state') || '');
+    const [cohortSort, setCohortSort] = useState(() => searchParams.get('seo_sort') || 'lifecycle_restored_at:desc');
+    const [cohortPage, setCohortPage] = useState(() => Number(searchParams.get('seo_page') || 1));
+    const [rowAction, setRowAction] = useState(null);
+    const [deleteConfirmation, setDeleteConfirmation] = useState('');
+    const [smartDelete, setSmartDelete] = useState(null);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedCohortSearch(cohortSearch.trim()), 300);
+        return () => window.clearTimeout(timer);
+    }, [cohortSearch]);
+
+    useEffect(() => {
+        const params = new URLSearchParams(searchParams);
+        params.set('seo_view', activeView);
+        cohortSearch ? params.set('seo_search', cohortSearch) : params.delete('seo_search');
+        cohortState ? params.set('seo_state', cohortState) : params.delete('seo_state');
+        cohortSort !== 'lifecycle_restored_at:desc' ? params.set('seo_sort', cohortSort) : params.delete('seo_sort');
+        cohortPage > 1 ? params.set('seo_page', String(cohortPage)) : params.delete('seo_page');
+        if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
+    }, [activeView, cohortPage, cohortSearch, cohortSort, cohortState, searchParams, setSearchParams]);
 
     useEffect(() => {
         if (platformId) {
@@ -237,13 +283,18 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     });
 
     const cohortQuery = useQuery({
-        queryKey: ['lifecycle-restore', 'cohort', selectedPlatform, cohortRunFilter],
+        queryKey: ['lifecycle-restore', 'cohort', selectedPlatform, cohortRunFilter, debouncedCohortSearch, cohortState, cohortSort, cohortPage],
         enabled: hasMarket,
         queryFn: async () => {
             const { data } = await api.get('/crm/lifecycle-restore/cohort', {
                 params: {
                     platform_id: selectedPlatform,
                     run_id: cohortRunFilter || undefined,
+                    search: debouncedCohortSearch || undefined,
+                    lifecycle_state: cohortState || undefined,
+                    sort_by: cohortSort.split(':')[0],
+                    sort_direction: cohortSort.split(':')[1],
+                    page: cohortPage,
                     per_page: 25,
                 },
             });
@@ -318,6 +369,78 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
         },
     });
 
+    const invalidateLifecycleLists = () => {
+        queryClient.invalidateQueries({ queryKey: ['lifecycle-restore'] });
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
+    };
+
+    const rowMutation = useMutation({
+        mutationFn: async ({ type, row }) => {
+            if (type === 'archive') return api.post(`/crm/clients/${row.id}/archive`).then((response) => response.data);
+            if (type === 'revert') return api.post(`/crm/lifecycle-restore/clients/${row.id}/revert`, { reason: 'Single-profile SEO Recovery revert' }).then((response) => response.data);
+            return api.delete(`/crm/clients/${row.id}`, {
+                data: { confirm: deleteConfirmation, reason: 'Single-profile deletion from SEO Recovery' },
+            }).then((response) => response.data);
+        },
+        onSuccess: (payload, variables) => {
+            invalidateLifecycleLists();
+            setRowAction(null);
+            setDeleteConfirmation('');
+            toast?.success?.(payload?.message || (variables.type === 'delete' ? 'Profile deleted.' : 'Profile updated.'));
+        },
+        onError: (error) => toast?.error?.(error?.response?.data?.message || 'Profile action failed.'),
+    });
+
+    const deletePreview = useMutation({
+        mutationFn: (row) => api.post(`/crm/clients/${row.id}/delete-preview`).then((response) => response.data),
+        onSuccess: (preview) => setRowAction((current) => current ? { ...current, preview } : current),
+        onError: (error) => toast?.error?.(error?.response?.data?.message || 'Deletion impact could not be loaded.'),
+    });
+
+    const openRowAction = (type, row) => {
+        setDeleteConfirmation('');
+        setRowAction({ type, row, preview: null });
+        if (type === 'delete') deletePreview.mutate(row);
+    };
+
+    const smartPreview = useMutation({
+        mutationFn: (dialog) => api.post('/crm/clients/bulk-delete/preview', { filters: dialog.filters }).then((response) => response.data),
+        onSuccess: (preview) => setSmartDelete((current) => current ? { ...current, preview } : current),
+        onError: (error) => toast?.error?.(error?.response?.data?.message || 'Cleanup preview could not be loaded.'),
+    });
+
+    const smartDeleteMutation = useMutation({
+        mutationFn: (dialog) => api.post('/crm/clients/bulk-delete', {
+            client_ids: (dialog.preview?.clients || []).map((row) => Number(row.client_id)),
+            filters: dialog.filters,
+            confirm: 'DELETE',
+            reason: dialog.reason,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            invalidateLifecycleLists();
+            setSmartDelete(null);
+            toast?.success?.(`Deleted ${Number(payload.deleted_count || 0).toLocaleString()} offline profiles.`);
+        },
+        onError: (error) => toast?.error?.(error?.response?.data?.message || 'Offline cleanup failed.'),
+    });
+
+    const openOfflineCleanup = () => setSmartDelete({
+        open: true,
+        mode: 'smart',
+        preview: null,
+        confirmText: '',
+        reason: 'Guarded offline profile cleanup from SEO Recovery',
+        filters: {
+            platform_id: Number(selectedPlatform),
+            inactive_days: 90,
+            offline_only: true,
+            include_never_seen: false,
+            has_no_chat: true,
+            has_no_subscription_or_payment: true,
+            seo_placeholders: false,
+        },
+    });
+
     const eligibility = eligibilityQuery.data;
     const lifecycleEnabled = eligibility?.platform?.lifecycle_enabled ?? true;
     const candidateCount = Number(eligibility?.candidate_count ?? 0);
@@ -378,13 +501,15 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                     tone="success"
                     isLoading={eligibilityQuery.isLoading}
                 />
-                <MetricCard
-                    label="Still offline"
-                    value={eligibilityQuery.isLoading ? '—' : Number(eligibility?.still_offline ?? 0).toLocaleString()}
-                    hint="Private in WordPress — invisible to Google"
-                    tone="warning"
-                    isLoading={eligibilityQuery.isLoading}
-                />
+                <button type="button" onClick={() => setActiveView('offline')} className="text-left">
+                    <MetricCard
+                        label="Still offline"
+                        value={eligibilityQuery.isLoading ? '—' : Number(eligibility?.still_offline ?? 0).toLocaleString()}
+                        hint="Open guarded cleanup"
+                        tone="warning"
+                        isLoading={eligibilityQuery.isLoading}
+                    />
+                </button>
                 <MetricCard
                     label="Pages this batch recovers"
                     value={eligibilityQuery.isLoading ? '—' : willProcess.toLocaleString()}
@@ -395,6 +520,26 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
             </div>
 
             <MarketPicker options={marketOptions} value={selectedPlatform} onChange={setSelectedPlatform} />
+
+            <nav className="flex gap-5 overflow-x-auto border-b border-slate-200" aria-label="SEO Recovery views">
+                {[
+                    ['recover', 'Recover', candidateCount],
+                    ['recovered', 'Recovered', Number(eligibility?.already_restored || 0)],
+                    ['offline', 'Still offline', Number(eligibility?.still_offline || 0)],
+                    ['history', 'Run history', null],
+                ].map(([key, label, count]) => (
+                    <button
+                        key={key}
+                        type="button"
+                        onClick={() => setActiveView(key)}
+                        className={`shrink-0 border-b-2 px-0.5 py-2 text-sm font-semibold transition ${activeView === key ? 'border-teal-700 text-teal-800' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
+                    >
+                        {label}{count !== null ? ` ${count.toLocaleString()}` : ''}
+                    </button>
+                ))}
+            </nav>
+
+            {activeView === 'recover' ? <>
 
             {!lifecycleEnabled ? (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
@@ -732,7 +877,10 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                 )}
             </SectionCard>
 
+            </> : null}
+
             {/* 5 — Run history */}
+            {activeView === 'history' ? (
             <SectionCard step="4" title="Run history" subtitle="Every batch, what it selected on, and a one-click undo.">
                 {runsQuery.isLoading ? (
                     <SkeletonRows rows={3} cols={6} />
@@ -810,25 +958,64 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                     </div>
                 )}
             </SectionCard>
+            ) : null}
+
+            {activeView === 'offline' ? (
+                <SectionCard
+                    title="Still offline cleanup"
+                    subtitle={`Private WordPress profiles in ${selectedMarketLabel}. Configure safeguards and preview before deleting anything.`}
+                    actions={(
+                        <button type="button" onClick={openOfflineCleanup} className="crm-btn-danger">
+                            Configure Smart Delete
+                        </button>
+                    )}
+                >
+                    <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Private profiles</p>
+                            <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(eligibility?.still_offline || 0).toLocaleString()}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+                            <p className="text-sm font-semibold text-slate-800">Safe defaults reset every session</p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-600">3 months, offline only, no support chat, and no subscription or payment history. Never-seen profiles remain excluded unless you deliberately include profiles whose WordPress creation date is old enough.</p>
+                        </div>
+                    </div>
+                </SectionCard>
+            ) : null}
 
             {/* 6 — Restored cohort */}
+            {activeView === 'recovered' ? (
             <SectionCard
                 step="5"
                 title="Recovered profiles"
-                subtitle="The cohort this feature created — spot-check a few on the live site to confirm the notice shows and contacts are hidden."
+                subtitle="Search, filter, sort, inspect, and safely act on profiles republished by SEO Recovery."
                 actions={(
-                    <select
-                        value={cohortRunFilter}
-                        onChange={(event) => setCohortRunFilter(event.target.value)}
-                        className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    >
-                        <option value="">All runs</option>
-                        {(runsQuery.data ?? [])
-                            .filter((run) => run.restored_count > 0)
-                            .map((run) => (
+                    <div className="flex flex-wrap gap-2">
+                        <input
+                            value={cohortSearch}
+                            onChange={(event) => { setCohortSearch(event.target.value); setCohortPage(1); }}
+                            placeholder="Search name, phone, city or post ID"
+                            className="crm-input min-w-[15rem] text-xs"
+                        />
+                        <select value={cohortState} onChange={(event) => { setCohortState(event.target.value); setCohortPage(1); }} className="crm-select text-xs">
+                            <option value="">All states</option>
+                            <option value="expired">Expired</option>
+                            <option value="archived">Archived</option>
+                        </select>
+                        <select value={cohortRunFilter} onChange={(event) => { setCohortRunFilter(event.target.value); setCohortPage(1); }} className="crm-select text-xs">
+                            <option value="">All runs</option>
+                            {(runsQuery.data ?? []).filter((run) => run.restored_count > 0).map((run) => (
                                 <option key={run.id} value={run.id}>Run #{run.id}</option>
                             ))}
-                    </select>
+                        </select>
+                        <select value={cohortSort} onChange={(event) => { setCohortSort(event.target.value); setCohortPage(1); }} className="crm-select text-xs">
+                            <option value="lifecycle_restored_at:desc">Newest recovered</option>
+                            <option value="lifecycle_restored_at:asc">Oldest recovered</option>
+                            <option value="lifecycle_expired_at:asc">Oldest expiry</option>
+                            <option value="name:asc">Name A–Z</option>
+                            <option value="city:asc">City A–Z</option>
+                        </select>
+                    </div>
                 )}
             >
                 {cohortQuery.isLoading ? (
@@ -855,7 +1042,7 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                     <th className="px-3 py-2 font-semibold">Expired</th>
                                     <th className="px-3 py-2 font-semibold">Recovered</th>
                                     <th className="px-3 py-2 font-semibold">Run</th>
-                                    <th className="px-3 py-2 text-right font-semibold">Live page</th>
+                                    <th className="px-3 py-2 text-right font-semibold">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -886,6 +1073,7 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                         <td className="px-3 py-2 text-xs text-slate-500">{row.lifecycle_restored_at ?? '—'}</td>
                                         <td className="px-3 py-2 text-xs text-slate-500">#{row.lifecycle_restore_run_id}</td>
                                         <td className="px-3 py-2 text-right">
+                                            <div className="flex flex-wrap justify-end gap-2">
                                             {row.profile_url ? (
                                                 <a
                                                     href={row.profile_url}
@@ -896,20 +1084,27 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                                 >
                                                     View ↗
                                                 </a>
-                                            ) : (
-                                                <span className="text-xs text-slate-300" title="No permalink synced from WordPress yet">—</span>
-                                            )}
+                                            ) : null}
+                                            <RowAction label="Archive" enabled={row.can_archive} reason={row.archive_reason_code} onClick={() => openRowAction('archive', row)} />
+                                            <RowAction label="Revert" enabled={row.can_revert} reason={row.revert_reason_code} onClick={() => openRowAction('revert', row)} tone="warning" />
+                                            <RowAction label="Delete" enabled={row.can_delete} reason={row.delete_reason_code} onClick={() => openRowAction('delete', row)} tone="danger" />
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
-                        <p className="mt-2 text-[11px] text-slate-400">
-                            Showing {(cohortQuery.data?.data ?? []).length} of {Number(cohortQuery.data?.total ?? 0).toLocaleString()} recovered profiles.
-                        </p>
+                        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+                            <p>Showing {(cohortQuery.data?.data ?? []).length} of {Number(cohortQuery.data?.total ?? 0).toLocaleString()} recovered profiles.</p>
+                            <div className="flex gap-2">
+                                <button type="button" disabled={cohortPage <= 1} onClick={() => setCohortPage((page) => Math.max(1, page - 1))} className="crm-btn-secondary disabled:opacity-40">Previous</button>
+                                <button type="button" disabled={!cohortQuery.data?.next_page_url} onClick={() => setCohortPage((page) => page + 1)} className="crm-btn-secondary disabled:opacity-40">Next</button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </SectionCard>
+            ) : null}
 
             <ConfirmDialog
                 open={confirmRun}
@@ -944,6 +1139,66 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                 isPending={revertRun.isPending}
                 onCancel={() => setRevertTarget(null)}
                 onConfirm={() => revertRun.mutate(revertTarget.id)}
+            />
+
+            <ConfirmDialog
+                open={Boolean(rowAction)}
+                title={rowAction ? `${rowAction.type === 'delete' ? 'Delete' : rowAction.type === 'revert' ? 'Return offline' : 'Archive'} ${rowAction.row.name}?` : ''}
+                message={rowAction?.type === 'archive'
+                    ? 'Archive keeps the page published for SEO but removes it from normal listings.'
+                    : rowAction?.type === 'revert'
+                        ? 'Revert takes this SEO-recovered profile back offline and clears its recovery stamp.'
+                        : 'Delete removes the WordPress profile and CRM client through the audited deletion workflow.'}
+                confirmLabel={rowMutation.isPending ? 'Working…' : rowAction?.type === 'delete' ? 'Delete profile' : rowAction?.type === 'revert' ? 'Return offline' : 'Archive profile'}
+                tone={rowAction?.type === 'delete' ? 'danger' : 'warning'}
+                isPending={rowMutation.isPending || deletePreview.isPending}
+                confirmDisabled={rowAction?.type === 'delete' && (!rowAction?.preview || deleteConfirmation !== rowAction?.row?.name)}
+                onCancel={() => { setRowAction(null); setDeleteConfirmation(''); }}
+                onConfirm={() => rowMutation.mutate(rowAction)}
+            >
+                {rowAction?.type === 'delete' ? (
+                    <div className="space-y-3">
+                        {rowAction.preview ? (
+                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                                <span>Deals: {rowAction.preview.deals_count}</span>
+                                <span>Payments: {rowAction.preview.payments_count}</span>
+                                <span>Notes: {rowAction.preview.notes_count}</span>
+                                <span>Timeline events: {rowAction.preview.timeline_events_count}</span>
+                            </div>
+                        ) : <p className="text-xs text-slate-500">Loading deletion impact…</p>}
+                        <label className="block text-xs font-semibold text-slate-700">
+                            Type {rowAction.row.name} to confirm
+                            <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} className="crm-input mt-1 w-full" />
+                        </label>
+                    </div>
+                ) : null}
+            </ConfirmDialog>
+
+            <SmartDeleteDialog
+                open={Boolean(smartDelete?.open)}
+                mode="smart"
+                platformOptions={(platforms || []).map((platform) => ({
+                    platform_id: platform.id ?? platform.value,
+                    platform_name: platform.name ?? platform.label,
+                }))}
+                filters={smartDelete?.filters || {}}
+                preview={smartDelete?.preview}
+                confirmText={smartDelete?.confirmText || ''}
+                reason={smartDelete?.reason || ''}
+                previewPending={smartPreview.isPending}
+                deletePending={smartDeleteMutation.isPending}
+                lockMarket
+                lockOffline
+                onCancel={() => setSmartDelete(null)}
+                onFiltersChange={(updater) => setSmartDelete((current) => ({
+                    ...current,
+                    filters: typeof updater === 'function' ? updater(current.filters) : updater,
+                    preview: null,
+                }))}
+                onConfirmTextChange={(confirmText) => setSmartDelete((current) => ({ ...current, confirmText }))}
+                onReasonChange={(reason) => setSmartDelete((current) => ({ ...current, reason }))}
+                onPreview={() => smartPreview.mutate(smartDelete)}
+                onConfirm={() => smartDeleteMutation.mutate(smartDelete)}
             />
         </div>
     );

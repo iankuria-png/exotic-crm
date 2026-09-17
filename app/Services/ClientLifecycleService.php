@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\ClientLifecycleMutationException;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
@@ -22,13 +23,29 @@ use InvalidArgumentException;
  */
 class ClientLifecycleService
 {
+    public function __construct(
+        private readonly ClientLifecycleMutationLock $lifecycleLock,
+    ) {}
+
     /**
      * Move an Expired profile to Archived: still published & indexed, but excluded
      * from city/category listings. Idempotent when already archived.
      */
     public function archive(Client $client, ?int $actorId, string $trigger = 'manual'): Client
     {
+        return $this->lifecycleLock->run(
+            $client,
+            fn () => $this->archiveLocked($client, $actorId, $trigger),
+        );
+    }
+
+    private function archiveLocked(Client $client, ?int $actorId, string $trigger): Client
+    {
         $client->refresh()->loadMissing('platform');
+
+        if ($client->deals()->currentlyActive()->exists()) {
+            throw ClientLifecycleMutationException::paidEntitlement();
+        }
 
         if ($client->lifecycle_state === ClientLifecycleState::ARCHIVED) {
             return $client;
@@ -58,6 +75,25 @@ class ClientLifecycleService
         ?CarbonInterface $archiveDeferredUntil = null,
         string $trigger = 'manual',
         ?int $recoveryRunId = null,
+    ): Client {
+        return $this->lifecycleLock->run(
+            $client,
+            fn () => $this->unarchiveLocked(
+                $client,
+                $actorId,
+                $archiveDeferredUntil,
+                $trigger,
+                $recoveryRunId,
+            ),
+        );
+    }
+
+    private function unarchiveLocked(
+        Client $client,
+        ?int $actorId,
+        ?CarbonInterface $archiveDeferredUntil,
+        string $trigger,
+        ?int $recoveryRunId,
     ): Client {
         $client->refresh()->loadMissing('platform');
 

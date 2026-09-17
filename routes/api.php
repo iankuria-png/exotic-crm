@@ -489,6 +489,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/runs', [LifecycleRestoreController::class, 'store']);
         Route::get('/runs/{run}', [LifecycleRestoreController::class, 'show']);
         Route::post('/runs/{run}/revert', [LifecycleRestoreController::class, 'revert']);
+        Route::post('/clients/{client}/revert', [LifecycleRestoreController::class, 'revertClient']);
     });
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');

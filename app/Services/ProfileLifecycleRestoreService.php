@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\ClientLifecycleMutationException;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\LifecycleRestoreRun;
@@ -35,6 +36,7 @@ class ProfileLifecycleRestoreService
     public function __construct(
         private readonly ProfileBioScrubService $bioScrubber,
         private readonly ActiveSubscriptionProfileRepairService $activeSubscriptionRepair,
+        private readonly ClientLifecycleMutationLock $lifecycleLock,
     ) {}
 
     /**
@@ -151,70 +153,15 @@ class ProfileLifecycleRestoreService
                 }
 
                 try {
-                    if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
-                        $this->activeSubscriptionRepair->repairClient(
-                            $client,
-                            null,
-                            false,
-                            'profile_restore_active_subscription_skip',
-                            false
-                        );
+                    $result = $this->lifecycleLock->run(
+                        $client,
+                        fn () => $this->restoreClient($client, $run, $wp, $sync),
+                    );
+                    if ($result === 'skipped') {
                         $skipped++;
-
-                        continue;
+                    } else {
+                        $restored++;
                     }
-
-                    $expiredAt = $this->resolveHistoricalExpiry($client);
-                    $state = $this->resolveLandingState($run, $expiredAt);
-
-                    // setLifecycleState() republishes (post_status = publish) and
-                    // stamps crm_lifecycle_state, so it is the whole WP-side write.
-                    $wp->setLifecycleState((int) $client->wp_post_id, $state);
-
-                    // Re-mirror WordPress, then stamp — the stamp is authoritative
-                    // and must not be clobbered by the sync.
-                    try {
-                        $sync->syncOne((int) $client->wp_post_id);
-                    } catch (\Throwable $syncError) {
-                        Log::warning('SEO Recovery: re-sync after republish failed', [
-                            'client_id' => $client->id,
-                            'error' => $syncError->getMessage(),
-                        ]);
-                    }
-
-                    $fresh = $client->fresh() ?? $client;
-                    $fresh->forceFill([
-                        'profile_status' => 'publish',
-                        'lifecycle_state' => $state,
-                        'lifecycle_expired_at' => $expiredAt,
-                        'lifecycle_archived_at' => $state === ClientLifecycleState::ARCHIVED ? now() : null,
-                        'lifecycle_archive_deferred_until' => null,
-                        'lifecycle_restored_at' => now(),
-                        'lifecycle_restore_run_id' => $run->id,
-                    ])->save();
-                    $expiredDealCount = $this->expireStaleActiveDeals($fresh);
-
-                    // A republished bio may still carry phone/WhatsApp/email —
-                    // restricted profiles must not generate leads.
-                    $this->bioScrubber->scrubQuietly($fresh, $run->requested_by);
-
-                    TimelineEvent::create([
-                        'platform_id' => (int) $client->platform_id,
-                        'entity_type' => 'client',
-                        'entity_id' => (int) $client->id,
-                        'event_type' => 'profile_restored_from_offline',
-                        'actor_id' => $run->requested_by,
-                        'content' => [
-                            'run_id' => (int) $run->id,
-                            'landing_state' => $state,
-                            'resolved_expiry' => $expiredAt->toDateTimeString(),
-                            'expiry_source' => $this->resolveExpirySource($client),
-                            'deals_expired' => $expiredDealCount,
-                        ],
-                        'created_at' => now(),
-                    ]);
-
-                    $restored++;
                 } catch (\Throwable $exception) {
                     $failed++;
                     Log::error('SEO Recovery: profile restore failed', [
@@ -272,31 +219,39 @@ class ProfileLifecycleRestoreService
             ->chunkById(100, function ($clients) use ($wp, $sync, &$reverted, &$skipped, &$failed) {
                 foreach ($clients as $client) {
                     try {
-                        if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
-                            $this->activeSubscriptionRepair->repairClient(
+                        $result = $this->lifecycleLock->run($client, function () use ($client, $wp, $sync) {
+                            $client->refresh();
+                            if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+                                $this->activeSubscriptionRepair->repairClient(
+                                    $client,
+                                    null,
+                                    false,
+                                    'profile_restore_revert_active_subscription_skip',
+                                    false
+                                );
+
+                                return 'skipped';
+                            }
+
+                            $this->deactivateAndVerify(
                                 $client,
+                                $wp,
+                                $sync,
                                 null,
-                                false,
-                                'profile_restore_revert_active_subscription_skip',
-                                false
+                                'profile_restore_reverted',
+                                [
+                                    'run_id' => (int) $client->lifecycle_restore_run_id,
+                                    'scope' => 'run_revert',
+                                ]
                             );
+
+                            return 'reverted';
+                        });
+                        if ($result === 'skipped') {
                             $skipped++;
-
-                            continue;
+                        } else {
+                            $reverted++;
                         }
-
-                        $this->deactivateAndVerify(
-                            $client,
-                            $wp,
-                            $sync,
-                            null,
-                            'profile_restore_reverted',
-                            [
-                                'run_id' => (int) $client->lifecycle_restore_run_id,
-                                'scope' => 'run_revert',
-                            ]
-                        );
-                        $reverted++;
                     } catch (\Throwable $exception) {
                         $failed++;
                         Log::error('SEO Recovery: revert failed', [
@@ -319,6 +274,50 @@ class ProfileLifecycleRestoreService
         return ['reverted' => $reverted, 'skipped' => $skipped, 'failed' => $failed];
     }
 
+    public function revertClient(Client $client, ?int $actorId = null, ?string $reason = null): Client
+    {
+        return $this->lifecycleLock->run($client, function () use ($client, $actorId, $reason): Client {
+            $client->refresh()->loadMissing('platform');
+
+            if ($client->lifecycle_restored_at === null || $client->lifecycle_restore_run_id === null) {
+                throw new ClientLifecycleMutationException(
+                    'This profile is not part of an SEO Recovery cohort.',
+                    'not_recovered',
+                );
+            }
+
+            if (! in_array((string) $client->lifecycle_state, [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED], true)) {
+                throw new \InvalidArgumentException('Only recovered Expired or Archived profiles can be returned offline.');
+            }
+
+            if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+                $this->activeSubscriptionRepair->repairClient(
+                    $client,
+                    null,
+                    false,
+                    'profile_restore_single_revert_active_subscription_skip',
+                    false,
+                );
+                throw ClientLifecycleMutationException::paidEntitlement();
+            }
+
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+
+            return $this->deactivateAndVerify(
+                $client,
+                WpSyncService::forPlatform((int) $client->platform_id),
+                new ClientSyncService($platform),
+                $actorId,
+                'profile_restore_reverted',
+                array_filter([
+                    'run_id' => (int) $client->lifecycle_restore_run_id,
+                    'scope' => 'single_revert',
+                    'reason' => $reason,
+                ], static fn ($value) => $value !== null && $value !== ''),
+            );
+        });
+    }
+
     /**
      * Emergency rollback for a market when the SEO lifecycle is disabled.
      *
@@ -339,7 +338,7 @@ class ProfileLifecycleRestoreService
         $query->chunkById(100, function ($clients) use ($wp, $sync, $actorId, $reason, &$reverted, &$failed) {
             foreach ($clients as $client) {
                 try {
-                    $this->deactivateAndVerify(
+                    $this->lifecycleLock->run($client, fn () => $this->deactivateAndVerify(
                         $client,
                         $wp,
                         $sync,
@@ -352,7 +351,7 @@ class ProfileLifecycleRestoreService
                             'run_id' => $client->lifecycle_restore_run_id ? (int) $client->lifecycle_restore_run_id : null,
                             'restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
                         ]
-                    );
+                    ));
                     $reverted++;
                 } catch (\Throwable $exception) {
                     $failed++;
@@ -395,6 +394,70 @@ class ProfileLifecycleRestoreService
                     ->where('expires_at', '>', now());
             })
             ->orderBy('id');
+    }
+
+    private function restoreClient(
+        Client $client,
+        LifecycleRestoreRun $run,
+        WpSyncService $wp,
+        ClientSyncService $sync,
+    ): string {
+        $client->refresh();
+        if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+            $this->activeSubscriptionRepair->repairClient(
+                $client,
+                null,
+                false,
+                'profile_restore_active_subscription_skip',
+                false,
+            );
+
+            return 'skipped';
+        }
+
+        $expiredAt = $this->resolveHistoricalExpiry($client);
+        $state = $this->resolveLandingState($run, $expiredAt);
+        $wp->setLifecycleState((int) $client->wp_post_id, $state);
+
+        try {
+            $sync->syncOne((int) $client->wp_post_id);
+        } catch (\Throwable $syncError) {
+            Log::warning('SEO Recovery: re-sync after republish failed', [
+                'client_id' => $client->id,
+                'error' => $syncError->getMessage(),
+            ]);
+        }
+
+        $fresh = $client->fresh() ?? $client;
+        $fresh->forceFill([
+            'profile_status' => 'publish',
+            'lifecycle_state' => $state,
+            'lifecycle_expired_at' => $expiredAt,
+            'lifecycle_archived_at' => $state === ClientLifecycleState::ARCHIVED ? now() : null,
+            'lifecycle_archive_deferred_until' => null,
+            'lifecycle_restored_at' => now(),
+            'lifecycle_restore_run_id' => $run->id,
+        ])->save();
+        $expiredDealCount = $this->expireStaleActiveDeals($fresh);
+        $this->bioScrubber->scrubQuietly($fresh, $run->requested_by);
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'profile_restored_from_offline',
+            'actor_id' => $run->requested_by,
+            'content' => [
+                'run_id' => (int) $run->id,
+                'landing_state' => $state,
+                'resolved_expiry' => $expiredAt->toDateTimeString(),
+                'expiry_source' => $this->resolveExpirySource($client),
+                'deals_expired' => $expiredDealCount,
+            ],
+            'created_at' => now(),
+        ]);
+
+        return 'restored';
     }
 
     private function deactivateAndVerify(

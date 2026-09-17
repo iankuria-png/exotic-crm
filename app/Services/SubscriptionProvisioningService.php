@@ -19,7 +19,8 @@ use InvalidArgumentException;
 class SubscriptionProvisioningService
 {
     public function __construct(
-        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
+        private readonly ClientLifecycleMutationLock $lifecycleLock,
     ) {}
 
     /**
@@ -42,6 +43,19 @@ class SubscriptionProvisioningService
     }
 
     public function activateDeal(Deal $deal, array $options = []): Deal
+    {
+        $clientId = (int) ($deal->client_id ?: $deal->client()->value('id'));
+        if ($clientId <= 0) {
+            throw new InvalidArgumentException('Deal has no associated client.');
+        }
+
+        return $this->lifecycleLock->run(
+            $clientId,
+            fn () => $this->activateDealUnlocked($deal, $options),
+        );
+    }
+
+    private function activateDealUnlocked(Deal $deal, array $options = []): Deal
     {
         // Cleared per invocation so a reused service instance cannot report a
         // previous request's activation as this one's.

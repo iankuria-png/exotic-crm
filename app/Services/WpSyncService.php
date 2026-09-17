@@ -621,6 +621,82 @@ class WpSyncService
     }
 
     /**
+     * Delete a source profile without treating an ambiguous DELETE response as
+     * proof that the profile is gone. The independent GET is deliberately
+     * strict: missing routes and authentication failures remain unknown.
+     */
+    public function deleteClientWithPresenceCheck(int $postId): array
+    {
+        $path = "/clients/{$postId}/delete";
+
+        try {
+            $this->assertRemoteWriteAllowed($path);
+            $this->assertMarketAvailable();
+            $response = Http::withHeaders($this->headers())
+                ->timeout($this->defaultTimeout)
+                ->delete($this->baseUrl.$path);
+
+            if ($response->successful()) {
+                return ['state' => 'source_deleted', 'response' => (array) $response->json()];
+            }
+
+            // Even a recognized DELETE 404 is not independent proof: a missing
+            // route and a missing profile can otherwise look identical.
+        } catch (\Throwable $exception) {
+            Log::warning('WordPress client delete was ambiguous; probing profile presence.', [
+                'platform_id' => $this->platformId,
+                'wp_post_id' => $postId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        $presence = $this->probeClientPresence($postId);
+
+        return match ($presence['state']) {
+            'present' => ['state' => 'source_not_deleted', 'probe' => $presence],
+            'missing' => ['state' => 'source_missing', 'probe' => $presence],
+            default => ['state' => 'source_delete_unknown', 'probe' => $presence],
+        };
+    }
+
+    public function probeClientPresence(int $postId): array
+    {
+        try {
+            $response = $this->getResponse("/clients/{$postId}", [], $this->defaultTimeout);
+        } catch (\Throwable $exception) {
+            return ['state' => 'unknown', 'error' => $exception->getMessage()];
+        }
+
+        if ($response->successful()) {
+            return ['state' => 'present'];
+        }
+
+        if ($this->isKnownProfileMissingResponse($response)) {
+            return ['state' => 'missing', 'code' => $response->json('code')];
+        }
+
+        return [
+            'state' => 'unknown',
+            'status' => $response->status(),
+            'code' => $response->json('code'),
+        ];
+    }
+
+    private function isKnownProfileMissingResponse(Response $response): bool
+    {
+        if ($response->status() !== 404) {
+            return false;
+        }
+
+        return in_array((string) $response->json('code'), [
+            'exotic_crm_client_not_found',
+            'rest_post_invalid_id',
+            'client_not_found',
+            'not_found',
+        ], true);
+    }
+
+    /**
      * Extend a client profile
      */
     public function extendClient(int $postId, int $additionalDays): array

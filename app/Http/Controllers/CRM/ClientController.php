@@ -128,6 +128,8 @@ class ClientController extends Controller
             'segment' => 'nullable|string|in:'.implode(',', ClientSegmentService::keys()),
             'city_key' => 'nullable|string|max:120',
             'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
+            'include_unlock_stats' => 'nullable|boolean',
+            'recovery_origin' => 'nullable|string|in:seo_recovered,natural',
             // Typeahead pickers (shared-payment bundle, subsidiary search, conversations)
             // legitimately ask for 8-40 rows. A whitelist of the table's own page sizes 422'd
             // those callers, which surfaced as "no clients found" instead of an error.
@@ -140,6 +142,7 @@ class ClientController extends Controller
             'platform_id',
             'You do not have access to this client market.'
         );
+        $includeUnlockStats = $request->boolean('include_unlock_stats');
 
         $query = Client::with([
             'platform',
@@ -189,6 +192,15 @@ class ClientController extends Controller
                 $query->lifecycle(ClientLifecycleState::ARCHIVED);
             } else {
                 $query->where('profile_status', $request->status);
+            }
+        }
+
+        if (! empty($validated['recovery_origin'])) {
+            $query->whereIn('lifecycle_state', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED]);
+            if ($validated['recovery_origin'] === 'seo_recovered') {
+                $query->whereNotNull('lifecycle_restored_at');
+            } else {
+                $query->whereNull('lifecycle_restored_at');
             }
         }
 
@@ -362,10 +374,20 @@ class ClientController extends Controller
             'closed_recent' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(30))->count(),
             'closed_recent_7d' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(7))->count(),
             'purging_soon' => (clone $closedStatsBase)->closed()->whereNotNull('purge_after')->where('purge_after', '<=', now()->addDays(7))->count(),
-            'contact_unlock_attempted' => $this->countContactUnlockClients(clone $statsQuery, 'attempted'),
-            'contact_unlock_successful' => $this->countContactUnlockClients(clone $statsQuery, 'successful'),
-            'contact_unlock_failed' => $this->countContactUnlockClients(clone $statsQuery, 'failed'),
-            'contact_unlock_pending' => $this->countContactUnlockClients(clone $statsQuery, 'pending'),
+            // Unlock aggregates only decorate the Unlocks filter labels. Keep them out of
+            // the common list request; the UI opts in when an unlock filter is active.
+            'contact_unlock_attempted' => $includeUnlockStats
+                ? $this->countContactUnlockClients(clone $statsQuery, 'attempted')
+                : null,
+            'contact_unlock_successful' => $includeUnlockStats
+                ? $this->countContactUnlockClients(clone $statsQuery, 'successful')
+                : null,
+            'contact_unlock_failed' => $includeUnlockStats
+                ? $this->countContactUnlockClients(clone $statsQuery, 'failed')
+                : null,
+            'contact_unlock_pending' => $includeUnlockStats
+                ? $this->countContactUnlockClients(clone $statsQuery, 'pending')
+                : null,
         ];
 
         $sortBy = (string) $request->input('sort_by', 'updated_at');
@@ -1370,6 +1392,8 @@ class ClientController extends Controller
 
         try {
             $fresh = $this->clientLifecycleService->archive($client, (int) $request->user()->id, 'manual');
+        } catch (\App\Exceptions\ClientLifecycleMutationException $e) {
+            throw $e;
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
@@ -1421,6 +1445,8 @@ class ClientController extends Controller
 
         try {
             $fresh = $this->clientLifecycleService->unarchive($client, (int) $request->user()->id);
+        } catch (\App\Exceptions\ClientLifecycleMutationException $e) {
+            throw $e;
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
@@ -1988,22 +2014,32 @@ class ClientController extends Controller
 
     private function applyContactUnlockClientFilter($query, string $filter): void
     {
-        $query->whereExists(function ($unlockQuery) use ($filter): void {
-            $unlockQuery
-                ->selectRaw('1')
-                ->from('visitor_contact_unlocks')
-                ->leftJoin('payments as contact_unlock_payments', 'contact_unlock_payments.id', '=', 'visitor_contact_unlocks.payment_id')
-                ->whereColumn('visitor_contact_unlocks.platform_id', 'clients.platform_id')
-                ->where(function ($matchQuery): void {
-                    $matchQuery->whereColumn('visitor_contact_unlocks.client_id', 'clients.id')
-                        ->orWhere(function ($wpQuery): void {
-                            $wpQuery->whereNotNull('clients.wp_post_id')
-                                ->whereColumn('visitor_contact_unlocks.wp_post_id', 'clients.wp_post_id');
-                        });
-                });
-
-            $this->applyContactUnlockOutcomeFilter($unlockQuery, $filter);
+        $query->where(function ($matchQuery) use ($filter): void {
+            $matchQuery->whereExists(function ($unlockQuery) use ($filter): void {
+                $this->applyContactUnlockExistsMatch($unlockQuery, $filter, 'client_id');
+            })->orWhereExists(function ($unlockQuery) use ($filter): void {
+                $this->applyContactUnlockExistsMatch($unlockQuery, $filter, 'wp_post_id');
+            });
         });
+    }
+
+    private function applyContactUnlockExistsMatch($query, string $filter, string $matchColumn): void
+    {
+        $query
+            ->selectRaw('1')
+            ->from('visitor_contact_unlocks')
+            ->leftJoin('payments as contact_unlock_payments', 'contact_unlock_payments.id', '=', 'visitor_contact_unlocks.payment_id')
+            ->whereColumn('visitor_contact_unlocks.platform_id', 'clients.platform_id');
+
+        if ($matchColumn === 'client_id') {
+            $query->whereColumn('visitor_contact_unlocks.client_id', 'clients.id');
+        } else {
+            $query
+                ->whereNotNull('clients.wp_post_id')
+                ->whereColumn('visitor_contact_unlocks.wp_post_id', 'clients.wp_post_id');
+        }
+
+        $this->applyContactUnlockOutcomeFilter($query, $filter);
     }
 
     private function applyContactUnlockOutcomeFilter($query, string $filter): void
@@ -2392,7 +2428,7 @@ class ClientController extends Controller
             (string) ($validated['reason'] ?? 'Client deleted from CRM')
         );
 
-        return response()->json($result);
+        return response()->json($result, ($result['deleted'] ?? false) ? 200 : 502);
     }
 
     public function bulkDeletePreview(Request $request)
@@ -2404,7 +2440,9 @@ class ClientController extends Controller
             'client_ids.*' => 'integer|min:1',
             'filters' => 'nullable|array',
             'filters.platform_id' => 'nullable|integer|min:1',
-            'filters.inactive_days' => 'nullable|integer|min:1',
+            'filters.inactive_days' => 'nullable|integer|in:90,180,270,365,730',
+            'filters.offline_only' => 'nullable|boolean',
+            'filters.include_never_seen' => 'nullable|boolean',
             'filters.has_no_chat' => 'nullable|boolean',
             'filters.has_no_subscription_or_payment' => 'nullable|boolean',
             'filters.seo_placeholders' => 'nullable|boolean',
@@ -2447,6 +2485,14 @@ class ClientController extends Controller
         $validated = $request->validate([
             'client_ids' => 'required|array|max:500',
             'client_ids.*' => 'integer|min:1',
+            'filters' => 'nullable|array',
+            'filters.platform_id' => 'nullable|integer|min:1',
+            'filters.inactive_days' => 'nullable|integer|in:90,180,270,365,730',
+            'filters.offline_only' => 'nullable|boolean',
+            'filters.include_never_seen' => 'nullable|boolean',
+            'filters.has_no_chat' => 'nullable|boolean',
+            'filters.has_no_subscription_or_payment' => 'nullable|boolean',
+            'filters.seo_placeholders' => 'nullable|boolean',
             'confirm' => 'required|string',
             'reason' => 'nullable|string|max:500',
         ]);
@@ -2465,6 +2511,14 @@ class ClientController extends Controller
             ->all();
 
         $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        $filters = $validated['filters'] ?? [];
+        if (! empty($filters['platform_id'])) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                (int) $filters['platform_id'],
+                'You do not have access to this client market.'
+            );
+        }
         $accessibleQuery = Client::query()->whereIn('id', $clientIds);
         if (is_array($platformIds)) {
             if (empty($platformIds)) {
@@ -2485,8 +2539,10 @@ class ClientController extends Controller
         return response()->json(
             $this->clientDeletionService->bulkDelete(
                 $clientIds,
+                $filters,
                 (int) $request->user()->id,
-                (string) ($validated['reason'] ?? 'Bulk client deletion from CRM')
+                (string) ($validated['reason'] ?? 'Bulk client deletion from CRM'),
+                $platformIds,
             )
         );
     }

@@ -147,6 +147,29 @@ export function isClientPubliclyActive(client) {
     return deriveClientProfileState(client).isPubliclyActive;
 }
 
+export function deriveClientRecoveryOrigin(client) {
+    const state = String(client?.lifecycle_state || '').toLowerCase();
+    if (!['expired', 'archived'].includes(state)) {
+        return null;
+    }
+
+    if (client?.lifecycle_restored_at) {
+        return {
+            key: 'seo_recovered',
+            label: 'SEO recovered',
+            tone: 'bg-violet-50 text-violet-700 ring-violet-200',
+            date: client.lifecycle_restored_at,
+        };
+    }
+
+    return {
+        key: 'natural',
+        label: 'Natural lifecycle',
+        tone: 'bg-slate-100 text-slate-600 ring-slate-200',
+        date: null,
+    };
+}
+
 export function isClientTrueForeverPlan(client) {
     const state = deriveClientProfileState(client);
 

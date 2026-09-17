@@ -7,6 +7,7 @@ use App\Jobs\RunLifecycleRestoreJob;
 use App\Models\Client;
 use App\Models\LifecycleRestoreRun;
 use App\Models\Platform;
+use App\Services\ClientLifecycleMutationLock;
 use App\Services\FeatureSettingsService;
 use App\Services\MarketAuthorizationService;
 use App\Services\ProfileLifecycleRestoreService;
@@ -26,6 +27,7 @@ class LifecycleRestoreController extends Controller
         private readonly ProfileLifecycleRestoreService $restorer,
         private readonly MarketAuthorizationService $marketAuth,
         private readonly FeatureSettingsService $settings,
+        private readonly ClientLifecycleMutationLock $lifecycleLock,
     ) {}
 
     /**
@@ -173,47 +175,123 @@ class LifecycleRestoreController extends Controller
             return $platform;
         }
 
+        $validated = $request->validate([
+            'run_id' => 'nullable|integer|min:1',
+            'lifecycle_state' => 'nullable|in:expired,archived',
+            'search' => 'nullable|string|max:120',
+            'sort_by' => 'nullable|in:name,city,lifecycle_expired_at,lifecycle_restored_at,lifecycle_state',
+            'sort_direction' => 'nullable|in:asc,desc',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
         $query = Client::query()
             ->where('platform_id', $platform->id)
-            ->whereNotNull('lifecycle_restored_at');
+            ->whereNotNull('lifecycle_restored_at')
+            ->whereIn('lifecycle_state', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED])
+            ->with(['deals:id,client_id,status,expires_at', 'lifecycleRestoreRun:id,created_at']);
 
-        if ($request->filled('run_id')) {
-            $query->where('lifecycle_restore_run_id', (int) $request->input('run_id'));
+        if (! empty($validated['run_id'])) {
+            $query->where('lifecycle_restore_run_id', (int) $validated['run_id']);
         }
 
-        if ($request->filled('lifecycle_state')) {
-            $query->where('lifecycle_state', (string) $request->input('lifecycle_state'));
+        if (! empty($validated['lifecycle_state'])) {
+            $query->where('lifecycle_state', (string) $validated['lifecycle_state']);
         }
 
-        if ($request->filled('search')) {
-            $search = trim((string) $request->input('search'));
+        if (! empty($validated['search'])) {
+            $search = trim((string) $validated['search']);
             $query->where(function ($builder) use ($search) {
                 $builder->where('name', 'like', "%{$search}%")
+                    ->orWhere('phone_normalized', 'like', "%{$search}%")
                     ->orWhere('city', 'like', "%{$search}%");
+
+                if (ctype_digit($search)) {
+                    $builder->orWhere('wp_post_id', (int) $search);
+                }
             });
         }
 
+        $sortBy = (string) ($validated['sort_by'] ?? 'lifecycle_restored_at');
+        $sortDirection = (string) ($validated['sort_direction'] ?? 'desc');
         $clients = $query
-            ->orderByDesc('lifecycle_restored_at')
-            ->paginate(min((int) $request->input('per_page', 25), 100));
+            ->orderBy($sortBy, $sortDirection)
+            ->orderBy('id', $sortDirection)
+            ->paginate((int) ($validated['per_page'] ?? 25));
 
-        $clients->getCollection()->transform(fn (Client $client) => [
-            'id' => (int) $client->id,
-            'name' => $client->name,
-            'city' => $client->city,
-            'wp_post_id' => (int) $client->wp_post_id,
-            // The live URL is the whole point of the recovery — surfaced so a
-            // restored profile can be spot-checked on the market site.
-            'profile_url' => $client->wp_profile_permalink,
-            'phone_normalized' => $client->phone_normalized,
-            'lifecycle_state' => $client->lifecycle_state,
-            'lifecycle_expired_at' => optional($client->lifecycle_expired_at)->toDateString(),
-            'lifecycle_restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
-            'lifecycle_restore_run_id' => $client->lifecycle_restore_run_id,
-            'seo_score' => $client->seo_score !== null ? (int) $client->seo_score : null,
-        ]);
+        $clients->getCollection()->transform(function (Client $client) {
+            $hasEntitlement = $client->deals->contains(fn ($deal) => (string) $deal->status === 'active'
+                && ($deal->expires_at === null || $deal->expires_at->isFuture()));
+            $busy = $this->lifecycleLock->isBusy($client);
+            $isRecovered = $client->lifecycle_restored_at !== null && $client->lifecycle_restore_run_id !== null;
+            $isRestricted = in_array((string) $client->lifecycle_state, [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED], true);
+            $isAgency = (string) ($client->client_type ?? 'escort') === 'agency';
+
+            $reason = $busy
+                ? 'lifecycle_busy'
+                : ($hasEntitlement
+                    ? 'paid_entitlement'
+                    : (! $isRestricted ? 'wrong_state' : (! $isRecovered ? 'not_recovered' : null)));
+            $deleteReason = $reason ?? ($isAgency ? 'agency_protected' : null);
+
+            return [
+                'id' => (int) $client->id,
+                'name' => $client->name,
+                'city' => $client->city,
+                'wp_post_id' => (int) $client->wp_post_id,
+                // The live URL is the whole point of the recovery — surfaced so a
+                // restored profile can be spot-checked on the market site.
+                'profile_url' => $client->wp_profile_permalink,
+                'phone_normalized' => $client->phone_normalized,
+                'lifecycle_state' => $client->lifecycle_state,
+                'lifecycle_expired_at' => optional($client->lifecycle_expired_at)->toDateString(),
+                'lifecycle_restored_at' => optional($client->lifecycle_restored_at)->toDateTimeString(),
+                'lifecycle_restore_run_id' => $client->lifecycle_restore_run_id,
+                'restore_run_created_at' => optional($client->lifecycleRestoreRun?->created_at)->toDateTimeString(),
+                'last_online_at' => $client->last_online_at,
+                'seo_score' => $client->seo_score !== null ? (int) $client->seo_score : null,
+                'can_archive' => $reason === null && $client->lifecycle_state === ClientLifecycleState::EXPIRED,
+                'archive_reason_code' => $reason ?? ($client->lifecycle_state !== ClientLifecycleState::EXPIRED ? 'wrong_state' : null),
+                'can_revert' => $reason === null,
+                'revert_reason_code' => $reason,
+                'can_delete' => $deleteReason === null,
+                'delete_reason_code' => $deleteReason,
+            ];
+        });
 
         return response()->json($clients);
+    }
+
+    public function revertClient(Request $request, Client $client): JsonResponse
+    {
+        if ($denied = $this->assertPlatformAccess($request, (int) $client->platform_id)) {
+            return $denied;
+        }
+
+        $validated = $request->validate(['reason' => 'nullable|string|max:500']);
+
+        try {
+            $updated = $this->restorer->revertClient(
+                $client,
+                $request->user()?->id,
+                $validated['reason'] ?? null,
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage(), 'reason_code' => 'wrong_state'], 422);
+        } catch (\Illuminate\Http\Client\ConnectionException|\Illuminate\Http\Client\RequestException $exception) {
+            return response()->json(['message' => 'WordPress did not confirm that the profile is private.'], 502);
+        }
+
+        return response()->json([
+            'message' => 'Profile returned offline.',
+            'client' => [
+                'id' => (int) $updated->id,
+                'profile_status' => $updated->profile_status,
+                'lifecycle_state' => $updated->lifecycle_state,
+                'lifecycle_restored_at' => $updated->lifecycle_restored_at,
+                'lifecycle_restore_run_id' => $updated->lifecycle_restore_run_id,
+            ],
+        ]);
     }
 
     /** Read the per-market pacing policy. */

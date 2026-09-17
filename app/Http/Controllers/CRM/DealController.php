@@ -2,36 +2,38 @@
 
 namespace App\Http\Controllers\CRM;
 
-use App\Http\Controllers\Controller;
+use App\Exceptions\ClientLifecycleMutationException;
 use App\Exceptions\MarketUnavailableException;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Http\Client\RequestException;
-use Illuminate\Http\Request;
-use App\Models\Deal;
+use App\Http\Controllers\Controller;
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\Platform;
 use App\Models\Template;
 use App\Models\TimelineEvent;
-use App\Models\Platform;
 use App\Services\AuditService;
-use App\Services\CommissionService;
-use App\Services\WpSyncService;
+use App\Services\ClientLifecycleMutationLock;
 use App\Services\ClientSyncService;
+use App\Services\CommissionService;
 use App\Services\DealPaymentService;
+use App\Services\ManualPaymentBundleService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\SubscriptionDeactivationService;
-use App\Services\ManualPaymentBundleService;
 use App\Services\SubscriptionLifecycleService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\SubsidiaryTrialService;
 use App\Services\WalletSettingsService;
+use App\Services\WpSyncService;
+use App\Support\CrmAuditAction;
 use App\Support\CrossPlatformPhoneResolver;
 use App\Support\DeactivationRequest;
-use App\Support\CrmAuditAction;
 use App\Support\DealDeactivationReason;
 use App\Support\LinkedPaymentAction;
 use App\Support\WpSubscriptionExpiry;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -51,9 +53,9 @@ class DealController extends Controller
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly SubsidiaryTrialService $subsidiaryTrialService,
-        private readonly CommissionService $commissionService
-    ) {
-    }
+        private readonly CommissionService $commissionService,
+        private readonly ClientLifecycleMutationLock $lifecycleLock,
+    ) {}
 
     public function index(Request $request)
     {
@@ -90,6 +92,7 @@ class DealController extends Controller
     {
         $this->authorizeDealAccess($request, $deal);
         $deal->load(['client', 'product', 'platform', 'assignedAgent', 'payment', 'lead']);
+
         return response()->json($deal);
     }
 
@@ -203,13 +206,13 @@ class DealController extends Controller
             'pin' => ['required', 'regex:/^\d{4,6}$/'],
         ]);
 
-        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+        if (! $this->walletSettingsService->freeTrialPinIsConfigured()) {
             return response()->json([
                 'message' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
             ], 409);
         }
 
-        if (!$this->walletSettingsService->verifyFreeTrialPin((string) $validated['pin'])) {
+        if (! $this->walletSettingsService->verifyFreeTrialPin((string) $validated['pin'])) {
             return response()->json([
                 'message' => 'Free-trial PIN is invalid.',
             ], 422);
@@ -292,7 +295,7 @@ class DealController extends Controller
         }
 
         $saveAsPackage = (bool) ($validated['save_as_package'] ?? false);
-        if ($saveAsPackage && (!$hasCustomAmount || !$hasCustomDuration)) {
+        if ($saveAsPackage && (! $hasCustomAmount || ! $hasCustomDuration)) {
             throw ValidationException::withMessages([
                 'save_as_package' => 'Custom amount and duration are required before saving a package.',
             ]);
@@ -300,11 +303,11 @@ class DealController extends Controller
 
         $baseProduct = $this->dealPaymentService->resolveScopedProduct((int) $validated['product_id'], (int) $client->platform_id);
         $baseProductPrice = null;
-        if (!empty($validated['base_product_price_id'])) {
+        if (! empty($validated['base_product_price_id'])) {
             $baseProductPrice = $this->dealPaymentService->resolveScopedProductPrice((int) $validated['base_product_price_id'], $baseProduct);
         }
 
-        if ($hasCustomAmount && count($client->platform?->effectiveCurrencies() ?? []) > 1 && !$baseProductPrice) {
+        if ($hasCustomAmount && count($client->platform?->effectiveCurrencies() ?? []) > 1 && ! $baseProductPrice) {
             throw ValidationException::withMessages([
                 'base_product_price_id' => 'Select a base pricing option for multi-currency custom deals.',
             ]);
@@ -379,6 +382,7 @@ class DealController extends Controller
         }
 
         $deal->load(['client', 'product', 'platform']);
+
         return response()->json($deal, 201);
     }
 
@@ -417,7 +421,7 @@ class DealController extends Controller
         }
 
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
@@ -557,7 +561,7 @@ class DealController extends Controller
                     $targetPhone,
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
-                if (!($initiation['success'] ?? false)) {
+                if (! ($initiation['success'] ?? false)) {
                     throw ValidationException::withMessages([
                         'payment_method' => (string) ($initiation['message'] ?? 'Payment initiation failed.'),
                     ]);
@@ -628,6 +632,7 @@ class DealController extends Controller
                 DB::commit();
 
                 $deal->load(['client', 'product', 'platform']);
+
                 return response()->json([
                     'message' => $initiation['message'] ?? 'Payment initiated. Subscription will activate when payment succeeds.',
                     'deal' => $deal,
@@ -644,8 +649,8 @@ class DealController extends Controller
                     'phone' => $client->phone_normalized,
                     'amount' => 0,
                     'currency' => $deal->currency ?: ($platform->currency_code ?? 'KES'),
-                    'transaction_uuid' => 'free_trial_' . $deal->id . '_' . now()->timestamp,
-                    'transaction_reference' => 'FREE-TRIAL-' . $deal->id,
+                    'transaction_uuid' => 'free_trial_'.$deal->id.'_'.now()->timestamp,
+                    'transaction_reference' => 'FREE-TRIAL-'.$deal->id,
                     'status' => 'completed',
                     'duration' => $deal->duration,
                     'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
@@ -757,13 +762,17 @@ class DealController extends Controller
                 'message' => collect($e->errors())->flatten()->first() ?: 'Activation failed.',
                 'errors' => $e->errors(),
             ], 422);
+        } catch (ClientLifecycleMutationException $e) {
+            DB::rollBack();
+
+            throw $e;
         } catch (\InvalidArgumentException $e) {
             DB::rollBack();
 
             return response()->json([
-                'message' => 'Activation failed: ' . $e->getMessage(),
+                'message' => 'Activation failed: '.$e->getMessage(),
             ], 422);
-        } catch (MarketUnavailableException | ConnectionException | RequestException $e) {
+        } catch (MarketUnavailableException|ConnectionException|RequestException $e) {
             // The market is unreachable, not the request wrong. Rolling back
             // here would also destroy the Payment row created earlier in this
             // transaction — the salesperson has taken money and the CRM would
@@ -783,7 +792,7 @@ class DealController extends Controller
                 ]);
 
                 return response()->json([
-                    'message' => 'Activation failed: ' . $e->getMessage(),
+                    'message' => 'Activation failed: '.$e->getMessage(),
                 ], 500);
             }
 
@@ -841,8 +850,9 @@ class DealController extends Controller
                     'wordpress_activated' => $orphaned,
                     'error' => $e->getMessage(),
                 ]);
+
             return response()->json([
-                'message' => 'Activation failed: ' . $e->getMessage(),
+                'message' => 'Activation failed: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -852,15 +862,15 @@ class DealController extends Controller
         $this->authorizeDealAccess($request, $deal);
 
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
-            'reason_code' => 'nullable|string|in:' . implode(',', $this->deactivationReasonValues()),
+            'reason_code' => 'nullable|string|in:'.implode(',', $this->deactivationReasonValues()),
             'reason_notes' => 'nullable|string|max:500',
-            'linked_payment_action' => 'nullable|string|in:' . implode(',', $this->linkedPaymentActionValues()),
+            'linked_payment_action' => 'nullable|string|in:'.implode(',', $this->linkedPaymentActionValues()),
             'notify_client' => 'nullable|boolean',
             'notification_message' => 'nullable|string|max:500',
             'notification_template_id' => 'nullable|integer|exists:templates,id',
@@ -936,6 +946,7 @@ class DealController extends Controller
             }
 
             $deal->load(['client', 'product', 'platform']);
+
             return response()->json($deal);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -943,8 +954,9 @@ class DealController extends Controller
                 'deal_id' => $deal->id,
                 'error' => $e->getMessage(),
             ]);
+
             return response()->json([
-                'message' => 'Deactivation failed: ' . $e->getMessage(),
+                'message' => 'Deactivation failed: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -977,7 +989,7 @@ class DealController extends Controller
         }
 
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
@@ -1067,7 +1079,7 @@ class DealController extends Controller
                     $paymentLinkSelection ?? [],
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
-                if (!($initiation['success'] ?? false)) {
+                if (! ($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
 
@@ -1155,9 +1167,9 @@ class DealController extends Controller
                     'new_expires_at' => $newExpiry->toDateTimeString(),
                     'payment_method' => $paymentMethod,
                     'extension_payment_id' => $payment?->id,
-                    ],
-                    'created_at' => now(),
-                ]);
+                ],
+                'created_at' => now(),
+            ]);
 
             if ($discountAudit && $discountAudit['applied']) {
                 $this->recordDiscountAudit(
@@ -1172,16 +1184,26 @@ class DealController extends Controller
             DB::commit();
 
             $deal->load(['client', 'product', 'platform']);
+
             return response()->json($deal);
         } catch (\Exception $e) {
             DB::rollBack();
+
             return response()->json([
-                'message' => 'Extension failed: ' . $e->getMessage(),
+                'message' => 'Extension failed: '.$e->getMessage(),
             ], 500);
         }
     }
 
     public function renew(Request $request, Deal $deal)
+    {
+        return $this->lifecycleLock->run(
+            (int) $deal->client_id,
+            fn () => $this->renewUnderLifecycleLock($request, $deal),
+        );
+    }
+
+    private function renewUnderLifecycleLock(Request $request, Deal $deal)
     {
         $this->authorizeDealAccess($request, $deal);
 
@@ -1204,14 +1226,14 @@ class DealController extends Controller
             return $missingColumnsResponse;
         }
 
-        if (!in_array($deal->status, ['expired', 'cancelled'], true)) {
+        if (! in_array($deal->status, ['expired', 'cancelled'], true)) {
             return response()->json([
                 'message' => 'Only expired or cancelled subscriptions can be renewed.',
             ], 422);
         }
 
         $client = $deal->client;
-        if (!$client) {
+        if (! $client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
@@ -1327,7 +1349,7 @@ class DealController extends Controller
                     $paymentLinkSelection ?? [],
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
-                if (!($initiation['success'] ?? false)) {
+                if (! ($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
 
@@ -1460,7 +1482,7 @@ class DealController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Renewal failed: ' . $exception->getMessage(),
+                'message' => 'Renewal failed: '.$exception->getMessage(),
             ], 500);
         }
     }
@@ -1483,7 +1505,7 @@ class DealController extends Controller
                 ->first();
         }
 
-        if (!$payment) {
+        if (! $payment) {
             return null;
         }
 
@@ -1512,7 +1534,7 @@ class DealController extends Controller
             return null;
         }
 
-        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+        if (! $this->walletSettingsService->freeTrialPinIsConfigured()) {
             return response()->json([
                 'message' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
             ], 409);
@@ -1530,7 +1552,7 @@ class DealController extends Controller
     private function buildSubsidiaryTrialIntent(Request $request, Deal $deal, Client $client, array $validated): ?array
     {
         $input = $validated['subsidiary_trial'] ?? null;
-        if (!is_array($input) || !($input['enabled'] ?? false)) {
+        if (! is_array($input) || ! ($input['enabled'] ?? false)) {
             return null;
         }
 
@@ -1559,12 +1581,12 @@ class DealController extends Controller
             $selectedClient = Client::query()
                 ->where('platform_id', $targetId)
                 ->find($clientId);
-            if (!$selectedClient) {
+            if (! $selectedClient) {
                 throw ValidationException::withMessages([
                     'subsidiary_trial.client_id' => 'Selected subsidiary client must belong to the target market.',
                 ]);
             }
-        } elseif (!filter_var($input['create_confirmed'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+        } elseif (! filter_var($input['create_confirmed'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
             throw ValidationException::withMessages([
                 'subsidiary_trial.create_confirmed' => 'Confirm that a new WordPress-provisioned subsidiary client may be created.',
             ]);
@@ -1578,19 +1600,19 @@ class DealController extends Controller
         }
 
         $pin = trim((string) ($input['pin'] ?? ''));
-        if ($pin === '' || !preg_match('/^\d{4,6}$/', $pin)) {
+        if ($pin === '' || ! preg_match('/^\d{4,6}$/', $pin)) {
             throw ValidationException::withMessages([
                 'subsidiary_trial.pin' => 'Enter the configured free-trial PIN.',
             ]);
         }
 
-        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+        if (! $this->walletSettingsService->freeTrialPinIsConfigured()) {
             throw ValidationException::withMessages([
                 'subsidiary_trial.pin' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
             ]);
         }
 
-        if (!$this->walletSettingsService->verifyFreeTrialPin($pin)) {
+        if (! $this->walletSettingsService->verifyFreeTrialPin($pin)) {
             throw ValidationException::withMessages([
                 'subsidiary_trial.pin' => 'Free-trial PIN is invalid.',
             ]);
@@ -1640,13 +1662,13 @@ class DealController extends Controller
             ], 422);
         }
 
-        if (!$this->walletSettingsService->discountPinIsConfigured()) {
+        if (! $this->walletSettingsService->discountPinIsConfigured()) {
             return response()->json([
                 'message' => 'Discount PIN is not configured. Ask an admin to set it in Settings first.',
             ], 409);
         }
 
-        if ($discountPin === null || trim($discountPin) === '' || !$this->walletSettingsService->verifyDiscountPin($discountPin)) {
+        if ($discountPin === null || trim($discountPin) === '' || ! $this->walletSettingsService->verifyDiscountPin($discountPin)) {
             return response()->json([
                 'message' => 'Discount PIN is invalid.',
             ], 422);
@@ -1672,7 +1694,7 @@ class DealController extends Controller
         if ($missingColumns === null) {
             $missingColumns = [];
             foreach (['is_free_trial', 'free_trial_approved_by', 'payment_reference', 'discount_percentage', 'original_amount', 'discount_approved_by', 'discount_source'] as $column) {
-                if (!Schema::hasColumn('deals', $column)) {
+                if (! Schema::hasColumn('deals', $column)) {
                     $missingColumns[] = $column;
                 }
             }
@@ -1695,7 +1717,7 @@ class DealController extends Controller
             return $custom;
         }
 
-        if (!empty($templateId)) {
+        if (! empty($templateId)) {
             $template = Template::query()
                 ->where('id', (int) $templateId)
                 ->where('channel', 'sms')
@@ -1711,6 +1733,7 @@ class DealController extends Controller
         }
 
         $name = $client->name ?: 'there';
+
         return "Hi {$name}, your subscription has been deactivated. Contact support if this is unexpected.";
     }
 
@@ -1771,7 +1794,7 @@ class DealController extends Controller
     {
         $normalizedMethod = strtolower(trim($paymentMethod));
         $policy = $this->dealPaymentService->marketBillingMethodPolicy($platformId);
-        $allowedMethods = data_get($policy, $surface . '.crm_methods', []);
+        $allowedMethods = data_get($policy, $surface.'.crm_methods', []);
 
         if (in_array($normalizedMethod, $allowedMethods, true)) {
             return null;
@@ -1799,7 +1822,7 @@ class DealController extends Controller
         }
 
         $conflict = $this->manualPaymentBundleService->findReferenceConflict($platformId, $reference);
-        if (!$conflict) {
+        if (! $conflict) {
             return null;
         }
 
@@ -1970,5 +1993,4 @@ class DealController extends Controller
             $reason
         );
     }
-
 }

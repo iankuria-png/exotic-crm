@@ -188,6 +188,7 @@ class ClientDeletionFlowTest extends TestCase
             'profile_status' => 'private',
             'sb_user_id' => null,
             'last_online_at' => null,
+            'wp_created_at' => now()->subYear(),
         ]);
 
         $clientWithChat = $this->createClient($platform, 9901);
@@ -198,7 +199,9 @@ class ClientDeletionFlowTest extends TestCase
         $response = $this->postJson('/api/crm/clients/bulk-delete/preview', [
             'filters' => [
                 'platform_id' => $platform->id,
-                'inactive_days' => 30,
+                'inactive_days' => 90,
+                'offline_only' => true,
+                'include_never_seen' => true,
                 'has_no_chat' => true,
                 'has_no_subscription_or_payment' => true,
             ],
@@ -268,6 +271,89 @@ class ClientDeletionFlowTest extends TestCase
             'id' => $agency->id,
             'client_type' => 'agency',
         ]);
+    }
+
+    public function test_ambiguous_source_delete_fails_closed_when_profile_is_still_present(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $client = $this->createClient($platform, 9401);
+        $base = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake(function ($request) use ($base) {
+            if ($request->method() === 'DELETE') {
+                return Http::response(['message' => 'upstream failed'], 500);
+            }
+            if ($request->url() === "{$base}/clients/9401") {
+                return Http::response(['wp_post_id' => 9401, 'post_status' => 'private'], 200);
+            }
+
+            return Http::response(['code' => 'rest_no_route'], 404);
+        });
+        Sanctum::actingAs($manager);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Ambiguous source test',
+        ])->assertStatus(502)->assertJsonPath('state', 'source_not_deleted');
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        $this->assertDatabaseMissing('client_sync_exclusions', ['platform_id' => $platform->id, 'wp_post_id' => 9401]);
+    }
+
+    public function test_missing_route_is_not_treated_as_a_missing_profile(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $client = $this->createClient($platform, 9405);
+        Http::fake(['*' => Http::response(['code' => 'rest_no_route'], 404)]);
+        Sanctum::actingAs($manager);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Route ambiguity test',
+        ])->assertStatus(502)->assertJsonPath('state', 'source_delete_unknown');
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        $this->assertDatabaseHas('client_sync_exclusions', ['platform_id' => $platform->id, 'wp_post_id' => 9405]);
+    }
+
+    public function test_confirmed_missing_source_profile_allows_local_deletion_to_finish(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $client = $this->createClient($platform, 9403);
+        Http::fake(['*' => Http::response(['code' => 'not_found'], 404)]);
+        Sanctum::actingAs($manager);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Confirmed missing source test',
+        ])->assertOk()->assertJsonPath('state', 'completed');
+
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
+    }
+
+    public function test_current_or_future_entitlement_always_blocks_operator_deletion(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = $this->createManager($platform);
+        $client = $this->createClient($platform, 9404);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+            'expires_at' => now()->addWeek(),
+        ]);
+        Http::fake();
+        Sanctum::actingAs($manager);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Should be blocked',
+        ])->assertStatus(409)->assertJsonPath('reason_code', 'paid_entitlement');
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        Http::assertNothingSent();
     }
 
     private function createPlatform(): Platform

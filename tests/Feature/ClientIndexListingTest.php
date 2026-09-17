@@ -8,6 +8,8 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
+use App\Models\VisitorContactUnlock;
+use App\Support\ClientLifecycleState;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -501,7 +503,7 @@ class ClientIndexListingTest extends TestCase
             'role' => 'sales',
             'status' => 'active',
             'assigned_market_ids' => [$kenya->id],
-            'email' => 'client-queue-sales-' . uniqid('', true) . '@example.test',
+            'email' => 'client-queue-sales-'.uniqid('', true).'@example.test',
         ]);
         $timezone = config('app.timezone');
         Carbon::setTestNow(Carbon::create(2026, 5, 22, 12, 0, 0, $timezone));
@@ -573,6 +575,134 @@ class ClientIndexListingTest extends TestCase
             ->assertJsonValidationErrors('per_page');
     }
 
+    public function test_clients_index_defers_unlock_aggregate_stats_until_requested(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Unlock stats client',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $defaultResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}");
+
+        $defaultResponse->assertOk();
+        $this->assertNull($defaultResponse->json('stats.contact_unlock_attempted'));
+        $this->assertNull($defaultResponse->json('stats.contact_unlock_successful'));
+        $this->assertNull($defaultResponse->json('stats.contact_unlock_failed'));
+        $this->assertNull($defaultResponse->json('stats.contact_unlock_pending'));
+
+        $optInResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}&include_unlock_stats=1");
+
+        $optInResponse->assertOk();
+        $this->assertSame(0, $optInResponse->json('stats.contact_unlock_attempted'));
+        $this->assertSame(0, $optInResponse->json('stats.contact_unlock_successful'));
+        $this->assertSame(0, $optInResponse->json('stats.contact_unlock_failed'));
+        $this->assertSame(0, $optInResponse->json('stats.contact_unlock_pending'));
+    }
+
+    public function test_clients_index_unlock_filter_matches_by_client_or_wordpress_post(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $directClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 70001,
+            'name' => 'Direct unlock match',
+        ]);
+        $wpPostClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 70002,
+            'name' => 'WordPress unlock match',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 70003,
+            'name' => 'No unlock match',
+        ]);
+
+        $unlockDefaults = [
+            'platform_id' => $platform->id,
+            'scope' => VisitorContactUnlock::SCOPE_SINGLE_PROFILE,
+            'status' => VisitorContactUnlock::STATUS_INITIATED,
+            'visitor_phone_hash' => str_repeat('a', 64),
+            'visitor_phone_masked' => '254*******001',
+            'session_token_hash' => str_repeat('b', 64),
+            'public_token_hash' => str_repeat('c', 64),
+        ];
+        VisitorContactUnlock::query()->create(array_merge($unlockDefaults, [
+            'client_id' => $directClient->id,
+            'wp_post_id' => $directClient->wp_post_id,
+            'idempotency_key_hash' => str_repeat('d', 64),
+        ]));
+        VisitorContactUnlock::query()->create(array_merge($unlockDefaults, [
+            'client_id' => null,
+            'wp_post_id' => $wpPostClient->wp_post_id,
+            'visitor_phone_hash' => str_repeat('e', 64),
+            'session_token_hash' => str_repeat('f', 64),
+            'public_token_hash' => str_repeat('1', 64),
+            'idempotency_key_hash' => str_repeat('2', 64),
+        ]));
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&contact_unlock=attempted");
+
+        $response->assertOk();
+        $this->assertSame(
+            [$directClient->id, $wpPostClient->id],
+            collect($response->json('data'))->pluck('id')->sort()->values()->all()
+        );
+    }
+
+    public function test_clients_index_filters_restricted_profiles_by_recovery_origin(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $recovered = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'SEO recovered expiry',
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_restored_at' => now()->subDay(),
+            'lifecycle_restore_run_id' => 91,
+        ]);
+        $natural = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Natural expiry',
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'lifecycle_restored_at' => null,
+            'lifecycle_restore_run_id' => null,
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Active stale marker',
+            'profile_status' => 'publish',
+            'lifecycle_state' => ClientLifecycleState::ACTIVE,
+            'lifecycle_restored_at' => now(),
+        ]);
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&recovery_origin=seo_recovered")
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $recovered->id)
+            ->assertJsonPath('data.0.lifecycle_restore_run_id', 91);
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&recovery_origin=natural")
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $natural->id);
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&recovery_origin=unknown")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('recovery_origin');
+    }
+
     private function createPlatform(): Platform
     {
         return Platform::factory()->create([
@@ -606,7 +736,7 @@ class ClientIndexListingTest extends TestCase
             'role' => 'admin',
             'status' => 'active',
             'assigned_market_ids' => [],
-            'email' => 'client-listing-admin-' . uniqid('', true) . '@example.test',
+            'email' => 'client-listing-admin-'.uniqid('', true).'@example.test',
         ]);
     }
 }

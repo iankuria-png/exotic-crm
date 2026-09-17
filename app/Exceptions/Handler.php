@@ -77,6 +77,17 @@ class Handler extends ExceptionHandler
 
             return null;
         });
+
+        $this->renderable(function (ClientLifecycleMutationException $e, $request) {
+            if ($request->is('api/crm/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'reason_code' => $e->reasonCode,
+                ], 409);
+            }
+
+            return null;
+        });
     }
 
     /**

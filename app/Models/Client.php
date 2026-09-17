@@ -387,13 +387,21 @@ class Client extends Model
         return $query->where('is_high_risk', true);
     }
 
-    public function scopeInactiveFor($query, int $days)
+    public function scopeInactiveFor($query, int $days, bool $includeNeverSeen = false)
     {
         $threshold = now()->subDays($days)->timestamp;
+        $createdThreshold = now()->subDays($days);
 
-        return $query->where(function ($builder) use ($threshold) {
-            $builder->where('last_online_at', '<', $threshold)
-                ->orWhereNull('last_online_at');
+        return $query->where(function ($builder) use ($threshold, $createdThreshold, $includeNeverSeen) {
+            $builder->where('last_online_at', '<', $threshold);
+
+            if ($includeNeverSeen) {
+                $builder->orWhere(function ($neverSeen) use ($createdThreshold): void {
+                    $neverSeen->whereNull('last_online_at')
+                        ->whereNotNull('wp_created_at')
+                        ->where('wp_created_at', '<', $createdThreshold);
+                });
+            }
         });
     }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
@@ -16,11 +16,12 @@ import ChurnedQueueView from '../components/clients/ChurnedQueueView';
 import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import LocationsView from '../components/clients/LocationsView';
 import SeoRecoveryView from '../components/clients/SeoRecoveryView';
+import SmartDeleteDialog from '../components/clients/SmartDeleteDialog';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import ClientCreateModal from '../components/clients/ClientCreateModal';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
-import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
+import { deriveClientProfileState, deriveClientRecoveryOrigin, isClientPubliclyActive } from '../utils/clientProfileState';
 import { normalizePhone } from '../utils/phone';
 import { copyToClipboard } from '../utils/clipboard';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
@@ -33,7 +34,7 @@ import { formatCurrency } from '../utils/currency';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
-const SMART_DELETE_DAY_OPTIONS = [30, 60, 90, 180, 365];
+const SMART_DELETE_DAY_OPTIONS = [90, 180, 270, 365, 730];
 const DEFAULT_SORT_OPTION = 'updated_desc';
 const ONLINE_STATUS_WINDOW_MINUTES = 30;
 const NO_ACTIVE_SUBSCRIPTION_PLAN_FILTER = 'no-active-subscription';
@@ -80,6 +81,8 @@ function createBulkDeleteDialogState(platformId = '') {
         filters: {
             platform_id: platformId,
             inactive_days: '90',
+            offline_only: false,
+            include_never_seen: false,
             has_no_chat: true,
             has_no_subscription_or_payment: true,
             seo_placeholders: false,
@@ -546,6 +549,7 @@ export default function Clients() {
     const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
     const allowedClientSegments = new Set(CLIENT_SEGMENT_KEYS);
     const allowedContactUnlockFilters = new Set(['attempted', 'successful', 'failed', 'pending']);
+    const allowedRecoveryOriginFilters = new Set(['seo_recovered', 'natural']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -590,6 +594,10 @@ export default function Clients() {
     const [statusFilter, setStatusFilter] = useState(() => {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
+    });
+    const [recoveryOriginFilter, setRecoveryOriginFilter] = useState(() => {
+        const requested = (searchParams.get('recovery_origin') || '').trim();
+        return allowedRecoveryOriginFilters.has(requested) ? requested : '';
     });
     const [clientTypeFilter, setClientTypeFilter] = useState(() => {
         const requested = (searchParams.get('client_type') || '').trim();
@@ -700,6 +708,8 @@ export default function Clients() {
             api.get('/crm/clients/cities', {
                 params: platformFilter ? { platform_id: Number(platformFilter) } : {},
             }).then((response) => response.data),
+        enabled: tab === 'all',
+        staleTime: 5 * 60 * 1000,
     });
     const availableCities = citiesData?.cities || [];
 
@@ -716,6 +726,15 @@ export default function Clients() {
         setCityKeyFilter((current) => (current === nextCityKey ? current : nextCityKey));
     }, [searchParams]);
 
+    useEffect(() => {
+        const current = searchParams.get('recovery_origin') || '';
+        if (current === recoveryOriginFilter) return;
+        const params = new URLSearchParams(searchParams);
+        if (recoveryOriginFilter) params.set('recovery_origin', recoveryOriginFilter);
+        else params.delete('recovery_origin');
+        setSearchParams(params, { replace: true });
+    }, [recoveryOriginFilter, searchParams, setSearchParams]);
+
     const { data, isLoading, isFetching } = useQuery({
         queryKey: [
             'clients',
@@ -723,6 +742,7 @@ export default function Clients() {
             perPage,
             search,
             statusFilter,
+            recoveryOriginFilter,
             clientTypeFilter,
             planFilter,
             verifiedFilter,
@@ -749,6 +769,7 @@ export default function Clients() {
                     per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
+                    ...(recoveryOriginFilter && { recovery_origin: recoveryOriginFilter }),
                     ...(clientTypeFilter && { client_type: clientTypeFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
@@ -763,11 +784,14 @@ export default function Clients() {
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
                     ...(segmentFilter && { segment: segmentFilter }),
                     ...(contactUnlockFilter && { contact_unlock: contactUnlockFilter }),
+                    ...(contactUnlockFilter && { include_unlock_stats: 1 }),
                     ...(resolvedCreatedRange.createdFrom && { created_from: resolvedCreatedRange.createdFrom }),
                     ...(resolvedCreatedRange.createdTo && { created_to: resolvedCreatedRange.createdTo }),
                     ...sortParams,
                 },
             }).then((response) => response.data),
+        enabled: tab === 'all',
+        placeholderData: keepPreviousData,
     });
 
     // Lifetime value is normalized per-currency in PHP, so it can't be ranked across very
@@ -784,6 +808,7 @@ export default function Clients() {
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'client-create'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+        staleTime: 5 * 60 * 1000,
     });
 
     const platformOptions = integrationData?.platforms || [];
@@ -1052,6 +1077,8 @@ export default function Clients() {
         if (dialogState.filters.inactive_days) {
             filters.inactive_days = Number(dialogState.filters.inactive_days);
         }
+        filters.offline_only = Boolean(dialogState.filters.offline_only);
+        filters.include_never_seen = Boolean(dialogState.filters.include_never_seen);
         if (dialogState.filters.has_no_chat) {
             filters.has_no_chat = true;
         }
@@ -1079,8 +1106,9 @@ export default function Clients() {
     });
 
     const bulkDeleteMutation = useMutation({
-        mutationFn: ({ clientIds, reason }) => api.post('/crm/clients/bulk-delete', {
+        mutationFn: ({ clientIds, filters, reason }) => api.post('/crm/clients/bulk-delete', {
             client_ids: clientIds,
+            filters,
             confirm: 'DELETE',
             reason,
         }).then((response) => response.data),
@@ -1563,6 +1591,13 @@ export default function Clients() {
     }, [planFilter, scopedPlanOptions]);
 
     const stats = useMemo(() => {
+        const pageUnlockStats = {
+            contact_unlock_attempted: rows.filter((row) => Number(row.contact_unlock_summary?.attempts || 0) > 0).length,
+            contact_unlock_successful: rows.filter((row) => Number(row.contact_unlock_summary?.successful || 0) > 0).length,
+            contact_unlock_failed: rows.filter((row) => Number(row.contact_unlock_summary?.failed || 0) > 0).length,
+            contact_unlock_pending: rows.filter((row) => Number(row.contact_unlock_summary?.pending || 0) > 0).length,
+        };
+
         if (data?.stats) {
             return {
                 active: Number(data.stats.active || 0),
@@ -1571,10 +1606,18 @@ export default function Clients() {
                 with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
                 expired_public: Number(data.stats.expired_public || 0),
-                contact_unlock_attempted: Number(data.stats.contact_unlock_attempted || 0),
-                contact_unlock_successful: Number(data.stats.contact_unlock_successful || 0),
-                contact_unlock_failed: Number(data.stats.contact_unlock_failed || 0),
-                contact_unlock_pending: Number(data.stats.contact_unlock_pending || 0),
+                contact_unlock_attempted: data.stats.contact_unlock_attempted == null
+                    ? pageUnlockStats.contact_unlock_attempted
+                    : Number(data.stats.contact_unlock_attempted || 0),
+                contact_unlock_successful: data.stats.contact_unlock_successful == null
+                    ? pageUnlockStats.contact_unlock_successful
+                    : Number(data.stats.contact_unlock_successful || 0),
+                contact_unlock_failed: data.stats.contact_unlock_failed == null
+                    ? pageUnlockStats.contact_unlock_failed
+                    : Number(data.stats.contact_unlock_failed || 0),
+                contact_unlock_pending: data.stats.contact_unlock_pending == null
+                    ? pageUnlockStats.contact_unlock_pending
+                    : Number(data.stats.contact_unlock_pending || 0),
                 total: Number(data.stats.total || 0),
                 segments: data.stats.segments || {},
             };
@@ -1592,10 +1635,7 @@ export default function Clients() {
             with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
             expired_public: rows.filter((row) => String(row.expiry_state || '') === 'expired_public').length,
-            contact_unlock_attempted: rows.filter((row) => Number(row.contact_unlock_summary?.attempts || 0) > 0).length,
-            contact_unlock_successful: rows.filter((row) => Number(row.contact_unlock_summary?.successful || 0) > 0).length,
-            contact_unlock_failed: rows.filter((row) => Number(row.contact_unlock_summary?.failed || 0) > 0).length,
-            contact_unlock_pending: rows.filter((row) => Number(row.contact_unlock_summary?.pending || 0) > 0).length,
+            ...pageUnlockStats,
             total: Number(data?.total || rows.length),
             segments: {},
         };
@@ -1759,6 +1799,7 @@ export default function Clients() {
     const hasActiveFilters = Boolean(
         search
         || statusFilter
+        || recoveryOriginFilter
         || clientTypeFilter
         || planFilter
         || verifiedFilter !== ''
@@ -2069,13 +2110,21 @@ export default function Clients() {
             label: 'Status',
             render: (row) => {
                 const profileState = deriveClientProfileState(row);
+                const recoveryOrigin = deriveClientRecoveryOrigin(row);
 
                 return (
-                    <StatusBadge
-                        status={profileState.status}
-                        tone={profileState.tone}
-                        label={profileState.label}
-                    />
+                    <div className="flex flex-col items-start gap-1">
+                        <StatusBadge
+                            status={profileState.status}
+                            tone={profileState.tone}
+                            label={profileState.label}
+                        />
+                        {recoveryOrigin ? (
+                            <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${recoveryOrigin.tone}`}>
+                                {recoveryOrigin.label}{recoveryOrigin.date ? ` · ${String(recoveryOrigin.date).slice(0, 10)}` : ''}
+                            </span>
+                        ) : null}
+                    </div>
                 );
             },
         },
@@ -2562,6 +2611,17 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Recovery source"
+                        value={recoveryOriginFilter}
+                        onChange={(event) => { setRecoveryOriginFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All sources' },
+                            { value: 'seo_recovered', label: 'SEO recovered' },
+                            { value: 'natural', label: 'Natural lifecycle' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Type"
                         value={clientTypeFilter}
                         onChange={(event) => { setClientTypeFilter(event.target.value); setPage(1); }}
@@ -2748,6 +2808,7 @@ export default function Clients() {
                                 setSearch('');
                                 setSearchInput('');
                                 setStatusFilter('');
+                                setRecoveryOriginFilter('');
                                 setClientTypeFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
@@ -2935,7 +2996,7 @@ export default function Clients() {
             />
 
             {canDeleteClients ? (
-                <BulkDeleteClientsDialog
+                <SmartDeleteDialog
                     open={bulkDeleteDialog.open}
                     mode={bulkDeleteDialog.mode}
                     platformOptions={platformOptions}
@@ -2968,6 +3029,9 @@ export default function Clients() {
 
                         bulkDeleteMutation.mutate({
                             clientIds,
+                            filters: bulkDeleteDialog.mode === 'smart'
+                                ? buildBulkDeletePreviewPayload(bulkDeleteDialog).filters
+                                : {},
                             reason: bulkDeleteDialog.reason.trim() || 'Bulk client deletion from clients page',
                         });
                     }}
