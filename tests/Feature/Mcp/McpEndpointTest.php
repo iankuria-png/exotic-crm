@@ -224,6 +224,26 @@ class McpEndpointTest extends TestCase
         $this->assertSame('schema', $sqlTool['domain']);
     }
 
+    public function test_revenue_app_is_discoverable_and_previews_its_html(): void
+    {
+        Config::set('mcp.enabled', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($user);
+
+        $tool = collect($this->getJson('/api/crm/settings/mcp')->assertOk()->json('tools'))
+            ->firstWhere('name', 'exotic_render_revenue_dashboard');
+        $this->assertSame('ui://exotic/revenue-dashboard/v1.html', $tool['ui_resource']);
+        $this->assertTrue($tool['enabled']);
+
+        $preview = $this->postJson('/api/crm/settings/mcp/tools/exotic_render_revenue_dashboard/preview', ['arguments' => []])
+            ->assertOk()
+            ->assertJsonPath('tool', 'exotic_render_revenue_dashboard')
+            ->assertJsonPath('pii_scan.clean', true)
+            ->assertJsonStructure(['payload' => ['summary', 'trend', 'market_breakdown']]);
+        $this->assertStringContainsString('<title>Revenue dashboard</title>', $preview->json('app_html'));
+        $this->assertStringContainsString('ui/notifications/tool-result', $preview->json('app_html'));
+    }
+
     public function test_enhanced_capabilities_are_visible_in_the_management_registry_and_default_token(): void
     {
         Config::set('mcp.enabled', true);

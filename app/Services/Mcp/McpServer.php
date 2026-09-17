@@ -108,6 +108,9 @@ class McpServer
         return [
             'tool' => $name,
             'payload' => is_array($payload) ? $payload : ['value' => $text],
+            'app_html' => $name === 'exotic_render_revenue_dashboard'
+                ? (string) file_get_contents(resource_path('mcp/apps/revenue-dashboard-v1.html'))
+                : null,
             'bytes' => strlen($text),
             'row_count' => (int) data_get($result, '_meta.exotic/rowCount', 0),
             'pii_scan' => [

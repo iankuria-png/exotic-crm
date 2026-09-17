@@ -184,6 +184,7 @@ class ToolRegistry
                     'enabled' => $enabled,
                     'management_mode' => $modern ? 'rollout' : 'registry',
                     'scope_required' => $modern,
+                    'ui_resource' => $meta['ui_resource'] ?? null,
                     'status_detail' => $modern
                         ? ($enabled ? 'Live for tokens with this permission.' : 'Unavailable until its rollout is enabled.')
                         : ($enabled ? 'Enabled in the organisation registry.' : 'Disabled in the organisation registry.'),
