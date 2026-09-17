@@ -48,6 +48,7 @@ use App\Services\MediaConversionStatusService;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
+use App\Services\Seo\ProfileImageAltTextGenerator;
 use App\Services\SupportBoardService;
 use App\Services\VideoTranscodeService;
 use App\Services\WalletSettingsService;
@@ -120,6 +121,7 @@ class ClientController extends Controller
         private readonly ClientLifetimeValueService $clientLifetimeValueService,
         private readonly AutoPushBoostLimitService $autoPushBoostLimitService,
         private readonly AutoPushBoostService $autoPushBoostService,
+        private readonly ProfileImageAltTextGenerator $profileImageAltTextGenerator,
     ) {}
 
     public function index(Request $request)
@@ -3904,6 +3906,10 @@ class ClientController extends Controller
             $existingMedia = $wpSync->getClientMedia((int) $client->wp_post_id);
             $this->ensureProfileMediaCapacity($existingMedia, $uploadedFiles);
 
+            // Alt text is numbered by the image's position on the profile, so
+            // a gallery never repeats the same string twenty times.
+            $nextImagePosition = $this->countCurrentProfileMedia($existingMedia)['images'] + 1;
+
             // WordPress only stores MP4. Anything in another container is
             // handed to the conversion queue and uploaded once it is MP4, so
             // the sync plugin and theme never have to learn a second format.
@@ -3922,10 +3928,14 @@ class ClientController extends Controller
 
             $results = [];
             foreach ($directFiles as $index => $file) {
+                $isVideo = $this->isProfileMediaVideoUpload($file);
+
                 $results[] = $wpSync->uploadClientMedia(
                     (int) $client->wp_post_id,
                     $file,
-                    $setMain && count($uploadedFiles) === 1 && $index === 0 && ! $this->isProfileMediaVideoUpload($file)
+                    $setMain && count($uploadedFiles) === 1 && $index === 0 && ! $isVideo,
+                    // Videos have no alt attribute to carry; only images do.
+                    $isVideo ? null : $this->profileImageAltTextGenerator->generate($client, $nextImagePosition++)
                 );
             }
 

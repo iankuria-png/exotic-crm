@@ -757,14 +757,15 @@ class WpSyncService
     /**
      * Upload a media file to a client profile.
      */
-    public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false): array
+    public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false, ?string $altText = null): array
     {
         return $this->uploadClientMediaFile(
             $postId,
             (string) $file->getRealPath(),
             $file->getClientOriginalName(),
             $file->getMimeType() ?: 'application/octet-stream',
-            $setMain
+            $setMain,
+            $altText
         );
     }
 
@@ -779,7 +780,8 @@ class WpSyncService
         string $path,
         string $fileName,
         string $mimeType = 'application/octet-stream',
-        bool $setMain = false
+        bool $setMain = false,
+        ?string $altText = null
     ): array {
         $this->assertRemoteWriteAllowed("/clients/{$postId}/media");
 
@@ -796,9 +798,12 @@ class WpSyncService
                 ->attach('file', $handle, $fileName, [
                     'Content-Type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
                 ])
-                ->post($this->baseUrl."/clients/{$postId}/media", [
+                ->post($this->baseUrl."/clients/{$postId}/media", array_filter([
                     'set_main' => $setMain ? '1' : '0',
-                ]);
+                    // Older plugin builds ignore this field, so an unpatched
+                    // market degrades to the previous behaviour rather than erroring.
+                    'alt_text' => $altText !== null && trim($altText) !== '' ? trim($altText) : null,
+                ], static fn ($value): bool => $value !== null));
         } finally {
             fclose($handle);
         }
