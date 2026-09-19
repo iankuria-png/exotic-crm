@@ -98,6 +98,22 @@ function deleteBlockLabel(reason) {
     return 'Protected';
 }
 
+function formatClientValue(row) {
+    const paymentCount = Number(row.lifetime_payment_count || 0);
+    if (paymentCount === 0) return { primary: 'No payments', secondary: 'No recorded value', tone: 'text-slate-500' };
+    const lastPaid = row.lifetime_last_payment_at
+        ? ` · last ${new Date(row.lifetime_last_payment_at).toLocaleDateString()}`
+        : '';
+    if (row.lifetime_value_partial) {
+        return { primary: 'FX incomplete', secondary: `${paymentCount.toLocaleString()} payment${paymentCount === 1 ? '' : 's'}${lastPaid}`, tone: 'text-amber-700' };
+    }
+    return {
+        primary: new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(row.lifetime_value_usd || 0)),
+        secondary: `${paymentCount.toLocaleString()} payment${paymentCount === 1 ? '' : 's'}${lastPaid}`,
+        tone: Number(row.lifetime_value_usd || 0) >= 100 ? 'text-emerald-700' : 'text-slate-800',
+    };
+}
+
 // ─── Small presentational pieces ─────────────────────────────────────────────
 
 function Pill({ children, tone = 'bg-slate-100 text-slate-700 ring-slate-200' }) {
@@ -240,6 +256,11 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     const [smartDelete, setSmartDelete] = useState(null);
     const [offlineSearch, setOfflineSearch] = useState('');
     const [debouncedOfflineSearch, setDebouncedOfflineSearch] = useState('');
+    const [offlineCity, setOfflineCity] = useState('');
+    const [offlineCreatedFrom, setOfflineCreatedFrom] = useState('');
+    const [offlineCreatedTo, setOfflineCreatedTo] = useState('');
+    const [offlineLastActive, setOfflineLastActive] = useState('');
+    const [offlineClientValue, setOfflineClientValue] = useState('');
     const [offlineDeletionState, setOfflineDeletionState] = useState('');
     const [offlineSort, setOfflineSort] = useState('updated_at:desc');
     const [offlinePage, setOfflinePage] = useState(1);
@@ -297,7 +318,7 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     });
 
     const offlineQuery = useQuery({
-        queryKey: ['lifecycle-restore', 'offline-clients', selectedPlatform, debouncedOfflineSearch, offlineDeletionState, offlineSort, offlinePage, offlinePerPage],
+        queryKey: ['lifecycle-restore', 'offline-clients', selectedPlatform, debouncedOfflineSearch, offlineCity, offlineCreatedFrom, offlineCreatedTo, offlineLastActive, offlineClientValue, offlineDeletionState, offlineSort, offlinePage, offlinePerPage],
         enabled: hasMarket && activeView === 'offline',
         placeholderData: (previousData) => previousData,
         queryFn: async () => {
@@ -305,6 +326,11 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                 params: {
                     platform_id: selectedPlatform,
                     search: debouncedOfflineSearch || undefined,
+                    city: offlineCity || undefined,
+                    created_from: offlineCreatedFrom || undefined,
+                    created_to: offlineCreatedTo || undefined,
+                    last_active: offlineLastActive || undefined,
+                    client_value: offlineClientValue || undefined,
                     deletion_state: offlineDeletionState || undefined,
                     sort_by: offlineSort.split(':')[0],
                     sort_direction: offlineSort.split(':')[1],
@@ -519,6 +545,19 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
         { key: 'city', label: 'City', render: (row) => row.city || '—' },
         { key: 'last_online_at', label: 'Last active', render: (row) => <span className="text-xs text-slate-600">{formatActivity(row.last_online_at)}</span> },
         { key: 'wp_created_at', label: 'Profile created', render: (row) => <span className="text-xs text-slate-600">{row.wp_created_at ? new Date(row.wp_created_at).toLocaleDateString() : 'Unknown'}</span> },
+        {
+            key: 'client_value',
+            label: 'Client value',
+            render: (row) => {
+                const value = formatClientValue(row);
+                return (
+                    <div className="min-w-[7.5rem]">
+                        <p className={`text-sm font-semibold ${value.tone}`}>{value.primary}</p>
+                        <p className="text-[11px] text-slate-500">{value.secondary}</p>
+                    </div>
+                );
+            },
+        },
         {
             key: 'delete_status',
             label: 'Deletion status',
@@ -1092,7 +1131,7 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                             </div>
                         </div>
 
-                        <div className="grid gap-2 border-t border-slate-100 pt-4 md:grid-cols-[minmax(16rem,1fr)_12rem_13rem]">
+                        <div className="grid gap-3 border-t border-slate-100 pt-4 md:grid-cols-2 xl:grid-cols-4">
                             <label className="block">
                                 <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Search profiles</span>
                                 <input
@@ -1101,6 +1140,41 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                     placeholder="Name, phone, email, city or WordPress ID"
                                     className="crm-input w-full"
                                 />
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">City</span>
+                                <select value={offlineCity} onChange={(event) => { setOfflineCity(event.target.value); setOfflinePage(1); }} className="crm-select w-full">
+                                    <option value="">All cities</option>
+                                    {(offlineQuery.data?.available_cities || []).map((city) => <option key={city} value={city}>{city}</option>)}
+                                </select>
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Last online</span>
+                                <select value={offlineLastActive} onChange={(event) => { setOfflineLastActive(event.target.value); setOfflinePage(1); }} className="crm-select w-full">
+                                    <option value="">Any activity</option>
+                                    <option value="recent_30">Within 30 days</option>
+                                    <option value="days_30_90">30–90 days ago</option>
+                                    <option value="days_90_180">3–6 months ago</option>
+                                    <option value="days_180_365">6–12 months ago</option>
+                                    <option value="older_365">Over 12 months ago</option>
+                                    <option value="never">Never seen online</option>
+                                </select>
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Client value</span>
+                                <select value={offlineClientValue} onChange={(event) => { setOfflineClientValue(event.target.value); setOfflinePage(1); }} className="crm-select w-full">
+                                    <option value="">Any value</option>
+                                    <option value="has_value">Has successful payments</option>
+                                    <option value="no_value">No successful payments</option>
+                                </select>
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Created from</span>
+                                <input type="date" value={offlineCreatedFrom} max={offlineCreatedTo || undefined} onChange={(event) => { setOfflineCreatedFrom(event.target.value); setOfflinePage(1); }} className="crm-input w-full" />
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Created to</span>
+                                <input type="date" value={offlineCreatedTo} min={offlineCreatedFrom || undefined} onChange={(event) => { setOfflineCreatedTo(event.target.value); setOfflinePage(1); }} className="crm-input w-full" />
                             </label>
                             <label className="block">
                                 <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Deletion status</span>
@@ -1121,6 +1195,31 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
                                 </select>
                             </label>
                         </div>
+
+                        {(offlineSearch || offlineCity || offlineCreatedFrom || offlineCreatedTo || offlineLastActive || offlineClientValue || offlineDeletionState || offlineSort !== 'updated_at:desc') ? (
+                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-teal-100 bg-teal-50/50 px-3 py-2">
+                                <p className="text-xs font-medium text-teal-900">
+                                    Showing {Number(offlineQuery.data?.total || 0).toLocaleString()} matching profile{Number(offlineQuery.data?.total || 0) === 1 ? '' : 's'}.
+                                </p>
+                                <button
+                                    type="button"
+                                    className="text-xs font-semibold text-teal-800 underline decoration-teal-300 underline-offset-4"
+                                    onClick={() => {
+                                        setOfflineSearch('');
+                                        setOfflineCity('');
+                                        setOfflineCreatedFrom('');
+                                        setOfflineCreatedTo('');
+                                        setOfflineLastActive('');
+                                        setOfflineClientValue('');
+                                        setOfflineDeletionState('');
+                                        setOfflineSort('updated_at:desc');
+                                        setOfflinePage(1);
+                                    }}
+                                >
+                                    Clear filters
+                                </button>
+                            </div>
+                        ) : null}
 
                         {offlineQuery.isError ? (
                             <ErrorState

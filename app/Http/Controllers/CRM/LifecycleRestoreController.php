@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\LifecycleRestoreRun;
 use App\Models\Platform;
 use App\Services\ClientLifecycleMutationLock;
+use App\Services\ClientLifetimeValueService;
 use App\Services\FeatureSettingsService;
 use App\Services\MarketAuthorizationService;
 use App\Services\ProfileLifecycleRestoreService;
@@ -28,6 +29,7 @@ class LifecycleRestoreController extends Controller
         private readonly MarketAuthorizationService $marketAuth,
         private readonly FeatureSettingsService $settings,
         private readonly ClientLifecycleMutationLock $lifecycleLock,
+        private readonly ClientLifetimeValueService $clientLifetimeValueService,
     ) {}
 
     /**
@@ -273,6 +275,11 @@ class LifecycleRestoreController extends Controller
 
         $validated = $request->validate([
             'search' => 'nullable|string|max:120',
+            'city' => 'nullable|string|max:120',
+            'created_from' => 'nullable|date_format:Y-m-d',
+            'created_to' => 'nullable|date_format:Y-m-d|after_or_equal:created_from',
+            'last_active' => 'nullable|in:recent_30,days_30_90,days_90_180,days_180_365,older_365,never',
+            'client_value' => 'nullable|in:has_value,no_value',
             'deletion_state' => 'nullable|in:deletable,protected',
             'sort_by' => 'nullable|in:name,city,last_online_at,wp_created_at,updated_at',
             'sort_direction' => 'nullable|in:asc,desc',
@@ -300,6 +307,39 @@ class LifecycleRestoreController extends Controller
             });
         }
 
+        if (! empty($validated['city'])) {
+            $query->where('city', (string) $validated['city']);
+        }
+
+        if (! empty($validated['created_from'])) {
+            $query->whereDate('wp_created_at', '>=', (string) $validated['created_from']);
+        }
+
+        if (! empty($validated['created_to'])) {
+            $query->whereDate('wp_created_at', '<=', (string) $validated['created_to']);
+        }
+
+        $lastActive = (string) ($validated['last_active'] ?? '');
+        if ($lastActive === 'never') {
+            $query->whereNull('last_online_at');
+        } elseif ($lastActive === 'recent_30') {
+            $query->where('last_online_at', '>=', now()->subDays(30)->timestamp);
+        } elseif ($lastActive === 'days_30_90') {
+            $query->whereBetween('last_online_at', [now()->subDays(90)->timestamp, now()->subDays(30)->timestamp]);
+        } elseif ($lastActive === 'days_90_180') {
+            $query->whereBetween('last_online_at', [now()->subDays(180)->timestamp, now()->subDays(90)->timestamp]);
+        } elseif ($lastActive === 'days_180_365') {
+            $query->whereBetween('last_online_at', [now()->subDays(365)->timestamp, now()->subDays(180)->timestamp]);
+        } elseif ($lastActive === 'older_365') {
+            $query->whereNotNull('last_online_at')->where('last_online_at', '<', now()->subDays(365)->timestamp);
+        }
+
+        if (($validated['client_value'] ?? null) === 'has_value') {
+            $query->whereHas('payments', fn ($builder) => $builder->reportableSuccessful()->excludingWalletTopups());
+        } elseif (($validated['client_value'] ?? null) === 'no_value') {
+            $query->whereDoesntHave('payments', fn ($builder) => $builder->reportableSuccessful()->excludingWalletTopups());
+        }
+
         if (($validated['deletion_state'] ?? null) === 'deletable') {
             $query->where(fn ($builder) => $builder->whereNull('client_type')->orWhere('client_type', '!=', 'agency'))
                 ->whereDoesntHave('deals', fn ($builder) => $builder->currentlyActive());
@@ -317,10 +357,13 @@ class LifecycleRestoreController extends Controller
             ->orderBy('id', $sortDirection)
             ->paginate((int) ($validated['per_page'] ?? 50));
 
-        $clients->getCollection()->transform(function (Client $client) {
+        $lifetimeValues = $this->clientLifetimeValueService->forClientIds($clients->getCollection()->pluck('id'));
+
+        $clients->getCollection()->transform(function (Client $client) use ($lifetimeValues) {
             $hasEntitlement = (int) ($client->active_deals_count ?? 0) > 0;
             $isAgency = (string) ($client->client_type ?? 'escort') === 'agency';
             $blockedReason = $isAgency ? 'agency_protected' : ($hasEntitlement ? 'paid_entitlement' : null);
+            $lifetimeValue = $lifetimeValues[(int) $client->id] ?? null;
 
             return [
                 'id' => (int) $client->id,
@@ -333,12 +376,28 @@ class LifecycleRestoreController extends Controller
                 'last_online_at' => $client->last_online_at,
                 'wp_created_at' => optional($client->wp_created_at)->toDateTimeString(),
                 'updated_at' => optional($client->updated_at)->toDateTimeString(),
+                'lifetime_value_usd' => $lifetimeValue['value_usd'] ?? 0.0,
+                'lifetime_value_partial' => (bool) ($lifetimeValue['partial'] ?? false),
+                'lifetime_payment_count' => (int) ($lifetimeValue['payment_count'] ?? 0),
+                'lifetime_last_payment_at' => $lifetimeValue['last_payment_at'] ?? null,
                 'can_delete' => $blockedReason === null,
                 'delete_reason_code' => $blockedReason,
             ];
         });
 
-        return response()->json($clients);
+        $availableCities = Client::query()
+            ->where('platform_id', $platform->id)
+            ->where('profile_status', 'private')
+            ->whereNotNull('wp_post_id')
+            ->whereNotNull('city')
+            ->where('city', '!=', '')
+            ->distinct()
+            ->orderBy('city')
+            ->pluck('city')
+            ->values()
+            ->all();
+
+        return response()->json(['available_cities' => $availableCities] + $clients->toArray());
     }
 
     public function revertClient(Request $request, Client $client): JsonResponse

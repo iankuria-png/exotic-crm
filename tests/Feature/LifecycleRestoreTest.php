@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\LifecycleRestoreRun;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\ProfileLifecycleRestoreService;
@@ -415,10 +416,25 @@ class LifecycleRestoreTest extends TestCase
             'status' => 'active',
             'assigned_market_ids' => [$platform->id],
         ]);
-        Client::factory()->count(51)->create([
+        $offlineClients = Client::factory()->count(51)->create([
             'platform_id' => $platform->id,
             'profile_status' => 'private',
             'client_type' => 'escort',
+        ]);
+        $valuableClient = $offlineClients->first();
+        $valuableClient->update([
+            'name' => 'Kampala Value Profile',
+            'city' => 'Kampala',
+            'wp_created_at' => now()->subYears(2),
+            'last_online_at' => now()->subDays(400)->timestamp,
+        ]);
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $valuableClient->id,
+            'amount' => 120,
+            'currency' => 'USD',
+            'status' => 'completed',
+            'completed_at' => now()->subYear(),
         ]);
         $agency = Client::factory()->create([
             'platform_id' => $platform->id,
@@ -451,6 +467,22 @@ class LifecycleRestoreTest extends TestCase
             ->assertJsonPath('data.0.id', $agency->id)
             ->assertJsonPath('data.0.can_delete', false)
             ->assertJsonPath('data.0.delete_reason_code', 'agency_protected');
+
+        $filteredResponse = $this->getJson('/api/crm/lifecycle-restore/offline-clients?'.http_build_query([
+            'platform_id' => $platform->id,
+            'city' => 'Kampala',
+            'created_to' => now()->subYear()->toDateString(),
+            'last_active' => 'older_365',
+            'client_value' => 'has_value',
+        ]))->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $valuableClient->id)
+            ->assertJsonPath('data.0.city', 'Kampala')
+            ->assertJsonPath('data.0.lifetime_value_usd', 120)
+            ->assertJsonPath('data.0.lifetime_payment_count', 1)
+            ->assertJsonPath('data.0.lifetime_value_partial', false);
+
+        $this->assertContains('Kampala', $filteredResponse->json('available_cities'));
     }
 
     public function test_single_profile_revert_endpoint_rechecks_recovery_and_entitlement(): void
