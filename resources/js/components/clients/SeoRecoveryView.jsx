@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import ConfirmDialog from '../ConfirmDialog';
+import DataTable from '../DataTable';
 import MetricCard from '../MetricCard';
 import SmartDeleteDialog from './SmartDeleteDialog';
 
@@ -82,6 +83,20 @@ const EXPIRY_SOURCE_LABELS = {
 };
 
 const POLL_STATUSES = new Set(['queued', 'running']);
+
+function formatActivity(value) {
+    if (!value) return 'Never seen';
+    const date = typeof value === 'number' || /^\d+$/.test(String(value))
+        ? new Date(Number(value) * 1000)
+        : new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+}
+
+function deleteBlockLabel(reason) {
+    if (reason === 'paid_entitlement') return 'Active entitlement';
+    if (reason === 'agency_protected') return 'Agency protected';
+    return 'Protected';
+}
 
 // ─── Small presentational pieces ─────────────────────────────────────────────
 
@@ -223,11 +238,23 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     const [rowAction, setRowAction] = useState(null);
     const [deleteConfirmation, setDeleteConfirmation] = useState('');
     const [smartDelete, setSmartDelete] = useState(null);
+    const [offlineSearch, setOfflineSearch] = useState('');
+    const [debouncedOfflineSearch, setDebouncedOfflineSearch] = useState('');
+    const [offlineDeletionState, setOfflineDeletionState] = useState('');
+    const [offlineSort, setOfflineSort] = useState('updated_at:desc');
+    const [offlinePage, setOfflinePage] = useState(1);
+    const [offlinePerPage, setOfflinePerPage] = useState(50);
+    const [offlineClearSelectionKey, setOfflineClearSelectionKey] = useState(0);
 
     useEffect(() => {
         const timer = window.setTimeout(() => setDebouncedCohortSearch(cohortSearch.trim()), 300);
         return () => window.clearTimeout(timer);
     }, [cohortSearch]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedOfflineSearch(offlineSearch.trim()), 300);
+        return () => window.clearTimeout(timer);
+    }, [offlineSearch]);
 
     useEffect(() => {
         const params = new URLSearchParams(searchParams);
@@ -269,6 +296,26 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
         },
     });
 
+    const offlineQuery = useQuery({
+        queryKey: ['lifecycle-restore', 'offline-clients', selectedPlatform, debouncedOfflineSearch, offlineDeletionState, offlineSort, offlinePage, offlinePerPage],
+        enabled: hasMarket && activeView === 'offline',
+        placeholderData: (previousData) => previousData,
+        queryFn: async () => {
+            const { data } = await api.get('/crm/lifecycle-restore/offline-clients', {
+                params: {
+                    platform_id: selectedPlatform,
+                    search: debouncedOfflineSearch || undefined,
+                    deletion_state: offlineDeletionState || undefined,
+                    sort_by: offlineSort.split(':')[0],
+                    sort_direction: offlineSort.split(':')[1],
+                    page: offlinePage,
+                    per_page: offlinePerPage,
+                },
+            });
+            return data;
+        },
+    });
+
     const runsQuery = useQuery({
         queryKey: ['lifecycle-restore', 'runs', selectedPlatform],
         enabled: hasMarket,
@@ -284,7 +331,7 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
 
     const cohortQuery = useQuery({
         queryKey: ['lifecycle-restore', 'cohort', selectedPlatform, cohortRunFilter, debouncedCohortSearch, cohortState, cohortSort, cohortPage],
-        enabled: hasMarket,
+        enabled: hasMarket && activeView === 'recovered',
         queryFn: async () => {
             const { data } = await api.get('/crm/lifecycle-restore/cohort', {
                 params: {
@@ -404,7 +451,9 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     };
 
     const smartPreview = useMutation({
-        mutationFn: (dialog) => api.post('/crm/clients/bulk-delete/preview', { filters: dialog.filters }).then((response) => response.data),
+        mutationFn: (dialog) => api.post('/crm/clients/bulk-delete/preview', dialog.mode === 'selected'
+            ? { client_ids: dialog.selectedClients.map((row) => Number(row.id)) }
+            : { filters: dialog.filters }).then((response) => response.data),
         onSuccess: (preview) => setSmartDelete((current) => current ? { ...current, preview } : current),
         onError: (error) => toast?.error?.(error?.response?.data?.message || 'Cleanup preview could not be loaded.'),
     });
@@ -412,13 +461,14 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
     const smartDeleteMutation = useMutation({
         mutationFn: (dialog) => api.post('/crm/clients/bulk-delete', {
             client_ids: (dialog.preview?.clients || []).map((row) => Number(row.client_id)),
-            filters: dialog.filters,
+            filters: dialog.mode === 'smart' ? dialog.filters : {},
             confirm: 'DELETE',
             reason: dialog.reason,
         }).then((response) => response.data),
         onSuccess: (payload) => {
             invalidateLifecycleLists();
             setSmartDelete(null);
+            setOfflineClearSelectionKey((key) => key + 1);
             toast?.success?.(`Deleted ${Number(payload.deleted_count || 0).toLocaleString()} offline profiles.`);
         },
         onError: (error) => toast?.error?.(error?.response?.data?.message || 'Offline cleanup failed.'),
@@ -440,6 +490,64 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
             seo_placeholders: false,
         },
     });
+
+    const openSelectedOfflineDelete = (selectedClients) => {
+        const dialog = {
+            open: true,
+            mode: 'selected',
+            selectedClients,
+            preview: null,
+            confirmText: '',
+            reason: 'Selected offline profile deletion from SEO Recovery',
+            filters: {},
+        };
+        setSmartDelete(dialog);
+        smartPreview.mutate(dialog);
+    };
+
+    const offlineColumns = useMemo(() => [
+        {
+            key: 'profile',
+            label: 'Profile',
+            render: (row) => (
+                <div className="min-w-[12rem]">
+                    <p className="font-semibold text-slate-900">{row.name || `Profile ${row.id}`}</p>
+                    <p className="crm-mono mt-0.5 text-xs text-slate-500">{row.phone_normalized || `WP #${row.wp_post_id}`}</p>
+                </div>
+            ),
+        },
+        { key: 'city', label: 'City', render: (row) => row.city || '—' },
+        { key: 'last_online_at', label: 'Last active', render: (row) => <span className="text-xs text-slate-600">{formatActivity(row.last_online_at)}</span> },
+        { key: 'wp_created_at', label: 'Profile created', render: (row) => <span className="text-xs text-slate-600">{row.wp_created_at ? new Date(row.wp_created_at).toLocaleDateString() : 'Unknown'}</span> },
+        {
+            key: 'delete_status',
+            label: 'Deletion status',
+            render: (row) => row.can_delete
+                ? <Pill tone="bg-emerald-50 text-emerald-700 ring-emerald-200">Ready</Pill>
+                : <Pill tone="bg-amber-50 text-amber-700 ring-amber-200">{deleteBlockLabel(row.delete_reason_code)}</Pill>,
+        },
+        {
+            key: 'actions',
+            label: 'Actions',
+            headerClassName: 'text-right',
+            cellClassName: 'text-right',
+            render: (row) => (
+                <div onClick={(event) => event.stopPropagation()}>
+                    <RowAction
+                        label="Delete"
+                        enabled={row.can_delete}
+                        reason={deleteBlockLabel(row.delete_reason_code)}
+                        onClick={() => {
+                            setDeleteConfirmation('');
+                            setRowAction({ type: 'delete', row, preview: null });
+                            deletePreview.mutate(row);
+                        }}
+                        tone="danger"
+                    />
+                </div>
+            ),
+        },
+    ], [deletePreview.mutate]);
 
     const eligibility = eligibilityQuery.data;
     const lifecycleEnabled = eligibility?.platform?.lifecycle_enabled ?? true;
@@ -962,23 +1070,88 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
 
             {activeView === 'offline' ? (
                 <SectionCard
-                    title="Still offline cleanup"
-                    subtitle={`Private WordPress profiles in ${selectedMarketLabel}. Configure safeguards and preview before deleting anything.`}
+                    title="Still offline profiles"
+                    subtitle={`Review all private WordPress profiles in ${selectedMarketLabel}. Delete individually, select visible rows in bulk, or use Smart Delete for a rules-based cleanup.`}
                     actions={(
                         <button type="button" onClick={openOfflineCleanup} className="crm-btn-danger">
                             Configure Smart Delete
                         </button>
                     )}
                 >
-                    <div className="grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Private profiles</p>
-                            <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(eligibility?.still_offline || 0).toLocaleString()}</p>
+                    <div className="space-y-4">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,2.3fr)]">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Private profiles</p>
+                                <p className="mt-1 text-2xl font-semibold text-slate-900">{Number(eligibility?.still_offline || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-sm font-semibold text-slate-800">Two deletion paths, one protected workflow</p>
+                                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                                    Select specific profiles below when you know exactly what should go. Smart Delete remains available for inactivity-based cleanup and always previews the impact before deletion.
+                                </p>
+                            </div>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
-                            <p className="text-sm font-semibold text-slate-800">Safe defaults reset every session</p>
-                            <p className="mt-1 text-xs leading-relaxed text-slate-600">3 months, offline only, no support chat, and no subscription or payment history. Never-seen profiles remain excluded unless you deliberately include profiles whose WordPress creation date is old enough.</p>
+
+                        <div className="grid gap-2 border-t border-slate-100 pt-4 md:grid-cols-[minmax(16rem,1fr)_12rem_13rem]">
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Search profiles</span>
+                                <input
+                                    value={offlineSearch}
+                                    onChange={(event) => { setOfflineSearch(event.target.value); setOfflinePage(1); }}
+                                    placeholder="Name, phone, email, city or WordPress ID"
+                                    className="crm-input w-full"
+                                />
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Deletion status</span>
+                                <select value={offlineDeletionState} onChange={(event) => { setOfflineDeletionState(event.target.value); setOfflinePage(1); }} className="crm-select w-full">
+                                    <option value="">All profiles</option>
+                                    <option value="deletable">Ready to delete</option>
+                                    <option value="protected">Protected</option>
+                                </select>
+                            </label>
+                            <label className="block">
+                                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Sort</span>
+                                <select value={offlineSort} onChange={(event) => { setOfflineSort(event.target.value); setOfflinePage(1); }} className="crm-select w-full">
+                                    <option value="updated_at:desc">Recently updated</option>
+                                    <option value="last_online_at:asc">Least recently online</option>
+                                    <option value="wp_created_at:asc">Oldest profile first</option>
+                                    <option value="name:asc">Name A–Z</option>
+                                    <option value="city:asc">City A–Z</option>
+                                </select>
+                            </label>
                         </div>
+
+                        {offlineQuery.isError ? (
+                            <ErrorState
+                                message={offlineQuery.error?.response?.data?.message ?? 'Could not load offline profiles.'}
+                                onRetry={() => offlineQuery.refetch()}
+                            />
+                        ) : (
+                            <DataTable
+                                data={offlineQuery.data?.data || []}
+                                pagination={offlineQuery.data}
+                                isLoading={offlineQuery.isLoading}
+                                compact
+                                selectable
+                                isRowSelectable={(row) => row.can_delete}
+                                clearSelectionKey={offlineClearSelectionKey}
+                                perPage={offlinePerPage}
+                                perPageOptions={[50, 100]}
+                                onPerPageChange={(value) => { setOfflinePerPage(value); setOfflinePage(1); }}
+                                onPageChange={setOfflinePage}
+                                onRowClick={(row) => navigate(`/clients/${row.id}`)}
+                                emptyMessage="No offline profiles match these filters."
+                                stickyColumns={1}
+                                bulkActions={[{
+                                    key: 'delete-offline-selected',
+                                    label: 'Delete selected',
+                                    variant: 'danger',
+                                    onClick: openSelectedOfflineDelete,
+                                }]}
+                                columns={offlineColumns}
+                            />
+                        )}
                     </div>
                 </SectionCard>
             ) : null}
@@ -1176,12 +1349,13 @@ export default function SeoRecoveryView({ platformId, platforms = [], marketName
 
             <SmartDeleteDialog
                 open={Boolean(smartDelete?.open)}
-                mode="smart"
+                mode={smartDelete?.mode || 'smart'}
                 platformOptions={(platforms || []).map((platform) => ({
                     platform_id: platform.id ?? platform.value,
                     platform_name: platform.name ?? platform.label,
                 }))}
                 filters={smartDelete?.filters || {}}
+                selectedCount={smartDelete?.selectedClients?.length || 0}
                 preview={smartDelete?.preview}
                 confirmText={smartDelete?.confirmText || ''}
                 reason={smartDelete?.reason || ''}

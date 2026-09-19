@@ -26,6 +26,7 @@ export default function DataTable({
     compact = false,
     rowIdKey = 'id',
     selectable = false,
+    isRowSelectable,
     bulkActions = [],
     onSelectionChange,
     clearSelectionKey,
@@ -95,6 +96,13 @@ export default function DataTable({
     const isLastStickyColumn = (key) => stickyColumnKeys[stickyColumnKeys.length - 1] === key;
 
     const rowIds = useMemo(() => rows.map((row, index) => defaultRowId(row, index, rowIdKey)), [rows, rowIdKey]);
+    const selectableRowIds = useMemo(
+        () => rows
+            .map((row, index) => ({ row, id: defaultRowId(row, index, rowIdKey) }))
+            .filter(({ row }) => !isRowSelectable || isRowSelectable(row))
+            .map(({ id }) => id),
+        [isRowSelectable, rowIdKey, rows],
+    );
 
     const [selectedIds, setSelectedIds] = useState([]);
     const [activeBulkAction, setActiveBulkAction] = useState(null);
@@ -130,14 +138,14 @@ export default function DataTable({
         onSelectionChange?.(selectedRows);
     }, [onSelectionChange, selectedRows]);
 
-    const allVisibleSelected = rowIds.length > 0 && rowIds.every((id) => selectedIds.includes(id));
+    const allVisibleSelected = selectableRowIds.length > 0 && selectableRowIds.every((id) => selectedIds.includes(id));
 
     const toggleAll = () => {
         if (allVisibleSelected) {
             setSelectedIds([]);
             return;
         }
-        setSelectedIds(rowIds);
+        setSelectedIds(selectableRowIds);
     };
 
     const toggleRow = (id) => {
@@ -222,8 +230,9 @@ export default function DataTable({
                                     <input
                                         type="checkbox"
                                         checked={allVisibleSelected}
+                                        disabled={selectableRowIds.length === 0}
                                         onChange={toggleAll}
-                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200"
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200 disabled:cursor-not-allowed disabled:opacity-40"
                                         aria-label="Select all rows"
                                     />
                                 </th>
@@ -271,6 +280,7 @@ export default function DataTable({
                             rows.map((row, index) => {
                                 const rowId = defaultRowId(row, index, rowIdKey);
                                 const isSelected = selectedIds.includes(rowId);
+                                const rowSelectable = !isRowSelectable || isRowSelectable(row);
                                 const stickyRowBackground = isSelected ? 'bg-teal-50/90' : 'bg-white group-hover:bg-slate-50';
 
                                 return (
@@ -287,10 +297,11 @@ export default function DataTable({
                                                 <input
                                                     type="checkbox"
                                                     checked={isSelected}
+                                                    disabled={!rowSelectable}
                                                     onChange={() => toggleRow(rowId)}
                                                     onClick={(event) => event.stopPropagation()}
-                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200"
-                                                    aria-label="Select row"
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                                    aria-label={rowSelectable ? 'Select row' : 'Row cannot be selected'}
                                                 />
                                             </td>
                                         ) : null}

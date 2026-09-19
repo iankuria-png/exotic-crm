@@ -483,6 +483,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('/options', [LifecycleRestoreController::class, 'options']);
         Route::get('/eligibility', [LifecycleRestoreController::class, 'eligibility']);
         Route::get('/cohort', [LifecycleRestoreController::class, 'cohort']);
+        Route::get('/offline-clients', [LifecycleRestoreController::class, 'offlineClients']);
         Route::get('/pacing', [LifecycleRestoreController::class, 'pacing']);
         Route::post('/pacing', [LifecycleRestoreController::class, 'updatePacing']);
         Route::get('/runs', [LifecycleRestoreController::class, 'index']);

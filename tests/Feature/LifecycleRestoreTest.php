@@ -407,6 +407,52 @@ class LifecycleRestoreTest extends TestCase
             ->assertJsonPath('data.0.last_online_at', $eligible->last_online_at);
     }
 
+    public function test_offline_clients_endpoint_defaults_to_fifty_and_exposes_delete_protection(): void
+    {
+        $platform = $this->createPlatform();
+        $manager = User::factory()->create([
+            'role' => 'sub_admin',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        Client::factory()->count(51)->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'client_type' => 'escort',
+        ]);
+        $agency = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 71999,
+            'name' => 'Protected Coast Agency',
+            'profile_status' => 'private',
+            'client_type' => 'agency',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 72000,
+            'name' => 'Public Profile',
+            'profile_status' => 'publish',
+        ]);
+        Sanctum::actingAs($manager);
+
+        $this->getJson('/api/crm/lifecycle-restore/offline-clients?'.http_build_query([
+            'platform_id' => $platform->id,
+        ]))->assertOk()
+            ->assertJsonCount(50, 'data')
+            ->assertJsonPath('per_page', 50)
+            ->assertJsonPath('total', 52);
+
+        $this->getJson('/api/crm/lifecycle-restore/offline-clients?'.http_build_query([
+            'platform_id' => $platform->id,
+            'search' => 'Protected Coast',
+            'deletion_state' => 'protected',
+        ]))->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $agency->id)
+            ->assertJsonPath('data.0.can_delete', false)
+            ->assertJsonPath('data.0.delete_reason_code', 'agency_protected');
+    }
+
     public function test_single_profile_revert_endpoint_rechecks_recovery_and_entitlement(): void
     {
         $platform = $this->createPlatform();

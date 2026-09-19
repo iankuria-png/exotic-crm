@@ -262,6 +262,85 @@ class LifecycleRestoreController extends Controller
         return response()->json($clients);
     }
 
+    /** Private WordPress profiles available for operator-led cleanup. */
+    public function offlineClients(Request $request): JsonResponse
+    {
+        $platform = $this->authorizedPlatform($request);
+
+        if ($platform instanceof JsonResponse) {
+            return $platform;
+        }
+
+        $validated = $request->validate([
+            'search' => 'nullable|string|max:120',
+            'deletion_state' => 'nullable|in:deletable,protected',
+            'sort_by' => 'nullable|in:name,city,last_online_at,wp_created_at,updated_at',
+            'sort_direction' => 'nullable|in:asc,desc',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $query = Client::query()
+            ->where('platform_id', $platform->id)
+            ->where('profile_status', 'private')
+            ->whereNotNull('wp_post_id')
+            ->withCount(['deals as active_deals_count' => fn ($builder) => $builder->currentlyActive()]);
+
+        if (! empty($validated['search'])) {
+            $search = trim((string) $validated['search']);
+            $query->where(function ($builder) use ($search) {
+                $builder->where('name', 'like', "%{$search}%")
+                    ->orWhere('phone_normalized', 'like', "%{$search}%")
+                    ->orWhere('city', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+
+                if (ctype_digit($search)) {
+                    $builder->orWhere('wp_post_id', (int) $search);
+                }
+            });
+        }
+
+        if (($validated['deletion_state'] ?? null) === 'deletable') {
+            $query->where(fn ($builder) => $builder->whereNull('client_type')->orWhere('client_type', '!=', 'agency'))
+                ->whereDoesntHave('deals', fn ($builder) => $builder->currentlyActive());
+        } elseif (($validated['deletion_state'] ?? null) === 'protected') {
+            $query->where(function ($builder) {
+                $builder->where('client_type', 'agency')
+                    ->orWhereHas('deals', fn ($deal) => $deal->currentlyActive());
+            });
+        }
+
+        $sortBy = (string) ($validated['sort_by'] ?? 'updated_at');
+        $sortDirection = (string) ($validated['sort_direction'] ?? 'desc');
+        $clients = $query
+            ->orderBy($sortBy, $sortDirection)
+            ->orderBy('id', $sortDirection)
+            ->paginate((int) ($validated['per_page'] ?? 50));
+
+        $clients->getCollection()->transform(function (Client $client) {
+            $hasEntitlement = (int) ($client->active_deals_count ?? 0) > 0;
+            $isAgency = (string) ($client->client_type ?? 'escort') === 'agency';
+            $blockedReason = $isAgency ? 'agency_protected' : ($hasEntitlement ? 'paid_entitlement' : null);
+
+            return [
+                'id' => (int) $client->id,
+                'name' => (string) $client->name,
+                'phone_normalized' => $client->phone_normalized,
+                'email' => $client->email,
+                'city' => $client->city,
+                'client_type' => (string) ($client->client_type ?? 'escort'),
+                'wp_post_id' => (int) $client->wp_post_id,
+                'last_online_at' => $client->last_online_at,
+                'wp_created_at' => optional($client->wp_created_at)->toDateTimeString(),
+                'updated_at' => optional($client->updated_at)->toDateTimeString(),
+                'can_delete' => $blockedReason === null,
+                'delete_reason_code' => $blockedReason,
+            ];
+        });
+
+        return response()->json($clients);
+    }
+
     public function revertClient(Request $request, Client $client): JsonResponse
     {
         if ($denied = $this->assertPlatformAccess($request, (int) $client->platform_id)) {
