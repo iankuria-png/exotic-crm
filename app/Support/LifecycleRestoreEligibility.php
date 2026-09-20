@@ -100,11 +100,14 @@ final class LifecycleRestoreEligibility
             ->where('wp_post_id', '>', 0)
             // An open case is still being worked; closed cases are the backlog.
             ->whereNull('closed_at')
-            // Never touch anything already carrying a lifecycle state — those
-            // are handled by the live lifecycle, not the backfill.
+            // A private profile can drift while still carrying Expired or
+            // Archived metadata (for example, an older WordPress transition
+            // updated the lifecycle meta without republishing the post). Those
+            // rows are exactly what recovery must repair. Only Removed is a
+            // terminal lifecycle state; null is retained for legacy records.
             ->where(function (Builder $builder) {
                 $builder->whereNull('lifecycle_state')
-                    ->orWhere('lifecycle_state', ClientLifecycleState::ACTIVE);
+                    ->orWhereIn('lifecycle_state', ClientLifecycleState::PUBLISHABLE);
             })
             ->whereDoesntHave('deals', function (Builder $deal): void {
                 $deal->where('status', 'active')

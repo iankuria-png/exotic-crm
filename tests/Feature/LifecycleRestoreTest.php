@@ -93,6 +93,33 @@ class LifecycleRestoreTest extends TestCase
         ]);
     }
 
+    public function test_a_paid_private_profile_with_expired_state_is_recovered(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createOfflineClient($platform, 7007, [
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'first_activated_at' => now()->subMonths(4),
+            'churned_at' => now()->subDays(20),
+        ]);
+        $this->createPaidDeal($client, now()->subDays(20));
+        $this->fakeWp($platform, 7007);
+
+        $run = $this->makeRun($platform, LifecycleRestoreRun::MODE_LIVE, [
+            'history_mode' => LifecycleRestoreEligibility::HISTORY_PAID,
+        ]);
+        $result = app(ProfileLifecycleRestoreService::class)->execute($run);
+
+        $this->assertSame(1, $result['candidates']);
+        $this->assertSame(1, $result['restored']);
+        $this->assertSame(0, $result['failed']);
+
+        $fresh = $client->fresh();
+        $this->assertSame('publish', $fresh->profile_status);
+        $this->assertSame(ClientLifecycleState::EXPIRED, $fresh->lifecycle_state);
+        $this->assertNotNull($fresh->lifecycle_restored_at);
+        $this->assertSame((int) $run->id, (int) $fresh->lifecycle_restore_run_id);
+    }
+
     public function test_a_long_dead_profile_lands_as_archived(): void
     {
         $platform = $this->createPlatform();

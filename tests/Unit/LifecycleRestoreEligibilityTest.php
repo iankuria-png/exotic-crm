@@ -60,6 +60,68 @@ class LifecycleRestoreEligibilityTest extends TestCase
         $this->assertNotContains($untouched->id, $ids);
     }
 
+    public function test_private_expired_and_archived_drift_remains_recoverable_but_removed_does_not(): void
+    {
+        $platform = $this->createPlatform();
+
+        $expiredPaid = $this->createOfflineClient($platform, 9006, [
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'first_activated_at' => now()->subMonths(4),
+            'churned_at' => now()->subMonth(),
+        ]);
+        Payment::factory()->create([
+            'client_id' => $expiredPaid->id,
+            'platform_id' => $platform->id,
+            'status' => 'completed',
+            'purpose' => Payment::PURPOSE_SUBSCRIPTION,
+            'end_date' => now()->subMonth(),
+        ]);
+
+        $archivedTrial = $this->createOfflineClient($platform, 9007, [
+            'lifecycle_state' => ClientLifecycleState::ARCHIVED,
+            'first_activated_at' => now()->subYear(),
+        ]);
+
+        $removedPaid = $this->createOfflineClient($platform, 9008, [
+            'lifecycle_state' => ClientLifecycleState::REMOVED,
+            'first_activated_at' => now()->subYear(),
+        ]);
+        $this->createPaidDeal($removedPaid, now()->subMonths(6));
+
+        $activeSubscription = $this->createOfflineClient($platform, 9009, [
+            'lifecycle_state' => ClientLifecycleState::EXPIRED,
+            'first_activated_at' => now()->subMonth(),
+        ]);
+        Deal::factory()->create([
+            'client_id' => $activeSubscription->id,
+            'platform_id' => $platform->id,
+            'status' => 'active',
+            'expires_at' => now()->addMonth(),
+        ]);
+
+        $paidIds = $this->idsFor($platform, [
+            'history_mode' => LifecycleRestoreEligibility::HISTORY_PAID,
+        ]);
+        $previouslyPublishedIds = $this->idsFor($platform, [
+            'history_mode' => LifecycleRestoreEligibility::HISTORY_PREVIOUSLY_PUBLISHED,
+        ]);
+        $allOfflineIds = $this->idsFor($platform, [
+            'history_mode' => LifecycleRestoreEligibility::HISTORY_ANY,
+        ]);
+
+        $this->assertContains($expiredPaid->id, $paidIds, 'paid private profiles must not be hidden solely by stale Expired metadata');
+        $this->assertContains($expiredPaid->id, $previouslyPublishedIds);
+        $this->assertContains($archivedTrial->id, $previouslyPublishedIds, 'private Archived drift must remain repairable');
+        $this->assertContains($expiredPaid->id, $allOfflineIds);
+        $this->assertContains($archivedTrial->id, $allOfflineIds);
+        $this->assertNotContains($removedPaid->id, $paidIds);
+        $this->assertNotContains($removedPaid->id, $previouslyPublishedIds);
+        $this->assertNotContains($removedPaid->id, $allOfflineIds, 'Removed is terminal and must never be republished');
+        $this->assertNotContains($activeSubscription->id, $paidIds, 'an active entitlement must use activation repair, not SEO Recovery');
+        $this->assertNotContains($activeSubscription->id, $previouslyPublishedIds);
+        $this->assertNotContains($activeSubscription->id, $allOfflineIds);
+    }
+
     public function test_safety_toggles_exclude_high_risk_duplicates_and_bad_close_reasons(): void
     {
         $platform = $this->createPlatform();
@@ -222,7 +284,7 @@ class LifecycleRestoreEligibilityTest extends TestCase
         return Client::factory()->create(array_merge([
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
-            'name' => 'Offline ' . $wpPostId,
+            'name' => 'Offline '.$wpPostId,
             'profile_status' => 'private',
             'lifecycle_state' => ClientLifecycleState::ACTIVE,
             'closed_at' => null,
@@ -245,7 +307,7 @@ class LifecycleRestoreEligibilityTest extends TestCase
     {
         return Platform::query()->create([
             'name' => 'Test Market',
-            'domain' => 'tm-' . Str::random(6) . '.example.test',
+            'domain' => 'tm-'.Str::random(6).'.example.test',
             'country' => 'South Sudan',
             'timezone' => 'Africa/Juba',
             'phone_prefix' => '211',
