@@ -47,8 +47,12 @@ yarn-debug.log
 auth.json
 
 ## Misc
-AGENTS.md
 *.swp
 *.swo
 *~
 .mcp.json
+
+
+# Local agent evidence and historical context; shared docs/agent stays versionable.
+/output/agent-runs/
+/output/agent-history/
