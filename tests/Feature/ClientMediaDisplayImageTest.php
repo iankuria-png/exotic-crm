@@ -31,14 +31,14 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
             'status' => 'active',
         ]);
 
-        $mediaUrl = rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/media";
+        $mediaUrl = rtrim($platform->wp_api_url, '/')."/clients/{$client->wp_post_id}/media";
         $mediaGetCount = 0;
         $mediaPostCount = 0;
 
@@ -91,7 +91,7 @@ class ClientMediaDisplayImageTest extends TestCase
         $this->assertSame(1, $mediaPostCount);
 
         Http::assertNotSent(fn ($request) => $request->method() === 'GET'
-            && $request->url() === rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}");
+            && $request->url() === rtrim($platform->wp_api_url, '/')."/clients/{$client->wp_post_id}");
     }
 
     public function test_upload_media_accepts_mixed_image_and_video_batches(): void
@@ -107,14 +107,14 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
             'status' => 'active',
         ]);
 
-        $mediaUrl = rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/media";
+        $mediaUrl = rtrim($platform->wp_api_url, '/')."/clients/{$client->wp_post_id}/media";
         $mediaGetCount = 0;
         $mediaPostCount = 0;
 
@@ -169,6 +169,7 @@ class ClientMediaDisplayImageTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('uploaded_count', 2)
+            ->assertJsonPath('watermarked_image_count', 1)
             ->assertJsonPath('attachments.0.mime_type', 'image/jpeg')
             ->assertJsonPath('attachments.1.mime_type', 'video/mp4');
 
@@ -189,14 +190,14 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
             'status' => 'active',
         ]);
 
-        $mediaUrl = rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/media";
+        $mediaUrl = rtrim($platform->wp_api_url, '/')."/clients/{$client->wp_post_id}/media";
         $existingImages = collect(range(1, 20))->map(fn (int $index): array => [
             'id' => 70000 + $index,
             'url' => "https://www.exoticghana.com/wp-content/uploads/image-{$index}.jpg",
@@ -232,14 +233,14 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
             'status' => 'active',
         ]);
 
-        $mediaUrl = rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/media";
+        $mediaUrl = rtrim($platform->wp_api_url, '/')."/clients/{$client->wp_post_id}/media";
         $existingVideos = collect(range(1, 5))->map(fn (int $index): array => [
             'id' => 80000 + $index,
             'url' => "https://www.exoticghana.com/wp-content/uploads/video-{$index}.mp4",
@@ -275,7 +276,7 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
@@ -305,7 +306,7 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],
@@ -340,7 +341,7 @@ class ClientMediaDisplayImageTest extends TestCase
         ]);
         $user = User::query()->create([
             'name' => 'Sales User',
-            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.test',
+            'email' => 'sales-'.Str::lower(Str::random(6)).'@example.test',
             'password' => bcrypt('password'),
             'role' => 'sales',
             'assigned_market_ids' => [$platform->id],

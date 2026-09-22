@@ -3889,6 +3889,9 @@ class ClientController extends Controller
             'files' => ['sometimes', 'array', 'min:1'],
             'files.*' => ['file', 'mimes:'.self::PROFILE_MEDIA_ALLOWED_EXTENSIONS],
             'set_main' => 'nullable|boolean',
+            'watermark' => 'nullable|boolean',
+            'watermark_position' => 'nullable|string|in:tl,tc,tr,cl,cc,cr,bl,bc,br',
+            'watermark_size' => 'nullable|string|in:small,medium,large',
             'reason' => 'nullable|string|max:500',
         ], [
             'file.mimes' => 'The file must be a JPEG, PNG, WEBP image, or an MP4 or MOV video.',
@@ -3914,6 +3917,10 @@ class ClientController extends Controller
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             $setMain = (bool) ($validated['set_main'] ?? false);
+            $watermarker = app(\App\Services\ClientMediaWatermarker::class);
+            $applyWatermark = array_key_exists('watermark', $validated)
+                ? (bool) $validated['watermark']
+                : $watermarker->enabledByDefault();
             $this->validateProfileMediaBatch($uploadedFiles, $setMain);
 
             $existingMedia = $wpSync->getClientMedia((int) $client->wp_post_id);
@@ -3940,16 +3947,46 @@ class ClientController extends Controller
             }
 
             $results = [];
+            $watermarkedImageCount = 0;
             foreach ($directFiles as $index => $file) {
                 $isVideo = $this->isProfileMediaVideoUpload($file);
+                $setMainForFile = $setMain && count($uploadedFiles) === 1 && $index === 0 && ! $isVideo;
+                // Videos have no alt attribute to carry; only images do.
+                $altText = $isVideo ? null : $this->profileImageAltTextGenerator->generate($client, $nextImagePosition++);
 
-                $results[] = $wpSync->uploadClientMedia(
-                    (int) $client->wp_post_id,
+                if ($isVideo || ! $applyWatermark) {
+                    $results[] = $wpSync->uploadClientMedia(
+                        (int) $client->wp_post_id,
+                        $file,
+                        $setMainForFile,
+                        $altText
+                    );
+
+                    continue;
+                }
+
+                // Keep the PHP upload untouched. The stamped copy exists only
+                // for this outgoing WordPress request and is removed even when
+                // the remote upload fails.
+                $watermarkedFile = $watermarker->stamp(
                     $file,
-                    $setMain && count($uploadedFiles) === 1 && $index === 0 && ! $isVideo,
-                    // Videos have no alt attribute to carry; only images do.
-                    $isVideo ? null : $this->profileImageAltTextGenerator->generate($client, $nextImagePosition++)
+                    $validated['watermark_position'] ?? null,
+                    $validated['watermark_size'] ?? null
                 );
+
+                try {
+                    $results[] = $wpSync->uploadClientMediaFile(
+                        (int) $client->wp_post_id,
+                        $watermarkedFile['path'],
+                        $file->getClientOriginalName(),
+                        $watermarkedFile['mime_type'],
+                        $setMainForFile,
+                        $altText
+                    );
+                    $watermarkedImageCount++;
+                } finally {
+                    @unlink($watermarkedFile['path']);
+                }
             }
 
             try {
@@ -3982,6 +4019,12 @@ class ClientController extends Controller
                         'upload_count' => count($uploadedAttachments),
                         'attachments' => $uploadedAttachments,
                         'set_main' => $setMain && count($uploadedFiles) === 1,
+                        'watermark' => [
+                            'enabled' => $applyWatermark,
+                            'image_count' => $watermarkedImageCount,
+                            'position' => $applyWatermark ? ($validated['watermark_position'] ?? config('client_media_watermark.default_position')) : null,
+                            'size' => $applyWatermark ? ($validated['watermark_size'] ?? config('client_media_watermark.default_size')) : null,
+                        ],
                     ],
                 ],
                 $validated['reason'] ?? 'Uploaded profile media from CRM'
@@ -3992,6 +4035,7 @@ class ClientController extends Controller
                 'uploaded_count' => count($uploadedAttachments),
                 'attachments' => $uploadedAttachments,
                 'conversions' => $conversions,
+                'watermarked_image_count' => $watermarkedImageCount,
                 'message' => count($uploadedAttachments) === 1
                     ? 'Media uploaded successfully.'
                     : sprintf('%d media files uploaded successfully.', count($uploadedAttachments)),

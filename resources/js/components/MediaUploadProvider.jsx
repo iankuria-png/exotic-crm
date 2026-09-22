@@ -337,7 +337,7 @@ export function MediaUploadProvider({ children }) {
         }
     }, [clearClientUploadLock, dismissUpload, queryClient, toast]);
 
-    const uploadItemsToWordPress = useCallback(async (uploadId, uploadItems, setMainItemId, clientId, summaryBase = {}) => {
+    const uploadItemsToWordPress = useCallback(async (uploadId, uploadItems, setMainItemId, clientId, watermark = {}, summaryBase = {}) => {
         const runResults = new Map(uploadItems.map((item) => [item.id, 'pending']));
         let batchStopMessage = '';
 
@@ -357,6 +357,11 @@ export function MediaUploadProvider({ children }) {
                 const formData = new FormData();
                 formData.append('file', item.file);
                 formData.append('set_main', item.id === setMainItemId ? '1' : '0');
+                formData.append('watermark', watermark.enabled ? '1' : '0');
+                if (watermark.enabled) {
+                    formData.append('watermark_position', watermark.position || 'br');
+                    formData.append('watermark_size', watermark.size || 'medium');
+                }
                 formData.append('reason', 'Background media upload from CRM');
 
                 updateUpload(uploadId, (upload) => ({
@@ -468,8 +473,8 @@ export function MediaUploadProvider({ children }) {
         }
     }, [finalizeUpload, updateUpload, updateUploadItem]);
 
-    const uploadToWordPress = useCallback((uploadId, uploadItems, setMainItemId, clientId, summaryBase = {}) => {
-        void uploadItemsToWordPress(uploadId, uploadItems, setMainItemId, clientId, summaryBase);
+    const uploadToWordPress = useCallback((uploadId, uploadItems, setMainItemId, clientId, watermark = {}, summaryBase = {}) => {
+        void uploadItemsToWordPress(uploadId, uploadItems, setMainItemId, clientId, watermark, summaryBase);
     }, [uploadItemsToWordPress]);
 
     const buildUploadItems = useCallback((uploadId, uploadFiles) => (
@@ -484,13 +489,21 @@ export function MediaUploadProvider({ children }) {
         }))
     ), []);
 
-    const startUploadRun = useCallback((uploadId, items, setMainItemId, clientId, summaryBase = {}) => {
+    const startUploadRun = useCallback((uploadId, items, setMainItemId, clientId, watermark = {}, summaryBase = {}) => {
         const clientKey = String(clientId);
         activeClientUploadsRef.current.add(clientKey);
-        uploadToWordPress(uploadId, items, setMainItemId, clientKey, summaryBase);
+        uploadToWordPress(uploadId, items, setMainItemId, clientKey, watermark, summaryBase);
     }, [uploadToWordPress]);
 
-    const startClientMediaUpload = useCallback(({ clientId, clientName = '', files, setMain = false }) => {
+    const startClientMediaUpload = useCallback(({
+        clientId,
+        clientName = '',
+        files,
+        setMain = false,
+        watermarkEnabled = true,
+        watermarkPosition = 'br',
+        watermarkSize = 'medium',
+    }) => {
         const uploadFiles = Array.isArray(files) ? files.filter(Boolean) : [];
         const preflight = getMediaUploadPreflight(uploadFiles, setMain);
         const clientKey = String(clientId);
@@ -512,6 +525,11 @@ export function MediaUploadProvider({ children }) {
         const uploadId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const items = buildUploadItems(uploadId, uploadFiles);
         const setMainItem = setMain ? items.find((item) => !item.isVideo) : null;
+        const watermark = {
+            enabled: watermarkEnabled !== false,
+            position: watermarkPosition,
+            size: watermarkSize,
+        };
         const entry = {
             id: uploadId,
             clientId: clientKey,
@@ -520,6 +538,7 @@ export function MediaUploadProvider({ children }) {
             items,
             setMain,
             setMainItemId: setMainItem?.id || null,
+            watermark,
             status: 'uploading',
             message: 'Uploading in the background',
             attempts: 1,
@@ -528,7 +547,7 @@ export function MediaUploadProvider({ children }) {
 
         setUploads((current) => [entry, ...current]);
         toast.info(`${preflight.label} uploading in the background.`);
-        startUploadRun(uploadId, items, setMainItem?.id || null, clientKey);
+        startUploadRun(uploadId, items, setMainItem?.id || null, clientKey, watermark);
 
         return { queued: true, uploadId };
     }, [buildUploadItems, startUploadRun, toast]);
@@ -571,7 +590,11 @@ export function MediaUploadProvider({ children }) {
             ? upload.setMainItemId
             : null;
 
-        startUploadRun(upload.id, failedItems, retrySetMainItemId, upload.clientId, {
+        startUploadRun(upload.id, failedItems, retrySetMainItemId, upload.clientId, upload.watermark || {
+            enabled: true,
+            position: 'br',
+            size: 'medium',
+        }, {
             totalCount: upload.items.length,
             existingSuccessCount: upload.items.filter((item) => item.status === 'success').length,
         });
