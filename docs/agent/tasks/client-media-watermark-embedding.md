@@ -1,15 +1,15 @@
 # Task: Stamp client photos with the Exotic Escorts watermark
 
 - ID / project: `crm-client-media-watermark-embedding` / Exotic CRM
-- Updated / status: 2026-09-22 / locally committed; not pushed or deployed
+- Updated / status: 2026-09-22 / pushed to `origin/main` as `66e8126d`; awaiting cPanel pull
 - Goal and acceptance criteria: New client image uploads receive the approved Exotic Escorts logo before they reach WordPress; staff can choose whether to apply it and choose placement/size; videos and existing media remain unchanged.
 - Scope authorized by the current request: CRM client-media upload pipeline and Media-tab controls only. The PBN watermark-removal tool is not changed.
 - Source plan / decisions / relevant code: `app/Http/Controllers/CRM/ClientController.php`, `app/Services/ClientMediaWatermarker.php`, `resources/js/components/MediaUploadProvider.jsx`, `resources/js/pages/ClientDetail.jsx`. The bundled mark is the existing Local WordPress `wp-content/uploads/watermark-logo.png` asset, copied as `resources/watermarks/exotic-escorts.png`.
 - History reconciliation: HEAD was `f6bbda21` at inspection. Pre-existing metadata-backfill work overlaps the client-media controller and must remain separate.
 - Done with evidence: Stamping happens on a temporary copy before `WpSyncService::uploadClientMediaFile()`; a watermark failure prevents the original from being sent. The default is enabled, bottom-right, medium, 82% opacity. The Media tab starts with those controls collapsed and shows the standard setting instead; staff expand Configure only for an exception. Config defaults are `CLIENT_MEDIA_WATERMARK_ENABLED`, `_POSITION`, `_SIZE`, and `_OPACITY`; upload-level controls retain their settings during manual retry.
-- In progress / remaining: Deploy only when authorized. Verify one real image upload after cPanel deploy; it should show the mark and retain normal WordPress media metadata.
+- In progress / remaining: Pull the committed CRM main branch in cPanel, then verify one real image upload; it should show the mark and retain normal WordPress media metadata.
 - Next concrete action or command: After deployment, upload a disposable JPG through a client Media tab, then inspect its WordPress attachment and rendered profile image.
 - Verification: 2026-09-22 at source commit `6b40a579` and the follow-up local UX change: PHP lint passed; Pint passed; `/usr/local/opt/php@8.2/bin/php artisan test --filter='ClientMediaWatermarkerTest|ClientMediaDisplayImageTest'` passed (9 tests/36 assertions); `npm run build` passed (known existing CSS-parser/chunk-size warnings); `npm run test:browser -- client-detail-media-background-upload.spec.js` passed (5 tests) after starting the local Laravel server.
-- Deployment: local commits; no push, cPanel deployment, or production verification.
+- Deployment: pushed to `origin/main` through `66e8126d`; cPanel deployment and production verification remain outstanding.
 - Files/hunks owned; unrelated working-tree/index changes to preserve: `app/Services/ClientMediaWatermarker.php`, `config/client_media_watermark.php`, `resources/watermarks/exotic-escorts.png`, scoped `ClientController`, MediaUploadProvider, ClientDetail, tests, and generated `public/build/` artifacts. Preserve the concurrently modified profile-media-metadata backfill files/state, WpSyncService, Clients.jsx, routes, and all other existing changes.
 - Unresolved questions / blockers: None for the standard Exotic Escorts logo. A future custom-logo feature needs an explicit asset-management and authorization decision.
