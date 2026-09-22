@@ -7,7 +7,7 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
 
 - Current request: [profile media metadata backfill](tasks/profile-media-metadata-backfill.md).
 - Profile-media metadata (22 Sep): CRM Media-tab UI/build is pushed as `85e3c696`; it awaits a cPanel pull. Local `exotic-crm-sync` commit `f57f18b76` sets image/video attachment titles and Media Library descriptions from profile fields, and refreshes them after relevant profile saves. It is intentionally unpushed/unpackaged. See [task](tasks/seo-media-metadata.md) for verification and the missing WP PHPUnit bootstrap.
-- Profile-media metadata backfill (22 Sep): CRM shipping adds an admin-only Clients-page repair run with preview, market lock, durable counts/failure notes, and five-profile heavy-queue slices. It introduces one CRM migration (`profile_media_metadata_backfill_runs`) and one authenticated WP metadata endpoint; neither side is deployed or production-tested. See [task](tasks/profile-media-metadata-backfill.md).
+- Profile-media metadata backfill (22 Sep): CRM `d3099d4c` is pushed to `origin/main`, adding an admin-only Clients-page repair run with preview, market lock, durable counts/failure notes, and five-profile heavy-queue slices. It introduces one CRM migration (`profile_media_metadata_backfill_runs`) and one authenticated WP metadata endpoint; neither side is deployed or production-tested. See [task](tasks/profile-media-metadata-backfill.md).
 - Lifecycle resumption: [code/evidence checkpoint](tasks/lifecycle-recovery-checkpoint.md).
   The archived July handover has been overtaken by implementation: `66371e69`
   (12 Sep) archive recovery, `d0dac577` (17 Sep) operability, `7aaaf703` (19 Sep)
