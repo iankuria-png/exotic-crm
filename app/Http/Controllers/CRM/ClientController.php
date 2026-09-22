@@ -132,6 +132,7 @@ class ClientController extends Controller
             'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
             'include_unlock_stats' => 'nullable|boolean',
             'recovery_origin' => 'nullable|string|in:seo_recovered,natural',
+            'subscription_state' => 'nullable|string|in:expired',
             // Typeahead pickers (shared-payment bundle, subsidiary search, conversations)
             // legitimately ask for 8-40 rows. A whitelist of the table's own page sizes 422'd
             // those callers, which surfaced as "no clients found" instead of an error.
@@ -196,6 +197,10 @@ class ClientController extends Controller
             } else {
                 $query->where('profile_status', $request->status);
             }
+        }
+
+        if (($validated['subscription_state'] ?? null) === 'expired') {
+            ClientFunnelService::applyExpiredCommercialHistory($query);
         }
 
         if (! empty($validated['recovery_origin'])) {
@@ -364,7 +369,10 @@ class ClientController extends Controller
 
         $stats = [
             'total' => (clone $statsQuery)->count(),
-            'active' => (clone $statsQuery)->active()->count(),
+            // Published SEO placeholders are search coverage, not active clients.
+            // Match the actionable Active lifecycle segment shown in the workspace.
+            'active' => (int) ($segmentCounts['active'] ?? 0),
+            'expired' => ClientFunnelService::applyExpiredCommercialHistory(clone $statsQuery)->count(),
             'premium' => $premiumStatsQuery->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'high_risk' => (clone $statsQuery)->where('is_high_risk', true)->count(),

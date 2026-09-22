@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 class ClientFunnelService
 {
     public const PROFILE_COMPLETE_SEO_FLOOR = 1;
+
     public const PAID_DEAL_STATUSES = ['active', 'paid', 'expired', 'renewed'];
 
     public function build(Builder $baseQuery): array
@@ -90,6 +91,20 @@ class ClientFunnelService
             ->whereDoesntHave('deals', function (Builder $dealQuery) {
                 $dealQuery->whereIn('status', self::PAID_DEAL_STATUSES);
             });
+    }
+
+    /**
+     * Clients that have previously held a paid, discounted, or trial subscription
+     * (or have a reportable subscription payment) but are no longer active.
+     *
+     * This follows the existing funnel and churn paid-history definition instead
+     * of treating WordPress publication status as proof of a subscription.
+     */
+    public static function applyExpiredCommercialHistory(Builder $query): Builder
+    {
+        return self::applyPaidHistory($query)
+            ->whereNot(fn (Builder $active) => $active->active())
+            ->whereDoesntHave('deals', fn (Builder $dealQuery) => $dealQuery->currentlyActive());
     }
 
     private function formatStages(array $counts, array $labels): array

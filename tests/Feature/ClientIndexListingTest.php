@@ -174,6 +174,86 @@ class ClientIndexListingTest extends TestCase
         );
     }
 
+    public function test_clients_index_expired_subscription_state_requires_paid_history_and_no_current_subscription(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $product = $this->createProduct($platform, 'Expired State Product', 'basic');
+
+        $expiredPayment = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Expired Payment Client',
+            'profile_status' => 'private',
+            'needs_payment' => true,
+        ]);
+        $expiredTrial = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Expired Trial Client',
+            'profile_status' => 'private',
+            'needs_payment' => true,
+        ]);
+        $expiredDiscount = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Expired Discount Client',
+            'profile_status' => 'private',
+            'needs_payment' => true,
+        ]);
+        $currentSubscription = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Private But Current Client',
+            'profile_status' => 'private',
+            'needs_payment' => true,
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Inactive Without History',
+            'profile_status' => 'private',
+            'needs_payment' => true,
+        ]);
+
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'client_id' => $expiredPayment->id,
+            'status' => 'completed',
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'client_id' => $expiredTrial->id,
+            'status' => 'expired',
+            'is_free_trial' => true,
+            'expires_at' => now()->subDay(),
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'client_id' => $expiredDiscount->id,
+            'status' => 'expired',
+            'discount_percentage' => 25,
+            'expires_at' => now()->subDay(),
+        ]);
+        Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'client_id' => $currentSubscription->id,
+            'status' => 'active',
+            'expires_at' => now()->addDay(),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&subscription_state=expired");
+
+        $response->assertOk()
+            ->assertJsonPath('stats.expired', 3)
+            ->assertJsonPath('stats.total', 3);
+        $this->assertEqualsCanonicalizing(
+            [$expiredPayment->id, $expiredTrial->id, $expiredDiscount->id],
+            collect($response->json('data'))->pluck('id')->all()
+        );
+    }
+
     public function test_clients_index_can_filter_clients_by_gender(): void
     {
         $platform = $this->createPlatform();

@@ -27,7 +27,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
 import BulkBioModal from '../components/seo/BulkBioModal';
 import { useAuth } from '../hooks/useAuth';
-import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
+import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses } from '../utils/retention';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { CLIENT_SEGMENTS, CLIENT_SEGMENT_KEYS } from '../utils/clientSegments';
 import { formatCurrency } from '../utils/currency';
@@ -558,6 +558,7 @@ export default function Clients() {
     const allowedClientSegments = new Set(CLIENT_SEGMENT_KEYS);
     const allowedContactUnlockFilters = new Set(['attempted', 'successful', 'failed', 'pending']);
     const allowedRecoveryOriginFilters = new Set(['seo_recovered', 'natural']);
+    const allowedSubscriptionStateFilters = new Set(['expired']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -606,6 +607,10 @@ export default function Clients() {
     const [recoveryOriginFilter, setRecoveryOriginFilter] = useState(() => {
         const requested = (searchParams.get('recovery_origin') || '').trim();
         return allowedRecoveryOriginFilters.has(requested) ? requested : '';
+    });
+    const [subscriptionStateFilter, setSubscriptionStateFilter] = useState(() => {
+        const requested = (searchParams.get('subscription_state') || '').trim();
+        return allowedSubscriptionStateFilters.has(requested) ? requested : '';
     });
     const [clientTypeFilter, setClientTypeFilter] = useState(() => {
         const requested = (searchParams.get('client_type') || '').trim();
@@ -747,6 +752,15 @@ export default function Clients() {
         setSearchParams(params, { replace: true });
     }, [recoveryOriginFilter, searchParams, setSearchParams]);
 
+    useEffect(() => {
+        const current = searchParams.get('subscription_state') || '';
+        if (current === subscriptionStateFilter) return;
+        const params = new URLSearchParams(searchParams);
+        if (subscriptionStateFilter) params.set('subscription_state', subscriptionStateFilter);
+        else params.delete('subscription_state');
+        setSearchParams(params, { replace: true });
+    }, [searchParams, setSearchParams, subscriptionStateFilter]);
+
     const { data, isLoading, isFetching } = useQuery({
         queryKey: [
             'clients',
@@ -755,6 +769,7 @@ export default function Clients() {
             search,
             statusFilter,
             recoveryOriginFilter,
+            subscriptionStateFilter,
             clientTypeFilter,
             genderFilter,
             planFilter,
@@ -783,6 +798,7 @@ export default function Clients() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(recoveryOriginFilter && { recovery_origin: recoveryOriginFilter }),
+                    ...(subscriptionStateFilter && { subscription_state: subscriptionStateFilter }),
                     ...(clientTypeFilter && { client_type: clientTypeFilter }),
                     ...(genderFilter && { gender: genderFilter }),
                     ...(planFilter && { plan: planFilter }),
@@ -1615,6 +1631,7 @@ export default function Clients() {
         if (data?.stats) {
             return {
                 active: Number(data.stats.active || 0),
+                expired: Number(data.stats.expired || 0),
                 new_users: Number(data.stats.new_users || 0),
                 verified: Number(data.stats.verified || 0),
                 with_chat: Number(data.stats.with_chat || 0),
@@ -1641,6 +1658,7 @@ export default function Clients() {
 
         return {
             active: rows.filter((row) => isClientPubliclyActive(row)).length,
+            expired: 0,
             new_users: rows.filter((row) => {
                 const createdAt = row.created_at ? new Date(row.created_at) : null;
                 return createdAt && !Number.isNaN(createdAt.getTime()) && createdAt.getTime() >= sevenDayThreshold;
@@ -1657,22 +1675,23 @@ export default function Clients() {
 
     const metricShare = useMemo(() => ({
         active: percentage(stats.active, stats.total),
+        expired: percentage(stats.expired, stats.total),
         new_users: percentage(stats.new_users, stats.total),
         verified: percentage(stats.verified, stats.total),
-        retention_watch: percentage(stats.retention_watch, stats.total),
     }), [stats]);
 
     const activeMetric = useMemo(() => {
         if (
-            statusFilter === 'publish'
+            statusFilter === ''
             && clientTypeFilter === ''
             && genderFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
-            && segmentFilter === ''
+            && segmentFilter === 'active'
             && contactUnlockFilter === ''
+            && subscriptionStateFilter === ''
         ) return 'active';
 
         if (
@@ -1689,6 +1708,7 @@ export default function Clients() {
             && hasChatFilter === ''
             && segmentFilter === ''
             && contactUnlockFilter === ''
+            && subscriptionStateFilter === ''
         ) return 'new_users';
 
         if (
@@ -1701,10 +1721,11 @@ export default function Clients() {
             && newUsersFilter === ''
             && segmentFilter === ''
             && contactUnlockFilter === ''
+            && subscriptionStateFilter === ''
         ) return 'verified';
 
         if (
-            retentionBandFilter === 'watch'
+            subscriptionStateFilter === 'expired'
             && statusFilter === ''
             && clientTypeFilter === ''
             && genderFilter === ''
@@ -1712,10 +1733,11 @@ export default function Clients() {
             && verifiedFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
+            && retentionBandFilter === ''
             && behaviorTagFilter === ''
             && segmentFilter === ''
             && contactUnlockFilter === ''
-        ) return 'retention_watch';
+        ) return 'expired';
 
         return '';
     }, [
@@ -1731,12 +1753,14 @@ export default function Clients() {
         segmentFilter,
         signupSourceFilter,
         statusFilter,
+        subscriptionStateFilter,
         verifiedFilter,
     ]);
 
     const applyMetricFilter = (metricKey) => {
         if (activeMetric === metricKey) {
             setStatusFilter('');
+            setSubscriptionStateFilter('');
             setClientTypeFilter('');
             setGenderFilter('');
             setPlanFilter('');
@@ -1756,7 +1780,8 @@ export default function Clients() {
         }
 
         if (metricKey === 'active') {
-            setStatusFilter('publish');
+            setStatusFilter('');
+            setSubscriptionStateFilter('');
             setClientTypeFilter('');
             setGenderFilter('');
             setPlanFilter('');
@@ -1764,7 +1789,7 @@ export default function Clients() {
             setNewUsersFilter('');
             setCreatedFrom('');
             setCreatedTo('');
-            setSegmentFilter('');
+            setSegmentFilter('active');
             setCityKeyFilter('');
             setContactUnlockFilter('');
         } else if (metricKey === 'new_users') {
@@ -1779,6 +1804,7 @@ export default function Clients() {
             setSegmentFilter('');
             setCityKeyFilter('');
             setContactUnlockFilter('');
+            setSubscriptionStateFilter('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setClientTypeFilter('');
@@ -1794,7 +1820,8 @@ export default function Clients() {
             setBehaviorTagFilter('');
             setSegmentFilter('');
             setContactUnlockFilter('');
-        } else if (metricKey === 'retention_watch') {
+            setSubscriptionStateFilter('');
+        } else if (metricKey === 'expired') {
             setStatusFilter('');
             setClientTypeFilter('');
             setGenderFilter('');
@@ -1805,10 +1832,11 @@ export default function Clients() {
             setCreatedTo('');
             setCityKeyFilter('');
             setSignupSourceFilter('');
-            setRetentionBandFilter('watch');
+            setRetentionBandFilter('');
             setBehaviorTagFilter('');
             setSegmentFilter('');
             setContactUnlockFilter('');
+            setSubscriptionStateFilter('expired');
         }
 
         setOnlineFilter('');
@@ -1824,6 +1852,7 @@ export default function Clients() {
         search
         || statusFilter
         || recoveryOriginFilter
+        || subscriptionStateFilter
         || clientTypeFilter
         || genderFilter
         || planFilter
@@ -2518,7 +2547,8 @@ export default function Clients() {
                 <MetricCard
                     label="Active Clients"
                     value={stats.active.toLocaleString()}
-                    meta={`${metricShare.active}% of current scope in publish status`}
+                    meta={`${metricShare.active}% of current scope excluding SEO placeholders`}
+                    subHint="Actionable active profiles — click to review"
                     tone="success"
                     onClick={() => applyMetricFilter('active')}
                     active={activeMetric === 'active'}
@@ -2540,12 +2570,13 @@ export default function Clients() {
                     active={activeMetric === 'verified'}
                 />
                 <MetricCard
-                    label="Retention Watch"
-                    value={stats.retention_watch.toLocaleString()}
-                    meta="Clients showing churn or disengagement signals in current scope"
-                    tone={retentionBandTone('Needs Attention')}
-                    onClick={() => applyMetricFilter('retention_watch')}
-                    active={activeMetric === 'retention_watch'}
+                    label="Expired Clients"
+                    value={stats.expired.toLocaleString()}
+                    meta={`${metricShare.expired}% of current scope previously paid or trial`}
+                    subHint="No active subscription or live profile now"
+                    tone="warning"
+                    onClick={() => applyMetricFilter('expired')}
+                    active={activeMetric === 'expired'}
                 />
             </section>
 
@@ -2844,6 +2875,7 @@ export default function Clients() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setRecoveryOriginFilter('');
+                                setSubscriptionStateFilter('');
                                 setClientTypeFilter('');
                                 setGenderFilter('');
                                 setPlanFilter('');

@@ -160,6 +160,7 @@ class ClientLifecycleFunnelAndSegmentationTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('stats.total', 6)
+            ->assertJsonPath('stats.active', 1)
             ->assertJsonPath('stats.segments.active', 1)
             ->assertJsonPath('stats.segments.suspended', 1)
             ->assertJsonPath('stats.segments.duplicate', 1)
@@ -237,7 +238,7 @@ class ClientLifecycleFunnelAndSegmentationTest extends TestCase
             'role' => 'admin',
             'status' => 'active',
             'assigned_market_ids' => [],
-            'email' => 'lifecycle-admin-' . uniqid('', true) . '@example.test',
+            'email' => 'lifecycle-admin-'.uniqid('', true).'@example.test',
         ]);
     }
 
@@ -245,9 +246,9 @@ class ClientLifecycleFunnelAndSegmentationTest extends TestCase
     {
         return Product::query()->create([
             'platform_id' => $platform->id,
-            'name' => 'Lifecycle Test Product ' . uniqid('', true),
+            'name' => 'Lifecycle Test Product '.uniqid('', true),
             'display_name' => 'Lifecycle Test Product',
-            'slug' => 'lifecycle-test-product-' . uniqid(),
+            'slug' => 'lifecycle-test-product-'.uniqid(),
             'tier' => 'premium',
             'weekly_price' => 1000,
             'biweekly_price' => 2000,
