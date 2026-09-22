@@ -87,6 +87,79 @@
   retained the pre-existing forecast CSS warning and large bundle advisory.
 - New operator references: `docs/mcp-intelligence-contracts.md` and
   `docs/mcp-client-operations.md`. Implementation commit `a042a1d4` was pushed
-  to `origin/main` on 22 Sep; no cPanel pull, deployment or production validation
-  has been performed. Production still needs separately authorised rollout and
+  to `origin/main` on 22 Sep. It had not been deployed at shipping time; the
+  later read-only probe below confirms current MCP code is reachable in production,
+  although the deployment actor/time is not recorded here. Production still needs
   restricted non-production ChatGPT/Claude connector checks first.
+
+## 2026-09-22 production read-only probe
+
+- A supplied administrator MCP credential discovered 30 tools on
+  `https://crm.exotic-online.com/api/mcp`; 24 returned successful bounded test
+  responses. The shared CEO metrics matched across the summary, full CEO and
+  rendered-dashboard paths. Transaction-level FX rows were absent from returned
+  payloads. The complete response sweep was about 1.247 MB (roughly 312k output
+  tokens at four bytes/token); no server-side model-token measurement exists.
+- Confirmed live defects: `exotic_city_performance` throws `Indirect modification
+  of overloaded element of Illuminate\Support\Collection has no effect` at
+  `McpAnalyticsService.php:162`. `exotic_visitor_demand` reaches
+  `ToolResultSanitizer`; source inspection shows its top-profile source row retains
+  `client_id`, which sanitizer correctly refuses instead of projecting it to a
+  pseudonym. `exotic_weekly_executive_scorecard` returns generic `-32603`, but its
+  specific exception was not in the supplied log extract.
+- The supplied logs also contain earlier `exotic_get_document` regex delimiter
+  failures. The current live document call succeeds, so that error predates the
+  delimiter-safe matcher rollout.
+- Token-grant edit failure is deterministic: the Settings UI selects tools from
+  `managementDefinitions()` (including enhanced tools), while
+  `McpTokenGrantService` validates against legacy-only `definitions()`. Validate
+  against enabled, role-appropriate management definitions to allow unchanged
+  enhanced grants to save safely.
+- No production mutation was made during this probe. The externally supplied token
+  should be rotated because it was pasted into chat.
+
+## 2026-09-22 supplied log follow-up
+
+- The follow-up extract confirms the visitor-preview refusal: an unsanitized
+  `client_id` reaches `ToolResultSanitizer` from the Settings preview path. The
+  safe repair is a deliberate pseudonymous projection of the visitor top-profile
+  rows, not disabling the sanitizer.
+- It does not contain the weekly-scorecard exception. Its broad `tail` was
+  dominated by an earlier daily-statistics foreign-key failure, so the generic
+  weekly MCP refusal remains un-attributed pending a time-bounded log slice.
+- Independently, the scheduled daily staff-statistics upsert attempted rows for
+  a missing platform and failed its whole batch. That can leave team/weekly
+  performance data stale or incomplete; it is separate from the MCP transport
+  defects and requires an authorised data-health repair before scorecard
+  accuracy can be certified.
+- The focused grep confirms additional direct enhanced `tools/call` sanitizer
+  failures immediately before the city failure, but its context begins at the
+  stack trace and does not include the request's tool name. `mcp_tool_calls`
+  records that exact attribution (tool, status, request ID and timestamp) and
+  is the bounded read-only source required before assigning the remaining
+  weekly failure to the archived scorecard projection.
+
+## 2026-09-22 failed-call attribution
+
+- The bounded `mcp_tool_calls` query attributed the three direct failures:
+  `exotic_weekly_executive_scorecard` at 09:09:12 UTC, `exotic_visitor_demand`
+  at 09:09:15 UTC, and `exotic_city_performance` at 09:09:21 UTC. All failed
+  internally; no tool returned an unsafe result. The remaining scorecard repair
+  must deliberately project stored `Briefing::decodedBody()` archives into the
+  MCP-safe executive-scorecard contract before the final sanitizer, rather than
+  weakening the sanitizer or forwarding arbitrary archival JSON.
+
+## 2026-09-22 authorised production-defect repair
+
+- Authorised local repair: token-grant validation now uses the same enabled,
+  role-aware management registry shown by Settings; visitor top profiles are
+  projected to pseudonymous client handles; archived scorecards remove raw
+  entity/identity fields before the final fail-closed sanitizer; city scoring
+  rebuilds collection rows instead of mutating them in place.
+- Targeted regression plus OAuth/grant coverage passed: 9 tests / 50 assertions.
+  Complete MCP feature suite passed: 38 tests / 244 assertions. Pint passed for
+  the four changed PHP files and `git diff --check` passed. This backend-only
+  repair changes no frontend source or generated build asset.
+- Commit/push is authorised; production deployment still requires a separate
+  cPanel pull authorisation. After a pull, retest the three failed tools and one
+  enhanced-token edit from Settings, then rotate the externally shared token.

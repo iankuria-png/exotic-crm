@@ -67,6 +67,29 @@ class McpOAuthAndGrantTest extends TestCase
         $this->assertTrue(AuditLog::query()->where('action', 'mcp_token_grant_update')->exists());
     }
 
+    public function test_administrator_can_preserve_an_enabled_enhanced_tool_when_editing_a_grant(): void
+    {
+        Config::set('mcp.waves.contracts', true);
+        Config::set('mcp.waves.knowledge', true);
+        Config::set('mcp.waves.diagnostics', true);
+        $admin = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($admin);
+
+        $this->postJson('/api/crm/settings/mcp/tokens', [
+            'label' => 'enhanced connector',
+            'tools' => ['exotic_catalog', 'exotic_get_document'],
+        ])->assertCreated();
+        $tokenId = (int) \Laravel\Sanctum\PersonalAccessToken::query()
+            ->where('name', 'mcp:enhanced connector')
+            ->value('id');
+
+        $this->patchJson('/api/crm/settings/mcp/tokens/'.$tokenId, [
+            'tools' => ['exotic_catalog', 'exotic_get_document', 'exotic_search_knowledge'],
+        ])->assertOk()
+            ->assertJsonPath('capabilities.tools.1', 'exotic_get_document')
+            ->assertJsonPath('capabilities.tools.2', 'exotic_search_knowledge');
+    }
+
     public function test_identified_client_rows_require_the_capability_confirmation_and_audited_purpose(): void
     {
         Config::set('mcp.enabled', true);

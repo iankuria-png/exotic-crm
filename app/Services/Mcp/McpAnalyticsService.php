@@ -28,6 +28,7 @@ class McpAnalyticsService
         private readonly CityPerformanceService $cities,
         private readonly MarketAuthorizationService $markets,
         private readonly McpStaffAliasService $aliases,
+        private readonly PseudonymService $pseudonyms,
     ) {}
 
     public function ceoDashboard(array $arguments, McpAuthorizationContext $auth): array
@@ -58,7 +59,7 @@ class McpAnalyticsService
             'week_start' => optional($briefing->period_start)->toDateString(),
             'week_end' => optional($briefing->period_end)->toDateString(),
             'generated_at' => optional($briefing->created_at)->toIso8601String(),
-            'scorecard' => $briefing->decodedBody(),
+            'scorecard' => $this->projectArchivedScorecard($briefing->decodedBody()),
         ])->all()];
     }
 
@@ -83,9 +84,27 @@ class McpAnalyticsService
         $range = (string) ($arguments['range'] ?? '7d');
         $currency = $arguments['reporting_currency'] ?? null;
 
+        $overview = $this->visitorPulse->summary($scope, $range, null, $currency);
+        $overview['top_profiles'] = collect($overview['top_profiles'] ?? [])
+            ->map(function (array $row): array {
+                $clientId = (int) ($row['client_id'] ?? 0);
+
+                return array_filter([
+                    'client_handle' => $clientId > 0 ? $this->pseudonyms->handle('client', $clientId) : null,
+                    'profile_scope' => $clientId > 0 ? 'single_profile' : 'market_inactive_profiles',
+                    'count' => (int) ($row['count'] ?? 0),
+                    'amount_normalized' => $row['amount_normalized'] ?? null,
+                    'amount_display' => $row['amount_display'] ?? null,
+                    'normalized_currency' => $row['normalized_currency'] ?? null,
+                    'source_breakdown' => $row['source_breakdown'] ?? [],
+                ], static fn (mixed $value): bool => $value !== null);
+            })
+            ->values()
+            ->all();
+
         return [
             'definition' => 'Contact-unlock demand only; it is not subscription revenue.',
-            'overview' => $this->visitorPulse->summary($scope, $range, null, $currency),
+            'overview' => $overview,
             'analytics' => $this->visitorAnalytics->analytics($scope, $range, null, $currency, null, null, (string) ($arguments['bucket'] ?? 'auto')),
         ];
     }
@@ -156,12 +175,14 @@ class McpAnalyticsService
         }
         $rows = Client::query()->notClosed()->where('platform_id', $platformId)->whereNotNull('city')->where('city', '!=', '')
             ->select('city', DB::raw('COUNT(*) as client_count'), DB::raw('SUM(CASE WHEN notactive = 0 THEN 1 ELSE 0 END) as active_count'), DB::raw('SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END) as verified_count'))
-            ->groupBy('city')->orderByDesc('client_count')->limit(100)->get()->map(fn ($row) => ['city' => $row->city, 'client_count' => (int) $row->client_count, 'active_count' => (int) $row->active_count, 'verified_count' => (int) $row->verified_count, 'views' => null, 'contact_rate' => null]);
+            ->groupBy('city')->orderByDesc('client_count')->limit(100)->get()->map(fn ($row) => ['city' => $row->city, 'client_count' => (int) $row->client_count, 'active_count' => (int) $row->active_count, 'verified_count' => (int) $row->verified_count, 'views' => null, 'contact_rate' => null])->values();
         $scored = $this->cities->score($rows->map(fn ($row) => ['client_count' => $row['client_count'], 'views' => 0, 'contact_rate' => 0])->all());
-        foreach ($rows as $index => $row) {
-            $rows[$index]['performance'] = $scored[$index]['performance'];
-            $rows[$index]['analytics_status'] = 'unavailable';
-        }
+        $rows = $rows->map(function (array $row, int $index) use ($scored): array {
+            $row['performance'] = $scored[$index]['performance'] ?? ['index' => null, 'band' => 'insufficient_data'];
+            $row['analytics_status'] = 'unavailable';
+
+            return $row;
+        });
 
         return ['definition' => '30% client count / 40% views / 30% contact rate. Views/contact rate are unavailable when analytics is not supplied.', 'platform_id' => $platformId, 'cities' => $rows->all()];
     }
@@ -179,5 +200,33 @@ class McpAnalyticsService
     private function scope(McpAuthorizationContext $auth, ?int $platformId): ?array
     {
         return $platformId ? [$platformId] : $auth->platformIds;
+    }
+
+    /**
+     * Archived scorecards predate the MCP boundary and are persisted JSON, not a
+     * connector contract. Remove raw entity identifiers and identifying labels
+     * before the general sanitizer applies its final fail-closed verification.
+     */
+    private function projectArchivedScorecard(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $forbidden = [
+            'clientid', 'clientname', 'dealid', 'paymentid', 'leadid', 'agentid', 'agentname',
+            'staffid', 'staffname', 'userid', 'username', 'name', 'phone', 'email', 'bio',
+            'notes', 'body', 'rawpayload', 'paymentdata', 'crmurl',
+        ];
+        $projected = [];
+        foreach ($value as $key => $child) {
+            $normalizedKey = strtolower(str_replace(['_', '-'], '', (string) $key));
+            if (in_array($normalizedKey, $forbidden, true)) {
+                continue;
+            }
+            $projected[$key] = $this->projectArchivedScorecard($child);
+        }
+
+        return $projected;
     }
 }

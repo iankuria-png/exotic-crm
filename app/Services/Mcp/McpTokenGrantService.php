@@ -29,7 +29,13 @@ class McpTokenGrantService
         $prompts = array_values(array_unique(array_key_exists('prompts', $input)
             ? (array) $input['prompts']
             : $this->grantedNames($currentAbilities, 'mcp:prompt:')));
-        $availableTools = collect($this->tools->definitions($owner, $this->settings))->pluck('name')->all();
+        // Settings renders the management registry, which includes enabled modern tools.
+        // Validate against that same role-aware registry so an unchanged enhanced grant
+        // can be saved without silently dropping its capabilities.
+        $availableTools = collect($this->tools->managementDefinitions($owner, $this->settings))
+            ->where('enabled', true)
+            ->pluck('name')
+            ->all();
         $availableResources = collect($this->resources->list(McpAuthorizationContext::for($owner, ['mcp:read'], app(\App\Services\MarketAuthorizationService::class)), $this->settings, false))->pluck('uri')->all();
         $availablePrompts = collect($this->prompts->list(McpAuthorizationContext::for($owner, ['mcp:read'], app(\App\Services\MarketAuthorizationService::class))))->pluck('name')->all();
         if (array_diff($tools, $availableTools) || array_diff($resources, $availableResources) || array_diff($prompts, $availablePrompts)) {

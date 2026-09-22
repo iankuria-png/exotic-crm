@@ -26,6 +26,11 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   CRM-hosted PKCE OAuth, governed intelligence tools, managed aliases and token
   grant edits. Verification is recorded in the MCP checkpoint; it is local only,
   with no commit, push or deployment performed.
+- MCP production-defect repair (22 Sep): read-only production evidence attributed
+  weekly-scorecard, visitor-demand and city-performance MCP failures plus an
+  enhanced token-grant validation mismatch. The authorised local repair and
+  verification are recorded in the MCP checkpoint; push status must be checked
+  against Git rather than inferred from this note.
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is
