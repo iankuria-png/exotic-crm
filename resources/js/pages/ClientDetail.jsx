@@ -6005,6 +6005,9 @@ export default function ClientDetail() {
                                         <p className="mt-2 text-xs text-slate-500">
                                             Videos: MP4 or MOV up to 50MB (max 5) — MOV is converted to MP4 automatically. Images: JPG/PNG/WEBP up to 5MB (max 20).
                                         </p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Media titles and descriptions are filled from the saved profile title, location, age, and bio. Saving any of those profile fields refreshes existing media too.
+                                        </p>
                                         {mediaUploadPreflight.errors.map((message) => (
                                             <p key={message} className="mt-2 text-xs text-rose-700">{message}</p>
                                         ))}
@@ -7232,7 +7235,8 @@ function ClientMediaCard({
     onSetMain,
     onDelete,
 }) {
-    const displayName = media.file_name || media.filename || 'Untitled media';
+    const displayName = media.title || media.file_name || media.filename || 'Untitled media';
+    const fileName = media.file_name || media.filename || '';
     const mediaKind = resolveMediaKind(media);
     const proxiedUrl = proxyImageUrl(media?.url || '');
     const hasAssetUrl = proxiedUrl.trim() !== '';
@@ -7393,7 +7397,13 @@ function ClientMediaCard({
                     <p className="truncate text-sm font-medium text-slate-900">{displayName}</p>
                     <p className="mt-1 text-xs text-slate-500">
                         {media.mime_type || (mediaKind === 'video' ? 'video' : 'image')}
+                        {fileName && fileName !== displayName ? ` · ${fileName}` : ''}
                     </p>
+                    {media.description ? (
+                        <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-600" title={media.description}>
+                            {media.description}
+                        </p>
+                    ) : null}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
