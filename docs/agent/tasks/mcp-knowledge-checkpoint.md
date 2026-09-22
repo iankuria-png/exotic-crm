@@ -86,6 +86,7 @@
   retains two pre-existing unrelated Pint findings. `npm run build` passed; it
   retained the pre-existing forecast CSS warning and large bundle advisory.
 - New operator references: `docs/mcp-intelligence-contracts.md` and
-  `docs/mcp-client-operations.md`. No commit, push, deployment or production
-  validation has been performed; production needs separately authorised rollout
-  and restricted non-production ChatGPT/Claude connector checks first.
+  `docs/mcp-client-operations.md`. Implementation commit `a042a1d4` was pushed
+  to `origin/main` on 22 Sep; no cPanel pull, deployment or production validation
+  has been performed. Production still needs separately authorised rollout and
+  restricted non-production ChatGPT/Claude connector checks first.
