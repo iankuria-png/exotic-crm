@@ -108,6 +108,16 @@ function createArchiveRecoveryDialogState(platformId = '', selectedClients = [])
     };
 }
 
+function createMediaMetadataBackfillDialogState(platformId = '', selectedClients = []) {
+    return {
+        open: false,
+        platformId: String(platformId || ''),
+        scope: selectedClients.length > 0 ? 'selected' : 'market',
+        selectedClients,
+        preview: null,
+    };
+}
+
 function percentage(part, total) {
     if (!total) return 0;
     return Math.round((Number(part || 0) / Number(total)) * 100);
@@ -568,6 +578,7 @@ export default function Clients() {
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canBulkTakeSeoPlaceholdersPrivate = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canRunArchiveRecovery = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canRunMediaMetadataBackfill = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients || canRunArchiveRecovery;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
@@ -700,6 +711,9 @@ export default function Clients() {
     const [archiveRecoveryDialog, setArchiveRecoveryDialog] = useState(() => createArchiveRecoveryDialogState(''));
     const [archiveRecoveryRunId, setArchiveRecoveryRunId] = useState(null);
     const [archiveRecoveryCompletionNotifiedId, setArchiveRecoveryCompletionNotifiedId] = useState(null);
+    const [mediaMetadataBackfillDialog, setMediaMetadataBackfillDialog] = useState(() => createMediaMetadataBackfillDialogState(''));
+    const [mediaMetadataBackfillRunId, setMediaMetadataBackfillRunId] = useState(null);
+    const [mediaMetadataBackfillCompletionNotifiedId, setMediaMetadataBackfillCompletionNotifiedId] = useState(null);
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
         client: null,
@@ -1326,6 +1340,86 @@ export default function Clients() {
         });
     };
 
+    const buildMediaMetadataBackfillPayload = (dialogState) => ({
+        platform_id: Number(dialogState.platformId),
+        scope: dialogState.scope,
+        ...(dialogState.scope === 'selected' ? {
+            client_ids: dialogState.selectedClients
+                .map((client) => Number(client.id))
+                .filter((clientId) => clientId > 0),
+        } : {}),
+    });
+
+    const mediaMetadataBackfillPreviewMutation = useMutation({
+        mutationFn: (dialogState) => api.post(
+            '/crm/clients/media-metadata-backfill/preview',
+            buildMediaMetadataBackfillPayload(dialogState),
+        ).then((response) => response.data),
+        onSuccess: (preview) => {
+            setMediaMetadataBackfillDialog((current) => ({ ...current, preview }));
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Media metadata backfill preview could not be loaded.');
+        },
+    });
+
+    const mediaMetadataBackfillStartMutation = useMutation({
+        mutationFn: (dialogState) => api.post(
+            '/crm/clients/media-metadata-backfill/runs',
+            buildMediaMetadataBackfillPayload(dialogState),
+        ).then((response) => response.data),
+        onSuccess: (response) => {
+            const run = response?.data;
+            setMediaMetadataBackfillDialog(createMediaMetadataBackfillDialogState(platformFilter));
+            setMediaMetadataBackfillRunId(run?.id || null);
+            setClearSelectionKey((current) => current + 1);
+            toast.success('Media metadata backfill queued. It will continue in the background for this market.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Media metadata backfill could not be started.');
+        },
+    });
+
+    const mediaMetadataBackfillRunQuery = useQuery({
+        queryKey: ['media-metadata-backfill-run', mediaMetadataBackfillRunId],
+        queryFn: () => api.get(`/crm/clients/media-metadata-backfill/runs/${mediaMetadataBackfillRunId}`).then((response) => response.data?.data),
+        enabled: Boolean(mediaMetadataBackfillRunId),
+        refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status) ? 1500 : false,
+    });
+
+    useEffect(() => {
+        const run = mediaMetadataBackfillRunQuery.data;
+        if (!run || ['queued', 'running'].includes(run.status) || mediaMetadataBackfillCompletionNotifiedId === run.id) {
+            return;
+        }
+
+        setMediaMetadataBackfillCompletionNotifiedId(run.id);
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
+        if (run.status === 'completed') {
+            const result = [
+                `${Number(run.attachments_updated_count || 0).toLocaleString()} attachment${Number(run.attachments_updated_count || 0) === 1 ? '' : 's'} updated`,
+                Number(run.skipped_count || 0) ? `${Number(run.skipped_count).toLocaleString()} without media` : null,
+                Number(run.failed_count || 0) ? `${Number(run.failed_count).toLocaleString()} failed` : null,
+            ].filter(Boolean).join(' · ');
+            toast.success(`Media metadata backfill complete: ${result}.`);
+            return;
+        }
+
+        toast.error(run.notes || 'Media metadata backfill stopped before it could complete.');
+    }, [mediaMetadataBackfillCompletionNotifiedId, mediaMetadataBackfillRunQuery.data, queryClient, toast]);
+
+    const openMediaMetadataBackfillDialog = (selectedClients = []) => {
+        if (!platformFilter) {
+            toast.warning('Choose one market before backfilling media metadata.');
+            return;
+        }
+
+        setMediaMetadataBackfillDialog({
+            ...createMediaMetadataBackfillDialogState(platformFilter, selectedClients),
+            open: true,
+        });
+    };
+
     const bulkSeoPrivateMutation = useMutation({
         mutationFn: ({ clientIds, reason }) => api.post('/crm/clients/bulk-seo-placeholder-private', {
             client_ids: clientIds,
@@ -1486,6 +1580,23 @@ export default function Clients() {
                     ? 'Only WordPress-linked clients can refresh thumbnails.'
                     : undefined
             ),
+        }] : []),
+        ...(canRunMediaMetadataBackfill ? [{
+            key: 'media-metadata-backfill-selected',
+            label: 'Backfill media metadata',
+            variant: 'primary',
+            onClick: (rowsSelection) => openMediaMetadataBackfillDialog(rowsSelection),
+            isDisabled: (rowsSelection) => !platformFilter
+                || !rowsSelection.some((row) => Number(row.wp_post_id || 0) > 0),
+            getDisabledReason: (rowsSelection) => {
+                if (!platformFilter) {
+                    return 'Choose one market before backfilling media metadata.';
+                }
+
+                return rowsSelection.some((row) => Number(row.wp_post_id || 0) > 0)
+                    ? undefined
+                    : 'Select at least one WordPress-linked client.';
+            },
         }] : []),
         ...(canDeleteClients ? [{
             key: 'bulk-delete-clients',
@@ -3042,6 +3153,45 @@ export default function Clients() {
                 </section>
             ) : null}
 
+            {canRunMediaMetadataBackfill ? (
+                <section className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">Repair Media Library metadata</p>
+                        <p className="mt-0.5 text-xs text-slate-600">
+                            {platformFilter
+                                ? 'Reapply each profile’s current title, location, age, and bio to its existing media in a paced background run.'
+                                : 'Choose a market first. Each repair run is limited to one market.'}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        disabled={!platformFilter || mediaMetadataBackfillStartMutation.isPending}
+                        onClick={() => openMediaMetadataBackfillDialog()}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Backfill this market
+                    </button>
+                </section>
+            ) : null}
+
+            {mediaMetadataBackfillRunQuery.data ? (
+                <section className={`mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${['queued', 'running'].includes(mediaMetadataBackfillRunQuery.data.status) ? 'border-sky-200 bg-sky-50 text-sky-900' : mediaMetadataBackfillRunQuery.data.status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`} aria-live="polite">
+                    <div>
+                        <p className="font-semibold">
+                            Media metadata backfill {mediaMetadataBackfillRunQuery.data.status === 'running' ? 'in progress' : mediaMetadataBackfillRunQuery.data.status}
+                        </p>
+                        <p className="mt-0.5 text-xs opacity-80">
+                            {Number(mediaMetadataBackfillRunQuery.data.processed_count || 0).toLocaleString()} of {Number(mediaMetadataBackfillRunQuery.data.candidate_count || 0).toLocaleString()} profiles processed
+                            {' · '}{Number(mediaMetadataBackfillRunQuery.data.attachments_updated_count || 0).toLocaleString()} attachments updated
+                            {' · '}{Number(mediaMetadataBackfillRunQuery.data.failed_count || 0).toLocaleString()} failed
+                        </p>
+                        {mediaMetadataBackfillRunQuery.data.notes ? (
+                            <p className="mt-1 max-w-3xl whitespace-pre-line text-xs opacity-80">{mediaMetadataBackfillRunQuery.data.notes}</p>
+                        ) : null}
+                    </div>
+                </section>
+            ) : null}
+
             <DataTable
                 columns={columns}
                 data={data?.data}
@@ -3202,6 +3352,77 @@ export default function Clients() {
                     )}
                     {archiveRecoveryDialog.preview && Number(archiveRecoveryDialog.preview.summary?.will_restore || 0) === 0 ? (
                         <p className="text-xs text-amber-700">Nothing matches this scope and recovery rule. Adjust the rule or select a different cohort.</p>
+                    ) : null}
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={mediaMetadataBackfillDialog.open}
+                title="Backfill Media Library metadata"
+                message="This updates existing attachment titles and descriptions from the current WordPress profile. It does not change profile content, image files, alt text, or the main image."
+                confirmLabel="Queue metadata backfill"
+                confirmDisabled={!mediaMetadataBackfillDialog.preview
+                    || mediaMetadataBackfillPreviewMutation.isPending
+                    || mediaMetadataBackfillStartMutation.isPending
+                    || Number(mediaMetadataBackfillDialog.preview?.summary?.profiles || 0) === 0}
+                isPending={mediaMetadataBackfillStartMutation.isPending}
+                onCancel={() => {
+                    if (mediaMetadataBackfillPreviewMutation.isPending || mediaMetadataBackfillStartMutation.isPending) {
+                        return;
+                    }
+                    setMediaMetadataBackfillDialog(createMediaMetadataBackfillDialogState(platformFilter));
+                }}
+                onConfirm={() => mediaMetadataBackfillStartMutation.mutate(mediaMetadataBackfillDialog)}
+            >
+                <div className="space-y-3 text-sm">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Scope</p>
+                        <div className="mt-2 grid gap-2">
+                            {mediaMetadataBackfillDialog.selectedClients.length > 0 ? (
+                                <label className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                    <input
+                                        type="radio"
+                                        name="media-metadata-backfill-scope"
+                                        checked={mediaMetadataBackfillDialog.scope === 'selected'}
+                                        onChange={() => setMediaMetadataBackfillDialog((current) => ({ ...current, scope: 'selected', preview: null }))}
+                                        className="mt-0.5"
+                                    />
+                                    <span><span className="font-semibold text-slate-900">Selected profiles</span><br /><span className="text-xs text-slate-500">{mediaMetadataBackfillDialog.selectedClients.length.toLocaleString()} profile{mediaMetadataBackfillDialog.selectedClients.length === 1 ? '' : 's'} selected on this page.</span></span>
+                                </label>
+                            ) : null}
+                            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                <input
+                                    type="radio"
+                                    name="media-metadata-backfill-scope"
+                                    checked={mediaMetadataBackfillDialog.scope === 'market'}
+                                    onChange={() => setMediaMetadataBackfillDialog((current) => ({ ...current, scope: 'market', preview: null }))}
+                                    className="mt-0.5"
+                                />
+                                <span><span className="font-semibold text-slate-900">All WordPress-linked profiles in this market</span><br /><span className="text-xs text-slate-500">Includes every linked profile in {activeMarketName || 'the selected market'}, not only this page of results.</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    {mediaMetadataBackfillDialog.preview ? (
+                        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-semibold">Preview ready</span>
+                                <span className="crm-mono text-lg font-bold">{Number(mediaMetadataBackfillDialog.preview.summary?.profiles || 0).toLocaleString()}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-emerald-800">WordPress-linked profiles whose attachment metadata will be refreshed. {Number(mediaMetadataBackfillDialog.preview.summary?.skipped || 0).toLocaleString()} selected profile{Number(mediaMetadataBackfillDialog.preview.summary?.skipped || 0) === 1 ? '' : 's'} are not linked to WordPress.</p>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            disabled={mediaMetadataBackfillPreviewMutation.isPending}
+                            onClick={() => mediaMetadataBackfillPreviewMutation.mutate(mediaMetadataBackfillDialog)}
+                            className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {mediaMetadataBackfillPreviewMutation.isPending ? 'Checking media profiles…' : 'Review backfill cohort'}
+                        </button>
+                    )}
+                    {mediaMetadataBackfillDialog.preview && Number(mediaMetadataBackfillDialog.preview.summary?.profiles || 0) === 0 ? (
+                        <p className="text-xs text-amber-700">Nothing in this scope is linked to a WordPress profile.</p>
                     ) : null}
                 </div>
             </ConfirmDialog>

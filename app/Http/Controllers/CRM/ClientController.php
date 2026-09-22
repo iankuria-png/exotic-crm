@@ -6,6 +6,7 @@ use App\Exceptions\ClientCaseClosureException;
 use App\Http\Controllers\Controller;
 use App\Jobs\ConvertClientVideoUploadJob;
 use App\Jobs\RunLifecycleArchiveRecoveryJob;
+use App\Jobs\RunProfileMediaMetadataBackfillJob;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\ClientNote;
@@ -14,6 +15,7 @@ use App\Models\Lead;
 use App\Models\LifecycleArchiveRecoveryRun;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\ProfileMediaMetadataBackfillRun;
 use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Models\VisitorContactUnlock;
@@ -48,6 +50,7 @@ use App\Services\MediaConversionStatusService;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
+use App\Services\ProfileMediaMetadataBackfillService;
 use App\Services\Seo\ProfileImageAltTextGenerator;
 use App\Services\SupportBoardService;
 use App\Services\VideoTranscodeService;
@@ -1682,6 +1685,124 @@ class ClientController extends Controller
         );
 
         return response()->json(['data' => $this->presentArchiveRecoveryRun($run->fresh())]);
+    }
+
+    /** Preview the WordPress-linked profiles whose attachment metadata can be repaired. */
+    public function profileMediaMetadataBackfillPreview(Request $request, ProfileMediaMetadataBackfillService $backfill)
+    {
+        [$platform, $options] = $this->resolveProfileMediaMetadataBackfillRequest($request);
+
+        return response()->json([
+            'platform' => [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+            ],
+            'scope' => $options['scope'],
+        ] + $backfill->preview($platform, $options));
+    }
+
+    /** Create a durable, single-market metadata repair run. */
+    public function startProfileMediaMetadataBackfill(Request $request)
+    {
+        [$platform, $options] = $this->resolveProfileMediaMetadataBackfillRequest($request);
+
+        if (ProfileMediaMetadataBackfillRun::query()
+            ->where('platform_id', (int) $platform->id)
+            ->whereIn('status', [
+                ProfileMediaMetadataBackfillRun::STATUS_QUEUED,
+                ProfileMediaMetadataBackfillRun::STATUS_RUNNING,
+            ])
+            ->exists()) {
+            throw new ConflictHttpException('A media metadata backfill is already in progress for this market.');
+        }
+
+        $run = ProfileMediaMetadataBackfillRun::create([
+            'platform_id' => (int) $platform->id,
+            'requested_by' => $request->user()?->id,
+            'scope' => $options['scope'],
+            'client_ids' => $options['client_ids'] ?? null,
+            'status' => ProfileMediaMetadataBackfillRun::STATUS_QUEUED,
+        ]);
+
+        RunProfileMediaMetadataBackfillJob::dispatch((int) $run->id);
+
+        return response()->json(['data' => $this->presentProfileMediaMetadataBackfillRun($run)], 201);
+    }
+
+    /** Poll a queued or active metadata repair from the Clients workspace. */
+    public function showProfileMediaMetadataBackfill(Request $request, ProfileMediaMetadataBackfillRun $run)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $run->platform_id,
+            'You do not have access to this market.'
+        );
+
+        return response()->json(['data' => $this->presentProfileMediaMetadataBackfillRun($run->fresh())]);
+    }
+
+    /** @return array{0: Platform, 1: array{scope:string,client_ids?:array<int, int>}} */
+    private function resolveProfileMediaMetadataBackfillRequest(Request $request): array
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'scope' => 'required|string|in:'.implode(',', [
+                ProfileMediaMetadataBackfillRun::SCOPE_SELECTED,
+                ProfileMediaMetadataBackfillRun::SCOPE_MARKET,
+            ]),
+            'client_ids' => 'required_if:scope,'.ProfileMediaMetadataBackfillRun::SCOPE_SELECTED.'|array|max:150',
+            'client_ids.*' => 'integer|distinct|exists:clients,id',
+        ]);
+
+        $platform = Platform::query()->findOrFail((int) $validated['platform_id']);
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $options = ['scope' => (string) $validated['scope']];
+        if ($options['scope'] === ProfileMediaMetadataBackfillRun::SCOPE_SELECTED) {
+            $clientIds = array_values(array_unique(array_map('intval', $validated['client_ids'] ?? [])));
+            if ($clientIds === []) {
+                throw ValidationException::withMessages([
+                    'client_ids' => 'Select at least one client to backfill.',
+                ]);
+            }
+
+            $matchingCount = Client::query()
+                ->where('platform_id', (int) $platform->id)
+                ->whereIn('id', $clientIds)
+                ->count();
+            if ($matchingCount !== count($clientIds)) {
+                throw ValidationException::withMessages([
+                    'client_ids' => 'Every selected client must belong to the chosen market.',
+                ]);
+            }
+            $options['client_ids'] = $clientIds;
+        }
+
+        return [$platform, $options];
+    }
+
+    private function presentProfileMediaMetadataBackfillRun(?ProfileMediaMetadataBackfillRun $run): array
+    {
+        abort_if(! $run, 404, 'Media metadata backfill run not found.');
+
+        return [
+            'id' => (int) $run->id,
+            'platform_id' => (int) $run->platform_id,
+            'scope' => $run->scope,
+            'status' => $run->status,
+            'candidate_count' => (int) $run->candidate_count,
+            'processed_count' => (int) $run->processed_count,
+            'attachments_updated_count' => (int) $run->attachments_updated_count,
+            'skipped_count' => (int) $run->skipped_count,
+            'failed_count' => (int) $run->failed_count,
+            'notes' => $run->notes,
+            'started_at' => optional($run->started_at)->toIso8601String(),
+            'finished_at' => optional($run->finished_at)->toIso8601String(),
+        ];
     }
 
     /** @return array{0: Platform, 1: array{scope:string,mode:string,client_ids?:array<int, int>}} */

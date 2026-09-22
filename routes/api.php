@@ -508,6 +508,11 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-refresh-display-images', [ClientController::class, 'bulkRefreshDisplayImages'])->middleware('role:admin,sub_admin,sales,field_sales');
+    // Metadata repair updates historical Media Library records; it is market-scoped,
+    // queued, and deliberately restricted to operational administrators.
+    Route::post('/clients/media-metadata-backfill/preview', [ClientController::class, 'profileMediaMetadataBackfillPreview'])->middleware('role:admin,sub_admin');
+    Route::post('/clients/media-metadata-backfill/runs', [ClientController::class, 'startProfileMediaMetadataBackfill'])->middleware('role:admin,sub_admin');
+    Route::get('/clients/media-metadata-backfill/runs/{run}', [ClientController::class, 'showProfileMediaMetadataBackfill'])->middleware('role:admin,sub_admin');
     Route::post('/clients/archive-recovery/preview', [ClientController::class, 'archiveRecoveryPreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/archive-recovery/runs', [ClientController::class, 'startArchiveRecovery'])->middleware('role:admin,sub_admin');
     Route::get('/clients/archive-recovery/runs/{run}', [ClientController::class, 'showArchiveRecovery'])->middleware('role:admin,sub_admin');

@@ -755,6 +755,15 @@ class WpSyncService
     }
 
     /**
+     * Reapply the WordPress profile-derived title and description to every
+     * attachment already owned by this profile.
+     */
+    public function synchronizeClientMediaMetadata(int $postId): array
+    {
+        return $this->post("/clients/{$postId}/media/metadata");
+    }
+
+    /**
      * Upload a media file to a client profile.
      */
     public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false, ?string $altText = null): array
