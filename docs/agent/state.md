@@ -6,6 +6,7 @@ Existing checkout has unrelated changes: CLAUDE.md modified, a deleted performan
 runbook, and many untracked plans/artifacts; the index was empty. Preserve those changes.
 
 - Current request: [shared context foundation](tasks/harness-foundation.md).
+- Profile-media metadata (22 Sep): CRM Media-tab UI/build is pushed as `85e3c696`; it awaits a cPanel pull. Local `exotic-crm-sync` commit `f57f18b76` sets image/video attachment titles and Media Library descriptions from profile fields, and refreshes them after relevant profile saves. It is intentionally unpushed/unpackaged. See [task](tasks/seo-media-metadata.md) for verification and the missing WP PHPUnit bootstrap.
 - Lifecycle resumption: [code/evidence checkpoint](tasks/lifecycle-recovery-checkpoint.md).
   The archived July handover has been overtaken by implementation: `66371e69`
   (12 Sep) archive recovery, `d0dac577` (17 Sep) operability, `7aaaf703` (19 Sep)
