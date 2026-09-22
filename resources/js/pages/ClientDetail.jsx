@@ -1376,6 +1376,7 @@ export default function ClientDetail() {
     const [mediaUploadWatermarkEnabled, setMediaUploadWatermarkEnabled] = useState(true);
     const [mediaUploadWatermarkPosition, setMediaUploadWatermarkPosition] = useState('br');
     const [mediaUploadWatermarkSize, setMediaUploadWatermarkSize] = useState('medium');
+    const [mediaUploadWatermarkOptionsOpen, setMediaUploadWatermarkOptionsOpen] = useState(false);
     const [selectedMediaIds, setSelectedMediaIds] = useState([]);
     const [mediaBulkDeleteOpen, setMediaBulkDeleteOpen] = useState(false);
     const [mediaPreviewRecoveryVersion, setMediaPreviewRecoveryVersion] = useState(0);
@@ -6014,56 +6015,77 @@ export default function ClientDetail() {
                                         </p>
                                         <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/50 p-3">
                                             <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={mediaUploadWatermarkEnabled}
-                                                        onChange={(event) => setMediaUploadWatermarkEnabled(event.target.checked)}
-                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                    />
-                                                    Add Exotic Escorts watermark to photos
-                                                </label>
+                                                <div>
+                                                    <p className="text-sm font-medium text-slate-800">Exotic Escorts watermark</p>
+                                                    <p className="mt-0.5 text-xs text-slate-600">
+                                                        {mediaUploadWatermarkEnabled
+                                                            ? 'Applied automatically: bottom right, medium size.'
+                                                            : 'Off for this upload.'}
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    aria-expanded={mediaUploadWatermarkOptionsOpen}
+                                                    aria-controls="client-media-watermark-options"
+                                                    onClick={() => setMediaUploadWatermarkOptionsOpen((open) => !open)}
+                                                    className="crm-btn-secondary text-xs"
+                                                >
+                                                    {mediaUploadWatermarkOptionsOpen ? 'Hide settings' : 'Configure'}
+                                                </button>
                                                 {mediaUploadHasSelection && !mediaUploadHasImage ? (
                                                     <p className="text-xs text-slate-500">Videos are uploaded without a watermark.</p>
                                                 ) : null}
                                             </div>
-                                            {mediaUploadWatermarkEnabled ? (
-                                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                                    <label className="text-xs font-medium text-slate-700">
-                                                        Position
-                                                        <select
-                                                            value={mediaUploadWatermarkPosition}
-                                                            onChange={(event) => setMediaUploadWatermarkPosition(event.target.value)}
-                                                            className="crm-input mt-1 w-full"
-                                                        >
-                                                            <option value="br">Bottom right</option>
-                                                            <option value="bc">Bottom centre</option>
-                                                            <option value="bl">Bottom left</option>
-                                                            <option value="cr">Centre right</option>
-                                                            <option value="cc">Centre</option>
-                                                            <option value="cl">Centre left</option>
-                                                            <option value="tr">Top right</option>
-                                                            <option value="tc">Top centre</option>
-                                                            <option value="tl">Top left</option>
-                                                        </select>
+                                            {mediaUploadWatermarkOptionsOpen ? (
+                                                <div id="client-media-watermark-options" className="mt-3 border-t border-teal-200 pt-3">
+                                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={mediaUploadWatermarkEnabled}
+                                                            onChange={(event) => setMediaUploadWatermarkEnabled(event.target.checked)}
+                                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                        />
+                                                        Add watermark to these photos
                                                     </label>
-                                                    <label className="text-xs font-medium text-slate-700">
-                                                        Logo size
-                                                        <select
-                                                            value={mediaUploadWatermarkSize}
-                                                            onChange={(event) => setMediaUploadWatermarkSize(event.target.value)}
-                                                            className="crm-input mt-1 w-full"
-                                                        >
-                                                            <option value="small">Small</option>
-                                                            <option value="medium">Medium</option>
-                                                            <option value="large">Large</option>
-                                                        </select>
-                                                    </label>
+                                                    {mediaUploadWatermarkEnabled ? (
+                                                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                            <label className="text-xs font-medium text-slate-700">
+                                                                Position
+                                                                <select
+                                                                    value={mediaUploadWatermarkPosition}
+                                                                    onChange={(event) => setMediaUploadWatermarkPosition(event.target.value)}
+                                                                    className="crm-input mt-1 w-full"
+                                                                >
+                                                                    <option value="br">Bottom right</option>
+                                                                    <option value="bc">Bottom centre</option>
+                                                                    <option value="bl">Bottom left</option>
+                                                                    <option value="cr">Centre right</option>
+                                                                    <option value="cc">Centre</option>
+                                                                    <option value="cl">Centre left</option>
+                                                                    <option value="tr">Top right</option>
+                                                                    <option value="tc">Top centre</option>
+                                                                    <option value="tl">Top left</option>
+                                                                </select>
+                                                            </label>
+                                                            <label className="text-xs font-medium text-slate-700">
+                                                                Logo size
+                                                                <select
+                                                                    value={mediaUploadWatermarkSize}
+                                                                    onChange={(event) => setMediaUploadWatermarkSize(event.target.value)}
+                                                                    className="crm-input mt-1 w-full"
+                                                                >
+                                                                    <option value="small">Small</option>
+                                                                    <option value="medium">Medium</option>
+                                                                    <option value="large">Large</option>
+                                                                </select>
+                                                            </label>
+                                                        </div>
+                                                    ) : null}
+                                                    <p className="mt-2 text-xs text-slate-600">
+                                                        The approved Exotic Escorts logo is applied before each image is sent to WordPress. Existing media is unchanged.
+                                                    </p>
                                                 </div>
                                             ) : null}
-                                            <p className="mt-2 text-xs text-slate-600">
-                                                The approved Exotic Escorts logo is applied before each image is sent to WordPress. Existing media is unchanged.
-                                            </p>
                                         </div>
                                         {mediaUploadPreflight.errors.map((message) => (
                                             <p key={message} className="mt-2 text-xs text-rose-700">{message}</p>
