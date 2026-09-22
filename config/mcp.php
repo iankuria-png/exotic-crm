@@ -3,7 +3,26 @@
 return [
     'enabled' => (bool) env('MCP_ENABLED', false),
     'endpoint' => env('MCP_ENDPOINT', '/api/mcp'),
-    'protocol_versions' => ['2025-06-18', '2025-03-26'],
+    // 2026-07-28 is the stateless remote-connector contract. Older revisions
+    // remain explicit adapters for already-installed clients; they are never a
+    // per-token data grant.
+    'protocol_versions' => ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'],
+    'server' => [
+        'name' => 'exotic-crm',
+        'version' => '1.1.0',
+    ],
+    'oauth' => [
+        'enabled' => (bool) env('MCP_OAUTH_ENABLED', true),
+        'access_token_minutes' => 30,
+        'refresh_token_days' => 30,
+        'authorization_code_minutes' => 5,
+        'resource_scopes' => ['mcp:read'],
+    ],
+    'vitals_thresholds' => [
+        'latency_ms' => ['warning' => 750, 'critical' => 2000, 'direction' => 'above'],
+        'error_rate_percent' => ['warning' => 2, 'critical' => 5, 'direction' => 'above'],
+        'queue_depth' => ['warning' => 100, 'critical' => 500, 'direction' => 'above'],
+    ],
     'waves' => [
         // Feature rollout is intentionally independent from MCP protocol
         // negotiation. Standard clients negotiate 2025-06-18.
@@ -32,6 +51,14 @@ return [
         'exotic_market_health' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_schema_dictionary' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_run_reporting_sql' => ['enabled' => false, 'min_role' => 'admin'],
+        'exotic_ceo_dashboard' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_weekly_executive_scorecard' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_team_performance' => ['enabled' => true, 'min_role' => 'sales'],
+        'exotic_visitor_demand' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_commission_summary' => ['enabled' => true, 'min_role' => 'field_sales'],
+        'exotic_client_operations' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_lifecycle_intelligence' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_city_performance' => ['enabled' => true, 'min_role' => 'sub_admin'],
     ],
     'resources' => [
         'exotic://context/who-is-who' => ['enabled' => true, 'path' => 'mcp/who-is-who.md'],

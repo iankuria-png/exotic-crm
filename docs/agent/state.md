@@ -17,6 +17,15 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   Use [MCP checkpoint](tasks/mcp-knowledge-checkpoint.md), not the old plan status as a backlog.
 - Shared team delivery/open items: WordPress repository `changelog/`, with CRM entries
   separate from WP entries. Retrieve the relevant dates; do not copy the full backlog here.
+- MCP implementation handoff (22 Sep): [checkpoint](tasks/mcp-knowledge-checkpoint.md)
+  records the re-baselined client-compatibility plan, confirmed OAuth/client-detail
+  decisions, live defects to repair first, and the one remaining FX-detail decision.
+  No application code, deployment or production mutation occurred in that planning pass.
+- MCP implementation checkpoint (22 Sep): the authoritative compatibility plan is
+  implemented locally, including 2026 stateless compatibility, legacy adapters,
+  CRM-hosted PKCE OAuth, governed intelligence tools, managed aliases and token
+  grant edits. Verification is recorded in the MCP checkpoint; it is local only,
+  with no commit, push or deployment performed.
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is

@@ -43,6 +43,7 @@ class McpServer
         private readonly McpDailyBudget $budget,
         private readonly McpJsonSerializer $serializer,
         private readonly McpResultNormalizer $normalizer,
+        private readonly McpResponseProjector $projector,
     ) {}
 
     public function handle(Request $request): JsonResponse|Response
@@ -190,9 +191,10 @@ class McpServer
             'exotic_payment_failure_diagnosis' => $this->paymentDiagnosis((string) $arguments['locator'], $auth),
             'exotic_system_vitals_live' => $this->modernVitals(),
             'exotic_error_digest_live' => $this->modernErrors((int) ($arguments['limit'] ?? 10)),
-            default => $this->legacyData($name, $arguments, $auth->user),
+            'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, $auth),
+            default => $this->legacyData($name, $arguments, $auth->user, $auth->abilities),
         };
-        $safe = $this->sanitizer->sanitize($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $auth->user))));
+        $safe = $this->sanitizer->sanitize($this->projector->project($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $auth->user)))));
         $rowCount = $this->rowCount(is_array($safe) ? $safe : []);
         $envelope = ToolResult::envelope(is_array($safe) ? $safe : ['value' => $safe], [], [
             'filters' => $this->resultFilters($arguments),
@@ -229,10 +231,18 @@ class McpServer
             'exotic_market_health' => $this->marketHealth($arguments, $user),
             'exotic_schema_dictionary' => $this->schemaDictionary($arguments),
             'exotic_run_reporting_sql' => $this->runReportingSql($arguments, $user),
+            'exotic_ceo_dashboard' => app(McpAnalyticsService::class)->ceoDashboard($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_weekly_executive_scorecard' => app(McpAnalyticsService::class)->weeklyExecutiveScorecard($arguments),
+            'exotic_team_performance' => app(McpAnalyticsService::class)->teamPerformance($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_visitor_demand' => app(McpAnalyticsService::class)->visitorDemand($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_commission_summary' => app(McpAnalyticsService::class)->commissionSummary($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_lifecycle_intelligence' => app(McpAnalyticsService::class)->lifecycle($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_city_performance' => app(McpAnalyticsService::class)->cityPerformance($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
             default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
         };
 
-        $safe = $this->sanitizer->sanitize($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $user))));
+        $safe = $this->sanitizer->sanitize($this->projector->project($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $user)))));
 
         return [
             'content' => [['type' => 'text', 'text' => $this->serializer->encode($safe)]],
@@ -244,7 +254,7 @@ class McpServer
         ];
     }
 
-    private function legacyData(string $name, array $arguments, User $user): array
+    private function legacyData(string $name, array $arguments, User $user, array $abilities = []): array
     {
         return match ($name) {
             'exotic_catalog' => $this->catalog($user, null),
@@ -259,6 +269,18 @@ class McpServer
             'exotic_client_snapshot' => $this->clientSnapshot($arguments, $user),
             'exotic_market_health' => $this->marketHealth($arguments, $user),
             'exotic_schema_dictionary' => $this->schemaDictionary($arguments),
+            'exotic_error_digest' => ['status' => 'available', 'message' => 'Error digest is restricted to sanitised operational summaries.'],
+            'exotic_system_vitals' => $this->modernVitals(),
+            'exotic_cohort_retention' => ['status' => 'available', 'message' => 'Cohort retention requires the MCP reporting migration before row-level cohorts are enabled.'],
+            'exotic_run_reporting_sql' => $this->runReportingSql($arguments, $user),
+            'exotic_ceo_dashboard' => app(McpAnalyticsService::class)->ceoDashboard($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_weekly_executive_scorecard' => app(McpAnalyticsService::class)->weeklyExecutiveScorecard($arguments),
+            'exotic_team_performance' => app(McpAnalyticsService::class)->teamPerformance($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_visitor_demand' => app(McpAnalyticsService::class)->visitorDemand($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_commission_summary' => app(McpAnalyticsService::class)->commissionSummary($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_lifecycle_intelligence' => app(McpAnalyticsService::class)->lifecycle($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_city_performance' => app(McpAnalyticsService::class)->cityPerformance($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
             default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
         };
     }
@@ -278,7 +300,7 @@ class McpServer
         foreach ($arguments as $key => $value) {
             $schema = $properties[$key];
             $type = $schema['type'] ?? null;
-            if (($type === 'string' && ! is_string($value)) || ($type === 'integer' && ! is_int($value))) {
+            if (($type === 'string' && ! is_string($value)) || ($type === 'integer' && ! is_int($value)) || ($type === 'boolean' && ! is_bool($value))) {
                 throw McpProtocolException::rpc(-32602, "Invalid argument type: {$key}", 'invalid_params', 422);
             }
             if (isset($schema['minLength']) && mb_strlen((string) $value) < $schema['minLength']) {
@@ -293,8 +315,11 @@ class McpServer
             if (isset($schema['enum']) && ! in_array($value, $schema['enum'], true)) {
                 throw McpProtocolException::rpc(-32602, "Invalid argument value: {$key}", 'invalid_params', 422);
             }
-            if (isset($schema['pattern']) && ! preg_match('/'.$schema['pattern'].'/', (string) $value)) {
-                throw McpProtocolException::rpc(-32602, "Invalid argument format: {$key}", 'invalid_params', 422);
+            if (isset($schema['pattern'])) {
+                $matched = @preg_match('~'.$schema['pattern'].'~u', (string) $value);
+                if ($matched !== 1) {
+                    throw McpProtocolException::rpc(-32602, "Invalid argument format: {$key}", 'invalid_params', 422);
+                }
             }
         }
     }
@@ -315,7 +340,29 @@ class McpServer
             return ['availability' => 'unavailable', 'caveats' => ['No cached vitals sample is available.']];
         }
 
-        return ['availability' => 'sampled', 'sampled_at' => $sample['sampled_at'] ?? null, 'signals' => collect($sample['signals'] ?? [])->map(fn ($signal) => ['key' => $signal['key'] ?? null, 'value' => $signal['value'] ?? null, 'available' => $signal['available'] ?? false, 'status' => $signal['status'] ?? 'unknown'])->all()];
+        return ['availability' => 'sampled', 'sampled_at' => $sample['sampled_at'] ?? null, 'signals' => collect($sample['signals'] ?? [])->map(function ($signal) {
+            $key = (string) ($signal['key'] ?? '');
+            $available = (bool) ($signal['available'] ?? false);
+            $threshold = (array) config('mcp.vitals_thresholds.'.$key, []);
+            $value = $signal['value'] ?? null;
+            $status = $available && is_numeric($value) && $threshold !== []
+                ? $this->vitalStatus((float) $value, $threshold)
+                : ($available ? 'unavailable_threshold' : 'unavailable');
+
+            return ['key' => $key, 'value' => $value, 'available' => $available, 'status' => $status];
+        })->all()];
+    }
+
+    private function vitalStatus(float $value, array $threshold): string
+    {
+        $direction = $threshold['direction'] ?? 'above';
+        $critical = (float) ($threshold['critical'] ?? INF);
+        $warning = (float) ($threshold['warning'] ?? INF);
+        if ($direction === 'below') {
+            return $value <= $critical ? 'critical' : ($value <= $warning ? 'warning' : 'healthy');
+        }
+
+        return $value >= $critical ? 'critical' : ($value >= $warning ? 'warning' : 'healthy');
     }
 
     private function modernErrors(int $limit): array
@@ -338,7 +385,7 @@ class McpServer
     {
         $version = (string) ($request->header('MCP-Protocol-Version') ?: data_get($params, '_meta.io.modelcontextprotocol/protocolVersion') ?: $params['protocolVersion'] ?? '2025-03-26');
 
-        return new McpProtocolContext($version, $version === '2025-06-18' && (bool) config('mcp.waves.contracts'));
+        return new McpProtocolContext($version, in_array($version, ['2026-07-28', '2025-06-18'], true) && (bool) config('mcp.waves.contracts'));
     }
 
     private function runReportingSql(array $arguments, User $user): array
@@ -605,6 +652,7 @@ class McpServer
         $initializeVersion = $method === 'initialize' ? ($params['protocolVersion'] ?? null) : null;
         $bodyVersion = $metaVersion ?? $initializeVersion;
         $perRequestProtocol = $headerVersion === '2025-06-18' && $request->header('Mcp-Method') !== null;
+        $modernStateless = $headerVersion === '2026-07-28';
         $initializing = $method === 'initialize';
         if ($headerVersion === null && ! $initializing) {
             throw McpProtocolException::rpc(-32020, 'Header mismatch: MCP-Protocol-Version is required.', 'header_mismatch', 400);
@@ -616,7 +664,7 @@ class McpServer
                 implode(', ', $supportedVersions) ?: 'none configured',
             ), 'unsupported_protocol', 400);
         }
-        if ($headerVersion !== null && ($perRequestProtocol || $initializing) && $headerVersion !== $bodyVersion) {
+        if ($headerVersion !== null && ($perRequestProtocol || $modernStateless || $initializing) && $headerVersion !== $bodyVersion) {
             throw McpProtocolException::rpc(-32020, 'MCP-Protocol-Version header does not match the request protocol version.', 'header_mismatch', 400);
         }
         $accept = strtolower((string) $request->header('Accept', ''));
@@ -655,8 +703,11 @@ class McpServer
     {
         // A JSON-RPC result must serialise as an object. An empty PHP array would
         // encode as [] and fail strict client-side schema validation.
-        if ($context?->enhanced()) {
-            $result['_meta']['io.modelcontextprotocol/serverInfo'] = ['name' => 'exotic-crm', 'version' => '1.0.0'];
+        if ($context?->enhanced() || $context?->version === '2026-07-28') {
+            $result['_meta']['io.modelcontextprotocol/serverInfo'] = [
+                'name' => (string) config('mcp.server.name', 'exotic-crm'),
+                'version' => (string) config('mcp.server.version', '1.1.0'),
+            ];
         }
 
         return response()->json(['jsonrpc' => '2.0', 'id' => $id, 'result' => $result === [] ? (object) [] : $result]);

@@ -58,7 +58,7 @@ class McpEndpointTest extends TestCase
             ], $this->modernHeaders('server/discover', '2024-11-05'))
             ->assertStatus(400)
             ->assertJsonPath('error.code', -32022)
-            ->assertJsonPath('error.message', 'Unsupported MCP protocol version "2024-11-05" in the MCP-Protocol-Version header. Supported versions: 2025-06-18, 2025-03-26.');
+            ->assertJsonPath('error.message', 'Unsupported MCP protocol version "2024-11-05" in the MCP-Protocol-Version header. Supported versions: 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26.');
     }
 
     public function test_legacy_initialize_flow_is_isolated_and_wildcard_tokens_are_rejected(): void
@@ -256,14 +256,14 @@ class McpEndpointTest extends TestCase
 
         $this->getJson('/api/crm/settings/mcp')
             ->assertOk()
-            ->assertJsonCount(22, 'tools')
-            ->assertJsonPath('tools.16.name', 'exotic_search_knowledge')
-            ->assertJsonPath('tools.16.management_mode', 'rollout')
-            ->assertJsonPath('tools.16.scope_required', true);
+            ->assertJsonCount(30, 'tools')
+            ->assertJsonPath('tools.24.name', 'exotic_search_knowledge')
+            ->assertJsonPath('tools.24.management_mode', 'rollout')
+            ->assertJsonPath('tools.24.scope_required', true);
 
         $minted = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'full access'])
             ->assertCreated()
-            ->assertJsonCount(23, 'abilities')
+            ->assertJsonCount(31, 'abilities')
             ->assertJsonPath('abilities.0', 'mcp:read');
         $token = $minted->json('token');
 
@@ -274,7 +274,7 @@ class McpEndpointTest extends TestCase
             'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
         ], $this->modernHeaders('tools/list', '2025-06-18'));
 
-        $response->assertOk()->assertJsonCount(22, 'result.tools');
+        $response->assertOk()->assertJsonCount(30, 'result.tools');
         $this->assertContains('exotic_search_knowledge', collect($response->json('result.tools'))->pluck('name')->all());
         $this->assertContains('exotic_error_digest_live', collect($response->json('result.tools'))->pluck('name')->all());
     }
@@ -395,7 +395,7 @@ class McpEndpointTest extends TestCase
         ]);
     }
 
-    public function test_unsupported_protocol_version_names_the_supported_versions(): void
+    public function test_modern_stateless_protocol_requires_matching_per_request_metadata(): void
     {
         Config::set('mcp.enabled', true);
         $user = User::factory()->create(['role' => 'admin']);
@@ -406,15 +406,11 @@ class McpEndpointTest extends TestCase
                 'jsonrpc' => '2.0',
                 'id' => 10,
                 'method' => 'tools/list',
-                'params' => [],
-            ], $this->modernHeaders('tools/list', '2026-07-28'))
-            ->assertStatus(400);
+                'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2026-07-28']],
+            ], ['Accept' => 'application/json, text/event-stream', 'Content-Type' => 'application/json', 'MCP-Protocol-Version' => '2026-07-28'])
+            ->assertOk();
 
-        $response->assertJsonPath('error.code', -32022);
-        $message = $response->json('error.message');
-        $this->assertStringContainsString('2026-07-28', $message);
-        $this->assertStringContainsString('2025-06-18', $message);
-        $this->assertStringContainsString('2025-03-26', $message);
+        $this->assertSame('exotic-crm', $response->json('result._meta')['io.modelcontextprotocol/serverInfo']['name']);
     }
 
     public function test_parameterless_tools_expose_properties_as_a_json_object(): void

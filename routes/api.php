@@ -57,8 +57,10 @@ use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\McpActivityController;
 use App\Http\Controllers\CRM\McpController;
 use App\Http\Controllers\CRM\McpKnowledgeController;
+use App\Http\Controllers\CRM\McpOAuthController;
 use App\Http\Controllers\CRM\McpQualityController;
 use App\Http\Controllers\CRM\McpSettingsController;
+use App\Http\Controllers\CRM\McpStaffAliasController;
 use App\Http\Controllers\CRM\McpTokenController;
 use App\Http\Controllers\CRM\MessagingController;
 use App\Http\Controllers\CRM\MessagingSidecarController;
@@ -196,6 +198,12 @@ Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middlewar
 
 // Stateless MCP transport. McpAuthenticate records pre-auth refusals itself.
 Route::post('/mcp', McpController::class)->middleware(['mcp.size', 'mcp.auth']);
+Route::get('/.well-known/oauth-protected-resource', [McpOAuthController::class, 'protectedResource']);
+Route::get('/.well-known/oauth-authorization-server', [McpOAuthController::class, 'metadata']);
+Route::post('/mcp/oauth/register', [McpOAuthController::class, 'registerClient'])->middleware('throttle:10,1');
+Route::get('/mcp/oauth/authorize', [McpOAuthController::class, 'consent'])->middleware('auth:sanctum');
+Route::post('/mcp/oauth/token', [McpOAuthController::class, 'token'])->middleware('throttle:30,1');
+Route::post('/mcp/oauth/revoke', [McpOAuthController::class, 'revoke'])->middleware('throttle:30,1');
 
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);
@@ -303,6 +311,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::get('/settings/mcp/tokens', [McpTokenController::class, 'index'])->middleware('role:admin');
     Route::get('/settings/mcp/tokens/options', [McpTokenController::class, 'options'])->middleware('role:admin');
     Route::post('/settings/mcp/tokens', [McpTokenController::class, 'store'])->middleware('role:admin');
+    Route::patch('/settings/mcp/tokens/{token}', [McpTokenController::class, 'update'])->middleware('role:admin');
+    Route::get('/settings/mcp/staff-aliases', [McpStaffAliasController::class, 'index'])->middleware('role:admin');
+    Route::put('/settings/mcp/staff-aliases/{user}', [McpStaffAliasController::class, 'update'])->middleware('role:admin');
     Route::delete('/settings/mcp/tokens/{token}', [McpTokenController::class, 'destroy'])->middleware('role:admin');
     Route::get('/settings/mcp/knowledge', [McpKnowledgeController::class, 'index'])->middleware('role:admin,sub_admin');
     Route::get('/settings/mcp/knowledge/versions/{version}/review', [McpKnowledgeController::class, 'review'])->middleware('role:admin');

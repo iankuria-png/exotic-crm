@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\BillingController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
+use App\Http\Controllers\CRM\McpOAuthController;
 use App\Http\Controllers\ManualCheckoutController;
 
 
@@ -62,6 +63,13 @@ Route::get('/google-auth-success', [GoogleAuthController::class, 'googleAuthSucc
 // authenticate via the first-party session cookie even though /api is bearer-only.
 Route::post('/crm/auth/exchange', [CrmAuthController::class, 'exchangeSessionToken'])
     ->name('crm.auth.exchange');
+
+// OAuth discovery must be available at the resource origin, not behind the
+// SPA fallback. API aliases remain available for clients that derive from the
+// /api/mcp endpoint.
+Route::get('/.well-known/oauth-protected-resource', [McpOAuthController::class, 'protectedResource']);
+Route::get('/.well-known/oauth-authorization-server', [McpOAuthController::class, 'metadata']);
+Route::get('/mcp/oauth/authorize', [McpOAuthController::class, 'consent'])->middleware('auth');
 Route::get('/crm/impersonation/{bridge}', [CrmAuthController::class, 'consumeImpersonationBridge'])
     ->middleware('signed')
     ->name('crm.impersonation.consume');

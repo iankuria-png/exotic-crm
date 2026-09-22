@@ -33,16 +33,17 @@ class McpKnowledgeLayerTest extends TestCase
         $this->assertSame('object', $response->json('result.tools.0.outputSchema.type'));
     }
 
-    public function test_2026_is_rejected_as_an_unsupported_protocol_version(): void
+    public function test_2026_stateless_client_can_list_tools_without_initialize(): void
     {
         Config::set('mcp.enabled', true);
         Config::set('mcp.waves.contracts', true);
         $user = User::factory()->create(['role' => 'admin']);
         $plain = $user->createToken('mcp:knowledge', ['mcp:read'], now()->addDay())->plainTextToken;
 
-        $this->withToken($plain)->postJson('/api/mcp', $this->request('tools/list'), $this->headers('tools/list', '2026-07-28'))
-            ->assertStatus(400)
-            ->assertJsonPath('error.code', -32022);
+        $request = $this->request('tools/list');
+        $request['params']['_meta']['io.modelcontextprotocol/protocolVersion'] = '2026-07-28';
+        $response = $this->withToken($plain)->postJson('/api/mcp', $request, ['Accept' => 'application/json, text/event-stream', 'Content-Type' => 'application/json', 'MCP-Protocol-Version' => '2026-07-28'])->assertOk();
+        $this->assertSame('exotic-crm', $response->json('result._meta')['io.modelcontextprotocol/serverInfo']['name']);
     }
 
     public function test_admin_can_activate_the_initial_ontology_release(): void

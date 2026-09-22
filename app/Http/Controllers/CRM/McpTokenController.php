@@ -7,6 +7,7 @@ use App\Models\McpTokenLimit;
 use App\Models\McpToolCall;
 use App\Models\User;
 use App\Services\Mcp\McpSettingsService;
+use App\Services\Mcp\McpTokenGrantService;
 use App\Services\Mcp\PromptRegistry;
 use App\Services\Mcp\ResourceRegistry;
 use App\Services\Mcp\ToolRegistry;
@@ -16,7 +17,7 @@ use Laravel\Sanctum\PersonalAccessToken;
 
 class McpTokenController extends Controller
 {
-    public function __construct(private readonly ToolRegistry $registry, private readonly McpSettingsService $settings, private readonly PromptRegistry $prompts, private readonly ResourceRegistry $resources) {}
+    public function __construct(private readonly ToolRegistry $registry, private readonly McpSettingsService $settings, private readonly PromptRegistry $prompts, private readonly ResourceRegistry $resources, private readonly McpTokenGrantService $grants) {}
 
     public function options()
     {
@@ -129,5 +130,20 @@ class McpTokenController extends Controller
         $token->delete();
 
         return response()->json(['status' => 'revoked']);
+    }
+
+    public function update(Request $request, PersonalAccessToken $token)
+    {
+        $data = $request->validate([
+            'tools' => ['sometimes', 'array'], 'tools.*' => ['string'],
+            'resources' => ['sometimes', 'array'], 'resources.*' => ['string'],
+            'prompts' => ['sometimes', 'array'], 'prompts.*' => ['string'],
+            'identified_clients' => ['sometimes', 'boolean'],
+            'expires_at' => ['nullable', 'date', 'after:now', 'before_or_equal:+365 days'],
+            'daily_rows' => ['nullable', 'integer', 'min:1', 'max:10000000'],
+            'daily_bytes' => ['nullable', 'integer', 'min:1', 'max:1000000000'],
+        ]);
+
+        return response()->json($this->grants->update($token, $request->user(), $data));
     }
 }
