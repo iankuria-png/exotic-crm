@@ -385,7 +385,7 @@ class McpServer
     {
         $version = (string) ($request->header('MCP-Protocol-Version') ?: data_get($params, '_meta.io.modelcontextprotocol/protocolVersion') ?: $params['protocolVersion'] ?? '2025-03-26');
 
-        return new McpProtocolContext($version, in_array($version, ['2026-07-28', '2025-06-18'], true) && (bool) config('mcp.waves.contracts'));
+        return new McpProtocolContext($version, in_array($version, ['2026-07-28', '2025-11-25', '2025-06-18'], true) && (bool) config('mcp.waves.contracts'));
     }
 
     private function runReportingSql(array $arguments, User $user): array

@@ -489,6 +489,34 @@ class McpEndpointTest extends TestCase
         $this->assertSame([], $response->json('result.contents.0._meta.ui.csp.connectDomains'));
     }
 
+    public function test_2025_11_adapter_serves_the_revenue_dashboard_app_template(): void
+    {
+        Config::set('mcp.enabled', true);
+        Config::set('mcp.waves.contracts', true);
+        $user = User::factory()->create(['role' => 'admin']);
+        $token = $user->createToken('mcp:ui-resource-2025-11', ['mcp:read'], now()->addDay())->plainTextToken;
+
+        $response = $this->withToken($token)
+            ->postJson('/api/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 131,
+                'method' => 'resources/read',
+                'params' => [
+                    'uri' => 'ui://exotic/revenue-dashboard/v1.html',
+                    '_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-11-25'],
+                ],
+            ], [
+                'Accept' => 'application/json, text/event-stream',
+                'Content-Type' => 'application/json',
+                'MCP-Protocol-Version' => '2025-11-25',
+            ])
+            ->assertOk();
+
+        $response->assertJsonPath('result.contents.0.mimeType', 'text/html;profile=mcp-app');
+        $this->assertStringContainsString('<main class="shell">', $response->json('result.contents.0.text'));
+        $this->assertSame([], $response->json('result.contents.0._meta.ui.csp.connectDomains'));
+    }
+
     public function test_revenue_dashboard_render_tool_returns_structured_content(): void
     {
         Config::set('mcp.enabled', true);

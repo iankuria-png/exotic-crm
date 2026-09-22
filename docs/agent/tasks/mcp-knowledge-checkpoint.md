@@ -163,3 +163,26 @@
 - Commit/push is authorised; production deployment still requires a separate
   cPanel pull authorisation. After a pull, retest the three failed tools and one
   enhanced-token edit from Settings, then rotate the externally shared token.
+
+## 2026-09-22 ChatGPT MCP App diagnosis
+
+- ChatGPT successfully received the revenue answer but displayed “Failed to
+  fetch template” for the optional MCP App. The registered HTML MIME type and
+  tool metadata follow the current MCP Apps requirements. Source inspection
+  found a protocol-adapter gap instead: `2025-11-25` is advertised as supported
+  but is omitted from `McpServer::protocolContext()` enhanced versions. A
+  `resources/read` request at that revision therefore follows the legacy
+  handler, which has no `ui://` resource registry, and cannot fetch the revenue
+  template. Repair: include the retained `2025-11-25` adapter in the enhanced
+  context and add a direct resource-read/template fixture for that revision.
+
+## 2026-09-22 ChatGPT MCP App repair
+
+- Authorised repair: the `2025-11-25` adapter now enters the enhanced MCP
+  context, so `resources/read` resolves the revenue dashboard `ui://` template
+  with the MCP App HTML MIME type and CSP metadata. A direct ChatGPT-style
+  fixture omits legacy `Mcp-Method` headers and verifies that exact response.
+- Targeted template coverage passed: 2 tests / 8 assertions. Complete MCP suite
+  passed: 39 tests / 248 assertions. Pint passed for the two changed PHP files;
+  no frontend source or generated build asset changed. Commit/push is authorised;
+  cPanel deployment remains separately unauthorised.

@@ -31,6 +31,10 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   enhanced token-grant validation mismatch. The authorised local repair and
   verification are recorded in the MCP checkpoint; push status must be checked
   against Git rather than inferred from this note.
+- MCP App compatibility repair (22 Sep): ChatGPT template fetching exposed that
+  the advertised `2025-11-25` adapter was not routed to enhanced UI resources.
+  The local repair and regression are recorded in the MCP checkpoint; verify the
+  deployed connector separately after any authorised cPanel pull.
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is
