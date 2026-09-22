@@ -49,6 +49,13 @@ const CREATE_PROFILE_IMAGE_LIMIT = 6;
 const CREATE_PROFILE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const CREATE_PROFILE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const CREATE_PROFILE_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const CLIENT_GENDER_OPTIONS = [
+    { value: '1', label: 'Female' },
+    { value: '2', label: 'Male' },
+    { value: '3', label: 'Couple' },
+    { value: '4', label: 'Gay' },
+    { value: '5', label: 'Transsexual' },
+];
 
 function createDefaultClientForm(platformId = '') {
     return {
@@ -542,6 +549,7 @@ export default function Clients() {
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedHighRiskFilters = new Set(['1']);
     const allowedClientTypes = new Set(['escort', 'agency']);
+    const allowedClientGenders = new Set(CLIENT_GENDER_OPTIONS.map((option) => option.value));
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned', 'field']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
@@ -602,6 +610,10 @@ export default function Clients() {
     const [clientTypeFilter, setClientTypeFilter] = useState(() => {
         const requested = (searchParams.get('client_type') || '').trim();
         return allowedClientTypes.has(requested) ? requested : '';
+    });
+    const [genderFilter, setGenderFilter] = useState(() => {
+        const requested = (searchParams.get('gender') || '').trim();
+        return allowedClientGenders.has(requested) ? requested : '';
     });
     const [planFilter, setPlanFilter] = useState(() => (searchParams.get('plan') || '').trim());
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
@@ -744,6 +756,7 @@ export default function Clients() {
             statusFilter,
             recoveryOriginFilter,
             clientTypeFilter,
+            genderFilter,
             planFilter,
             verifiedFilter,
             highRiskFilter,
@@ -771,6 +784,7 @@ export default function Clients() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(recoveryOriginFilter && { recovery_origin: recoveryOriginFilter }),
                     ...(clientTypeFilter && { client_type: clientTypeFilter }),
+                    ...(genderFilter && { gender: genderFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
                     ...(highRiskFilter === '1' && { high_risk: 1 }),
@@ -1652,6 +1666,7 @@ export default function Clients() {
         if (
             statusFilter === 'publish'
             && clientTypeFilter === ''
+            && genderFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1664,6 +1679,7 @@ export default function Clients() {
             newUsersFilter === '7d'
             && statusFilter === ''
             && clientTypeFilter === ''
+            && genderFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1679,6 +1695,7 @@ export default function Clients() {
             verifiedFilter === '1'
             && statusFilter === ''
             && clientTypeFilter === ''
+            && genderFilter === ''
             && planFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
@@ -1690,6 +1707,7 @@ export default function Clients() {
             retentionBandFilter === 'watch'
             && statusFilter === ''
             && clientTypeFilter === ''
+            && genderFilter === ''
             && planFilter === ''
             && verifiedFilter === ''
             && onlineFilter === ''
@@ -1704,6 +1722,7 @@ export default function Clients() {
         behaviorTagFilter,
         clientTypeFilter,
         contactUnlockFilter,
+        genderFilter,
         hasChatFilter,
         newUsersFilter,
         onlineFilter,
@@ -1719,6 +1738,7 @@ export default function Clients() {
         if (activeMetric === metricKey) {
             setStatusFilter('');
             setClientTypeFilter('');
+            setGenderFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setOnlineFilter('');
@@ -1738,6 +1758,7 @@ export default function Clients() {
         if (metricKey === 'active') {
             setStatusFilter('publish');
             setClientTypeFilter('');
+            setGenderFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('');
@@ -1749,6 +1770,7 @@ export default function Clients() {
         } else if (metricKey === 'new_users') {
             setStatusFilter('');
             setClientTypeFilter('');
+            setGenderFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('7d');
@@ -1760,6 +1782,7 @@ export default function Clients() {
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setClientTypeFilter('');
+            setGenderFilter('');
             setPlanFilter('');
             setVerifiedFilter('1');
             setNewUsersFilter('');
@@ -1774,6 +1797,7 @@ export default function Clients() {
         } else if (metricKey === 'retention_watch') {
             setStatusFilter('');
             setClientTypeFilter('');
+            setGenderFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
             setNewUsersFilter('');
@@ -1801,6 +1825,7 @@ export default function Clients() {
         || statusFilter
         || recoveryOriginFilter
         || clientTypeFilter
+        || genderFilter
         || planFilter
         || verifiedFilter !== ''
         || highRiskFilter !== ''
@@ -2633,6 +2658,16 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Gender"
+                        value={genderFilter}
+                        onChange={(event) => { setGenderFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All genders' },
+                            ...CLIENT_GENDER_OPTIONS,
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Plan"
                         value={planFilter}
                         onChange={(event) => { setPlanFilter(event.target.value); setPage(1); }}
@@ -2810,6 +2845,7 @@ export default function Clients() {
                                 setStatusFilter('');
                                 setRecoveryOriginFilter('');
                                 setClientTypeFilter('');
+                                setGenderFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
                                 setHighRiskFilter('');

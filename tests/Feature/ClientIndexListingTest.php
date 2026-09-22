@@ -174,6 +174,34 @@ class ClientIndexListingTest extends TestCase
         );
     }
 
+    public function test_clients_index_can_filter_clients_by_gender(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $female = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Female Client',
+            'gender' => '1',
+        ]);
+        Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Male Client',
+            'gender' => '2',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&gender=1")
+            ->assertOk()
+            ->assertJsonPath('stats.total', 1)
+            ->assertJsonPath('data.0.id', $female->id)
+            ->assertJsonPath('data.0.gender', '1');
+
+        $this->getJson("/api/crm/clients?platform_id={$platform->id}&gender=unknown")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('gender');
+    }
+
     public function test_clients_index_filters_created_date_range_and_reports_new_user_stats(): void
     {
         $platform = $this->createPlatform();

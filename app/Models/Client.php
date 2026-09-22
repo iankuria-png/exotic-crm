@@ -48,6 +48,7 @@ class Client extends Model
         'wp_profile_permalink',
         'wp_profile_slug',
         'client_type',
+        'gender',
         'signup_source',
         'name',
         'phone_normalized',

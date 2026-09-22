@@ -137,6 +137,7 @@ class ClientController extends Controller
             // those callers, which surfaced as "no clients found" instead of an error.
             'per_page' => 'nullable|integer|min:1|max:150',
             'client_type' => 'nullable|string|in:escort,agency',
+            'gender' => 'nullable|string|in:1,2,3,4,5',
         ]);
 
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -212,6 +213,10 @@ class ClientController extends Controller
 
         if (! empty($validated['client_type'])) {
             $query->where('client_type', $validated['client_type']);
+        }
+
+        if (! empty($validated['gender'])) {
+            $query->where('gender', $validated['gender']);
         }
 
         $view = strtolower((string) $request->input('view', 'all'));

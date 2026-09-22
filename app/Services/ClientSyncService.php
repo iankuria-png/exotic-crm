@@ -188,6 +188,9 @@ class ClientSyncService
             'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
             'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
             'client_type' => $clientType,
+            'gender' => array_key_exists('gender', $wpClient)
+                ? $this->normalizeGender($wpClient['gender'])
+                : $client->gender,
             'name' => $name ?: null,
             'phone_normalized' => $phone ?: null,
             'email' => $email ?: null,
@@ -866,6 +869,9 @@ class ClientSyncService
             'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
             'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
             'client_type' => $clientType,
+            'gender' => array_key_exists('gender', $wpClient)
+                ? $this->normalizeGender($wpClient['gender'])
+                : $existing?->gender,
             'name' => $name !== '' ? $name : null,
             'phone_normalized' => $phone !== '' ? $phone : null,
             'email' => $email !== '' ? $email : null,
@@ -1161,6 +1167,13 @@ class ClientSyncService
     private function normalizeClientType(mixed $value): string
     {
         return strtolower(trim((string) $value)) === 'agency' ? 'agency' : 'escort';
+    }
+
+    private function normalizeGender(mixed $value): ?string
+    {
+        $gender = trim((string) $value);
+
+        return in_array($gender, ['1', '2', '3', '4', '5'], true) ? $gender : null;
     }
 
     private function syncProfileTypes(array $capability = []): array

@@ -14,6 +14,7 @@ export default function FilterSelect({ label, value, onChange, options, classNam
                 <select
                     value={value}
                     onChange={onChange}
+                    aria-label={label || undefined}
                     className={`crm-select-enhanced ${isActive ? 'border-teal-400 bg-teal-50/40 text-teal-800' : ''}`}
                 >
                     {options.map((opt) => (

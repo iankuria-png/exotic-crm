@@ -30,6 +30,7 @@ const rows = [
         display_image_url: '',
         last_online_at: null,
         signup_source: 'fast_signup',
+        gender: '1',
         platform: { id: 1, name: 'Kenya' },
         active_deal: null,
         plan_label: 'Basic',
@@ -59,6 +60,7 @@ const rows = [
         display_image_url: '',
         last_online_at: null,
         signup_source: 'crm_manual',
+        gender: '2',
         platform: { id: 1, name: 'Kenya' },
         active_deal: null,
         plan_label: 'Basic',
@@ -68,17 +70,19 @@ const rows = [
     },
 ];
 
-function clientsPayload(search = '') {
+function clientsPayload(search = '', gender = '') {
+    const visibleRows = gender ? rows.filter((row) => row.gender === gender) : rows;
+
     return {
         current_page: 1,
-        data: rows,
+        data: visibleRows,
         from: 1,
         last_page: 1,
         per_page: 50,
-        to: rows.length,
-        total: rows.length,
+        to: visibleRows.length,
+        total: visibleRows.length,
         stats: {
-            total: rows.length,
+            total: visibleRows.length,
             active: 1,
             premium: 0,
             verified: 0,
@@ -152,7 +156,10 @@ async function stubClientsPage(page) {
         const url = new URL(route.request().url());
         await route.fulfill({
             contentType: 'application/json',
-            body: JSON.stringify(clientsPayload(url.searchParams.get('search') || '')),
+            body: JSON.stringify(clientsPayload(
+                url.searchParams.get('search') || '',
+                url.searchParams.get('gender') || '',
+            )),
         });
     });
 }
@@ -180,5 +187,24 @@ test.describe('clients profile URL table identity', () => {
 
         await expect(page.getByText('CRM profile found, but WordPress resolves this URL differently')).toBeVisible();
         await expect(page.getByText(/CRM has WP #10026; WordPress resolves this URL to WP #44822/)).toBeVisible();
+    });
+
+    test('filters the list by gender without changing the page route', async ({ page }) => {
+        await stubClientsPage(page);
+
+        await page.goto('/clients', { waitUntil: 'domcontentloaded' });
+        await expect(page.getByText('Faith Videos')).toBeVisible();
+        await expect(page.getByLabel('Gender')).toHaveValue('');
+
+        const filteredRequest = page.waitForRequest((request) => (
+            request.url().includes('/api/crm/clients')
+            && new URL(request.url()).searchParams.get('gender') === '2'
+        ));
+        await page.getByLabel('Gender').selectOption('2');
+        await filteredRequest;
+
+        await expect(page.getByText('Short Link')).toBeVisible();
+        await expect(page.getByText('Faith Videos')).toHaveCount(0);
+        await expect(page).toHaveURL(/\/clients$/);
     });
 });
