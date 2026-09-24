@@ -25,6 +25,20 @@ class LinkInjectorTest extends TestCase
         $this->assertStringContainsString('<a href="/escorts/nairobi">Nairobi</a>', $result);
     }
 
+    public function test_preserves_accented_characters_when_injecting(): void
+    {
+        $html = '<p>À Cocody, sans détour. Où le naturel prime, à Abidjan.</p>';
+        $catalog = [
+            ['keyword' => 'Cocody', 'url' => '/escorts/cocody', 'category' => 'location', 'priority' => 10],
+        ];
+        $result = $this->injector->inject($html, $catalog);
+
+        $this->assertStringContainsString('<a href="/escorts/cocody">Cocody</a>', $result);
+        $this->assertStringContainsString('sans détour. Où le naturel prime, à Abidjan.', $result);
+        $this->assertStringNotContainsString('Ã', $result);
+        $this->assertStringNotContainsString('<meta', $result);
+    }
+
     public function test_returns_original_html_when_catalog_empty(): void
     {
         $html = '<p>Original text.</p>';

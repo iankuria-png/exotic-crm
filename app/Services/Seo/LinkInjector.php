@@ -194,7 +194,9 @@ class LinkInjector
     {
         $dom = new DOMDocument('1.0', 'UTF-8');
 
-        $wrapped = '<!DOCTYPE html><html><body>' . $html . '</body></html>';
+        // Without the charset declaration libxml reads the bytes as Latin-1,
+        // turning French/Portuguese accents into mojibake ("détour" → "dÃ©tour").
+        $wrapped = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' . $html . '</body></html>';
 
         $prevErrors = libxml_use_internal_errors(true);
         $ok = $dom->loadHTML($wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
