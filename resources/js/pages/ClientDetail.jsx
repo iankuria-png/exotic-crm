@@ -40,6 +40,8 @@ import {
 } from '../components/clients/profile-fields/profileFieldCatalog';
 import RegionCitySelect from '../components/clients/profile-fields/RegionCitySelect';
 import CurrencySelect, { formatCurrencyBadge } from '../components/clients/profile-fields/CurrencySelect';
+import { BioTextCheck, BioTextSaveWarning } from '../components/seo/BioTextCheck';
+import { inspectBioText } from '../utils/bioTextIntegrity';
 
 const mediaProxyAvailabilityCache = new Map();
 
@@ -1370,6 +1372,8 @@ export default function ClientDetail() {
     const [profileSection, setProfileSection] = useState('personal');
     const [profileForm, setProfileForm] = useState(null);
     const [profileReason, setProfileReason] = useState('Profile edited from CRM');
+    // Profile fields waiting on the broken-bio-text warning before saving.
+    const [bioTextWarningFields, setBioTextWarningFields] = useState(null);
     const [profileForce, setProfileForce] = useState(false);
     const [profileConflict, setProfileConflict] = useState(null);
     const [mediaUploadFiles, setMediaUploadFiles] = useState([]);
@@ -3593,7 +3597,7 @@ export default function ClientDetail() {
             && !activationSubscriptionLifecycleReason.trim()
         );
 
-    const submitProfileUpdate = () => {
+    const submitProfileUpdate = ({ skipBioTextCheck = false } = {}) => {
         if (!profileForm) {
             return;
         }
@@ -3685,6 +3689,11 @@ export default function ClientDetail() {
 
         if (Object.keys(fields).length === 0) {
             toast.warning('No profile changes to save.');
+            return;
+        }
+
+        if (!skipBioTextCheck && typeof fields.content === 'string' && fields.content !== '' && !inspectBioText(fields.content, 'html').clean) {
+            setBioTextWarningFields(fields);
             return;
         }
 
@@ -5741,6 +5750,12 @@ export default function ClientDetail() {
                                                 rows={4}
                                                 placeholder="Public profile description"
                                             />
+                                            <BioTextCheck
+                                                value={profileForm?.bio || ''}
+                                                format="html"
+                                                onChange={(bio) => setProfileForm((current) => ({ ...current, bio }))}
+                                                className="mt-2"
+                                            />
                                             <div className="flex items-center gap-3 mt-1">
                                                 <GenerateBioButton
                                                     clientId={client?.id ?? null}
@@ -6502,13 +6517,30 @@ export default function ClientDetail() {
                                     <div className="mt-2 flex justify-end">
                                         <button
                                             type="button"
-                                            onClick={submitProfileUpdate}
+                                            onClick={() => submitProfileUpdate()}
                                             disabled={!profileForm?.name?.trim() || !profileReason.trim() || updateProfileMutation.isPending || (profileConflict && !profileForce)}
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {updateProfileMutation.isPending ? 'Syncing to WordPress...' : 'Save profile changes'}
                                         </button>
                                     </div>
+                                    <BioTextSaveWarning
+                                        open={Boolean(bioTextWarningFields)}
+                                        value={bioTextWarningFields?.content || ''}
+                                        format="html"
+                                        continueLabel="save"
+                                        isPending={updateProfileMutation.isPending}
+                                        onCancel={() => setBioTextWarningFields(null)}
+                                        onContinueAnyway={() => {
+                                            updateProfileMutation.mutate({ fields: bioTextWarningFields, force: profileForce });
+                                            setBioTextWarningFields(null);
+                                        }}
+                                        onFixAndContinue={(bio) => {
+                                            setProfileForm((current) => ({ ...current, bio }));
+                                            updateProfileMutation.mutate({ fields: { ...bioTextWarningFields, content: bio }, force: profileForce });
+                                            setBioTextWarningFields(null);
+                                        }}
+                                    />
                                 </div>
                             ) : null}
                         </div>

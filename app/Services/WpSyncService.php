@@ -6,6 +6,7 @@ use App\Exceptions\MarketUnavailableException;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Support\BioContactScrubber;
+use App\Support\BioTextIntegrity;
 use App\Support\WordPressSiteConnection;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
@@ -290,9 +291,17 @@ class WpSyncService
 
     /**
      * Update editable profile fields on WordPress.
+     *
+     * Garbled accents ("dÃ©tour") are repaired on the way out, whatever the
+     * caller; only a restore that must write a backup back verbatim passes
+     * $repairBioText = false.
      */
-    public function updateClientProfile(int $postId, array $fields, bool $bypassBioGuard = false): array
+    public function updateClientProfile(int $postId, array $fields, bool $bypassBioGuard = false, bool $repairBioText = true): array
     {
+        if ($repairBioText) {
+            $fields = $this->repairBioText($postId, $fields);
+        }
+
         if (! $bypassBioGuard) {
             $fields = $this->guardBioContent($postId, $fields);
         }
@@ -479,6 +488,26 @@ class WpSyncService
             'reason' => $reason,
             'actor' => $actor,
         ], static fn ($value): bool => $value !== null));
+    }
+
+    private function repairBioText(int $postId, array $fields): array
+    {
+        foreach (['content', 'post_content'] as $key) {
+            if (! isset($fields[$key]) || ! is_string($fields[$key]) || $fields[$key] === '') {
+                continue;
+            }
+
+            $repaired = BioTextIntegrity::fix($fields[$key], BioTextIntegrity::FORMAT_HTML, [BioTextIntegrity::BROKEN_ACCENTS]);
+            if ($repaired !== $fields[$key]) {
+                Log::info('Repaired garbled accents in a bio write', [
+                    'platform_id' => $this->platformId,
+                    'wp_post_id' => $postId,
+                ]);
+                $fields[$key] = $repaired;
+            }
+        }
+
+        return $fields;
     }
 
     /**

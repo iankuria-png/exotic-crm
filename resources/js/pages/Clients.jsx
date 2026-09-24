@@ -17,6 +17,7 @@ import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import LocationsView from '../components/clients/LocationsView';
 import SeoRecoveryView from '../components/clients/SeoRecoveryView';
 import ProfileUrlHealthView from '../components/clients/ProfileUrlHealthView';
+import BioTextHealthView from '../components/clients/BioTextHealthView';
 import SmartDeleteDialog from '../components/clients/SmartDeleteDialog';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import ClientCreateModal from '../components/clients/ClientCreateModal';
@@ -589,7 +590,7 @@ export default function Clients() {
     const [searchParams, setSearchParams] = useSearchParams();
     const allowedTabs = new Set([
         'all', 'conversion', 'closed', 'churned', 'optimizer', 'locations',
-        ...(canRecoverSeo ? ['seo_recovery', 'profile_urls'] : []),
+        ...(canRecoverSeo ? ['seo_recovery', 'profile_urls', 'bio_text'] : []),
     ]);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
@@ -2524,6 +2525,11 @@ export default function Clients() {
                     ⇢ Profile URLs
                 </button>
             ) : null}
+            {canRecoverSeo ? (
+                <button type="button" role="tab" aria-selected={tab === 'bio_text'} className={`${tabClass('bio_text')} rounded-md`} onClick={() => setTab('bio_text')}>
+                    ¶ Bio text
+                </button>
+            ) : null}
         </div>
     );
 
@@ -2608,6 +2614,26 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <ProfileUrlHealthView
+                    platformId={platformFilter}
+                    platforms={platformOptions.map((platform) => ({
+                        id: platform.platform_id,
+                        name: platform.platform_name,
+                    }))}
+                    marketName={activeMarketName}
+                />
+            </div>
+        );
+    }
+
+    if (tab === 'bio_text') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Bios that show garbled accents, stray code or AI leftovers to visitors and Google — found, repaired and backed up."
+                />
+                {tabStrip}
+                <BioTextHealthView
                     platformId={platformFilter}
                     platforms={platformOptions.map((platform) => ({
                         id: platform.platform_id,

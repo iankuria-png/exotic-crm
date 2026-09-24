@@ -1,0 +1,258 @@
+{
+  "_note": "Shared by BioTextIntegrityTest (PHP) and bio-text-integrity.spec.js (JS). kinds = issues found in order; fixed = every fix; fixed_safe = SAFE_FIXES only.",
+  "cases": [
+    {
+      "name": "clean French bio is left alone",
+      "format": "html",
+      "input": "<p>À Cocody, une rencontre sans détour. Où le naturel prime, à Abidjan. Château, naïve, cœur.</p>",
+      "kinds": [],
+      "fixed": "<p>À Cocody, une rencontre sans détour. Où le naturel prime, à Abidjan. Château, naïve, cœur.</p>",
+      "fixed_safe": "<p>À Cocody, une rencontre sans détour. Où le naturel prime, à Abidjan. Château, naïve, cœur.</p>"
+    },
+    {
+      "name": "clean Portuguese bio is left alone",
+      "format": "html",
+      "input": "<p>Disponível à noite em São Tomé. Não perca, simpática e discreta!</p>",
+      "kinds": [],
+      "fixed": "<p>Disponível à noite em São Tomé. Não perca, simpática e discreta!</p>",
+      "fixed_safe": "<p>Disponível à noite em São Tomé. Não perca, simpática e discreta!</p>"
+    },
+    {
+      "name": "uppercase, typography and symbols are not mistaken for broken accents",
+      "format": "text",
+      "input": "ÉTÉ\u00a0! SÃO PAULO. IRMÃ Ana. Straße, € 50, «bonjour», 5° ± 2, ÇA VA ?",
+      "kinds": [],
+      "fixed": "ÉTÉ\u00a0! SÃO PAULO. IRMÃ Ana. Straße, € 50, «bonjour», 5° ± 2, ÇA VA ?",
+      "fixed_safe": "ÉTÉ\u00a0! SÃO PAULO. IRMÃ Ana. Straße, € 50, «bonjour», 5° ± 2, ÇA VA ?"
+    },
+    {
+      "name": "French bio garbled by the old SEO link step (Latin-1, hidden control characters)",
+      "format": "html",
+      "input": "<p>Ã\u0080 <a href=\"/escorts/cocody\">Cocody</a>, pour une rencontre sans dÃ©tour. Je propose un massage relaxant et une prÃ©sence qui met Ã\u00a0 lâ\u0080\u0099aise. OÃ¹ le naturel prime.</p>",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "<p>À <a href=\"/escorts/cocody\">Cocody</a>, pour une rencontre sans détour. Je propose un massage relaxant et une présence qui met à l’aise. Où le naturel prime.</p>",
+      "fixed_safe": "<p>À <a href=\"/escorts/cocody\">Cocody</a>, pour une rencontre sans détour. Je propose un massage relaxant et une présence qui met à l’aise. Où le naturel prime.</p>"
+    },
+    {
+      "name": "Portuguese bio garbled by the old SEO link step",
+      "format": "html",
+      "input": "<p>DisponÃ\u00advel Ã\u00a0 noite, simpÃ¡tica e discreta. Atendimento em SÃ£o TomÃ©.</p>",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "<p>Disponível à noite, simpática e discreta. Atendimento em São Tomé.</p>",
+      "fixed_safe": "<p>Disponível à noite, simpática e discreta. Atendimento em São Tomé.</p>"
+    },
+    {
+      "name": "the review-modal text from the screenshot (non-breaking spaces already lost)",
+      "format": "text",
+      "input": "A Cocody, pour une rencontre sans dÃ©tour. Je propose un massage relaxant et une prÃ©sence qui met Ã l'aise. DisponibilitÃ© flexible pour des rendez-vous, une ambiance d'esprit GFE. Mon approche est directe, sans faux-semblant. On passe un moment simple, Ã parler ou non, selon ce que tu recherches. Pour un temps d'Ã©change, sensuel et mature, oÃ¹ le naturel prime.",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "A Cocody, pour une rencontre sans détour. Je propose un massage relaxant et une présence qui met à l'aise. Disponibilité flexible pour des rendez-vous, une ambiance d'esprit GFE. Mon approche est directe, sans faux-semblant. On passe un moment simple, à parler ou non, selon ce que tu recherches. Pour un temps d'échange, sensuel et mature, où le naturel prime.",
+      "fixed_safe": "A Cocody, pour une rencontre sans détour. Je propose un massage relaxant et une présence qui met à l'aise. Disponibilité flexible pour des rendez-vous, une ambiance d'esprit GFE. Mon approche est directe, sans faux-semblant. On passe un moment simple, à parler ou non, selon ce que tu recherches. Pour un temps d'échange, sensuel et mature, où le naturel prime."
+    },
+    {
+      "name": "Windows-1252 garbling from a model or a paste",
+      "format": "text",
+      "input": "Rencontre sans dÃ©tour â€“ câ€™est simple. â€œDouceâ€ et Â«Â vraieÂ Â».",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "Rencontre sans détour – c’est simple. “Douce” et « vraie ».",
+      "fixed_safe": "Rencontre sans détour – c’est simple. “Douce” et « vraie »."
+    },
+    {
+      "name": "text garbled twice",
+      "format": "text",
+      "input": "Sans dÃƒÂ©tour, ÃƒÂ\u00a0 bientÃƒÂ´t.",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "Sans détour, à bientôt.",
+      "fixed_safe": "Sans détour, à bientôt."
+    },
+    {
+      "name": "garbling written as HTML entities",
+      "format": "html",
+      "input": "<p>caf&Atilde;&copy; &agrave; Dakar &amp; plus</p><p>caf&eacute; intact</p>",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "<p>café à Dakar &amp; plus</p><p>caf&eacute; intact</p>",
+      "fixed_safe": "<p>café à Dakar &amp; plus</p><p>caf&eacute; intact</p>"
+    },
+    {
+      "name": "garbled emoji become real emoji, then count as emoji",
+      "format": "text",
+      "input": "Bisous ðŸ˜˜ à bientôt",
+      "kinds": [
+        "broken_accents",
+        "emoji"
+      ],
+      "fixed": "Bisous à bientôt",
+      "fixed_safe": "Bisous 😘 à bientôt"
+    },
+    {
+      "name": "characters already lost cannot be repaired",
+      "format": "html",
+      "input": "<p>Sans d�tour, pr�sence garantie.</p>",
+      "kinds": [
+        "lost_characters"
+      ],
+      "fixed": "<p>Sans d�tour, pr�sence garantie.</p>",
+      "fixed_safe": "<p>Sans d�tour, pr�sence garantie.</p>"
+    },
+    {
+      "name": "HTML escaped one time too many",
+      "format": "html",
+      "input": "<p>Caf&amp;eacute; &lt;strong&gt;VIP&lt;/strong&gt; &amp; friends</p>",
+      "kinds": [
+        "escaped_html"
+      ],
+      "fixed": "<p>Caf&eacute; <strong>VIP</strong> &amp; friends</p>",
+      "fixed_safe": "<p>Caf&eacute; <strong>VIP</strong> &amp; friends</p>"
+    },
+    {
+      "name": "tags and entities typed into plain text",
+      "format": "text",
+      "input": "Hello<br>there, &eacute;t&eacute; &amp; rock&roll;",
+      "kinds": [
+        "escaped_html"
+      ],
+      "fixed": "Hello\nthere, été & rock&roll;",
+      "fixed_safe": "Hello\nthere, été & rock&roll;"
+    },
+    {
+      "name": "Markdown left by a model",
+      "format": "text",
+      "input": "**VIP** experience\n## About me\nSee [my city](https://example.com/nairobi) and __more__.",
+      "kinds": [
+        "markdown"
+      ],
+      "fixed": "VIP experience\nAbout me\nSee my city and more.",
+      "fixed_safe": "**VIP** experience\n## About me\nSee [my city](https://example.com/nairobi) and __more__."
+    },
+    {
+      "name": "a model's preamble is flagged, not removed",
+      "format": "html",
+      "input": "<p>Here's a revised bio for Amina:</p><p>Warm and discreet.</p>",
+      "kinds": [
+        "ai_text"
+      ],
+      "fixed": "<p>Here's a revised bio for Amina:</p><p>Warm and discreet.</p>",
+      "fixed_safe": "<p>Here's a revised bio for Amina:</p><p>Warm and discreet.</p>"
+    },
+    {
+      "name": "a model's refusal is flagged",
+      "format": "text",
+      "input": "I can’t write promotional content for sexual services.",
+      "kinds": [
+        "ai_text"
+      ],
+      "fixed": "I can’t write promotional content for sexual services.",
+      "fixed_safe": "I can’t write promotional content for sexual services."
+    },
+    {
+      "name": "French preamble and placeholders are flagged",
+      "format": "text",
+      "input": "Voici une bio pour toi :\nRencontre [Name] à [City].",
+      "kinds": [
+        "ai_text"
+      ],
+      "fixed": "Voici une bio pour toi :\nRencontre [Name] à [City].",
+      "fixed_safe": "Voici une bio pour toi :\nRencontre [Name] à [City]."
+    },
+    {
+      "name": "invisible characters",
+      "format": "html",
+      "input": "<p>Nairobi\u200b girl\u00ad with\ufeff style&shy;</p>",
+      "kinds": [
+        "invisible_characters"
+      ],
+      "fixed": "<p>Nairobi girl with style</p>",
+      "fixed_safe": "<p>Nairobi girl with style</p>"
+    },
+    {
+      "name": "emoji are a warning and only removed when asked",
+      "format": "html",
+      "input": "<p>Sweet 💋 and fun ✨!</p>",
+      "kinds": [
+        "emoji"
+      ],
+      "fixed": "<p>Sweet and fun!</p>",
+      "fixed_safe": "<p>Sweet 💋 and fun ✨!</p>"
+    },
+    {
+      "name": "tags and attributes are never rewritten",
+      "format": "html",
+      "input": "<p><a href=\"/escorts/caf%C3%A9\" title=\"Ã©\">dÃ©tour</a></p>",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "<p><a href=\"/escorts/caf%C3%A9\" title=\"Ã©\">détour</a></p>",
+      "fixed_safe": "<p><a href=\"/escorts/caf%C3%A9\" title=\"Ã©\">détour</a></p>"
+    },
+    {
+      "name": "entities typed as text that decode into garbled accents are repaired in one go",
+      "format": "text",
+      "input": "caf&Atilde;&copy; sans d&Atilde;&copy;tour",
+      "kinds": [
+        "escaped_html"
+      ],
+      "fixed": "café sans détour",
+      "fixed_safe": "café sans détour"
+    },
+    {
+      "name": "a person saying they can't help something is not an AI refusal",
+      "format": "text",
+      "input": "I can’t help being myself – I’m open hearted and playful. I cannot provide outcall on Sundays.",
+      "kinds": [],
+      "fixed": "I can’t help being myself – I’m open hearted and playful. I cannot provide outcall on Sundays.",
+      "fixed_safe": "I can’t help being myself – I’m open hearted and playful. I cannot provide outcall on Sundays."
+    },
+    {
+      "name": "an AI refusing to help with the request is flagged",
+      "format": "text",
+      "input": "I'm sorry, but I can't help with that request.",
+      "kinds": [
+        "ai_text"
+      ],
+      "fixed": "I'm sorry, but I can't help with that request.",
+      "fixed_safe": "I'm sorry, but I can't help with that request."
+    },
+    {
+      "name": "advertisers' own **asterisk** emphasis is a warning, never a safe fix",
+      "format": "html",
+      "input": "<p>**FULLY VACCINATED** and discreet</p>",
+      "kinds": [
+        "markdown"
+      ],
+      "fixed": "<p>FULLY VACCINATED and discreet</p>",
+      "fixed_safe": "<p>**FULLY VACCINATED** and discreet</p>"
+    },
+    {
+      "name": "a lone Windows-1252 apostrophe read as Latin-1 becomes an apostrophe again",
+      "format": "html",
+      "input": "<p>Let\u0092s meet, I\u0092m in Westlands.</p>",
+      "kinds": [
+        "broken_accents"
+      ],
+      "fixed": "<p>Let’s meet, I’m in Westlands.</p>",
+      "fixed_safe": "<p>Let’s meet, I’m in Westlands.</p>"
+    },
+    {
+      "name": "joined emoji stay whole unless emoji are removed",
+      "format": "html",
+      "input": "<p>Us 👩\u200d❤\ufe0f\u200d👨 forever</p>",
+      "kinds": [
+        "emoji"
+      ],
+      "fixed": "<p>Us forever</p>",
+      "fixed_safe": "<p>Us 👩\u200d❤\ufe0f\u200d👨 forever</p>"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import SeoScoreBadge from './SeoScoreBadge';
+import { BioTextBadge, BioTextCheck, BioTextSaveWarning, useBioTextReport } from './BioTextCheck';
 
 const LANGUAGE_LABEL = {
     en: 'English',
@@ -61,6 +62,7 @@ export default function BioPreviewModal({
     const [activeRefinements, setActiveRefinements] = useState([]);
     const [editableText, setEditableText] = useState('');
     const [acceptAttempted, setAcceptAttempted] = useState(false);
+    const [textWarningOpen, setTextWarningOpen] = useState(false);
 
     // Translation peek state
     const [showTranslation, setShowTranslation] = useState(false);
@@ -81,6 +83,7 @@ export default function BioPreviewModal({
         () => plainTextToSeoHtml(editableText, protectedLinks),
         [editableText, protectedLinks],
     );
+    const textReport = useBioTextReport(editableText, 'text');
 
     // Reset feedback + translation state when a new bio arrives
     useEffect(() => {
@@ -165,17 +168,25 @@ export default function BioPreviewModal({
         setFeedbackSent(true);
     };
 
-    const handleAccept = () => {
+    const handleAccept = ({ skipTextCheck = false, text = null } = {}) => {
         if (!hasDraft) return;
+
+        // Broken text first: garbled accents or AI leftovers must not slip
+        // into a profile unnoticed.
+        if (!skipTextCheck && !textReport.clean) {
+            setTextWarningOpen(true);
+            return;
+        }
 
         if (missingProtectedLinks.length > 0 && !acceptAttempted) {
             setAcceptAttempted(true);
             return;
         }
 
+        const bioToUse = text === null ? editedBioHtml : plainTextToSeoHtml(text, protectedLinks);
         // Send acceptance feedback before propagating (best-effort, fire-and-forget)
         sendFeedback({ accepted: true });
-        onAccept?.(editedBioHtml);
+        onAccept?.(bioToUse);
     };
 
     const handleRegenerate = (refinementKey) => {
@@ -341,16 +352,22 @@ export default function BioPreviewModal({
                                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Draft editor</p>
                                     <p className="mt-0.5 text-xs text-slate-500">Edits stay in this review step until you use the bio.</p>
                                 </div>
-                                {protectedLinks.length > 0 ? (
-                                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                        missingProtectedLinks.length > 0
-                                            ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
-                                            : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
-                                    }`}>
-                                        {protectedLinks.length - missingProtectedLinks.length}/{protectedLinks.length} SEO links kept
-                                    </span>
-                                ) : null}
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <BioTextBadge value={editableText} format="text" />
+                                    {protectedLinks.length > 0 ? (
+                                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                            missingProtectedLinks.length > 0
+                                                ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                                                : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
+                                        }`}>
+                                            {protectedLinks.length - missingProtectedLinks.length}/{protectedLinks.length} SEO links kept
+                                        </span>
+                                    ) : null}
+                                </div>
                             </div>
+                            {!updatingDraft ? (
+                                <BioTextCheck value={editableText} format="text" onChange={setEditableText} className="m-3 mb-0" />
+                            ) : null}
                             <textarea
                                 value={editableText}
                                 onChange={(event) => setEditableText(event.target.value)}
@@ -579,6 +596,8 @@ export default function BioPreviewModal({
                             ? loading
                                 ? 'Default waterfall is running from the saved SEO Engine provider order.'
                                 : 'Default waterfall uses the saved provider order from SEO Engine settings.'
+                            : !textReport.clean
+                            ? 'Fix the text problems above before using this bio.'
                             : missingProtectedLinks.length > 0
                             ? `${missingProtectedLinks.length} protected SEO link${missingProtectedLinks.length === 1 ? '' : 's'} missing from the edited draft.`
                             : 'Tip: you can edit the copy before saving.'}
@@ -591,7 +610,7 @@ export default function BioPreviewModal({
                             <button
                                 type="button"
                                 className={missingProtectedLinks.length > 0 && !acceptAttempted ? 'crm-btn-secondary' : 'crm-btn-primary'}
-                                onClick={handleAccept}
+                                onClick={() => handleAccept()}
                                 disabled={loading || regenerating}
                             >
                                 {missingProtectedLinks.length > 0 && acceptAttempted ? 'Use anyway' : 'Use this bio'}
@@ -610,6 +629,22 @@ export default function BioPreviewModal({
                         )}
                     </div>
                 </footer>
+                <BioTextSaveWarning
+                    open={textWarningOpen}
+                    value={editableText}
+                    format="text"
+                    continueLabel="use it"
+                    onCancel={() => setTextWarningOpen(false)}
+                    onContinueAnyway={() => {
+                        setTextWarningOpen(false);
+                        handleAccept({ skipTextCheck: true });
+                    }}
+                    onFixAndContinue={(fixedText) => {
+                        setTextWarningOpen(false);
+                        setEditableText(fixedText);
+                        handleAccept({ skipTextCheck: true, text: fixedText });
+                    }}
+                />
             </div>
         </div>
     );

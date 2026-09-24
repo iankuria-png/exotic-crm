@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { normalizePhone } from '../../utils/phone';
 import GenerateBioButton from '../seo/GenerateBioButton';
+import { BioTextCheck } from '../seo/BioTextCheck';
 import { useToast } from '../ToastProvider';
 import {
     MEDIA_UPLOAD_LIMITS,
@@ -1135,6 +1136,12 @@ export default function ClientCreateModal({
                                             rows={4}
                                             maxLength={5000}
                                             placeholder="Short public profile introduction"
+                                        />
+                                        <BioTextCheck
+                                            value={form.bio}
+                                            format="html"
+                                            onChange={(bio) => setForm((current) => ({ ...current, bio }))}
+                                            className="mt-2"
                                         />
                                         <div className="mt-2">
                                             <GenerateBioButton

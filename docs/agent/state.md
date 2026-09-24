@@ -39,6 +39,7 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   deployed connector separately after any authorised cPanel pull.
 - Client story controls (24 Sep): Stories tab + WP story routes pushed as `ede8b6be`; staff posting `641c8771` pushed; market-wide Stories page `aceb3a43` local only (needs exotic-crm-sync 1.3.12 + theme). See [task](tasks/crm-client-story-controls.md).
 - Profile URL ownership (24 Sep): provisioning claim + Clients → Profile URLs repair pushed as `a3676c65` (awaiting cPanel pull + migrate); needs migrate and exotic-crm-sync 1.3.13. See [task](tasks/profile-url-ownership.md).
+- Bio text integrity (24 Sep): shared PHP/JS detection, editor warnings, save-time accent repair and Clients → Bio text market scan/repair/restore are locally complete with fresh build assets. Final read-only Local Kenya run checked 2,505 profiles and reduced the earlier 64 hits to 27 genuine invisible/encoding findings after false-positive tuning. Migration passed on MySQL 8. Ready to commit/push; not deployed. See [task](tasks/bio-text-integrity.md).
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is

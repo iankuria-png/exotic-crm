@@ -73,6 +73,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PbnSiteController;
+use App\Http\Controllers\CRM\BioTextHealthController;
 use App\Http\Controllers\CRM\ProfileUrlHealthController;
 use App\Http\Controllers\CRM\PulseExportController;
 use App\Http\Controllers\CRM\PushCampaignController;
@@ -506,6 +507,18 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/runs/{run}/revert', [LifecycleRestoreController::class, 'revert']);
         Route::post('/clients/{client}/revert', [LifecycleRestoreController::class, 'revertClient']);
     });
+    // Bio text — bios with garbled accents, lost characters or AI leftovers,
+    // checked per market and repaired in WordPress. Admins only.
+    Route::middleware('role:admin,sub_admin')->prefix('bio-text-health')->group(function () {
+        Route::get('/', [BioTextHealthController::class, 'show']);
+        Route::post('/scans', [BioTextHealthController::class, 'store']);
+        Route::get('/scans/{scan}', [BioTextHealthController::class, 'showScan']);
+        Route::get('/scans/{scan}/findings', [BioTextHealthController::class, 'findings']);
+        Route::post('/scans/{scan}/repair', [BioTextHealthController::class, 'repair']);
+        Route::post('/scans/{scan}/restore', [BioTextHealthController::class, 'restore']);
+        Route::get('/scans/{scan}/export', [BioTextHealthController::class, 'export']);
+    });
+
     // Profile URLs — old profile addresses that redirect, or could redirect, to
     // the wrong profile. The repair edits WordPress data, so admins only.
     Route::middleware('role:admin,sub_admin')->prefix('profile-url-health')->group(function () {

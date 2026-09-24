@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import GenerateBioButton from '../seo/GenerateBioButton';
+import { BioTextCheck } from '../seo/BioTextCheck';
 import {
     MEDIA_UPLOAD_LIMITS,
     isVideoUploadFile,
@@ -203,6 +204,7 @@ export default function AgencyManagedProfileModal({
                                 className="crm-input min-h-[112px]"
                                 placeholder="Short first profile bio"
                             />
+                            <BioTextCheck value={form.bio} format="html" onChange={(bio) => onChange({ bio })} className="mt-2" />
                             <div className="mt-2 flex flex-wrap items-center gap-3">
                                 <GenerateBioButton
                                     platformId={platformId || null}

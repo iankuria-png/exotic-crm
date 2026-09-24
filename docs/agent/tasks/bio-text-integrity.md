@@ -1,0 +1,26 @@
+# Task: find, prevent and safely repair broken profile bio text
+
+- ID / project: CRM bio text integrity
+- Updated / status: 2026-09-24; implemented and locally verified, ready to commit and push.
+- Goal and acceptance criteria: warn staff before broken bio text is saved; repair garbled accents on every CRM-to-WordPress bio write; give admins a market-wide read-only check with review, safe repair, backup, verification, selective repair, restore and CSV export; avoid changing advertiser styling or valid Unicode.
+- Scope authorized by the current request: finish the existing uncommitted feature and ship it. The user confirmed the migration ran successfully on MySQL 8 and authorized a real read-only check against Local WordPress.
+- Source plan / decisions / relevant code: `app/Support/BioTextIntegrity.php` and `resources/js/utils/bioTextIntegrity.js` are parity implementations governed by `tests/Fixtures/bio-text-integrity-cases.json`; `BioTextRepairService`, `RunBioTextScanJob` and `BioTextHealthController` own the market workflow; Clients → Bio text and the shared editor warning own the UI.
+- History reconciliation: current source baseline was CRM `65a76176`, which already fixed UTF-8 corruption in SEO link injection. The uncommitted feature extended prevention, detection and repair; unrelated working-tree artifacts were not adopted.
+- Done with evidence:
+  - PHP/JS detectors preserve valid French/Portuguese, intentional Markdown in market scans, emoji ZWJ sequences and ordinary first-person wording; a lone misread Windows-1252 `U+0092` is repaired to `’`.
+  - Market repair re-reads before writing, backs up the current bio, applies only safe fixes, verifies WordPress after writing, records timeline events, keeps the scrubbed original in step and restores byte-for-byte unless a newer edit exists.
+  - Failed runs can resume with already-queued findings on MySQL; an unavailable post-write verification read is recorded as failed/restorable, never confirmed as repaired.
+  - Editors show inline proofreading marks and a save/use warning; generated bios and every CRM profile write have the accent-repair backstop.
+  - Fresh production assets were built and the two admin UI flows passed in Chromium.
+  - Final real Local run, scan `2`: 2,505 linked Kenya profiles read, five missing only because CRM is a production restore and Local WordPress differs; 27 findings (24 profiles with 40 `U+200B`, two with `U+FEFF`, one `U+0092`). No AI-refusal or Markdown false positives remained. WordPress was read-only.
+- In progress / remaining: commit, create the required shared changelog entry, and push `main` for Ian's cPanel pull.
+- Next concrete action or command: selectively stage the task-owned files and commit them.
+- Verification:
+  - `/usr/local/opt/php@8.2/bin/php artisan test --filter='BioTextIntegrityTest|BioTextHealthTest|BioSanitizationTest'` — 103 passed, 286 assertions, 36.67s, source HEAD `65a76176` plus the feature worktree.
+  - `npm run test:browser -- tests/browser/bio-text-integrity.spec.js tests/browser/clients-bio-text.spec.js tests/browser/client-detail-bio-text-warning.spec.js` — 33 passed, 11.9s, against the local CRM and fresh production build.
+  - PHP `-l` — no syntax errors in all 11 changed PHP files. Pint `--test` — 11 files passed.
+  - `npm run build` — Vite 6.4.1 built `app-DpXcHagN.js` and `app-Bf98HvZc.css`; existing forecast CSS/chunk-size warnings only.
+  - Controlled Local WordPress scan — status `scanned`, 2,505/2,505, 5 unreadable, 27 affected/fixable; no WordPress writes.
+- Deployment: local only at this checkpoint. Migration `2026_09_25_000002_create_bio_text_scans_tables.php` has been exercised on local MySQL 8. Production still needs the pushed commit pulled in cPanel and `php artisan migrate`; the heavy queue worker must be running. No production mutation or verification occurred.
+- Files/hunks owned: the bio text controller/job/models/service/support/migration; integrations in `BioGenerationService`, `WpSyncService`, routes and the five bio/profile editor surfaces; detector fixtures/tests/browser specs; matching `public/build` manifest/assets; this task record and the compact state line. Preserve the deleted performance runbook, untracked plans/artifacts and `docs/agent/tasks/client-commercial-metrics.md`.
+- Unresolved questions / blockers: none for commit/push. Deployment and live verification remain Ian's cPanel step.
