@@ -19,3 +19,7 @@ the WP repository: `/Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/cr
   Not browser-checked (local DB has 18 pending migrations; local token minting was refused).
 - Next: push on request, cPanel pull (no migration), deploy plugin 1.3.10 + theme per market,
   then smoke-test the tab on a stories-enabled market.
+
+Follow-up 2026-09-24: staff posting from profile media or upload, header "Add story" badge and
+icon tabs for Chat/Profile Health, committed locally as `641c8771` (needs exotic-crm-sync 1.3.11 +
+theme `upload-handler.php`). Tests 18 passed; see the WP task record for evidence and deploy steps.

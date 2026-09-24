@@ -37,7 +37,7 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   the advertised `2025-11-25` adapter was not routed to enhanced UI resources.
   The local repair and regression are recorded in the MCP checkpoint; verify the
   deployed connector separately after any authorised cPanel pull.
-- Client story controls (24 Sep): Stories tab + WP story routes committed locally as `ede8b6be` (needs exotic-crm-sync 1.3.10 and the matching theme on each market). Not pushed or deployed. See [task](tasks/crm-client-story-controls.md).
+- Client story controls (24 Sep): Stories tab + WP story routes pushed as `ede8b6be`; staff posting follow-up `641c8771` is local only (needs exotic-crm-sync 1.3.11 + theme). See [task](tasks/crm-client-story-controls.md).
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is
