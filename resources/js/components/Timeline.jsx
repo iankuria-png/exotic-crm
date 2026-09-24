@@ -20,7 +20,13 @@ const eventTones = {
     client_login_as_client_link_generated: 'bg-indigo-100 text-indigo-700',
     client_online_now_marked: 'bg-emerald-100 text-emerald-700',
     agency_managed_profile_created: 'bg-violet-100 text-violet-700',
+    story_moderated: 'bg-fuchsia-100 text-fuchsia-700',
+    story_expired: 'bg-slate-200 text-slate-700',
+    story_posting_blocked: 'bg-rose-100 text-rose-700',
+    story_posting_unblocked: 'bg-emerald-100 text-emerald-700',
 };
+
+const storyActionLabels = { approve: 'approved', hide: 'hidden', delete: 'deleted' };
 
 function formatEventDescription(event) {
     const content = event.content || {};
@@ -68,6 +74,14 @@ function formatEventDescription(event) {
             return `Marked client Online Now${content.expected_visible_until ? ` until ${new Date(content.expected_visible_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
         case 'agency_managed_profile_created':
             return `Managed provider added: ${content.managed_profile_name || 'new provider'}`;
+        case 'story_moderated':
+            return `Story #${content.story_id || '?'} ${storyActionLabels[content.action] || content.action || 'moderated'}${content.reason ? `: ${content.reason}` : ''}`;
+        case 'story_expired':
+            return `Story #${content.story_id || '?'} ended early${content.reason ? `: ${content.reason}` : ''}`;
+        case 'story_posting_blocked':
+            return `Story posting paused${content.reason ? `: ${content.reason}` : ''}${content.block_enforced === false ? ' (theme update needed to enforce)' : ''}`;
+        case 'story_posting_unblocked':
+            return 'Story posting resumed';
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';
     }

@@ -20,6 +20,7 @@ import ClientHealthSection from '../components/ClientHealthSection';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
 import SeoQualityPanel from '../components/seo/SeoQualityPanel';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
+import ClientStoriesTab from '../components/clients/ClientStoriesTab';
 import KycPanel from '../components/kyc/KycPanel';
 import CompliancePanel from '../components/compliance/CompliancePanel';
 import { proxyImageUrl } from '../utils/imageProxy';
@@ -1318,7 +1319,7 @@ export default function ClientDetail() {
     } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'agency_roster', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'agency_roster', 'kyc', 'compliance', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'stories', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -1730,6 +1731,22 @@ export default function ClientDetail() {
         queryKey: ['client-timeline', id],
         queryFn: () => api.get(`/crm/clients/${id}/timeline`).then((r) => r.data),
         enabled: activeTab === 'timeline',
+    });
+
+    // Live from WordPress: stories expire hourly, so only fetch while the tab is open.
+    const {
+        data: storiesData,
+        isLoading: storiesLoading,
+        error: storiesError,
+        isFetching: storiesFetching,
+        refetch: refetchStories,
+    } = useQuery({
+        queryKey: ['client-stories', id],
+        queryFn: () => api.get(`/crm/clients/${id}/stories`).then((r) => r.data),
+        enabled: !isAgency && activeTab === 'stories' && Number(client?.wp_post_id || 0) > 0,
+        retry: false,
+        staleTime: 0,
+        refetchOnWindowFocus: false,
     });
 
     const { data: contactUnlockData, isLoading: contactUnlockLoading } = useQuery({
@@ -2703,6 +2720,11 @@ export default function ClientDetail() {
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
             { key: 'contact_unlocks', label: `Unlocks (${client?.contact_unlock_summary?.attempts || 0})` },
+            {
+                key: 'stories',
+                label: storiesData?.enabled ? `Stories (${storiesData?.counts?.total ?? storiesData?.stories?.length ?? 0})` : 'Stories',
+                disabled: Number(client?.wp_post_id || 0) <= 0,
+            },
             // Staff can edit Expired/Archived profiles — the front-end edit lock
             // applies to the advertiser on the website, not to the CRM team, who
             // still need to work these accounts during a win-back.
@@ -2712,17 +2734,17 @@ export default function ClientDetail() {
 
         if (!isReadOnly) {
             return isAgency
-                ? links.filter((tab) => !['analytics', 'wallet', 'contact_unlocks', 'profile_health'].includes(tab.key))
+                ? links.filter((tab) => !['analytics', 'wallet', 'contact_unlocks', 'stories', 'profile_health'].includes(tab.key))
                 : links;
         }
 
         const hiddenTabs = ['edit_profile', 'profile_health', 'chat'];
         if (isAgency) {
-            hiddenTabs.push('analytics', 'wallet', 'contact_unlocks');
+            hiddenTabs.push('analytics', 'wallet', 'contact_unlocks', 'stories');
         }
 
         return links.filter((tab) => !hiddenTabs.includes(tab.key));
-    }, [client, healthData?.summary?.duplicate_count, isAgency, isReadOnly]);
+    }, [client, healthData?.summary?.duplicate_count, isAgency, isReadOnly, storiesData]);
 
     useEffect(() => {
         const allowedTabs = tabLinks.filter((tab) => !tab.disabled).map((tab) => tab.key);
@@ -5495,6 +5517,17 @@ export default function ClientDetail() {
 
             {activeTab === 'contact_unlocks' ? (
                 <ContactUnlocksTab data={contactUnlockData} isLoading={contactUnlockLoading} client={client} />
+            ) : null}
+
+            {activeTab === 'stories' ? (
+                <ClientStoriesTab
+                    clientId={id}
+                    data={storiesData}
+                    isLoading={storiesLoading}
+                    error={storiesError}
+                    isFetching={storiesFetching}
+                    onRefresh={refetchStories}
+                />
             ) : null}
 
             {activeTab === 'edit_profile' && !isReadOnly ? (

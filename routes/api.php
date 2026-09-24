@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\BannerAdController;
 use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\ClientController;
+use App\Http\Controllers\CRM\ClientStoryController;
 use App\Http\Controllers\CRM\ClientErrorController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
@@ -565,6 +566,10 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/{client}/media/bulk-delete', [ClientController::class, 'bulkDeleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::get('/clients/{client}/stories', [ClientStoryController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::post('/clients/{client}/stories/posting', [ClientStoryController::class, 'posting'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/stories/{storyId}/moderate', [ClientStoryController::class, 'moderate'])->whereNumber('storyId')->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/stories/{storyId}/expire', [ClientStoryController::class, 'expire'])->whereNumber('storyId')->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/access-context', [ClientController::class, 'credentialAccessContext'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/wallet', [ClientWalletController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');

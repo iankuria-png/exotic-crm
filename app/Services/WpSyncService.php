@@ -318,6 +318,47 @@ class WpSyncService
     }
 
     /**
+     * Live story state for one advertiser: stories, posting permission, this
+     * week's likes and reward history. Stories expire and are hard-deleted
+     * hourly on WordPress, so callers must not cache these rows as truth.
+     */
+    public function getClientStories(int $postId): array
+    {
+        return $this->get("/clients/{$postId}/stories");
+    }
+
+    /**
+     * Approve, hide or delete one story. WordPress checks that the story
+     * belongs to this profile's account and is not a brand story.
+     */
+    public function moderateClientStory(int $postId, int $storyId, string $action): array
+    {
+        return $this->post("/clients/{$postId}/stories/{$storyId}/moderate", [
+            'action' => $action,
+        ]);
+    }
+
+    /**
+     * End a story now without deleting it; WordPress' hourly expiry removes it.
+     */
+    public function expireClientStory(int $postId, int $storyId): array
+    {
+        return $this->post("/clients/{$postId}/stories/{$storyId}/expire");
+    }
+
+    /**
+     * Pause or resume this advertiser's story posting.
+     */
+    public function setClientStoryPosting(int $postId, bool $blocked, ?string $reason = null, ?string $actor = null): array
+    {
+        return $this->post("/clients/{$postId}/stories/posting", array_filter([
+            'blocked' => $blocked,
+            'reason' => $reason,
+            'actor' => $actor,
+        ], static fn ($value): bool => $value !== null));
+    }
+
+    /**
      * Single gate for bio writes: if this profile is lifecycle-restricted
      * (Expired/Archived) on a lifecycle market, redact contact details before
      * they reach WordPress. Every bio-writing path — SEO generation, bulk bios,

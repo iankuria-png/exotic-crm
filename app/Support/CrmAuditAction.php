@@ -234,6 +234,12 @@ final class CrmAuditAction
 
     public const CLIENT_TOUR_DELETE = 'client_tour_delete';
 
+    public const CLIENT_STORY_MODERATE = 'client_story_moderate';
+
+    public const CLIENT_STORY_EXPIRE = 'client_story_expire';
+
+    public const CLIENT_STORY_POSTING_UPDATE = 'client_story_posting_update';
+
     public const CLIENT_SUBSCRIPTION_DEACTIVATE = 'client_subscription_deactivate';
 
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
