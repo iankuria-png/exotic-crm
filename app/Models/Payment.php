@@ -269,6 +269,19 @@ class Payment extends Model
         });
     }
 
+    /**
+     * Visitor contact unlocks are paid by anonymous buyers against an
+     * advertiser's client_id; they have their own Web Visitors flow and must
+     * never surface as the advertiser's own failed payment.
+     */
+    public function scopeExcludingContactUnlocks($query)
+    {
+        return $query->where(function ($builder) {
+            $builder->whereNull('purpose')
+                ->orWhere('purpose', '!=', self::PURPOSE_VISITOR_CONTACT_UNLOCK);
+        });
+    }
+
     public function scopeWalletTopups($query)
     {
         return $query->where('purpose', self::PURPOSE_WALLET_TOPUP);

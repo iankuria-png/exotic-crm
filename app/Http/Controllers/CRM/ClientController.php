@@ -7142,6 +7142,7 @@ class ClientController extends Controller
             ->with(['client:id,name,phone_normalized,city,platform_id,closed_at', 'client.platform:id,name', 'product:id,name,display_name'])
             ->where('status', 'failed')
             ->where('reconciliation_state', 'open')
+            ->excludingContactUnlocks()
             ->where('created_at', '>=', $rangeStart)
             ->whereHas('client', function ($q) use ($platformScope) {
                 $q->whereNull('closed_at');

@@ -322,6 +322,28 @@ class LifecycleSmsTest extends TestCase
         $this->assertSame('test_payment', $result['skip_reason']);
     }
 
+    public function test_recovery_excludes_visitor_contact_unlock_payments(): void
+    {
+        [$platform] = $this->marketWithOffer();
+        $this->fakeTokenizedLinks();
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+
+        $unlockPayment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'status' => 'failed',
+            'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+            'provider_key' => 'pawapay',
+            'reconciliation_state' => 'open',
+        ]);
+
+        $result = $this->service()->send('recovery', $client->fresh(), ['payment' => $unlockPayment]);
+        $this->assertSame('visitor_contact_unlock', $result['skip_reason']);
+        $this->assertFalse(
+            $this->service()->recoveryTargets((int) $platform->id)->whereKey($unlockPayment->id)->exists()
+        );
+    }
+
     public function test_recovery_sibling_gate_skips_when_client_converted_after_failure(): void
     {
         [$platform] = $this->marketWithOffer();

@@ -345,6 +345,11 @@ class LifecycleSmsService
                 if ($payment->isSandboxTest() || $payment->isClassifiedTest()) {
                     return 'test_payment';
                 }
+                // A visitor's unlock payment carries the advertiser's client_id;
+                // "your payment failed" would reach the wrong person.
+                if ((string) $payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK) {
+                    return 'visitor_contact_unlock';
+                }
                 // Manual payments: the client likely already paid by proof and
                 // is awaiting operator review — "your payment failed" is wrong.
                 if ($payment->manual_payment_bundle_id
@@ -933,6 +938,7 @@ class LifecycleSmsService
             ->where('platform_id', $platformId)
             ->where('status', 'failed')
             ->where('reconciliation_state', 'open')
+            ->excludingContactUnlocks()
             ->whereNull('manual_payment_bundle_id')
             ->where(function (Builder $builder) {
                 $builder->whereNull('provider_key')->orWhere('provider_key', '!=', 'manual_confirmation');

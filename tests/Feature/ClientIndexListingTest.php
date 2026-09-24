@@ -481,6 +481,17 @@ class ClientIndexListingTest extends TestCase
                 'created_at' => now()->subMinutes(20),
                 'updated_at' => now()->subMinutes(20),
             ]);
+            // A visitor's failed unlock carries the advertiser's client_id but
+            // belongs to the Web Visitors flow, not the team's conversion queue.
+            Payment::factory()->create([
+                'platform_id' => $kenya->id,
+                'client_id' => $kenyaFailedClient->id,
+                'status' => 'failed',
+                'purpose' => Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
+                'reconciliation_state' => 'open',
+                'created_at' => now()->subMinutes(15),
+                'updated_at' => now()->subMinutes(15),
+            ]);
 
             Sanctum::actingAs($admin);
 
