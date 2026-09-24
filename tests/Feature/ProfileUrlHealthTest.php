@@ -68,6 +68,75 @@ class ProfileUrlHealthTest extends TestCase
             ->assertStatus(409);
     }
 
+    public function test_selected_urls_are_repaired_only_when_the_market_supports_it(): void
+    {
+        Queue::fake();
+        [$platform, $admin] = $this->platformAndAdmin();
+        Sanctum::actingAs($admin);
+        $targets = [
+            ['post_type' => 'escort', 'slug' => 'lisa'],
+            ['post_type' => 'escort', 'slug' => 'mary'],
+            ['post_type' => 'escort', 'slug' => 'lisa'],
+        ];
+
+        // First a 1.3.13 market (no capability), then a 1.3.14 one.
+        Http::fake([self::API.'/profile-slugs/aliases*' => Http::sequence()
+            ->push($this->auditPayload(4))
+            ->push($this->auditPayload(4, ['scoped_repair']))]);
+        $this->postJson('/api/crm/profile-url-health/runs', ['platform_id' => $platform->id, 'targets' => $targets])
+            ->assertStatus(409)
+            ->assertJsonPath('reason', 'plugin_outdated_for_selection');
+        Queue::assertNothingPushed();
+
+        $response = $this->postJson('/api/crm/profile-url-health/runs', ['platform_id' => $platform->id, 'targets' => $targets])
+            ->assertCreated()
+            ->assertJsonPath('data.scope', 'selected')
+            ->assertJsonPath('data.target_urls', 2);
+
+        $run = ProfileSlugAliasRepairRun::query()->findOrFail((int) $response->json('data.id'));
+        $this->assertSame([
+            ['post_type' => 'escort', 'slug' => 'lisa'],
+            ['post_type' => 'escort', 'slug' => 'mary'],
+        ], $run->targets);
+    }
+
+    public function test_a_selected_run_sends_its_targets_and_stops_if_the_plugin_ignores_them(): void
+    {
+        Queue::fake();
+        [$platform] = $this->platformAndAdmin();
+        $targets = [['post_type' => 'escort', 'slug' => 'lisa']];
+        $scoped = ProfileSlugAliasRepairRun::create(['platform_id' => $platform->id, 'status' => 'queued', 'targets' => $targets, 'target_urls' => 1]);
+
+        // A 1.3.14 answer, then an older plugin that repaired its own batch
+        // and answered without `scoped`.
+        Http::fake([self::API.'/profile-slugs/aliases/repair' => Http::sequence()
+            ->push([
+                'released' => [['meta_id' => 11, 'post_id' => 501, 'slug' => 'lisa', 'kind' => 'wrong_target']],
+                'slugs_processed' => 1,
+                'remaining_slugs' => 0,
+                'scoped' => true,
+            ])
+            ->push([
+                'released' => [['meta_id' => 21, 'post_id' => 601, 'slug' => 'zara', 'kind' => 'at_risk']],
+                'slugs_processed' => 250,
+                'remaining_slugs' => 400,
+            ])]);
+        (new RunProfileSlugAliasRepairJob($scoped->id))->handle(app(ProfileSlugAliasRepairService::class));
+
+        $this->assertSame(ProfileSlugAliasRepairRun::STATUS_COMPLETED, $scoped->fresh()->status);
+        Http::assertSent(fn (HttpRequest $request) => $request['targets'] === $targets);
+
+        $ignored = ProfileSlugAliasRepairRun::create(['platform_id' => $platform->id, 'status' => 'queued', 'targets' => $targets, 'target_urls' => 1]);
+        (new RunProfileSlugAliasRepairJob($ignored->id))->handle(app(ProfileSlugAliasRepairService::class));
+
+        $ignored->refresh();
+        $this->assertSame(ProfileSlugAliasRepairRun::STATUS_FAILED, $ignored->status);
+        $this->assertStringContainsString('ignored the URL selection', (string) $ignored->notes);
+        $this->assertSame([21], array_column($ignored->backup, 'meta_id'));
+        $this->assertTrue($ignored->canRestore());
+        Queue::assertNothingPushed();
+    }
+
     public function test_a_healthy_market_has_nothing_to_repair(): void
     {
         Queue::fake();
@@ -242,11 +311,12 @@ class ProfileUrlHealthTest extends TestCase
         ]);
     }
 
-    private function auditPayload(int $urls): array
+    private function auditPayload(int $urls, array $capabilities = []): array
     {
         return [
             'summary' => [
                 'checked_at' => '2026-09-24T10:00:00+00:00',
+                'capabilities' => $capabilities,
                 'urls' => $urls,
                 'aliases' => $urls,
                 'kinds' => [

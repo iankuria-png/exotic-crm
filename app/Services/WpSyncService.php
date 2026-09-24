@@ -942,11 +942,20 @@ class WpSyncService
 
     /**
      * Release up to $limit slugs' stale aliases, worst first. The response's
-     * `released` rows are the backup needed to restore them.
+     * `released` rows are the backup needed to restore them. With $targets
+     * ({post_type, slug}) only those URLs are repaired; that needs the
+     * `scoped_repair` capability (1.3.14), since 1.3.13 ignores targets.
+     *
+     * @param  array<int, array{post_type:string, slug:string}>|null  $targets
      */
-    public function repairProfileSlugAliases(int $limit = 200): array
+    public function repairProfileSlugAliases(int $limit = 200, ?array $targets = null): array
     {
-        return $this->post('/profile-slugs/aliases/repair', ['limit' => $limit]);
+        $body = ['limit' => $limit];
+        if ($targets !== null) {
+            $body['targets'] = array_values($targets);
+        }
+
+        return $this->post('/profile-slugs/aliases/repair', $body);
     }
 
     /** @param array<int, array{meta_id?:int, post_id:int, slug:string}> $rows */

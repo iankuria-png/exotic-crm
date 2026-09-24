@@ -22,6 +22,17 @@ class ProfileSlugAliasRepairService
     /** Rows sent back per restore request (the plugin accepts up to 1000). */
     public const RESTORE_SLICE_SIZE = 500;
 
+    /** Most URLs one selected-URL run may name (the plugin's limit). */
+    public const MAX_TARGETS = 500;
+
+    public const CAPABILITY_SCOPED_REPAIR = 'scoped_repair';
+
+    /** Whether an audit summary says the market can repair chosen URLs. */
+    public static function supportsScopedRepair(array $summary): bool
+    {
+        return in_array(self::CAPABILITY_SCOPED_REPAIR, (array) ($summary['capabilities'] ?? []), true);
+    }
+
     public function audit(Platform $platform, string $kind = '', int $page = 1, int $perPage = 25): array
     {
         return $this->call($platform, fn (WpSyncService $wp) => $wp->auditProfileSlugAliases($kind, $page, $perPage));
@@ -39,7 +50,13 @@ class ProfileSlugAliasRepairService
             ])->save();
         }
 
-        $result = $this->call($platform, fn (WpSyncService $wp) => $wp->repairProfileSlugAliases(self::SLICE_SIZE));
+        $targets = $run->isScoped() ? array_values($run->targets) : null;
+        $result = $this->call($platform, fn (WpSyncService $wp) => $wp->repairProfileSlugAliases(self::SLICE_SIZE, $targets));
+
+        // A plugin that ignored the selection repaired part of the whole market
+        // instead. Keep what it returned as the backup and stop, so the run can
+        // be restored, rather than carrying on market-wide.
+        $ignoredSelection = $targets !== null && empty($result['scoped']);
 
         $released = array_values(array_filter(
             (array) ($result['released'] ?? []),
@@ -58,6 +75,16 @@ class ProfileSlugAliasRepairService
             'urls_processed' => (int) $run->urls_processed + $processed,
             'aliases_released' => (int) $run->aliases_released + count($released),
         ])->save();
+
+        if ($ignoredSelection) {
+            $run->forceFill([
+                'status' => ProfileSlugAliasRepairRun::STATUS_FAILED,
+                'finished_at' => now(),
+                'notes' => 'The market\'s plugin ignored the URL selection and repaired other URLs. Restore this run, then update exotic-crm-sync to 1.3.14.',
+            ])->save();
+
+            return false;
+        }
 
         // A slice that processed slugs but released nothing would come back
         // with the same plan forever; stop and say so instead of looping.

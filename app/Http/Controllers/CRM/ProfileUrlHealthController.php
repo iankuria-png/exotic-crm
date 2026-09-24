@@ -62,11 +62,14 @@ class ProfileUrlHealthController extends Controller
         return response()->json($base + ['available' => true, 'audit' => $audit]);
     }
 
-    /** Queue a repair of every stale alias in the market. */
+    /** Queue a repair of the chosen URLs, or of every stale alias in the market. */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'platform_id' => 'required|integer|exists:platforms,id',
+            'targets' => 'sometimes|array|min:1|max:'.ProfileSlugAliasRepairService::MAX_TARGETS,
+            'targets.*.post_type' => 'required_with:targets|string|max:40',
+            'targets.*.slug' => 'required_with:targets|string|max:200',
         ]);
         $platform = $this->authorizedPlatform($request, (int) $validated['platform_id']);
         $this->ensureNoActiveRun($platform);
@@ -81,12 +84,34 @@ class ProfileUrlHealthController extends Controller
             return response()->json(['message' => 'Every profile URL in this market is already healthy.'], 422);
         }
 
+        $targets = null;
+        if (isset($validated['targets'])) {
+            // An older plugin ignores targets and would repair the whole
+            // market's first batch, so never send them without the capability.
+            if (! ProfileSlugAliasRepairService::supportsScopedRepair($summary)) {
+                return response()->json([
+                    'message' => 'Repairing selected URLs needs exotic-crm-sync 1.3.14 on this market. You can still repair the whole market.',
+                    'reason' => 'plugin_outdated_for_selection',
+                ], 409);
+            }
+
+            $targets = collect($validated['targets'])
+                ->map(fn (array $target) => [
+                    'post_type' => (string) $target['post_type'],
+                    'slug' => (string) $target['slug'],
+                ])
+                ->unique(fn (array $target) => $target['post_type']."\0".$target['slug'])
+                ->values()
+                ->all();
+        }
+
         $run = ProfileSlugAliasRepairRun::create([
             'platform_id' => (int) $platform->id,
             'requested_by' => $request->user()?->id,
             'status' => ProfileSlugAliasRepairRun::STATUS_QUEUED,
             'audit_summary' => $summary,
-            'target_urls' => (int) ($summary['urls'] ?? 0),
+            'targets' => $targets,
+            'target_urls' => $targets !== null ? count($targets) : (int) ($summary['urls'] ?? 0),
         ]);
 
         RunProfileSlugAliasRepairJob::dispatch((int) $run->id);
@@ -189,6 +214,7 @@ class ProfileUrlHealthController extends Controller
             'id' => (int) $run->id,
             'platform_id' => (int) $run->platform_id,
             'status' => $run->status,
+            'scope' => $run->isScoped() ? 'selected' : 'market',
             'requested_by' => $run->requester?->name,
             'restored_by' => $run->restorer?->name,
             'target_urls' => (int) $run->target_urls,

@@ -35,6 +35,7 @@ class ProfileSlugAliasRepairRun extends Model
         'requested_by',
         'status',
         'audit_summary',
+        'targets',
         'target_urls',
         'urls_processed',
         'aliases_released',
@@ -51,6 +52,7 @@ class ProfileSlugAliasRepairRun extends Model
         'platform_id' => 'integer',
         'requested_by' => 'integer',
         'audit_summary' => 'array',
+        'targets' => 'array',
         'target_urls' => 'integer',
         'urls_processed' => 'integer',
         'aliases_released' => 'integer',
@@ -75,6 +77,12 @@ class ProfileSlugAliasRepairRun extends Model
     public function restorer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'restored_by');
+    }
+
+    /** Whether the run repairs chosen URLs rather than the whole market. */
+    public function isScoped(): bool
+    {
+        return is_array($this->targets) && $this->targets !== [];
     }
 
     public function isActive(): bool

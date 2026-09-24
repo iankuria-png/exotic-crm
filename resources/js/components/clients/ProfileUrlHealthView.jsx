@@ -50,6 +50,29 @@ const RUN_STATUS = {
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'restoring']);
 const PER_PAGE = 25;
+// The plugin repairs at most this many chosen URLs per run.
+const MAX_SELECTION = 500;
+
+const itemKey = (item) => `${item.post_type}:${item.slug}`;
+
+/** What repairing these audit rows changes, from each row's before/after. */
+function selectionImpact(selected) {
+    let wrongStopped = 0;
+    let revived = 0;
+    let protectedCount = 0;
+    let claims = 0;
+    selected.forEach((item) => {
+        const before = item.before?.state;
+        const after = item.after?.state;
+        const retargeted = before === 'redirect' && after === 'redirect'
+            && item.before?.profile?.post_id !== item.after?.profile?.post_id;
+        if ((before === 'redirect' && after === 'not_found') || retargeted) wrongStopped += 1;
+        else if (before === 'not_found' && after === 'redirect') revived += 1;
+        else protectedCount += 1;
+        claims += (item.release || []).length;
+    });
+    return { wrongStopped, revived, protectedCount, claims };
+}
 
 const numberFormat = new Intl.NumberFormat('en-US');
 const fmt = (value) => numberFormat.format(Number(value || 0));
@@ -289,12 +312,23 @@ function ImpactStrip({ changes, aliases }) {
     );
 }
 
-function UrlRow({ item }) {
+function UrlRow({ item, selectable = false, selected = false, onToggle }) {
     const kind = KINDS[item.kind] || KINDS.at_risk;
     const released = item.release || [];
+    const path = urlPath(item.url);
 
     return (
-        <li className="grid gap-3 px-5 py-3.5 transition hover:bg-slate-50/70 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.6fr)_minmax(0,1fr)] lg:items-center">
+        <li className={`flex gap-3 px-5 py-3.5 transition ${selected ? 'bg-teal-50/60' : 'hover:bg-slate-50/70'}`}>
+            {selectable ? (
+                <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => onToggle(item)}
+                    aria-label={`Select ${path}`}
+                    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-slate-300 text-teal-600 accent-teal-600 focus:ring-teal-500"
+                />
+            ) : null}
+            <div className="grid min-w-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.6fr)_minmax(0,1fr)] lg:items-center">
             <div className="min-w-0">
                 <div className="flex items-center gap-1">
                     <a
@@ -304,7 +338,7 @@ function UrlRow({ item }) {
                         className="truncate font-mono text-[13px] text-slate-900 hover:text-teal-700"
                         title={item.url}
                     >
-                        {urlPath(item.url)}
+                        {path}
                     </a>
                     <CopyButton value={item.url} />
                 </div>
@@ -349,6 +383,7 @@ function UrlRow({ item }) {
                 {item.kind === 'wrong_target' && item.trashed_owner ? (
                     <p className="mt-1 text-[11px] text-slate-400">Last used by “{item.trashed_owner.title}” (in trash)</p>
                 ) : null}
+            </div>
             </div>
         </li>
     );
@@ -416,6 +451,9 @@ function RunHistory({ runs, onRestore, onDownload, downloadingId, busy }) {
                             <tr key={run.id} className="align-top">
                                 <td className="whitespace-nowrap px-5 py-3 text-slate-700" title={run.created_at ? new Date(run.created_at).toLocaleString() : ''}>
                                     {run.created_at ? new Date(run.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'}
+                                    <span className="block text-[11px] text-slate-400">
+                                        {run.scope === 'selected' ? `${fmt(run.target_urls)} selected ${plural(run.target_urls, 'URL', 'URLs')}` : 'Whole market'}
+                                    </span>
                                 </td>
                                 <td className="px-3 py-3 text-slate-600">
                                     {run.requested_by || '—'}
@@ -484,7 +522,10 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
     const [selectedPlatform, setSelectedPlatform] = useState(platformId ? String(platformId) : '');
     const [kind, setKind] = useState('');
     const [page, setPage] = useState(1);
-    const [confirmRepair, setConfirmRepair] = useState(false);
+    // null, 'market' or 'selected': which repair the confirm dialog is for.
+    const [confirmRepair, setConfirmRepair] = useState(null);
+    // Chosen URLs by key, kept across pages and filters.
+    const [selection, setSelection] = useState(() => new Map());
     const [restoreTarget, setRestoreTarget] = useState(null);
     const [downloadingId, setDownloadingId] = useState(null);
 
@@ -495,6 +536,10 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
     useEffect(() => {
         setPage(1);
     }, [kind, selectedPlatform]);
+
+    useEffect(() => {
+        setSelection(new Map());
+    }, [selectedPlatform]);
 
     const hasMarket = Boolean(selectedPlatform);
     const selectedMarketName = marketName
@@ -523,6 +568,46 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
     const total = Number(data?.audit?.total || 0);
     const totalUrls = Number(summary?.urls || 0);
     const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
+    const canSelect = (summary?.capabilities || []).includes('scoped_repair');
+    const selectedItems = useMemo(() => [...selection.values()], [selection]);
+    const selectedImpact = useMemo(() => selectionImpact(selectedItems), [selectedItems]);
+    const pageKeys = items.map(itemKey);
+    const pageSelectedCount = pageKeys.filter((key) => selection.has(key)).length;
+    const pageAllSelected = items.length > 0 && pageSelectedCount === items.length;
+
+    const toggleItem = (item) => {
+        setSelection((current) => {
+            const next = new Map(current);
+            const key = itemKey(item);
+            if (next.has(key)) {
+                next.delete(key);
+            } else if (next.size >= MAX_SELECTION) {
+                toast?.error?.(`You can repair up to ${fmt(MAX_SELECTION)} chosen URLs at a time.`);
+                return current;
+            } else {
+                next.set(key, item);
+            }
+            return next;
+        });
+    };
+
+    const togglePage = () => {
+        setSelection((current) => {
+            const next = new Map(current);
+            if (pageAllSelected) {
+                pageKeys.forEach((key) => next.delete(key));
+                return next;
+            }
+            for (const item of items) {
+                if (next.size >= MAX_SELECTION) {
+                    toast?.error?.(`Selection is capped at ${fmt(MAX_SELECTION)} URLs.`);
+                    break;
+                }
+                next.set(itemKey(item), item);
+            }
+            return next;
+        });
+    };
 
     // Tell the admin when a run they started finishes, once.
     const [watchedRunId, setWatchedRunId] = useState(null);
@@ -541,21 +626,29 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
     }, [runs, toast, watchedRunId]);
 
     const startRepair = useMutation({
-        mutationFn: async () => {
-            const { data: response } = await api.post('/crm/profile-url-health/runs', { platform_id: selectedPlatform });
+        mutationFn: async (targets) => {
+            const { data: response } = await api.post('/crm/profile-url-health/runs', {
+                platform_id: selectedPlatform,
+                ...(targets ? { targets } : {}),
+            });
             return response.data;
         },
-        onSuccess: (run) => {
-            setConfirmRepair(false);
+        onSuccess: (run, targets) => {
+            setConfirmRepair(null);
             setWatchedRunId(run.id);
+            if (targets) setSelection(new Map());
             queryClient.invalidateQueries({ queryKey: ['profile-url-health', selectedPlatform] });
-            toast?.success?.('Repair queued — progress updates below.');
+            toast?.success?.(targets
+                ? `Repair of ${fmt(targets.length)} selected ${plural(targets.length, 'URL', 'URLs')} queued.`
+                : 'Repair queued — progress updates below.');
         },
         onError: (error) => {
-            setConfirmRepair(false);
+            setConfirmRepair(null);
             toast?.error?.(error?.response?.data?.message ?? 'Could not start the repair.');
         },
     });
+
+    const selectedTargets = () => selectedItems.map((item) => ({ post_type: item.post_type, slug: item.slug }));
 
     const restoreRun = useMutation({
         mutationFn: async (runId) => {
@@ -714,12 +807,12 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
                         actions={(
                             <button
                                 type="button"
-                                onClick={() => setConfirmRepair(true)}
+                                onClick={() => setConfirmRepair('market')}
                                 disabled={Boolean(activeRun) || startRepair.isPending}
                                 title={activeRun ? 'A run is already in progress for this market' : undefined}
                                 className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
                             >
-                                {activeRun ? 'Repair running…' : `Repair ${fmt(totalUrls)} URL${totalUrls === 1 ? '' : 's'}`}
+                                {activeRun ? 'Repair running…' : `Repair ${canSelect ? 'all ' : ''}${fmt(totalUrls)} URL${totalUrls === 1 ? '' : 's'}`}
                             </button>
                         )}
                     >
@@ -730,9 +823,11 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
 
                     <Panel
                         title="Affected URLs"
-                        subtitle="Where each old URL goes today, and where it goes after the repair. Worst cases first."
+                        subtitle={canSelect
+                            ? 'Where each old URL goes today, and where it goes after the repair. Tick URLs to repair only those. Worst cases first.'
+                            : 'Where each old URL goes today, and where it goes after the repair. Worst cases first. Repairing chosen URLs needs exotic-crm-sync 1.3.14 on this market.'}
                         actions={(
-                            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="group" aria-label="Filter by case">
+                            <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="group" aria-label="Filter by case">
                                 {['', ...KIND_ORDER].map((key) => (
                                     <button
                                         key={key || 'all'}
@@ -750,9 +845,38 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
                             </div>
                         )}
                     >
+                        {items.length && canSelect ? (
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-2 text-xs text-slate-600">
+                                <label className="inline-flex cursor-pointer items-center gap-3 font-semibold">
+                                    <input
+                                        type="checkbox"
+                                        checked={pageAllSelected}
+                                        ref={(element) => {
+                                            if (element) element.indeterminate = pageSelectedCount > 0 && !pageAllSelected;
+                                        }}
+                                        onChange={togglePage}
+                                        className="h-4 w-4 cursor-pointer rounded border-slate-300 text-teal-600 accent-teal-600 focus:ring-teal-500"
+                                    />
+                                    Select all on this page
+                                </label>
+                                {selection.size ? (
+                                    <span className="tabular-nums text-slate-500">
+                                        {fmt(selection.size)} selected{selection.size > pageSelectedCount ? ` · ${fmt(selection.size - pageSelectedCount)} on other pages` : ''}
+                                    </span>
+                                ) : null}
+                            </div>
+                        ) : null}
                         {items.length ? (
                             <ul className={`divide-y divide-slate-100 transition-opacity ${healthQuery.isFetching ? 'opacity-60' : ''}`}>
-                                {items.map((item) => <UrlRow key={`${item.post_type}:${item.slug}`} item={item} />)}
+                                {items.map((item) => (
+                                    <UrlRow
+                                        key={itemKey(item)}
+                                        item={item}
+                                        selectable={canSelect}
+                                        selected={selection.has(itemKey(item))}
+                                        onToggle={toggleItem}
+                                    />
+                                ))}
                             </ul>
                         ) : (
                             <p className="px-5 py-8 text-center text-xs text-slate-500">No URLs in this case.</p>
@@ -783,6 +907,44 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
                 </div>
             ) : null}
 
+            {canSelect && selection.size > 0 ? (
+                <div className="sticky bottom-4 z-20" role="region" aria-label="Selected URLs">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200 bg-white px-4 py-3 shadow-lg ring-1 ring-teal-100">
+                        <div className="min-w-0 text-sm">
+                            <p className="font-semibold text-slate-900">
+                                {fmt(selection.size)} {plural(selection.size, 'URL', 'URLs')} selected
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                                {[
+                                    selectedImpact.wrongStopped ? `${fmt(selectedImpact.wrongStopped)} stop misrouting` : null,
+                                    selectedImpact.revived ? `${fmt(selectedImpact.revived)} start working` : null,
+                                    selectedImpact.protectedCount ? `${fmt(selectedImpact.protectedCount)} protected for later` : null,
+                                    `${fmt(selectedImpact.claims)} stale ${plural(selectedImpact.claims, 'claim', 'claims')} removed`,
+                                ].filter(Boolean).join(' · ')}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setSelection(new Map())}
+                                className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                Clear
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setConfirmRepair('selected')}
+                                disabled={Boolean(activeRun) || startRepair.isPending}
+                                title={activeRun ? 'A run is already in progress for this market' : undefined}
+                                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+                            >
+                                Repair selected
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
             <Panel title="Repair history" subtitle="Each run keeps a backup of what it removed. Restoring puts every record back exactly as it was.">
                 <RunHistory
                     runs={runs}
@@ -794,12 +956,12 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
             </Panel>
 
             <ConfirmDialog
-                open={confirmRepair}
-                title={`Repair ${fmt(totalUrls)} old URL${totalUrls === 1 ? '' : 's'} in ${selectedMarketName || 'this market'}?`}
+                open={confirmRepair === 'market'}
+                title={`Repair ${canSelect ? 'all ' : ''}${fmt(totalUrls)} old URL${totalUrls === 1 ? '' : 's'} in ${selectedMarketName || 'this market'}?`}
                 confirmLabel="Start repair"
                 isPending={startRepair.isPending}
-                onCancel={() => setConfirmRepair(false)}
-                onConfirm={() => startRepair.mutate()}
+                onCancel={() => setConfirmRepair(null)}
+                onConfirm={() => startRepair.mutate(null)}
             >
                 <ul className="space-y-1.5 text-sm text-slate-700">
                     {Number(summary?.changes?.redirect_to_404 || 0) + Number(summary?.changes?.retargeted || 0) > 0 ? (
@@ -812,6 +974,32 @@ export default function ProfileUrlHealthView({ platformId, platforms = [], marke
                 </ul>
                 <p className="mt-3 text-xs leading-relaxed text-slate-500">
                     Runs in the background in small batches. No profile content changes, and you can restore the run from the history below.
+                </p>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={confirmRepair === 'selected'}
+                title={`Repair ${fmt(selection.size)} selected ${plural(selection.size, 'URL', 'URLs')}?`}
+                confirmLabel="Repair selected"
+                isPending={startRepair.isPending}
+                onCancel={() => setConfirmRepair(null)}
+                onConfirm={() => startRepair.mutate(selectedTargets())}
+            >
+                <ul className="space-y-1.5 text-sm text-slate-700">
+                    {selectedImpact.wrongStopped ? (
+                        <li><span className="font-semibold tabular-nums text-rose-700">{fmt(selectedImpact.wrongStopped)}</span> {plural(selectedImpact.wrongStopped, 'URL stops', 'URLs stop')} sending visitors to the wrong profile.</li>
+                    ) : null}
+                    {selectedImpact.revived ? (
+                        <li><span className="font-semibold tabular-nums text-teal-700">{fmt(selectedImpact.revived)}</span> {plural(selectedImpact.revived, 'dead link starts', 'dead links start')} redirecting to the profile that used it last.</li>
+                    ) : null}
+                    <li><span className="font-semibold tabular-nums">{fmt(selectedImpact.claims)}</span> stale old-URL {plural(selectedImpact.claims, 'record is', 'records are')} removed and backed up.</li>
+                </ul>
+                <ul className="mt-3 max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-[12px] text-slate-700">
+                    {selectedItems.slice(0, 50).map((item) => <li key={itemKey(item)} className="truncate">{urlPath(item.url)}</li>)}
+                    {selectedItems.length > 50 ? <li className="font-sans text-slate-400">+{fmt(selectedItems.length - 50)} more</li> : null}
+                </ul>
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                    Only these URLs are touched. Their removed records are backed up, and the run can be restored from the history below.
                 </p>
             </ConfirmDialog>
 

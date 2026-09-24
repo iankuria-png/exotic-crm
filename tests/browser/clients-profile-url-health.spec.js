@@ -57,11 +57,12 @@ const SYNTHETIC_ITEMS = {
     },
 };
 
-function syntheticAudit(kind = '') {
+function syntheticAudit(kind = '', capabilities = []) {
     const items = kind ? [SYNTHETIC_ITEMS[kind]] : Object.values(SYNTHETIC_ITEMS);
     return {
         summary: {
             checked_at: new Date().toISOString(),
+            capabilities,
             post_types: ['escort', 'agency'],
             urls: 3,
             aliases: 3,
@@ -212,6 +213,68 @@ test.describe('clients → profile URLs', () => {
 
         await expect(page.getByRole('progressbar', { name: 'Repair progress' })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Repair running…' })).toBeDisabled();
+    });
+
+    test('repairs only the URLs an admin ticks', async ({ page }) => {
+        let posted = null;
+        await stubShell(page, (url) => ({
+            platform: { id: 1, name: 'Kenya' },
+            runs: [finishedRun({ id: 5, scope: 'selected', target_urls: 2 })],
+            available: true,
+            audit: syntheticAudit(url.searchParams.get('kind') || '', ['scoped_repair']),
+        }), {
+            onRunsPost: (route) => {
+                posted = route.request().postDataJSON();
+                return { data: finishedRun({ id: 9, scope: 'selected', status: 'queued', target_urls: 2, urls_processed: 0, aliases_released: 0, backup_count: 0, can_restore: false }) };
+            },
+        });
+
+        await openTab(page);
+
+        await expect(page.getByRole('button', { name: 'Repair all 3 URLs' })).toBeVisible();
+        await expect(page.getByText('2 selected URLs')).toBeVisible();
+        await page.getByRole('checkbox', { name: 'Select /escort/lisa/' }).check();
+        await page.getByRole('checkbox', { name: 'Select /escort/april/' }).check();
+
+        const bar = page.getByRole('region', { name: 'Selected URLs' });
+        await expect(bar).toContainText('2 URLs selected');
+        await expect(bar).toContainText('1 stop misrouting · 1 start working · 2 stale claims removed');
+        await expect(page.getByRole('checkbox', { name: 'Select all on this page' })).toHaveJSProperty('indeterminate', true);
+        await snap(page, 'profile-urls-selected');
+
+        await bar.getByRole('button', { name: 'Repair selected' }).click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toContainText('Repair 2 selected URLs?');
+        await expect(dialog).toContainText('/escort/lisa/');
+        await expect(dialog).not.toContainText('/escort/abby/');
+        await dialog.getByRole('button', { name: 'Repair selected' }).click();
+
+        await expect.poll(() => posted).not.toBeNull();
+        expect(posted.targets).toEqual([
+            { post_type: 'escort', slug: 'lisa' },
+            { post_type: 'escort', slug: 'april' },
+        ]);
+        await expect(bar).toHaveCount(0);
+
+        await page.getByRole('checkbox', { name: 'Select all on this page' }).check();
+        await expect(page.getByRole('region', { name: 'Selected URLs' })).toContainText('3 URLs selected');
+        await page.getByRole('button', { name: 'Clear' }).click();
+        await expect(page.getByRole('region', { name: 'Selected URLs' })).toHaveCount(0);
+    });
+
+    test('hides selection on a market without scoped repair', async ({ page }) => {
+        await stubShell(page, (url) => ({
+            platform: { id: 1, name: 'Kenya' },
+            runs: [],
+            available: true,
+            audit: syntheticAudit(url.searchParams.get('kind') || ''),
+        }));
+
+        await openTab(page);
+
+        await expect(page.getByText(/Repairing chosen URLs needs exotic-crm-sync 1.3.14/)).toBeVisible();
+        await expect(page.getByRole('checkbox')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Repair 3 URLs' })).toBeVisible();
     });
 
     test('restores a finished run from the history', async ({ page }) => {
