@@ -1425,6 +1425,7 @@ export default function ClientDetail() {
     const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
     const [storyComposeRequest, setStoryComposeRequest] = useState(0);
+    const clearStoryComposeRequest = useCallback(() => setStoryComposeRequest(0), []);
     const openTab = (key) => {
         setActiveTab(key);
         const next = new URLSearchParams(searchParams);
@@ -5586,6 +5587,7 @@ export default function ClientDetail() {
                     isFetching={storiesFetching}
                     onRefresh={refetchStories}
                     composeRequest={storyComposeRequest}
+                    onComposeConsumed={clearStoryComposeRequest}
                 />
             ) : null}
 

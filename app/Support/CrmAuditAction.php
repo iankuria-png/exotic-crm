@@ -236,6 +236,20 @@ final class CrmAuditAction
 
     public const CLIENT_STORY_CREATE = 'client_story_create';
 
+    public const STORIES_MODERATE = 'stories_moderate';
+
+    public const STORIES_REWARD_AWARD = 'stories_reward_award';
+
+    public const STORIES_REWARD_REVOKE = 'stories_reward_revoke';
+
+    public const STORIES_BRAND_CREATE = 'stories_brand_create';
+
+    public const STORIES_BRAND_END = 'stories_brand_end';
+
+    public const STORIES_BRAND_DELETE = 'stories_brand_delete';
+
+    public const STORIES_SETTINGS_UPDATE = 'stories_settings_update';
+
     public const CLIENT_STORY_MODERATE = 'client_story_moderate';
 
     public const CLIENT_STORY_EXPIRE = 'client_story_expire';

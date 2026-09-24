@@ -334,7 +334,83 @@ class WpSyncService
      */
     public function createClientStory(int $postId, array $fields, ?UploadedFile $file = null): array
     {
-        $path = "/clients/{$postId}/stories";
+        return $this->postWithOptionalFile("/clients/{$postId}/stories", $fields, $file);
+    }
+
+    /*
+     * Market-wide Stories administration (wp-admin → Stories equivalents).
+     * Reads are live: WordPress hard-deletes expired stories hourly.
+     */
+
+    public function getStoriesOverview(): array
+    {
+        return $this->get('/stories/overview');
+    }
+
+    public function getStoriesList(array $params = []): array
+    {
+        return $this->get('/stories/list', array_filter($params, static fn ($value): bool => $value !== null && $value !== ''));
+    }
+
+    public function moderateStories(string $action, array $storyIds): array
+    {
+        return $this->post('/stories/moderate', [
+            'action' => $action,
+            'story_ids' => array_values(array_map('intval', $storyIds)),
+        ]);
+    }
+
+    public function getStoriesHottest(): array
+    {
+        return $this->get('/stories/hottest');
+    }
+
+    public function awardStoriesWeek(string $week): array
+    {
+        return $this->post('/stories/hottest/award', ['week' => $week]);
+    }
+
+    public function revokeStoriesWeek(string $week): array
+    {
+        return $this->post('/stories/hottest/revoke', ['week' => $week]);
+    }
+
+    public function getBrandStories(): array
+    {
+        return $this->get('/stories/brand');
+    }
+
+    public function createBrandStory(array $fields, ?UploadedFile $file = null): array
+    {
+        return $this->postWithOptionalFile('/stories/brand', $fields, $file);
+    }
+
+    public function endBrandStory(int $storyId): array
+    {
+        return $this->post("/stories/brand/{$storyId}/end");
+    }
+
+    public function deleteBrandStory(int $storyId): array
+    {
+        return $this->post("/stories/brand/{$storyId}/delete");
+    }
+
+    public function getStorySettings(): array
+    {
+        return $this->get('/stories/settings');
+    }
+
+    public function saveStorySettings(array $fields, ?UploadedFile $avatar = null): array
+    {
+        return $this->postWithOptionalFile('/stories/settings', $fields, $avatar, 'house_avatar_file');
+    }
+
+    /**
+     * JSON when there is no file; multipart (with list values flattened to
+     * `name[0]`, `name[1]`…) when there is one.
+     */
+    private function postWithOptionalFile(string $path, array $fields, ?UploadedFile $file, string $fileField = 'file'): array
+    {
         $fields = array_filter($fields, static fn ($value): bool => $value !== null && $value !== '');
 
         if ($file === null) {
@@ -344,18 +420,29 @@ class WpSyncService
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 
+        $flat = [];
+        foreach ($fields as $key => $value) {
+            if (is_array($value)) {
+                foreach (array_values($value) as $index => $item) {
+                    $flat["{$key}[{$index}]"] = (string) $item;
+                }
+            } else {
+                $flat[$key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+            }
+        }
+
         $handle = @fopen((string) $file->getRealPath(), 'rb');
         if ($handle === false) {
-            throw new \RuntimeException('Unable to read story file for upload.');
+            throw new \RuntimeException('Unable to read the file for upload.');
         }
 
         try {
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->mediaUploadTimeout)
-                ->attach('file', $handle, $file->getClientOriginalName(), [
+                ->attach($fileField, $handle, $file->getClientOriginalName(), [
                     'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
                 ])
-                ->post($this->baseUrl.$path, array_map('strval', $fields));
+                ->post($this->baseUrl.$path, $flat);
         } finally {
             fclose($handle);
         }

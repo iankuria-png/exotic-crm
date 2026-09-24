@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import ConfirmDialog from '../ConfirmDialog';
@@ -24,17 +24,17 @@ const CAN_POST_COPY = {
     unknown: 'Cannot post',
 };
 
-const VISIBILITY_CHIP = {
+export const VISIBILITY_CHIP = {
     live: { label: 'Live', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
     pending: { label: 'Awaiting approval', className: 'bg-amber-50 text-amber-800 ring-amber-200' },
     hidden: { label: 'Hidden', className: 'bg-slate-100 text-slate-600 ring-slate-300' },
 };
 
-function chip(className) {
+export function chip(className) {
     return `inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${className}`;
 }
 
-function formatAgo(iso) {
+export function formatAgo(iso) {
     if (!iso) return '—';
     const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
     if (seconds < 60) return 'just now';
@@ -43,14 +43,14 @@ function formatAgo(iso) {
     return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-function formatLeft(seconds) {
+export function formatLeft(seconds) {
     const value = Number(seconds || 0);
     if (value <= 0) return 'ending';
     if (value < 3600) return `${Math.max(1, Math.floor(value / 60))}m left`;
     return `${Math.floor(value / 3600)}h ${Math.floor((value % 3600) / 60)}m left`;
 }
 
-function formatDateTime(iso) {
+export function formatDateTime(iso) {
     return iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 }
 
@@ -58,7 +58,7 @@ function errorMessage(error, fallback) {
     return error?.response?.data?.message || fallback;
 }
 
-function StoryMedia({ story }) {
+export function StoryMedia({ story }) {
     const [playing, setPlaying] = useState(false);
     const still = story.media_type === 'video' ? story.poster_url : (story.thumb_url || story.media_url);
 
@@ -250,7 +250,7 @@ function PostingControl({ data, clientId, canManage, onDone }) {
     );
 }
 
-export default function ClientStoriesTab({ clientId, data, isLoading, error, isFetching, onRefresh, composeRequest = 0 }) {
+export default function ClientStoriesTab({ clientId, data, isLoading, error, isFetching, onRefresh, composeRequest = 0, onComposeConsumed }) {
     const queryClient = useQueryClient();
     const [pending, setPending] = useState({});
     const [results, setResults] = useState({});
@@ -258,16 +258,15 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
     const [deleteReason, setDeleteReason] = useState('');
     const [composerOpen, setComposerOpen] = useState(false);
     const [postedNotice, setPostedNotice] = useState('');
-    const handledRequest = useRef(0);
 
     // The profile header's "Add story" badge opens the composer once the
     // stories payload says posting is possible.
     useEffect(() => {
-        if (composeRequest > handledRequest.current && data?.enabled && data?.can_manage && data?.can_create) {
-            handledRequest.current = composeRequest;
+        if (composeRequest > 0 && data?.enabled && data?.can_manage && data?.can_create) {
             setComposerOpen(true);
+            onComposeConsumed?.();
         }
-    }, [composeRequest, data]);
+    }, [composeRequest, data, onComposeConsumed]);
 
     const refresh = () => {
         onRefresh();

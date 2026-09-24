@@ -12,6 +12,7 @@ import WebVisitors from './pages/WebVisitors';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
+import Stories from './pages/Stories';
 import LifecycleAnalytics from './pages/LifecycleAnalytics';
 import BannerAds from './pages/BannerAds';
 import PushCampaigns from './pages/PushCampaigns';
@@ -146,6 +147,7 @@ export default function AppRouter() {
                 <Route path="banner-ads" element={<BannerAds />} />
                 <Route path="lifecycle" element={<LifecycleAnalytics />} />
                 <Route path="kyc" element={<Kyc />} />
+                <Route path="stories" element={<Stories />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
                 <Route path="auto-push" element={<AutoPush />} />
                 <Route path="team" element={<Team />} />

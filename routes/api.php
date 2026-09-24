@@ -25,6 +25,7 @@ use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientStoryController;
+use App\Http\Controllers\CRM\StoriesController;
 use App\Http\Controllers\CRM\ClientErrorController;
 use App\Http\Controllers\CRM\ClientLocationController;
 use App\Http\Controllers\CRM\ClientWalletController;
@@ -566,6 +567,22 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/{client}/media/bulk-delete', [ClientController::class, 'bulkDeleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
+    // Market-wide Stories page (wp-admin → Stories equivalents).
+    Route::prefix('/stories')->middleware('role:admin,sub_admin,sales')->group(function () {
+        Route::get('/markets', [StoriesController::class, 'markets']);
+        Route::get('/{platform}/overview', [StoriesController::class, 'overview']);
+        Route::get('/{platform}/stories', [StoriesController::class, 'index']);
+        Route::post('/{platform}/moderate', [StoriesController::class, 'moderate']);
+        Route::get('/{platform}/hottest', [StoriesController::class, 'hottest']);
+        Route::post('/{platform}/hottest/award', [StoriesController::class, 'award'])->middleware('role:admin');
+        Route::post('/{platform}/hottest/revoke', [StoriesController::class, 'revoke'])->middleware('role:admin');
+        Route::get('/{platform}/brand', [StoriesController::class, 'brand']);
+        Route::post('/{platform}/brand', [StoriesController::class, 'storeBrand'])->middleware('role:admin,sub_admin');
+        Route::post('/{platform}/brand/{storyId}/end', [StoriesController::class, 'endBrand'])->whereNumber('storyId')->middleware('role:admin,sub_admin');
+        Route::post('/{platform}/brand/{storyId}/delete', [StoriesController::class, 'destroyBrand'])->whereNumber('storyId')->middleware('role:admin,sub_admin');
+        Route::get('/{platform}/settings', [StoriesController::class, 'settings']);
+        Route::post('/{platform}/settings', [StoriesController::class, 'saveSettings'])->middleware('role:admin');
+    });
     Route::get('/clients/{client}/stories', [ClientStoryController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/stories', [ClientStoryController::class, 'store'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/stories/posting', [ClientStoryController::class, 'posting'])->middleware('role:admin,sub_admin,sales');
