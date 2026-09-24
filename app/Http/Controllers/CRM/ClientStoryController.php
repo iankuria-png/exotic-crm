@@ -68,6 +68,68 @@ class ClientStoryController extends Controller
         return response()->json($payload + ['can_manage' => $canManage]);
     }
 
+    public function store(Request $request, Client $client): JsonResponse
+    {
+        $this->authorizeManager($request, $client);
+
+        if ($response = $this->unlinkedResponse($client)) {
+            return $response;
+        }
+
+        $validated = $request->validate([
+            'attachment_id' => ['nullable', 'integer', 'min:1', 'required_without:file'],
+            // Matches the theme's story limits: photos 15 MB, videos 100 MB.
+            'file' => ['nullable', 'file', 'required_without:attachment_id', 'mimes:jpg,jpeg,png,webp,mp4,webm,mov', 'max:102400'],
+            'caption' => ['nullable', 'string', 'max:220'],
+            'start' => ['nullable', 'numeric', 'min:0', 'max:1800'],
+            'parts' => ['nullable', 'integer', 'min:1', 'max:8'],
+        ]);
+
+        $file = $request->file('file');
+        if ($file && str_starts_with((string) $file->getMimeType(), 'image/') && $file->getSize() > 15 * 1024 * 1024) {
+            return response()->json([
+                'message' => 'Photos must be 15 MB or smaller.',
+                'errors' => ['file' => ['Photos must be 15 MB or smaller.']],
+            ], 422);
+        }
+
+        try {
+            $result = WpSyncService::forPlatform((int) $client->platform_id)->createClientStory(
+                (int) $client->wp_post_id,
+                [
+                    'attachment_id' => $file ? null : ($validated['attachment_id'] ?? null),
+                    'caption' => $validated['caption'] ?? null,
+                    'start' => $validated['start'] ?? null,
+                    'parts' => $validated['parts'] ?? null,
+                    'actor' => (string) ($request->user()?->name ?? ''),
+                ],
+                $file,
+            );
+        } catch (RequestException $exception) {
+            if ($this->isMissingRoute($exception)) {
+                return response()->json([
+                    'message' => 'This market runs an older CRM sync plugin that cannot post stories. Upload exotic-crm-sync 1.3.11 or later.',
+                    'code' => 'plugin_outdated',
+                ], 409);
+            }
+
+            return $this->wordpressFailure($exception, 'WordPress could not post the story.');
+        } catch (\Throwable $exception) {
+            return response()->json(['message' => 'WordPress could not post the story.', 'error' => $exception->getMessage()], 502);
+        }
+
+        $storyIds = array_map('intval', (array) ($result['story_ids'] ?? []));
+        $this->record($request, $client, 'story_posted', CrmAuditAction::CLIENT_STORY_CREATE, [
+            'story_ids' => $storyIds,
+            'source' => $result['source'] ?? ($file ? 'upload' : 'profile_media'),
+            'attachment_id' => $file ? null : ($validated['attachment_id'] ?? null),
+            'parts' => count($storyIds),
+            'caption' => $validated['caption'] ?? null,
+        ], 'Story posted on the advertiser\'s behalf from CRM');
+
+        return response()->json($result, 201);
+    }
+
     public function moderate(Request $request, Client $client, int $storyId): JsonResponse
     {
         $this->authorizeManager($request, $client);

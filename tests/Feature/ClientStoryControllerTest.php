@@ -8,6 +8,7 @@ use App\Models\Platform;
 use App\Models\TimelineEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\Feature\Kyc\Concerns\InteractsWithKycFixtures;
@@ -212,6 +213,88 @@ class ClientStoryControllerTest extends TestCase
         $this->postJson("/api/crm/clients/{$this->client->id}/stories/97084/moderate", ['action' => 'hide'])->assertForbidden();
 
         Http::assertNothingSent();
+    }
+
+    public function test_posting_from_profile_media_sends_the_attachment_and_records_it(): void
+    {
+        $user = $this->createKycUser('sales', [$this->platform->id]);
+        Sanctum::actingAs($user);
+        Http::fake([self::BASE.'/clients/27955/stories' => Http::response([
+            'success' => true,
+            'story_ids' => [97120, 97121],
+            'source' => 'profile_media',
+            'stories' => [],
+        ])]);
+
+        $this->postJson("/api/crm/clients/{$this->client->id}/stories", [
+            'attachment_id' => 27956,
+            'start' => 3,
+            'parts' => 2,
+            'caption' => 'New photos this week',
+        ])->assertCreated()->assertJsonPath('story_ids.1', 97121);
+
+        Http::assertSent(fn (HttpRequest $request) => $request->method() === 'POST'
+            && $request->url() === self::BASE.'/clients/27955/stories'
+            && (int) $request['attachment_id'] === 27956
+            && (int) $request['parts'] === 2
+            && $request['actor'] === $user->name);
+
+        $event = TimelineEvent::query()->where('event_type', 'story_posted')->sole();
+        $this->assertSame([97120, 97121], $event->content['story_ids']);
+        $this->assertSame('profile_media', $event->content['source']);
+        $this->assertSame(1, AuditLog::query()->where('action', 'client_story_create')->count());
+    }
+
+    public function test_posting_an_upload_sends_the_file_as_multipart(): void
+    {
+        Sanctum::actingAs($this->createKycUser('admin'));
+        Http::fake(['*' => Http::response(['success' => true, 'story_ids' => [97130], 'source' => 'upload'])]);
+
+        $this->post("/api/crm/clients/{$this->client->id}/stories", [
+            'file' => UploadedFile::fake()->image('story.jpg', 1080, 1920),
+        ], ['Accept' => 'application/json'])->assertCreated();
+
+        Http::assertSent(fn (HttpRequest $request) => $request->isMultipart()
+            && collect($request->data())->contains(fn ($part) => ($part['name'] ?? null) === 'file'));
+        $this->assertSame('upload', TimelineEvent::query()->where('event_type', 'story_posted')->sole()->content['source']);
+    }
+
+    public function test_posting_needs_media_and_a_manager_role(): void
+    {
+        Sanctum::actingAs($this->createKycUser('admin'));
+        Http::fake();
+        $this->postJson("/api/crm/clients/{$this->client->id}/stories", ['caption' => 'x'])->assertUnprocessable();
+
+        Sanctum::actingAs($this->createKycUser('field_sales', [$this->platform->id]));
+        $this->postJson("/api/crm/clients/{$this->client->id}/stories", ['attachment_id' => 1])->assertForbidden();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_posting_passes_through_wordpress_eligibility_refusals(): void
+    {
+        Sanctum::actingAs($this->createKycUser('admin'));
+        Http::fake(['*' => Http::response([
+            'code' => 'not_eligible',
+            'message' => 'This profile cannot show stories right now.',
+            'data' => ['status' => 409, 'reason' => 'needs_payment'],
+        ], 409)]);
+
+        $this->postJson("/api/crm/clients/{$this->client->id}/stories", ['attachment_id' => 27956])
+            ->assertStatus(409)
+            ->assertJsonPath('data.reason', 'needs_payment');
+
+        $this->assertSame(0, TimelineEvent::query()->where('event_type', 'story_posted')->count());
+    }
+
+    public function test_posting_on_an_outdated_plugin_explains_the_upgrade(): void
+    {
+        Sanctum::actingAs($this->createKycUser('admin'));
+        Http::fake(['*' => Http::response(['code' => 'rest_no_route'], 404)]);
+
+        $this->postJson("/api/crm/clients/{$this->client->id}/stories", ['attachment_id' => 27956])
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'plugin_outdated');
     }
 
     public function test_unlinked_client_is_rejected(): void

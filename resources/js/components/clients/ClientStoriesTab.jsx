@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import ConfirmDialog from '../ConfirmDialog';
+import StoryComposerModal from './StoryComposerModal';
 
 // Stories live on WordPress and expire hourly, so everything here is read live
 // through /crm/clients/{id}/stories and refetched after every action.
@@ -9,7 +10,7 @@ import ConfirmDialog from '../ConfirmDialog';
 const UNAVAILABLE_COPY = {
     disabled: 'Stories are off on this market. They can be switched on in that site\'s wp-admin → Stories.',
     theme_unsupported: 'This market\'s theme predates stories, so there is nothing to manage yet.',
-    plugin_outdated: 'This market runs an older CRM sync plugin without story controls. Upload exotic-crm-sync 1.3.10 or later.',
+    plugin_outdated: 'This market runs an older CRM sync plugin without story controls. Upload exotic-crm-sync 1.3.11 or later.',
 };
 
 const CAN_POST_COPY = {
@@ -115,6 +116,9 @@ function StoryCard({ story, canManage, pendingAction, result, onAction, onDelete
                     <span className={chip(visibility.className)}>{visibility.label}</span>
                     {story.visibility === 'live' && story.review_state === 'unreviewed' ? (
                         <span className={chip('bg-white/90 text-slate-600 ring-slate-200')}>Unreviewed</span>
+                    ) : null}
+                    {story.posted_via === 'crm' ? (
+                        <span className={chip('bg-sky-50 text-sky-700 ring-sky-200')} title={story.posted_by ? `Posted by ${story.posted_by}` : 'Posted from the CRM'}>By support</span>
                     ) : null}
                     {story.group_id && story.group_size > 1 ? (
                         <span className={chip('bg-black/60 text-white ring-white/30')}>Part {story.group_part} of {story.group_size}</span>
@@ -246,12 +250,24 @@ function PostingControl({ data, clientId, canManage, onDone }) {
     );
 }
 
-export default function ClientStoriesTab({ clientId, data, isLoading, error, isFetching, onRefresh }) {
+export default function ClientStoriesTab({ clientId, data, isLoading, error, isFetching, onRefresh, composeRequest = 0 }) {
     const queryClient = useQueryClient();
     const [pending, setPending] = useState({});
     const [results, setResults] = useState({});
     const [confirmDelete, setConfirmDelete] = useState(null);
     const [deleteReason, setDeleteReason] = useState('');
+    const [composerOpen, setComposerOpen] = useState(false);
+    const [postedNotice, setPostedNotice] = useState('');
+    const handledRequest = useRef(0);
+
+    // The profile header's "Add story" badge opens the composer once the
+    // stories payload says posting is possible.
+    useEffect(() => {
+        if (composeRequest > handledRequest.current && data?.enabled && data?.can_manage && data?.can_create) {
+            handledRequest.current = composeRequest;
+            setComposerOpen(true);
+        }
+    }, [composeRequest, data]);
 
     const refresh = () => {
         onRefresh();
@@ -312,6 +328,10 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
     const week = data.week;
     const hottest = data.hottest_until ? new Date(data.hottest_until) : null;
     const rewards = data.rewards || [];
+    const liveCount = Number(counts.live || 0) + Number(counts.pending || 0);
+    const createBlockedReason = !data.can_create
+        ? 'This market\'s theme needs the latest escortwp-child update before the CRM can post stories.'
+        : null;
 
     return (
         <div className="space-y-4">
@@ -321,10 +341,29 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
                         <h3 className="crm-panel-title">Stories</h3>
                         <p className="crm-panel-subtitle">Live from the market site. Stories expire on their own; nothing here is cached.</p>
                     </div>
-                    <button type="button" className="crm-btn-secondary" onClick={onRefresh} disabled={isFetching}>
-                        {isFetching ? 'Refreshing…' : 'Refresh'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button type="button" className="crm-btn-secondary" onClick={onRefresh} disabled={isFetching}>
+                            {isFetching ? 'Refreshing…' : 'Refresh'}
+                        </button>
+                        {canManage ? (
+                            <button
+                                type="button"
+                                className="inline-flex items-center gap-1.5 rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                onClick={() => { setPostedNotice(''); setComposerOpen(true); }}
+                                disabled={Boolean(createBlockedReason)}
+                                title={createBlockedReason || 'Post a story on this client\'s behalf'}
+                            >
+                                <span aria-hidden="true">＋</span> Add story
+                            </button>
+                        ) : null}
+                    </div>
                 </header>
+                {createBlockedReason && canManage ? (
+                    <p className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">{createBlockedReason}</p>
+                ) : null}
+                {postedNotice ? (
+                    <p role="status" className="border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">{postedNotice}</p>
+                ) : null}
                 <div className="grid gap-4 p-4 md:grid-cols-[1fr_1fr_1.2fr]">
                     <div className="space-y-2">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Posting</p>
@@ -376,8 +415,27 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
             ) : (
                 <section className="crm-surface p-8 text-center text-sm text-slate-500">
                     No live stories right now. Stories disappear automatically when they expire.
+                    {canManage && !createBlockedReason ? (
+                        <button type="button" className="mx-auto mt-3 block font-semibold text-teal-700 hover:underline" onClick={() => setComposerOpen(true)}>
+                            Add the first story
+                        </button>
+                    ) : null}
                 </section>
             )}
+
+            <StoryComposerModal
+                open={composerOpen}
+                clientId={clientId}
+                limits={data.limits}
+                liveCount={liveCount}
+                onClose={() => setComposerOpen(false)}
+                onPosted={(result) => {
+                    const count = (result?.story_ids || []).length || 1;
+                    setComposerOpen(false);
+                    setPostedNotice(count > 1 ? `${count} stories posted and live.` : 'Story posted and live.');
+                    refresh();
+                }}
+            />
 
             <ConfirmDialog
                 open={Boolean(confirmDelete)}

@@ -328,6 +328,42 @@ class WpSyncService
     }
 
     /**
+     * Post a story on the advertiser's behalf, from a file already in the
+     * profile media ($fields['attachment_id']) or a new upload ($file).
+     * Videos accept $fields['start'] (seconds) and $fields['parts'].
+     */
+    public function createClientStory(int $postId, array $fields, ?UploadedFile $file = null): array
+    {
+        $path = "/clients/{$postId}/stories";
+        $fields = array_filter($fields, static fn ($value): bool => $value !== null && $value !== '');
+
+        if ($file === null) {
+            return $this->post($path, $fields);
+        }
+
+        $this->assertRemoteWriteAllowed($path);
+        $this->assertMarketAvailable();
+
+        $handle = @fopen((string) $file->getRealPath(), 'rb');
+        if ($handle === false) {
+            throw new \RuntimeException('Unable to read story file for upload.');
+        }
+
+        try {
+            $response = Http::withHeaders($this->headers())
+                ->timeout($this->mediaUploadTimeout)
+                ->attach('file', $handle, $file->getClientOriginalName(), [
+                    'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
+                ])
+                ->post($this->baseUrl.$path, array_map('strval', $fields));
+        } finally {
+            fclose($handle);
+        }
+
+        return $this->decodeResponse($response, 'POST', $path);
+    }
+
+    /**
      * Approve, hide or delete one story. WordPress checks that the story
      * belongs to this profile's account and is not a brand story.
      */

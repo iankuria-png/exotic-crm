@@ -567,6 +567,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/stories', [ClientStoryController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::post('/clients/{client}/stories', [ClientStoryController::class, 'store'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/stories/posting', [ClientStoryController::class, 'posting'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/stories/{storyId}/moderate', [ClientStoryController::class, 'moderate'])->whereNumber('storyId')->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/stories/{storyId}/expire', [ClientStoryController::class, 'expire'])->whereNumber('storyId')->middleware('role:admin,sub_admin,sales');

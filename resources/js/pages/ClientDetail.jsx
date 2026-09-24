@@ -1424,6 +1424,17 @@ export default function ClientDetail() {
     const [notifyClient, setNotifyClient] = useState(false);
     const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
+    const [storyComposeRequest, setStoryComposeRequest] = useState(0);
+    const openTab = (key) => {
+        setActiveTab(key);
+        const next = new URLSearchParams(searchParams);
+        if (key === 'overview') {
+            next.delete('tab');
+        } else {
+            next.set('tab', key);
+        }
+        setSearchParams(next, { replace: true });
+    };
     const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
     const [managedProfileForm, setManagedProfileForm] = useState(() => defaultManagedProfileForm());
     const [managedProfileLocationCatalogAvailable, setManagedProfileLocationCatalogAvailable] = useState(null);
@@ -2716,7 +2727,7 @@ export default function ClientDetail() {
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
             { key: 'timeline', label: 'Timeline' },
-            { key: 'chat', label: 'Chat' },
+            { key: 'chat', label: 'Chat', compactIcon: 'chat' },
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
             { key: 'contact_unlocks', label: `Unlocks (${client?.contact_unlock_summary?.attempts || 0})` },
@@ -2729,7 +2740,12 @@ export default function ClientDetail() {
             // applies to the advertiser on the website, not to the CRM team, who
             // still need to work these accounts during a win-back.
             { key: 'edit_profile', label: 'Edit Profile' },
-            { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
+            {
+                key: 'profile_health',
+                label: `Profile Health (${healthData?.summary?.duplicate_count || 0})`,
+                compactIcon: 'health',
+                compactCount: Number(healthData?.summary?.duplicate_count || 0),
+            },
         ];
 
         if (!isReadOnly) {
@@ -4135,6 +4151,25 @@ export default function ClientDetail() {
                                 </button>
                                 ) : null}
 
+                                {/* Add story: opens the Stories tab composer */}
+                                {!isAgency && !isReadOnly && Number(client?.wp_post_id || 0) > 0 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        openTab('stories');
+                                        setStoryComposeRequest((count) => count + 1);
+                                    }}
+                                    title="Post a story on this client's behalf"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-1.5 text-xs font-semibold text-fuchsia-700 transition hover:border-fuchsia-300 hover:bg-fuchsia-100"
+                                >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="12" cy="12" r="9" strokeWidth={2} strokeDasharray="4 2.5" />
+                                        <path strokeLinecap="round" strokeWidth={2} d="M12 8.5v7M8.5 12h7" />
+                                    </svg>
+                                    Add story
+                                </button>
+                                ) : null}
+
                                 {/* NEW badge pin toggle */}
                                 <button
                                     type="button"
@@ -4542,22 +4577,15 @@ export default function ClientDetail() {
             </section>
 
             <section className="crm-surface p-2">
-                <nav className="flex flex-wrap gap-1">
-                    {tabLinks.map((tab) => (
+                <nav className="flex flex-wrap items-center gap-1">
+                    {tabLinks.filter((tab) => !tab.compactIcon).map((tab) => (
                         <button
                             key={tab.key}
                             disabled={tab.disabled}
                             title={tab.disabled ? tab.disabledTitle : undefined}
                             onClick={() => {
                                 if (tab.disabled) return;
-                                setActiveTab(tab.key);
-                                const next = new URLSearchParams(searchParams);
-                                if (tab.key === 'overview') {
-                                    next.delete('tab');
-                                } else {
-                                    next.set('tab', tab.key);
-                                }
-                                setSearchParams(next, { replace: true });
+                                openTab(tab.key);
                             }}
                             className={`rounded-md px-3 py-2 text-sm font-medium transition ${tab.disabled ? 'cursor-not-allowed text-slate-300' : activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
                         >
@@ -4571,6 +4599,36 @@ export default function ClientDetail() {
                             </span>
                         </button>
                     ))}
+                    {/* Less-used tabs sit as small icons at the end of the bar. */}
+                    <span className="ml-auto flex items-center gap-1">
+                        {tabLinks.filter((tab) => tab.compactIcon).map((tab) => (
+                            <button
+                                key={tab.key}
+                                type="button"
+                                disabled={tab.disabled}
+                                title={tab.label}
+                                aria-label={tab.label}
+                                aria-pressed={activeTab === tab.key}
+                                onClick={() => openTab(tab.key)}
+                                className={`relative inline-flex h-9 w-9 items-center justify-center rounded-md transition ${activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+                            >
+                                {tab.compactIcon === 'chat' ? (
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                                    </svg>
+                                ) : (
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                    </svg>
+                                )}
+                                {tab.compactCount > 0 ? (
+                                    <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                                        {tab.compactCount}
+                                    </span>
+                                ) : null}
+                            </button>
+                        ))}
+                    </span>
                 </nav>
             </section>
 
@@ -5527,6 +5585,7 @@ export default function ClientDetail() {
                     error={storiesError}
                     isFetching={storiesFetching}
                     onRefresh={refetchStories}
+                    composeRequest={storyComposeRequest}
                 />
             ) : null}
 
