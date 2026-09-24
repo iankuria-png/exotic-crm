@@ -928,6 +928,48 @@ class WpSyncService
     }
 
     /**
+     * Old profile URLs that point, or could point, at the wrong profile
+     * (exotic-crm-sync 1.3.13). Read-only.
+     */
+    public function auditProfileSlugAliases(string $kind = '', int $page = 1, int $perPage = 25): array
+    {
+        return $this->get('/profile-slugs/aliases', array_filter([
+            'kind' => $kind,
+            'page' => max(1, $page),
+            'per_page' => max(1, min(100, $perPage)),
+        ], static fn ($value) => $value !== ''));
+    }
+
+    /**
+     * Release up to $limit slugs' stale aliases, worst first. The response's
+     * `released` rows are the backup needed to restore them.
+     */
+    public function repairProfileSlugAliases(int $limit = 200): array
+    {
+        return $this->post('/profile-slugs/aliases/repair', ['limit' => $limit]);
+    }
+
+    /** @param array<int, array{meta_id?:int, post_id:int, slug:string}> $rows */
+    public function restoreProfileSlugAliases(array $rows): array
+    {
+        return $this->post('/profile-slugs/aliases/restore', ['rows' => array_values($rows)]);
+    }
+
+    /**
+     * Finish a profile the CRM wrote directly: WordPress moves it off a slug
+     * that is already taken or Yoast-redirected, releases older aliases of
+     * the slug it keeps, and clears caches.
+     *
+     * @param  array<int, array{meta_id:int, post_id:int, slug:string}>  $releasedAliases
+     */
+    public function claimProfileSlug(int $postId, array $releasedAliases = []): array
+    {
+        return $this->post("/clients/{$postId}/slug/claim", [
+            'released_aliases' => array_values($releasedAliases),
+        ]);
+    }
+
+    /**
      * Upload a media file to a client profile.
      */
     public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false, ?string $altText = null): array

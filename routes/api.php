@@ -73,6 +73,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentReconciliationController;
 use App\Http\Controllers\CRM\PbnSiteController;
+use App\Http\Controllers\CRM\ProfileUrlHealthController;
 use App\Http\Controllers\CRM\PulseExportController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
@@ -504,6 +505,15 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('/runs/{run}', [LifecycleRestoreController::class, 'show']);
         Route::post('/runs/{run}/revert', [LifecycleRestoreController::class, 'revert']);
         Route::post('/clients/{client}/revert', [LifecycleRestoreController::class, 'revertClient']);
+    });
+    // Profile URLs — old profile addresses that redirect, or could redirect, to
+    // the wrong profile. The repair edits WordPress data, so admins only.
+    Route::middleware('role:admin,sub_admin')->prefix('profile-url-health')->group(function () {
+        Route::get('/', [ProfileUrlHealthController::class, 'show']);
+        Route::post('/runs', [ProfileUrlHealthController::class, 'store']);
+        Route::get('/runs/{run}', [ProfileUrlHealthController::class, 'showRun']);
+        Route::post('/runs/{run}/restore', [ProfileUrlHealthController::class, 'restore']);
+        Route::get('/runs/{run}/backup', [ProfileUrlHealthController::class, 'backup']);
     });
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales,field_sales');

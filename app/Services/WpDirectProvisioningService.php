@@ -8,6 +8,7 @@ use App\Support\WpProfileFieldCatalog;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
@@ -16,6 +17,15 @@ class WpDirectProvisioningService
     private WordPressSiteConnection $site;
 
     private string $connectionName;
+
+    /**
+     * `_wp_old_slug` rows the current provisioning released for the slug it
+     * took, handed to WordPress so it can put them back if it moves the
+     * profile to another slug.
+     *
+     * @var array<int, array{meta_id:int, post_id:int, slug:string}>
+     */
+    private array $releasedSlugAliases = [];
 
     public function __construct(Platform|WordPressSiteConnection $site, ?array $connectionConfig = null)
     {
@@ -73,7 +83,9 @@ class WpDirectProvisioningService
             $postStatus = 'private';
         }
 
-        return DB::connection($this->connectionName)->transaction(function () use (
+        $this->releasedSlugAliases = [];
+
+        $result = DB::connection($this->connectionName)->transaction(function () use (
             $requestId,
             $payloadHash,
             $name,
@@ -156,6 +168,8 @@ class WpDirectProvisioningService
                 'placeholder_email_used' => $placeholderEmailUsed,
             ];
         });
+
+        return $this->claimProvisionedProfileSlug($result);
     }
 
     /**
@@ -202,7 +216,9 @@ class WpDirectProvisioningService
             $postStatus = 'private';
         }
 
-        return DB::connection($this->connectionName)->transaction(function () use (
+        $this->releasedSlugAliases = [];
+
+        $result = DB::connection($this->connectionName)->transaction(function () use (
             $requestId,
             $payloadHash,
             $name,
@@ -281,6 +297,8 @@ class WpDirectProvisioningService
                 'placeholder_email_used' => $placeholderEmailUsed,
             ];
         });
+
+        return $this->claimProvisionedProfileSlug($result);
     }
 
     /**
@@ -333,7 +351,9 @@ class WpDirectProvisioningService
             $postStatus = 'private';
         }
 
-        return DB::connection($this->connectionName)->transaction(function () use (
+        $this->releasedSlugAliases = [];
+
+        $result = DB::connection($this->connectionName)->transaction(function () use (
             $requestId,
             $payloadHash,
             $agencyUserId,
@@ -403,6 +423,8 @@ class WpDirectProvisioningService
                 'managed_by_agency' => true,
             ];
         });
+
+        return $this->claimProvisionedProfileSlug($result);
     }
 
     /**
@@ -484,7 +506,7 @@ class WpDirectProvisioningService
         if ($nicename === '') {
             $nicename = $username;
         }
-        $nicename = Str::limit($nicename, 50, '');
+        $nicename = $this->nextAvailableNicename(Str::limit($nicename, 50, ''));
 
         $now = now()->format('Y-m-d H:i:s');
 
@@ -572,7 +594,90 @@ class WpDirectProvisioningService
         $guid = $baseUrl !== '' ? "{$baseUrl}/?p={$postId}" : "/?p={$postId}";
         $posts->where('ID', $postId)->update(['guid' => $guid]);
 
+        $this->releaseStaleSlugAliases($postId, $postSlug, $postType);
+
         return $postId;
+    }
+
+    /**
+     * The new profile now owns $slug, so an older profile that was renamed
+     * away from it must stop holding it as an old URL. WordPress does this on
+     * wp_insert_post(); this direct insert skips that hook, and a left-over
+     * alias sends the URL to the older profile once this one is renamed or
+     * removed.
+     */
+    private function releaseStaleSlugAliases(int $postId, string $slug, string $postType): void
+    {
+        $connection = DB::connection($this->connectionName);
+
+        $rows = $connection->table('postmeta')
+            ->join('posts', 'posts.ID', '=', 'postmeta.post_id')
+            ->where('postmeta.meta_key', '_wp_old_slug')
+            ->where('postmeta.meta_value', $slug)
+            ->where('posts.post_type', $postType)
+            ->where('postmeta.post_id', '<>', $postId)
+            ->get(['postmeta.meta_id', 'postmeta.post_id']);
+
+        if ($rows->isEmpty()) {
+            return;
+        }
+
+        $connection->table('postmeta')->whereIn('meta_id', $rows->pluck('meta_id')->all())->delete();
+
+        foreach ($rows as $row) {
+            $this->releasedSlugAliases[] = [
+                'meta_id' => (int) $row->meta_id,
+                'post_id' => (int) $row->post_id,
+                'slug' => $slug,
+            ];
+        }
+    }
+
+    /**
+     * Let WordPress finish the slug once the insert has committed: it moves
+     * the profile off a slug a Yoast redirect or a concurrent profile already
+     * uses, and clears the caches the direct writes bypassed. A site without
+     * the plugin route (or unreachable) keeps the profile as inserted; the
+     * aliases were already released inside the transaction.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function claimProvisionedProfileSlug(array $result): array
+    {
+        $postId = (int) ($result['wp_post_id'] ?? 0);
+        $released = $this->releasedSlugAliases;
+        $this->releasedSlugAliases = [];
+
+        $result['wp_profile_slug'] = (string) DB::connection($this->connectionName)
+            ->table('posts')
+            ->where('ID', $postId)
+            ->value('post_name');
+        $result['slug_aliases_released'] = count($released);
+        $result['slug_claim'] = 'skipped';
+
+        if ($postId <= 0 || trim((string) $this->site->wpApiUrl) === '') {
+            return $result;
+        }
+
+        try {
+            $claim = (new WpSyncService($this->site))->claimProfileSlug($postId, $released);
+            $result['wp_profile_slug'] = (string) ($claim['slug'] ?? $result['wp_profile_slug']);
+            $result['slug_claim'] = ! empty($claim['changed']) ? 'moved' : 'claimed';
+            if (! empty($claim['changed'])) {
+                $result['slug_claim_reason'] = $claim['reason'] ?? null;
+            }
+        } catch (\Throwable $exception) {
+            $result['slug_claim'] = 'failed';
+            Log::warning('WordPress slug claim failed after direct provisioning.', [
+                'site_type' => $this->site->siteType,
+                'site_id' => $this->site->siteId,
+                'wp_post_id' => $postId,
+                'error' => mb_substr($exception->getMessage(), 0, 500),
+            ]);
+        }
+
+        return $result;
     }
 
     private function storeProfileMeta(
@@ -1178,6 +1283,28 @@ class WpDirectProvisioningService
             $suffix++;
             $tail = (string) $suffix;
             $candidate = substr($base, 0, max(1, 60 - strlen($tail))).$tail;
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * user_nicename is the user's URL slug and must be unique, as
+     * wp_insert_user() keeps it: the first free of base, base-2, base-3...
+     */
+    private function nextAvailableNicename(string $base): string
+    {
+        $candidate = $base;
+        $suffix = 1;
+
+        while (
+            DB::connection($this->connectionName)->table('users')
+                ->where('user_nicename', $candidate)
+                ->exists()
+        ) {
+            $suffix++;
+            $tail = '-'.$suffix;
+            $candidate = Str::limit($base, max(1, 50 - strlen($tail)), '').$tail;
         }
 
         return $candidate;

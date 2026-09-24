@@ -16,6 +16,7 @@ import ChurnedQueueView from '../components/clients/ChurnedQueueView';
 import AutoOptimizeView from '../components/clients/AutoOptimizeView';
 import LocationsView from '../components/clients/LocationsView';
 import SeoRecoveryView from '../components/clients/SeoRecoveryView';
+import ProfileUrlHealthView from '../components/clients/ProfileUrlHealthView';
 import SmartDeleteDialog from '../components/clients/SmartDeleteDialog';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import ClientCreateModal from '../components/clients/ClientCreateModal';
@@ -588,7 +589,7 @@ export default function Clients() {
     const [searchParams, setSearchParams] = useSearchParams();
     const allowedTabs = new Set([
         'all', 'conversion', 'closed', 'churned', 'optimizer', 'locations',
-        ...(canRecoverSeo ? ['seo_recovery'] : []),
+        ...(canRecoverSeo ? ['seo_recovery', 'profile_urls'] : []),
     ]);
     const tabParam = searchParams.get('tab') || 'all';
     const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
@@ -2482,7 +2483,7 @@ export default function Clients() {
     const tabClass = (key) => {
         const isActive = tab === key;
         return [
-            'px-3.5 py-1.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
+            'shrink-0 whitespace-nowrap px-3.5 py-1.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
             isActive
                 ? 'bg-white text-teal-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-800',
@@ -2491,7 +2492,8 @@ export default function Clients() {
 
     const conversionCount = Number(data?.stats?.closed_recent ?? 0); // closed (last 30d) for tab badge
     const tabStrip = (
-        <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Clients view">
+        // Scrolls sideways on narrow screens instead of widening the page.
+        <div className="inline-flex max-w-full items-center overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Clients view">
             <button type="button" role="tab" aria-selected={tab === 'all'} className={`${tabClass('all')} rounded-md`} onClick={() => setTab('all')}>
                 All clients
                 {stats.total ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {stats.total.toLocaleString()}</span> : null}
@@ -2515,6 +2517,11 @@ export default function Clients() {
             {canRecoverSeo ? (
                 <button type="button" role="tab" aria-selected={tab === 'seo_recovery'} className={`${tabClass('seo_recovery')} rounded-md`} onClick={() => setTab('seo_recovery')}>
                     ↻ SEO Recovery
+                </button>
+            ) : null}
+            {canRecoverSeo ? (
+                <button type="button" role="tab" aria-selected={tab === 'profile_urls'} className={`${tabClass('profile_urls')} rounded-md`} onClick={() => setTab('profile_urls')}>
+                    ⇢ Profile URLs
                 </button>
             ) : null}
         </div>
@@ -2581,6 +2588,26 @@ export default function Clients() {
                 />
                 {tabStrip}
                 <SeoRecoveryView
+                    platformId={platformFilter}
+                    platforms={platformOptions.map((platform) => ({
+                        id: platform.platform_id,
+                        name: platform.platform_name,
+                    }))}
+                    marketName={activeMarketName}
+                />
+            </div>
+        );
+    }
+
+    if (tab === 'profile_urls') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Old profile links that open the wrong profile — or would — found and repaired, with a backup of every change."
+                />
+                {tabStrip}
+                <ProfileUrlHealthView
                     platformId={platformFilter}
                     platforms={platformOptions.map((platform) => ({
                         id: platform.platform_id,

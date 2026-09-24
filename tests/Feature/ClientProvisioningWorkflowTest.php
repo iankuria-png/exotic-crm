@@ -11,6 +11,7 @@ use App\Services\WpDirectProvisioningService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use ReflectionClass;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -483,6 +484,111 @@ class ClientProvisioningWorkflowTest extends TestCase
             ->assertJsonPath('managed_by_agency.name', 'Massage Kenya')
             ->assertJsonPath('managed_by_agency.wp_post_id', 110983)
             ->assertJsonPath('managed_by_agency.profile_status', 'private');
+    }
+
+    public function test_direct_provisioning_releases_old_urls_the_new_profile_takes_and_lets_wordpress_claim_the_slug(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        $wp = DB::connection($connectionName);
+
+        // Lisa was renamed to Lisa Queen, so /escort/lisa/ still redirects to her.
+        $renamedId = (int) $wp->table('posts')->insertGetId(['post_type' => 'escort', 'post_status' => 'publish', 'post_name' => 'lisa-queen', 'post_title' => 'Lisa Queen']);
+        $aliasId = (int) $wp->table('postmeta')->insertGetId(['post_id' => $renamedId, 'meta_key' => '_wp_old_slug', 'meta_value' => 'lisa']);
+        // An agency's old slug and an unrelated alias stay untouched.
+        $agencyId = (int) $wp->table('posts')->insertGetId(['post_type' => 'agency', 'post_status' => 'publish', 'post_name' => 'lisa-agency', 'post_title' => 'Lisa Agency']);
+        $wp->table('postmeta')->insert(['post_id' => $agencyId, 'meta_key' => '_wp_old_slug', 'meta_value' => 'lisa']);
+        $wp->table('postmeta')->insert(['post_id' => $renamedId, 'meta_key' => '_wp_old_slug', 'meta_value' => 'lisa-old']);
+
+        Http::fake(['*/clients/*/slug/claim' => Http::response([
+            'post_id' => 0,
+            'slug' => 'lisa',
+            'previous_slug' => 'lisa',
+            'changed' => false,
+            'reason' => null,
+            'aliases_released' => 0,
+            'aliases_restored' => 0,
+        ])]);
+
+        $result = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
+            'name' => 'Lisa',
+            'email' => 'lisa.new@example.test',
+            'phone' => '254722000111',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'currency' => 50,
+            'provision_request_id' => 'req-lisa-new',
+        ]);
+
+        $this->assertSame('lisa', $result['wp_profile_slug']);
+        $this->assertSame('claimed', $result['slug_claim']);
+        $this->assertSame(1, $result['slug_aliases_released']);
+        $this->assertFalse($wp->table('postmeta')->where('meta_id', $aliasId)->exists());
+        $this->assertTrue($wp->table('postmeta')->where('post_id', $agencyId)->where('meta_value', 'lisa')->exists());
+        $this->assertTrue($wp->table('postmeta')->where('post_id', $renamedId)->where('meta_value', 'lisa-old')->exists());
+
+        Http::assertSent(function ($request) use ($result, $renamedId, $aliasId) {
+            return str_ends_with($request->url(), "/clients/{$result['wp_post_id']}/slug/claim")
+                && $request['released_aliases'] === [['meta_id' => $aliasId, 'post_id' => $renamedId, 'slug' => 'lisa']];
+        });
+    }
+
+    public function test_direct_provisioning_reports_the_slug_wordpress_moved_the_profile_to(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        Http::fake(['*/slug/claim' => Http::response(['slug' => 'amani-2', 'previous_slug' => 'amani', 'changed' => true, 'reason' => 'yoast_redirect'])]);
+
+        $result = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
+            'name' => 'Amani',
+            'email' => 'amani@example.test',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'currency' => 50,
+        ]);
+
+        $this->assertSame('amani-2', $result['wp_profile_slug']);
+        $this->assertSame('moved', $result['slug_claim']);
+        $this->assertSame('yoast_redirect', $result['slug_claim_reason']);
+    }
+
+    public function test_direct_provisioning_keeps_the_profile_when_the_slug_claim_fails(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        Http::fake(['*/slug/claim' => Http::response(['code' => 'rest_no_route'], 404)]);
+
+        $result = (new WpDirectProvisioningService($platform, $connectionConfig))->provisionEscort([
+            'name' => 'Baraka',
+            'email' => 'baraka@example.test',
+            'region_id' => $regionId,
+            'city_id' => $cityId,
+            'currency' => 50,
+        ]);
+
+        $this->assertSame('failed', $result['slug_claim']);
+        $this->assertSame('baraka', $result['wp_profile_slug']);
+        $this->assertTrue(DB::connection($connectionName)->table('posts')->where('ID', $result['wp_post_id'])->exists());
+    }
+
+    public function test_direct_provisioning_gives_each_user_a_unique_nicename(): void
+    {
+        [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        [$regionId, $cityId] = $this->seedLocationTerms($connectionName);
+        Http::fake(['*' => Http::response(['slug' => 'x', 'changed' => false])]);
+        $this->seedWordPressUser($connectionName, 'lisa', 'lisa@example.test', 'Lisa');
+
+        $service = new WpDirectProvisioningService($platform, $connectionConfig);
+        $first = $service->provisionEscort(['name' => 'Lisa', 'email' => 'lisa.two@example.test', 'region_id' => $regionId, 'city_id' => $cityId, 'currency' => 50]);
+        $second = $service->provisionEscort(['name' => 'Lisa', 'email' => 'lisa.three@example.test', 'region_id' => $regionId, 'city_id' => $cityId, 'currency' => 50]);
+
+        $nicenames = DB::connection($connectionName)->table('users')
+            ->whereIn('ID', [$first['wp_user_id'], $second['wp_user_id']])
+            ->orderBy('ID')
+            ->pluck('user_nicename')
+            ->all();
+
+        $this->assertSame(['lisa-2', 'lisa-3'], $nicenames);
     }
 
     public function test_provisioned_profile_finalization_is_owned_by_the_direct_writer(): void
