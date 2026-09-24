@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import ConfirmDialog from '../ConfirmDialog';
-import { StoryMedia, VISIBILITY_CHIP, chip, formatAgo, formatDateTime, formatLeft } from '../clients/ClientStoriesTab';
+import { VISIBILITY_CHIP, chip, formatAgo, formatDateTime, formatLeft } from '../clients/ClientStoriesTab';
+import { StoryLightbox, StoryMedia, decodeEntities } from './StoryPreview';
 
 const LIVE_FILTERS = [
     { key: 'all', label: 'All' },
@@ -46,7 +47,7 @@ function ProfileLine({ story }) {
     );
 }
 
-function ReviewCard({ story, selected, onToggle, canModerate, busyAction, result, onAction }) {
+function ReviewCard({ story, selected, onToggle, canModerate, busyAction, result, onAction, onOpen }) {
     const visibility = VISIBILITY_CHIP[story.visibility] || VISIBILITY_CHIP.hidden;
     const lifetime = Math.max(1, (Number(story.expires_at_local) - Number(story.created_at_local)) || 1);
     const remaining = Math.min(100, Math.max(0, (Number(story.seconds_left || 0) / lifetime) * 100));
@@ -54,8 +55,13 @@ function ReviewCard({ story, selected, onToggle, canModerate, busyAction, result
     const approved = story.visibility === 'live' && story.review_state === 'approved';
 
     const onKeyDown = (event) => {
-        if (!canModerate || busy || event.target !== event.currentTarget) return;
+        if (event.target !== event.currentTarget) return;
         const key = event.key.toLowerCase();
+        if (key === 'enter') {
+            onOpen(story);
+            return;
+        }
+        if (!canModerate || busy) return;
         if (key === 'a' && !approved) onAction('approve', [story]);
         if (key === 'h' && story.visibility !== 'hidden') onAction('hide', [story]);
         if (key === 'e') onAction('expire', [story]);
@@ -86,7 +92,7 @@ function ReviewCard({ story, selected, onToggle, canModerate, busyAction, result
                 ) : null}
             </div>
             <div className={`relative aspect-[9/16] bg-slate-900 ${story.visibility === 'hidden' ? 'opacity-60' : ''}`}>
-                <StoryMedia story={story} />
+                <StoryMedia story={story} onOpen={onOpen} />
                 <div className="pointer-events-none absolute inset-x-2 top-2 flex flex-wrap gap-1">
                     <span className={chip(visibility.className)}>{visibility.label}</span>
                     {story.visibility === 'live' && story.review_state === 'unreviewed' ? <span className={chip('bg-white/90 text-slate-600 ring-slate-200')}>Unreviewed</span> : null}
@@ -106,7 +112,7 @@ function ReviewCard({ story, selected, onToggle, canModerate, busyAction, result
                     <span><strong className="text-slate-900">{Number(story.view_count || 0).toLocaleString()}</strong> views</span>
                     <span><strong className="text-slate-900">{Number(story.like_count || 0).toLocaleString()}</strong> likes</span>
                 </div>
-                {story.caption ? <p className="line-clamp-2 text-xs text-slate-600">{story.caption}</p> : null}
+                {story.caption ? <p className="line-clamp-2 text-xs text-slate-600">{decodeEntities(story.caption)}</p> : null}
                 {canModerate ? (
                     <div className="grid grid-cols-4 gap-1 pt-1">
                         <button type="button" title="Approve (A)" className="crm-btn-secondary justify-center px-1 py-1 text-xs" disabled={busy || approved} onClick={() => onAction('approve', [story])}>
@@ -140,6 +146,7 @@ export default function StoryReviewGrid({ platformId, mode, canModerate, onChang
     const [banner, setBanner] = useState(null);
     const [confirm, setConfirm] = useState(null);
     const [reason, setReason] = useState('');
+    const [viewing, setViewing] = useState(null);
 
     const state = mode === 'review' ? 'unreviewed' : filter;
 
@@ -162,6 +169,16 @@ export default function StoryReviewGrid({ platformId, mode, canModerate, onChang
     });
     const stories = useMemo(() => listQuery.data?.stories || [], [listQuery.data]);
     const selectedStories = stories.filter((story) => selected.has(story.id));
+    const viewingIndex = viewing === null ? -1 : stories.findIndex((story) => story.id === viewing);
+    const lastViewingIndex = useRef(-1);
+    if (viewingIndex >= 0) lastViewingIndex.current = viewingIndex;
+    useEffect(() => {
+        if (viewing !== null && viewingIndex < 0) {
+            // The reviewed story left this list (approved out of Review, or deleted).
+            const next = stories[Math.min(lastViewingIndex.current, stories.length - 1)];
+            setViewing(next ? next.id : null);
+        }
+    }, [viewing, viewingIndex, stories]);
 
     const toggle = (id) => setSelected((current) => {
         const next = new Set(current);
@@ -274,6 +291,7 @@ export default function StoryReviewGrid({ platformId, mode, canModerate, onChang
                                 busyAction={busy[story.id]}
                                 result={results[story.id]}
                                 onAction={requestAction}
+                                onOpen={() => setViewing(story.id)}
                             />
                         ))}
                     </div>
@@ -289,6 +307,47 @@ export default function StoryReviewGrid({ platformId, mode, canModerate, onChang
                     <button type="button" className="inline-flex items-center rounded-md border border-rose-200 bg-white px-3 py-1.5 text-sm font-semibold text-rose-700 hover:bg-rose-50" onClick={() => requestAction('delete', selectedStories)}>Delete</button>
                     <button type="button" className="ml-1 text-sm text-slate-500 hover:text-slate-700" onClick={() => setSelected(new Set())}>Clear</button>
                 </div>
+            ) : null}
+
+            {viewingIndex >= 0 ? (
+                <StoryLightbox
+                    stories={stories}
+                    index={viewingIndex}
+                    onIndex={(next) => setViewing(stories[next]?.id ?? null)}
+                    onClose={() => setViewing(null)}
+                    onKey={(event, story) => {
+                        if (!canModerate || confirm || busy[story.id]) return;
+                        const key = event.key.toLowerCase();
+                        if (key === 'a') requestAction('approve', [story]);
+                        if (key === 'h') requestAction('hide', [story]);
+                        if (key === 'e') requestAction('expire', [story]);
+                        if (key === 'x' || key === 'delete') requestAction('delete', [story]);
+                    }}
+                    renderActions={canModerate ? (story) => {
+                        const approved = story.visibility === 'live' && story.review_state === 'approved';
+                        const pendingAction = busy[story.id];
+                        return (
+                            <>
+                                <div className="grid w-full grid-cols-2 gap-2">
+                                    <button type="button" className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-40" disabled={Boolean(pendingAction) || approved} onClick={() => requestAction('approve', [story])}>
+                                        {pendingAction === 'approve' ? 'Approving…' : approved ? 'Approved' : 'Approve'}
+                                    </button>
+                                    <button type="button" className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20 disabled:opacity-40" disabled={Boolean(pendingAction) || story.visibility === 'hidden'} onClick={() => requestAction('hide', [story])}>
+                                        {pendingAction === 'hide' ? 'Hiding…' : 'Hide'}
+                                    </button>
+                                    <button type="button" className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20 disabled:opacity-40" disabled={Boolean(pendingAction)} onClick={() => requestAction('expire', [story])}>
+                                        {pendingAction === 'expire' ? 'Ending…' : 'End now'}
+                                    </button>
+                                    <button type="button" className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold hover:bg-rose-500 disabled:opacity-40" disabled={Boolean(pendingAction)} onClick={() => requestAction('delete', [story])}>
+                                        Delete
+                                    </button>
+                                </div>
+                                {results[story.id] ? <p className="text-xs text-rose-300">{results[story.id].message}</p> : null}
+                                {story.client_id ? <Link to={`/clients/${story.client_id}?tab=stories`} className="block text-xs text-teal-300 hover:underline">Open client in CRM →</Link> : null}
+                            </>
+                        );
+                    } : null}
+                />
             ) : null}
 
             <ConfirmDialog

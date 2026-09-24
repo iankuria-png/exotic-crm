@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import ConfirmDialog from '../ConfirmDialog';
 import StoryComposerModal from './StoryComposerModal';
+import { StoryLightbox, StoryMedia, decodeEntities } from '../stories/StoryPreview';
 
 // Stories live on WordPress and expire hourly, so everything here is read live
 // through /crm/clients/{id}/stories and refetched after every action.
@@ -58,50 +59,10 @@ function errorMessage(error, fallback) {
     return error?.response?.data?.message || fallback;
 }
 
-export function StoryMedia({ story }) {
-    const [playing, setPlaying] = useState(false);
-    const still = story.media_type === 'video' ? story.poster_url : (story.thumb_url || story.media_url);
+// Shared with the Stories page: first-frame previews and the review viewer.
+export { StoryMedia } from '../stories/StoryPreview';
 
-    if (story.media_type === 'video' && playing) {
-        const start = Number(story.trim_start || 0);
-        return (
-            // preload="none" + explicit click: videos can be 100 MB, never autoplay a list.
-            <video
-                className="h-full w-full bg-black object-contain"
-                src={start > 0 ? `${story.media_url}#t=${start}` : story.media_url}
-                controls
-                autoPlay
-                playsInline
-                preload="none"
-            />
-        );
-    }
-
-    return (
-        <button
-            type="button"
-            className="group relative block h-full w-full"
-            onClick={() => story.media_type === 'video' && story.media_url && setPlaying(true)}
-            disabled={story.media_type !== 'video'}
-            aria-label={story.media_type === 'video' ? 'Play story video' : undefined}
-        >
-            {still ? (
-                <img src={still} alt="Story" loading="lazy" decoding="async" className="h-full w-full object-cover" />
-            ) : (
-                <span className="flex h-full w-full items-center justify-center bg-gradient-to-b from-slate-700 to-slate-900 text-xs text-slate-300">
-                    {story.media_type === 'video' ? 'Video story' : 'No preview'}
-                </span>
-            )}
-            {story.media_type === 'video' ? (
-                <span className="absolute inset-0 flex items-center justify-center">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-lg text-white ring-1 ring-white/40 transition group-hover:scale-105">▶</span>
-                </span>
-            ) : null}
-        </button>
-    );
-}
-
-function StoryCard({ story, canManage, pendingAction, result, onAction, onDelete }) {
+function StoryCard({ story, canManage, pendingAction, result, onAction, onDelete, onOpen }) {
     const visibility = VISIBILITY_CHIP[story.visibility] || VISIBILITY_CHIP.hidden;
     const lifetime = Math.max(1, (Number(story.expires_at_local) - Number(story.created_at_local)) || 1);
     const remaining = Math.min(100, Math.max(0, (Number(story.seconds_left || 0) / lifetime) * 100));
@@ -111,7 +72,7 @@ function StoryCard({ story, canManage, pendingAction, result, onAction, onDelete
     return (
         <article className={`overflow-hidden rounded-lg border bg-white ${story.visibility === 'hidden' ? 'border-dashed border-slate-300' : 'border-slate-200'}`}>
             <div className={`relative aspect-[9/16] bg-slate-900 ${story.visibility === 'hidden' ? 'opacity-60' : ''}`}>
-                <StoryMedia story={story} />
+                <StoryMedia story={story} onOpen={onOpen} />
                 <div className="pointer-events-none absolute inset-x-2 top-2 flex flex-wrap gap-1">
                     <span className={chip(visibility.className)}>{visibility.label}</span>
                     {story.visibility === 'live' && story.review_state === 'unreviewed' ? (
@@ -140,7 +101,7 @@ function StoryCard({ story, canManage, pendingAction, result, onAction, onDelete
                     <span><strong className="text-slate-900">{Number(story.like_count || 0).toLocaleString()}</strong> likes</span>
                     {story.likes_revoked ? <span className="text-amber-700" title="Likes are removed from this week's total while hidden">likes revoked</span> : null}
                 </div>
-                {story.caption ? <p className="line-clamp-2 text-xs text-slate-600">{story.caption}</p> : null}
+                {story.caption ? <p className="line-clamp-2 text-xs text-slate-600">{decodeEntities(story.caption)}</p> : null}
 
                 {canManage ? (
                     <div className="grid grid-cols-2 gap-1.5 pt-1">
@@ -257,6 +218,7 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
     const [confirmDelete, setConfirmDelete] = useState(null);
     const [deleteReason, setDeleteReason] = useState('');
     const [composerOpen, setComposerOpen] = useState(false);
+    const [viewing, setViewing] = useState(null);
     const [postedNotice, setPostedNotice] = useState('');
 
     // The profile header's "Add story" badge opens the composer once the
@@ -328,6 +290,7 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
     const hottest = data.hottest_until ? new Date(data.hottest_until) : null;
     const rewards = data.rewards || [];
     const liveCount = Number(counts.live || 0) + Number(counts.pending || 0);
+    const viewingIndex = viewing === null ? -1 : stories.findIndex((story) => story.id === viewing);
     const createBlockedReason = !data.can_create
         ? 'This market\'s theme needs the latest escortwp-child update before the CRM can post stories.'
         : null;
@@ -408,6 +371,7 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
                             result={results[story.id]}
                             onAction={runAction}
                             onDelete={(target) => { setDeleteReason(''); setConfirmDelete(target); }}
+                            onOpen={() => setViewing(story.id)}
                         />
                     ))}
                 </section>
@@ -421,6 +385,38 @@ export default function ClientStoriesTab({ clientId, data, isLoading, error, isF
                     ) : null}
                 </section>
             )}
+
+            {viewingIndex >= 0 ? (
+                <StoryLightbox
+                    stories={stories}
+                    index={viewingIndex}
+                    onIndex={(next) => setViewing(stories[next]?.id ?? null)}
+                    onClose={() => setViewing(null)}
+                    onKey={(event, story) => {
+                        if (!canManage || confirmDelete || pending[story.id]) return;
+                        const key = event.key.toLowerCase();
+                        if (key === 'a') runAction(story, 'approve');
+                        if (key === 'h') runAction(story, 'hide');
+                        if (key === 'e') runAction(story, 'expire');
+                        if (key === 'x' || key === 'delete') { setDeleteReason(''); setConfirmDelete(story); }
+                    }}
+                    renderActions={canManage ? (story) => {
+                        const busy = Boolean(pending[story.id]);
+                        const approved = story.visibility === 'live' && story.review_state === 'approved';
+                        return (
+                            <>
+                                <div className="grid w-full grid-cols-2 gap-2">
+                                    <button type="button" className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-40" disabled={busy || approved} onClick={() => runAction(story, 'approve')}>{approved ? 'Approved' : 'Approve'}</button>
+                                    <button type="button" className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20 disabled:opacity-40" disabled={busy || story.visibility === 'hidden'} onClick={() => runAction(story, 'hide')}>Hide</button>
+                                    <button type="button" className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold hover:bg-white/20 disabled:opacity-40" disabled={busy} onClick={() => runAction(story, 'expire')}>End now</button>
+                                    <button type="button" className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold hover:bg-rose-500 disabled:opacity-40" disabled={busy} onClick={() => { setDeleteReason(''); setConfirmDelete(story); }}>Delete</button>
+                                </div>
+                                {results[story.id] ? <p className={`text-xs ${results[story.id].ok ? 'text-emerald-300' : 'text-rose-300'}`}>{results[story.id].message}</p> : null}
+                            </>
+                        );
+                    } : null}
+                />
+            ) : null}
 
             <StoryComposerModal
                 open={composerOpen}
