@@ -23,3 +23,7 @@ the WP repository: `/Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/cr
 Follow-up 2026-09-24: staff posting from profile media or upload, header "Add story" badge and
 icon tabs for Chat/Profile Health, committed locally as `641c8771` (needs exotic-crm-sync 1.3.11 +
 theme `upload-handler.php`). Tests 18 passed; see the WP task record for evidence and deploy steps.
+
+Follow-up 2026-09-24: market-wide Stories page (`/stories`: review, live, hottest, brand, settings,
+post for an advertiser) committed locally as `aceb3a43`; needs exotic-crm-sync 1.3.12 + theme
+`includes/stories/admin.php`. 31 story tests passed; evidence in the WP task record.
