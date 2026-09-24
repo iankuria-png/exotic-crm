@@ -1,0 +1,9 @@
+# Task: CRM-created profiles take reused names over cleanly; Profile URLs repair
+
+- ID / project: Exotic CRM + `exotic-crm-sync` 1.3.13 (WP repo task: `docs/agent/tasks/profile-url-ownership.md` there)
+- Updated / status: 2026-09-24 / committed locally as `a3676c65`; not pushed, not migrated anywhere but local
+- Problem: `WpDirectProvisioningService` inserts profiles with raw SQL, skipping the WordPress hook that makes an older renamed profile give up the name. Its `_wp_old_slug` then sent the new profile's URL to the older profile once the new one was trashed or deleted.
+- Change: in-transaction release of other profiles' `_wp_old_slug` for the taken slug; after commit, `WpSyncService::claimProfileSlug()` → `POST /clients/{id}/slug/claim` (moves off taken/Yoast-reserved slugs, restores aliases released for a slug it gave up, clears caches; failure recorded as `slug_claim=failed`, never blocks provisioning); unique `user_nicename`. Clients → Profile URLs (admin/sub_admin): audit, per-URL today/after view, market-locked queued repair (250 URLs per slice), backup CSV, restore.
+- Verification (2026-09-24, PHP 8.2): `ProfileUrlHealthTest` 10/10; `ClientProvisioningWorkflowTest` 17/17; PbnSite, PbnSeedBioFallback, SubsidiaryTrialActivation, ClientController, CrmStreamFourAuthorization, ProfileMediaMetadataBackfill pass; Playwright `clients-profile-url-health.spec.js` 4/4 and `clients-profile-url-table.spec.js` 2/2 against `artisan serve`; build OK. Local end to end against exotic.local recorded in the WP task.
+- Deployment steps: push → cPanel pull → `php artisan migrate` (`profile_slug_alias_repair_runs`) → upload exotic-crm-sync 1.3.13 per market → run Profile URLs on one market first.
+- Local-only note: `profile_slug_alias_repair_runs` was migrated on the local restore DB with `--path`; other pending local migrations were left untouched.

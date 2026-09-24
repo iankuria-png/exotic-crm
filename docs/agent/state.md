@@ -38,6 +38,7 @@ runbook, and many untracked plans/artifacts; the index was empty. Preserve those
   The local repair and regression are recorded in the MCP checkpoint; verify the
   deployed connector separately after any authorised cPanel pull.
 - Client story controls (24 Sep): Stories tab + WP story routes pushed as `ede8b6be`; staff posting `641c8771` pushed; market-wide Stories page `aceb3a43` local only (needs exotic-crm-sync 1.3.12 + theme). See [task](tasks/crm-client-story-controls.md).
+- Profile URL ownership (24 Sep): provisioning claim + Clients → Profile URLs repair committed locally as `a3676c65`; not pushed; needs migrate and exotic-crm-sync 1.3.13. See [task](tasks/profile-url-ownership.md).
 - Related WP root: `/Users/ian/Local Sites/exotic/app/public`.
 
 Use [map](map.md) for contracts, decisions, incidents and tools. Historical context is
