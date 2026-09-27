@@ -10,13 +10,19 @@ use Tests\TestCase;
 
 class S3UploadCompleteTest extends TestCase
 {
-    use RefreshDatabase;
     use InteractsWithKycFixtures;
+    use RefreshDatabase;
 
     public function test_s3_complete_creates_document_and_marks_subject_in_review(): void
     {
         config(['filesystems.disks.s3_kyc.url' => 'https://s3.example.test']);
-        Storage::shouldReceive('disk')->with('s3_kyc')->andReturn(new class {
+        Storage::shouldReceive('disk')->with('s3_kyc')->andReturn(new class
+        {
+            public function get($key)
+            {
+                return str_repeat('b', 1024);
+            }
+
             public function getClient()
             {
                 return null;
@@ -33,7 +39,7 @@ class S3UploadCompleteTest extends TestCase
             'kind' => 'id_front',
             'mime' => 'image/jpeg',
             'byte_size' => 1024,
-            'sha256' => str_repeat('b', 64),
+            'sha256' => hash('sha256', str_repeat('b', 1024)),
         ])->assertOk()->json();
 
         $this->assertSame('s3', $initiate['mode']);
@@ -45,7 +51,7 @@ class S3UploadCompleteTest extends TestCase
             's3_key' => $initiate['s3_key'],
             'mime' => 'image/jpeg',
             'byte_size' => 1024,
-            'sha256' => str_repeat('b', 64),
+            'sha256' => hash('sha256', str_repeat('b', 1024)),
         ]);
 
         $response->assertOk()->assertJsonPath('status', 'in_review');

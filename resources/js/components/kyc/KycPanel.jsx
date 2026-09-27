@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../ToastProvider';
 import { useAuth } from '../../hooks/useAuth';
 import kyc from '../../services/kyc';
+import KycAiFindings from './KycAiFindings';
 import KycRejectDialog from './KycRejectDialog';
 import KycRequestInfoDialog from './KycRequestInfoDialog';
 import KycDocumentViewer from './KycDocumentViewer';
@@ -75,6 +76,7 @@ export default function KycPanel({ client, canReview = true }) {
         queryKey: ['kyc-subject', subjectId],
         queryFn: () => kyc.getSubject(subjectId),
         enabled: Boolean(subjectId),
+        refetchInterval: (query) => ['queued', 'running'].includes(query.state?.data?.ai_review?.status) ? 4000 : false,
     });
 
     const subject = subjectQuery.data?.subject || subjectSummary;
@@ -209,6 +211,7 @@ export default function KycPanel({ client, canReview = true }) {
         if (input) input.value = '';
         setUploadFile(null);
         window.requestAnimationFrame(() => {
+            if (uploaderCardRef.current) uploaderCardRef.current.open = true;
             uploaderCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             input?.focus();
         });
@@ -230,7 +233,7 @@ export default function KycPanel({ client, canReview = true }) {
                         {source ? <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${source.className}`}>{source.label}</span> : null}
                         {!kycRequired ? <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">Exempt from queue</span> : null}
                     </div>
-                    <p className="mt-2 max-w-3xl text-sm text-slate-500">This is the primary reviewer surface. Approvals set <span className="font-medium text-slate-700">verified_source=kyc</span>, manual fallbacks remain explicit, and staff-assisted uploads preserve source-channel provenance.</p>
+                    <p className="mt-2 max-w-3xl text-sm text-slate-500">Compare the original photos, review the findings, and decide whether this advertiser is ready to be verified.</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -297,7 +300,9 @@ export default function KycPanel({ client, canReview = true }) {
             </div>
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <div>
+            <KycAiFindings review={subjectQuery.data?.ai_review} subjectId={subjectId} canReview={canActOnSubject} onRefresh={refreshAll} onRequestInfo={() => setShowRequestInfoDialog(true)} />
+                <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                         <div>
                             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Verified at</p>
@@ -325,19 +330,20 @@ export default function KycPanel({ client, canReview = true }) {
                     </div>
                 </div>
 
+                </div>
                 <div className="space-y-4">
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <h4 className="text-sm font-semibold text-slate-900">Documents</h4>
-                                <p className="mt-1 text-xs text-slate-500">Every document view is audited. DB mode streams decrypted content; S3 mode stays signed and temporary.</p>
+                                <p className="mt-1 text-xs text-slate-500">Open the original photos to check the details. Access is private and recorded.</p>
                             </div>
                             {subjectQuery.isLoading ? <span className="text-xs text-slate-400">Loading…</span> : null}
                         </div>
 
-                        {documents.length === 0 ? (
+                        {subjectQuery.isLoading ? <div role="status" className="mt-4 rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">Loading private documents…</div> : subjectQuery.isError ? <div role="alert" className="mt-4 rounded-xl bg-amber-50 px-4 py-6 text-sm text-amber-800">Documents could not be loaded. <button type="button" onClick={() => subjectQuery.refetch()} className="font-semibold underline">Try again</button></div> : documents.length === 0 ? (
                             <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                                No documents uploaded yet. The subject will enter review automatically after the required files arrive.
+                                No photos have been submitted yet. Request the missing documents before making a decision.
                             </div>
                         ) : (
                             <div className="mt-4 grid gap-3">
@@ -345,7 +351,7 @@ export default function KycPanel({ client, canReview = true }) {
                                     <div key={document.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
-                                                <p className="text-sm font-semibold text-slate-900">{titleize(document.kind)}</p>
+                                                <p className="text-sm font-semibold text-slate-900">{titleize(document.kind)}{document.kind === 'selfie' ? ` · ${['Straight', 'Left turn', 'Smile'][document.sequence || 0]}` : ''}</p>
                                                 <p className="mt-1 text-xs text-slate-500">{document.mime} • {formatBytes(document.byte_size)}</p>
                                                 <div className="mt-2 flex flex-wrap gap-2">
                                                     {document.upload_origin === 'crm_staff' ? (
@@ -369,7 +375,7 @@ export default function KycPanel({ client, canReview = true }) {
                                             <div className="flex flex-col items-end gap-2">
                                                 <button
                                                     type="button"
-                                                    onClick={() => setViewerIndex(index)}
+                                                    onClick={async () => { await subjectQuery.refetch(); setViewerIndex(index); }}
                                                     className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                                                 >
                                                     View
@@ -424,13 +430,15 @@ export default function KycPanel({ client, canReview = true }) {
                     </div>
 
                     {canStaffUpload ? (
-                        <div ref={uploaderCardRef} className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <details ref={uploaderCardRef} className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Upload on behalf of client</summary>
+                            <div className="pt-4">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                 <div>
-                                    <h4 className="text-sm font-semibold text-slate-900">Upload on behalf of client</h4>
+
                                     <p className="mt-1 text-xs text-slate-500">Use this when a client sends KYC through WhatsApp, support chat, or email. The source channel and reviewer note are kept with the document.</p>
                                 </div>
-                                <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">Admin / sub-admin / sales</span>
+
                             </div>
 
                             {replaceContext ? (
@@ -495,7 +503,7 @@ export default function KycPanel({ client, canReview = true }) {
                             </label>
 
                             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                <p className="text-xs text-slate-500">This does not masquerade as advertiser self-upload. Provenance stays visible to reviewers and in audit logs.</p>
+                                <p className="text-xs text-slate-500">Your name, source channel and note will be saved with this upload.</p>
                                 <button
                                     type="button"
                                     onClick={() => uploadMutation.mutate()}
@@ -506,9 +514,11 @@ export default function KycPanel({ client, canReview = true }) {
                                 </button>
                             </div>
                         </div>
+                        </details>
                     ) : null}
                 </div>
             </div>
+
 
             {showEmergencyDialog ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
@@ -569,6 +579,7 @@ export default function KycPanel({ client, canReview = true }) {
                 isPending={rejectMutation.isPending}
             />
             <KycRequestInfoDialog
+                initialReason={subjectQuery.data?.ai_review?.advertiser_message || (subjectQuery.data?.ai_review?.retake?.length ? `Please retake your ${subjectQuery.data.ai_review.retake.join(' and ').replaceAll('_', ' ')} in good light, with all details visible and no glare.` : '')}
                 open={showRequestInfoDialog}
                 onClose={() => setShowRequestInfoDialog(false)}
                 onSubmit={(payload) => requestInfoMutation.mutate(payload)}

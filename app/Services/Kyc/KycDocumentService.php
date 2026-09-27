@@ -21,7 +21,9 @@ use InvalidArgumentException;
 class KycDocumentService
 {
     private const REVIEWER_UPLOAD_ROLES = ['admin', 'sub_admin', 'sales'];
+
     private const STAFF_UPLOAD_CHANNELS = ['whatsapp', 'support_chat', 'email', 'manual_assisted'];
+
     private const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 
     public function __construct(
@@ -29,8 +31,7 @@ class KycDocumentService
         private readonly KycSubjectService $subjectService,
         private readonly AuditService $auditService,
         private readonly MarketAuthorizationService $marketAuthorizationService,
-    ) {
-    }
+    ) {}
 
     public function initiateUpload(KycSubject $subject, string $kind, string $mime, int $byteSize, string $sha256, array $context = []): UploadTarget
     {
@@ -41,7 +42,7 @@ class KycDocumentService
             throw new InvalidArgumentException('File is too large or empty.');
         }
 
-        if (!preg_match('/^[a-f0-9]{64}$/i', $sha256)) {
+        if (! preg_match('/^[a-f0-9]{64}$/i', $sha256)) {
             throw new InvalidArgumentException('Invalid SHA256 digest.');
         }
 
@@ -69,8 +70,12 @@ class KycDocumentService
             throw new InvalidArgumentException('Unable to read uploaded file.');
         }
 
+        if (! empty($claims['capture_set_id'])) {
+            $size = @getimagesizefromstring($contents);
+            abort_unless($size && ($size['mime'] ?? '') === $mime && $size[0] * $size[1] <= 25000000, 422, 'Choose a valid photo under 25 megapixels.');
+        }
         $actualSha = hash('sha256', $contents);
-        if (!hash_equals($expectedSha, $actualSha)) {
+        if (! hash_equals($expectedSha, $actualSha)) {
             throw new InvalidArgumentException('Uploaded file hash mismatch.');
         }
 
@@ -78,12 +83,24 @@ class KycDocumentService
         $driver = $this->driverForMode('db');
         $ciphertext = $driver->encryptRaw($contents);
 
-        return DB::transaction(function () use ($subject, $kind, $mime, $contents, $actualSha, $file, $ciphertext) {
-            $this->purgeExistingDocuments($subject, $kind);
+        return DB::transaction(function () use ($subject, $kind, $mime, $contents, $actualSha, $file, $ciphertext, $claims) {
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
+            $sequence = (int) ($claims['sequence'] ?? 0);
+            $set = $claims['capture_set_id'] ?? null;
+            if ($set && $subject->capture_set_id !== $set) {
+                abort(409, 'This capture session has been replaced. Start again.');
+            }
+            $existing = $subject->documents()->where('kind', $kind)->where('sequence', $sequence)->where('sha256', $actualSha)->where('capture_set_id', $set)->first();
+            if ($existing) {
+                return $existing;
+            }
+            $this->purgeExistingDocuments($subject, $kind, $sequence);
+            $subject->increment('review_version');
 
             $document = KycDocument::query()->create([
                 'subject_id' => (int) $subject->id,
                 'kind' => $kind,
+                'sequence' => $sequence, 'capture_set_id' => $set, 'document_type' => $claims['document_type'] ?? null,
                 'storage_driver' => 'db',
                 'mime' => $mime,
                 'byte_size' => strlen($contents),
@@ -106,17 +123,29 @@ class KycDocumentService
         });
     }
 
-    public function completeS3Upload(KycSubject $subject, string $kind, string $s3Key, string $mime, int $byteSize, string $sha256): KycDocument
+    public function completeS3Upload(KycSubject $subject, string $kind, string $s3Key, string $mime, int $byteSize, string $sha256, array $context = []): KycDocument
     {
         $this->guardDocumentKind($kind);
         $this->guardMimeType($mime);
 
-        return DB::transaction(function () use ($subject, $kind, $s3Key, $mime, $byteSize, $sha256) {
-            $this->purgeExistingDocuments($subject, $kind);
+        return DB::transaction(function () use ($subject, $kind, $s3Key, $mime, $byteSize, $sha256, $context) {
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
+            $sequence = (int) ($context['sequence'] ?? 0);
+            $set = $context['capture_set_id'] ?? null;
+            if ($set && $subject->capture_set_id !== $set) {
+                abort(409, 'This capture session has been replaced. Start again.');
+            }
+            $existing = $subject->documents()->where('s3_key', $s3Key)->first();
+            if ($existing) {
+                return $existing;
+            }
+            $this->purgeExistingDocuments($subject, $kind, $sequence);
+            $subject->increment('review_version');
 
             $document = KycDocument::query()->create([
                 'subject_id' => (int) $subject->id,
                 'kind' => $kind,
+                'sequence' => $sequence, 'capture_set_id' => $set, 'document_type' => $context['document_type'] ?? null,
                 'storage_driver' => 's3',
                 'mime' => $mime,
                 'byte_size' => $byteSize,
@@ -184,22 +213,25 @@ class KycDocumentService
 
     public function delete(KycDocument $document, ?User $actor = null): void
     {
-        $subject = $document->subject;
-        $before = $document->toArray();
-        $this->driverForDocument($document)->delete($document);
-        $document->delete();
+        DB::transaction(function () use ($document, $actor) {
+            $subject = KycSubject::query()->lockForUpdate()->find($document->subject_id);
+            $subject?->increment('review_version');
+            $before = $document->toArray();
+            $this->driverForDocument($document)->delete($document);
+            $document->delete();
 
-        if ($subject) {
-            $this->auditService->record([
-                'platform_id' => (int) ($subject->client?->platform_id ?? 0),
-                'actor_id' => $actor?->id,
-                'action' => 'kyc.delete_document',
-                'entity_type' => 'kyc_subject',
-                'entity_id' => (int) $subject->id,
-                'before_state' => $before,
-                'after_state' => ['deleted' => true],
-            ]);
-        }
+            if ($subject) {
+                $this->auditService->record([
+                    'platform_id' => (int) ($subject->client?->platform_id ?? 0),
+                    'actor_id' => $actor?->id,
+                    'action' => 'kyc.delete_document',
+                    'entity_type' => 'kyc_subject',
+                    'entity_id' => (int) $subject->id,
+                    'before_state' => $before,
+                    'after_state' => ['deleted' => true],
+                ]);
+            }
+        });
     }
 
     public function decryptBlob(KycDocument $document): string
@@ -236,6 +268,8 @@ class KycDocumentService
         $ciphertext = $driver->encryptRaw($contents);
 
         return DB::transaction(function () use ($subject, $file, $actor, $kind, $sourceChannel, $note, $mime, $byteSize, $sha256, $ciphertext) {
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
+            $subject->increment('review_version');
             $before = $subject->toArray();
             $this->purgeExistingDocuments($subject, $kind);
 
@@ -280,6 +314,8 @@ class KycDocumentService
 
         try {
             return DB::transaction(function () use ($subject, $file, $actor, $kind, $sourceChannel, $note, $mime, $byteSize, $sha256, $key) {
+                $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
+                $subject->increment('review_version');
                 $before = $subject->toArray();
                 $this->purgeExistingDocuments($subject, $kind);
 
@@ -337,11 +373,12 @@ class KycDocumentService
         ]);
     }
 
-    private function purgeExistingDocuments(KycSubject $subject, string $kind): void
+    private function purgeExistingDocuments(KycSubject $subject, string $kind, int $sequence = 0): void
     {
         $existingDocuments = KycDocument::query()
             ->where('subject_id', (int) $subject->id)
             ->where('kind', $kind)
+            ->where('sequence', $sequence)
             ->get();
 
         foreach ($existingDocuments as $existingDocument) {
@@ -353,15 +390,15 @@ class KycDocumentService
     private function authorizeDocumentAccess(KycDocument $document, User $user): void
     {
         $subject = $document->subject()->with('client')->first();
-        if (!$subject || !$subject->client) {
+        if (! $subject || ! $subject->client) {
             abort(404, 'Document subject not found.');
         }
 
-        if (!in_array($user->role, ['admin', 'sub_admin', 'sales', 'marketing'], true)) {
+        if (! in_array($user->role, ['admin', 'sub_admin', 'sales', 'marketing'], true)) {
             abort(403, 'You do not have permission to view KYC documents.');
         }
 
-        if ($user->role === 'sales' && !$this->marketAuthorizationService->userCanAccessPlatform($user, (int) $subject->client->platform_id)) {
+        if ($user->role === 'sales' && ! $this->marketAuthorizationService->userCanAccessPlatform($user, (int) $subject->client->platform_id)) {
             abort(403, 'You do not have access to this document market.');
         }
     }
@@ -381,21 +418,21 @@ class KycDocumentService
 
     private function guardDocumentKind(string $kind): void
     {
-        if (!in_array($kind, $this->allowedDocumentKinds(), true)) {
+        if (! in_array($kind, $this->allowedDocumentKinds(), true)) {
             throw new InvalidArgumentException('Unsupported KYC document type.');
         }
     }
 
     private function guardSourceChannel(string $sourceChannel): void
     {
-        if (!in_array($sourceChannel, self::STAFF_UPLOAD_CHANNELS, true)) {
+        if (! in_array($sourceChannel, self::STAFF_UPLOAD_CHANNELS, true)) {
             throw new InvalidArgumentException('Unsupported staff upload source channel.');
         }
     }
 
     private function guardMimeType(string $mime): void
     {
-        if (!in_array(strtolower($mime), self::ALLOWED_MIME_TYPES, true)) {
+        if (! in_array(strtolower($mime), self::ALLOWED_MIME_TYPES, true)) {
             throw new InvalidArgumentException('Unsupported KYC document format.');
         }
     }

@@ -10,7 +10,7 @@ class KycDocument extends Model
     use HasFactory;
 
     protected $fillable = [
-        'subject_id',
+        'subject_id', 'sequence', 'capture_set_id', 'document_type',
         'uploaded_by_user_id',
         'kind',
         'storage_driver',

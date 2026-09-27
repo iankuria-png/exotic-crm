@@ -17,6 +17,9 @@ class DbStorage implements StorageDriver
         $token = JWT::encode([
             'sub' => 'kyc_document_blob',
             'subject_id' => (int) $subject->id,
+            'capture_set_id' => $context['capture_set_id'] ?? null,
+            'document_type' => $context['document_type'] ?? null,
+            'sequence' => $context['sequence'] ?? 0,
             'kind' => $kind,
             'mime' => $mime,
             'max_bytes' => $bytes,
@@ -29,7 +32,7 @@ class DbStorage implements StorageDriver
             mode: 'db',
             url: url('/api/kyc/uploads/blob'),
             method: 'POST',
-            headers: ['Authorization' => 'Bearer ' . $token],
+            headers: ['Authorization' => 'Bearer '.$token],
             expiresAt: $expiresAt->toIso8601String()
         );
     }

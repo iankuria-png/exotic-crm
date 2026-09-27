@@ -19,8 +19,7 @@ class ReviewController extends Controller
         private readonly KycSubjectService $subjectService,
         private readonly KycDocumentService $documentService,
         private readonly KycSettingsService $settingsService,
-    ) {
-    }
+    ) {}
 
     public function show(Request $request, KycSubject $subject)
     {
@@ -98,7 +97,7 @@ class ReviewController extends Controller
             'kind' => ['required', 'string', Rule::in($this->documentService->allowedDocumentKinds())],
             'upload_source_channel' => ['required', 'string', Rule::in($this->documentService->allowedStaffUploadChannels())],
             'upload_note' => 'required|string|max:4000',
-            'file' => ['required', 'file', 'max:' . $maxKilobytes, 'mimetypes:' . implode(',', $this->documentService->allowedMimeTypes())],
+            'file' => ['required', 'file', 'max:'.$maxKilobytes, 'mimetypes:'.implode(',', $this->documentService->allowedMimeTypes())],
         ]);
 
         $document = $this->documentService->storeStaffUpload(
@@ -115,6 +114,7 @@ class ReviewController extends Controller
         return response()->json([
             'success' => true,
             'document' => $this->transformDocument($document->fresh(['subject.client', 'uploadedBy']), $request),
+            'ai_review' => app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject),
             'subject' => $subject,
             'status_payload' => $this->subjectService->buildStatusPayload($subject),
             'documents' => $subject->documents->map(fn (KycDocument $entry) => $this->transformDocument($entry, $request))->values(),
@@ -145,6 +145,7 @@ class ReviewController extends Controller
     private function subjectPayload(KycSubject $subject, Request $request): array
     {
         return [
+            'ai_review' => app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject),
             'subject' => $subject,
             'status_payload' => $this->subjectService->buildStatusPayload($subject),
             'documents' => $subject->documents->map(fn (KycDocument $document) => $this->transformDocument($document, $request))->values(),
@@ -161,6 +162,7 @@ class ReviewController extends Controller
         return [
             'id' => (int) $document->id,
             'kind' => $document->kind,
+            'sequence' => (int) $document->sequence,
             'mime' => $document->mime,
             'byte_size' => (int) $document->byte_size,
             'storage_driver' => $document->storage_driver,

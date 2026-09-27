@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
+import KycAiSettings from './KycAiSettings';
+
 const documentOptions = [
     { key: 'id_front', label: 'Government ID front' },
     { key: 'id_back', label: 'Government ID back' },
@@ -14,6 +16,7 @@ const escalationOptions = [
 
 function normalizeSettings(settings = {}) {
     return {
+        ai_review: settings.ai_review || {},
         enabled_platform_ids: Array.isArray(settings.enabled_platform_ids) ? settings.enabled_platform_ids.map(Number) : [],
         required_document_kinds: Array.isArray(settings.required_document_kinds) ? settings.required_document_kinds : ['id_front', 'selfie'],
         max_doc_bytes: Number(settings.max_doc_bytes || 20 * 1024 * 1024),
@@ -95,6 +98,7 @@ export default function KycSetupWizard({
 
     return (
         <div className="space-y-5">
+            <KycAiSettings value={form.ai_review} onChange={(value) => updateField('ai_review', value)} platforms={platforms} />
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>

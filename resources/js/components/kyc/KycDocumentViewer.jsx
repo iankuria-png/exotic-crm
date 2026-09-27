@@ -1,3 +1,4 @@
+import useKycDialog from './useKycDialog';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import kyc from '../../services/kyc';
 
@@ -20,6 +21,7 @@ function ToolbarButton({ label, onClick, disabled = false, children }) {
 }
 
 export default function KycDocumentViewer({ open, documents = [], initialIndex = 0, onClose }) {
+    const dialogRef = useKycDialog(open, onClose);
     const [activeIndex, setActiveIndex] = useState(initialIndex);
     const [zoom, setZoom] = useState(1);
     const [rotation, setRotation] = useState(0);
@@ -41,7 +43,6 @@ export default function KycDocumentViewer({ open, documents = [], initialIndex =
         setCompareMode(false);
 
         const onKeyDown = (event) => {
-            if (event.key === 'Escape') onClose?.();
             if (event.key === 'ArrowRight' && documents.length > 1) setActiveIndex((current) => (current + 1) % documents.length);
             if (event.key === 'ArrowLeft' && documents.length > 1) setActiveIndex((current) => (current - 1 + documents.length) % documents.length);
             if (event.key === '+' || event.key === '=') setZoom((current) => Math.min(3, current + 0.15));
@@ -62,7 +63,8 @@ export default function KycDocumentViewer({ open, documents = [], initialIndex =
         if (!open || !activeDocument) return undefined;
 
         let cancelled = false;
-        const urlToFetch = [activeDocument, compareDocument].filter(Boolean);
+        const urlToFetch = [activeDocument, compareDocument].filter(doc => doc && !blobUrls[doc.id]);
+        if (urlToFetch.length === 0) return undefined;
 
         const fetchDocuments = async () => {
             setLoading(true);
@@ -111,7 +113,7 @@ export default function KycDocumentViewer({ open, documents = [], initialIndex =
     if (!open || !activeDocument) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-slate-950 text-white">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Document viewer" className="fixed inset-0 z-50 bg-slate-950 text-white">
             <div className="flex h-full flex-col">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                     <div>

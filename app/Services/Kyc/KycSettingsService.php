@@ -13,9 +13,7 @@ use InvalidArgumentException;
 
 class KycSettingsService
 {
-    public function __construct(private readonly AuditService $auditService)
-    {
-    }
+    public function __construct(private readonly AuditService $auditService) {}
 
     public function get(): KycSetting
     {
@@ -51,6 +49,36 @@ class KycSettingsService
         return $settings;
     }
 
+    public function aiSettings(?int $platformId = null): array
+    {
+        $settings = array_replace([
+            'mode' => 'off', 'mode_per_platform' => [], 'paused' => false, 'reject_requires_second_opinion_per_platform' => [], 'auto_reject_enabled' => false,
+            'auto_reject_enabled_per_platform' => [], 'reject_requires_second_opinion' => true,
+            'ladder' => ['google/gemini-3.8-flash', 'openai/gpt-5.4-mini'],
+            'second_opinion_model' => 'anthropic/claude-sonnet-5',
+            'approve_threshold' => 0.95, 'reject_threshold' => 0.98,
+            'daily_cap_usd' => 5, 'qa_sample_pct' => 10, 'document_types_per_platform' => [],
+        ], (array) $this->get()->ai_review);
+        if ($platformId) {
+            $settings['mode'] = $settings['mode_per_platform'][(string) $platformId] ?? $settings['mode'];
+            $settings['auto_reject_enabled'] = $settings['auto_reject_enabled_per_platform'][(string) $platformId] ?? $settings['auto_reject_enabled'];
+            $settings['reject_requires_second_opinion'] = $settings['reject_requires_second_opinion_per_platform'][(string) $platformId] ?? $settings['reject_requires_second_opinion'];
+            if (! $this->isPlatformEnabled($platformId)) {
+                $settings['mode'] = 'off';
+            }
+        }
+        if ($platformId && $settings['paused']) {
+            $settings['mode'] = 'off';
+        }
+
+        return $settings;
+    }
+
+    public function documentTypes(int $platformId): array
+    {
+        return $this->aiSettings()['document_types_per_platform'][(string) $platformId] ?? ['national_id', 'passport', 'driving_licence'];
+    }
+
     public function activeStorageDriver(): string
     {
         return (string) ($this->get()->active_storage_driver ?: 'db');
@@ -68,7 +96,7 @@ class KycSettingsService
 
     public function isPlatformEnabled(?int $platformId): bool
     {
-        if (!$platformId) {
+        if (! $platformId) {
             return false;
         }
 
@@ -78,7 +106,7 @@ class KycSettingsService
     public function isExempt(Client $client): bool
     {
         $activeDeal = $client->relationLoaded('activeDeal') ? $client->activeDeal : $client->activeDeal()->with('product')->first();
-        if (!$activeDeal) {
+        if (! $activeDeal) {
             return false;
         }
 
@@ -113,16 +141,17 @@ class KycSettingsService
     {
         $map = (array) ($this->get()->escalation_rule_per_platform ?? []);
         $rule = $platformId ? (string) ($map[(string) $platformId] ?? 'notify_only') : 'notify_only';
+
         return in_array($rule, ['notify_only', 'remove_badge', 'auto_suspend'], true) ? $rule : 'notify_only';
     }
 
     public function recomputeClientRequirement(Client $client): bool
     {
-        $required = !$this->isExempt($client);
+        $required = ! $this->isExempt($client);
         if ((bool) $client->kyc_required !== $required) {
             $client->forceFill(['kyc_required' => $required])->save();
             $client->loadMissing('kycSubject');
-            if (!$required && $client->kycSubject) {
+            if (! $required && $client->kycSubject) {
                 $client->kycSubject->forceFill(['status' => 'unverified'])->save();
             }
         }
@@ -138,7 +167,7 @@ class KycSettingsService
 
         $inReviewCount = (clone $query)->where('status', 'in_review')->count();
 
-        if (!$user) {
+        if (! $user) {
             return ['in_review_count' => $inReviewCount, 'mine_count' => $inReviewCount];
         }
 
@@ -173,6 +202,13 @@ class KycSettingsService
             $this->probeS3Connectivity($payload + $settings->toArray());
         }
 
+        if (isset($payload['ai_review'])) {
+            $payload['ai_review'] = array_replace($this->aiSettings(), $payload['ai_review']);
+        }
+        foreach (array_diff($payload['enabled_platform_ids'] ?? [], $settings->enabled_platform_ids ?? []) as $newPlatform) {
+            $payload['ai_review'] = $payload['ai_review'] ?? $this->aiSettings();
+            $payload['ai_review']['mode_per_platform'][(string) $newPlatform] = 'off';
+        }
         $settings->fill($payload);
         $settings->updated_by = $actor->id;
         $settings->save();
@@ -196,13 +232,13 @@ class KycSettingsService
     {
         $this->applyRuntimeS3ConfigFromArray($candidate);
         $disk = Storage::disk('s3_kyc');
-        $key = 'kyc-probe/' . now()->timestamp . '-' . bin2hex(random_bytes(4));
+        $key = 'kyc-probe/'.now()->timestamp.'-'.bin2hex(random_bytes(4));
 
         $disk->put($key, '');
         $exists = $disk->exists($key);
         $disk->delete($key);
 
-        if (!$exists) {
+        if (! $exists) {
             throw new InvalidArgumentException('S3 connectivity probe failed.');
         }
 
@@ -216,7 +252,7 @@ class KycSettingsService
 
     private function applyRuntimeS3ConfigFromArray(array $values): void
     {
-        if (!empty($values['s3_bucket'])) {
+        if (! empty($values['s3_bucket'])) {
             config([
                 'filesystems.disks.s3_kyc.bucket' => $values['s3_bucket'],
                 'filesystems.disks.s3_kyc.region' => $values['s3_region'] ?: config('filesystems.disks.s3_kyc.region'),

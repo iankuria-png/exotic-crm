@@ -1,6 +1,10 @@
 import api from './api';
 
 const kyc = {
+    runAi(id) { return api.post(`/crm/kyc/subjects/${id}/ai-review`).then(r => r.data); },
+    aiFeedback(id, data) { return api.post(`/crm/kyc/subjects/${id}/ai-feedback`, data).then(r => r.data); },
+    aiReport(platformId) { return api.get('/crm/kyc/ai-review/report', {params: platformId ? {platform_id: platformId} : {}}).then(r => r.data); },
+    aiBacklog(platformId) { return api.post('/crm/kyc/ai-review/backlog', {platform_id: platformId}).then(r => r.data); },
     getQueue(params = {}) {
         return api.get('/crm/kyc/queue', { params }).then((response) => response.data);
     },
@@ -84,7 +88,7 @@ const kyc = {
             'verified_source',
             'required',
             'expires_at',
-            'updated_at',
+            'updated_at', 'ai_status', 'ai_recommendation', 'qa_sample',
         ];
         const escapeCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
         const csv = [
@@ -99,7 +103,7 @@ const kyc = {
                 row.client?.verified_source || '',
                 row.client?.kyc_required ? 'yes' : 'no',
                 row.expires_at || '',
-                row.updated_at || '',
+                row.updated_at || '', row.ai_review?.status || '', row.ai_review?.recommendation || '', row.ai_review?.qa_sample ? 'yes' : 'no',
             ].map(escapeCell).join(',')),
         ].join('\n');
 

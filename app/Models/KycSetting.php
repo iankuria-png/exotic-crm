@@ -14,7 +14,7 @@ class KycSetting extends Model
     public $incrementing = false;
 
     protected $fillable = [
-        'id',
+        'id', 'ai_review',
         'enabled_platform_ids',
         'required_document_kinds',
         'max_doc_bytes',
@@ -40,6 +40,7 @@ class KycSetting extends Model
     ];
 
     protected $casts = [
+        'ai_review' => 'array',
         'enabled_platform_ids' => 'array',
         'required_document_kinds' => 'array',
         'reject_reason_options' => 'array',

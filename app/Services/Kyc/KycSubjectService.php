@@ -2,23 +2,19 @@
 
 namespace App\Services\Kyc;
 
-use App\Jobs\Kyc\PushKycStatusJob;
 use App\Models\Client;
-use App\Models\KycDocument;
 use App\Models\KycSubject;
 use App\Models\KycSubjectSite;
 use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class KycSubjectService
 {
     public function __construct(
         private readonly AuditService $auditService,
         private readonly KycSettingsService $settingsService,
-    ) {
-    }
+    ) {}
 
     public function resolveOrCreateForClient(Client $client): KycSubject
     {
@@ -62,6 +58,9 @@ class KycSubjectService
 
     public function afterDocumentUploaded(KycSubject $subject): KycSubject
     {
+        if ($subject->capture_set_id) {
+            return $subject;
+        }
         $requiredKinds = $this->settingsService->requiredDocumentKinds();
         $existingKinds = $subject->documents()->pluck('kind')->unique()->values()->all();
         $missing = array_diff($requiredKinds, $existingKinds);
@@ -81,14 +80,19 @@ class KycSubjectService
 
     public function markApprovedFromSource(KycSubject $subject, string $source, ?User $actor = null, ?string $reason = null): KycSubject
     {
-        $idempotencyKey = $this->buildIdempotencyKey($subject, 'approve_' . $source, $actor?->id);
-        if (!$this->claimIdempotency($idempotencyKey, $subject, 'approve_' . $source)) {
+        $idempotencyKey = $this->buildIdempotencyKey($subject, 'approve_'.$source, $actor?->id);
+        if (! $this->claimIdempotency($idempotencyKey, $subject, 'approve_'.$source)) {
             return $subject->fresh(['client', 'sites']);
         }
 
         return DB::transaction(function () use ($subject, $source, $actor, $reason) {
             $client = $subject->client()->firstOrFail();
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
             $beforeSubject = $subject->toArray();
+            $subject->increment('review_version');
+            if ($actor) {
+                app(\App\Services\Kyc\Ai\KycAiReviewService::class)->recordHumanDecision($subject, 'approve');
+            }
             $beforeClient = $client->toArray();
 
             $subject->forceFill([
@@ -118,13 +122,18 @@ class KycSubjectService
     public function reject(KycSubject $subject, string $reasonUser, ?string $reasonInternal = null, ?User $actor = null): KycSubject
     {
         $idempotencyKey = $this->buildIdempotencyKey($subject, 'reject', $actor?->id);
-        if (!$this->claimIdempotency($idempotencyKey, $subject, 'reject')) {
+        if (! $this->claimIdempotency($idempotencyKey, $subject, 'reject')) {
             return $subject->fresh(['client', 'sites']);
         }
 
         return DB::transaction(function () use ($subject, $reasonUser, $reasonInternal, $actor) {
             $client = $subject->client()->firstOrFail();
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
             $beforeSubject = $subject->toArray();
+            $subject->increment('review_version');
+            if ($actor) {
+                app(\App\Services\Kyc\Ai\KycAiReviewService::class)->recordHumanDecision($subject, 'reject');
+            }
             $beforeClient = $client->toArray();
 
             $subject->forceFill([
@@ -147,7 +156,12 @@ class KycSubjectService
     public function requestInfo(KycSubject $subject, string $reasonUser, ?string $reasonInternal = null, ?User $actor = null): KycSubject
     {
         return DB::transaction(function () use ($subject, $reasonUser, $reasonInternal, $actor) {
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
             $before = $subject->toArray();
+            $subject->increment('review_version');
+            if ($actor) {
+                app(\App\Services\Kyc\Ai\KycAiReviewService::class)->recordHumanDecision($subject, 'retake');
+            }
             $subject->forceFill([
                 'status' => KycSubject::STATUS_INFO_REQUESTED,
                 'last_reviewer_id' => $actor?->id,
@@ -166,7 +180,12 @@ class KycSubjectService
     public function reRequest(KycSubject $subject, ?User $actor = null, ?string $reason = null): KycSubject
     {
         return DB::transaction(function () use ($subject, $actor, $reason) {
+            $subject = KycSubject::query()->lockForUpdate()->findOrFail($subject->id);
             $before = $subject->toArray();
+            $subject->increment('review_version');
+            if ($actor) {
+                app(\App\Services\Kyc\Ai\KycAiReviewService::class)->recordHumanDecision($subject, 'human');
+            }
             $subject->forceFill([
                 'status' => KycSubject::STATUS_EXPIRED,
                 'verified_at' => null,
@@ -190,13 +209,14 @@ class KycSubjectService
         $client = $subject->client;
 
         return [
+            ...app(\App\Services\Kyc\Ai\KycAiReviewService::class)->publicStatus($subject),
             'subject_id' => (int) $subject->id,
             'status' => (string) $subject->status,
             'verified_at' => optional($subject->verified_at)->toIso8601String(),
             'expires_at' => optional($subject->expires_at)->toIso8601String(),
             'last_reason_user' => $subject->last_reason_user,
             'grace_started_at' => optional($subject->grace_started_at)->toIso8601String(),
-            'is_exempt' => $client ? !$client->kyc_required : false,
+            'is_exempt' => $client ? ! $client->kyc_required : false,
             'verified_source' => $client?->verified_source,
             'client_verified' => (bool) ($client?->verified ?? false),
         ];
@@ -220,6 +240,7 @@ class KycSubjectService
                     'reason' => $reason,
                 ]);
             }
+
             return;
         }
 

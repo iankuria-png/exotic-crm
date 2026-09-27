@@ -172,6 +172,7 @@ Route::get('/billing/health', [BillingController::class, 'health']);
 Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
 Route::get('/crm/university/certificates/{code}/verify', [UniversityCertificateController::class, 'verify']);
 Route::middleware(['verify.wordpress.shared_key'])->prefix('kyc')->group(function () {
+    Route::post('/uploads/submit', [KycUploadController::class, 'submit']);
     Route::post('/uploads/initiate', [KycUploadController::class, 'initiate']);
     Route::post('/uploads/complete', [KycUploadController::class, 'complete']);
     Route::get('/subjects/by-wp/{platformId}/{wpUserId}', [KycUploadController::class, 'statusByWp']);
@@ -967,6 +968,10 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/settings/wallet/test-ssl', [SettingsController::class, 'testWalletSsl'])->middleware('role:admin');
 
     Route::prefix('kyc')->group(function () {
+        Route::post('/subjects/{subject}/ai-review', [\App\Http\Controllers\CRM\Kyc\AiReviewController::class, 'run'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/subjects/{subject}/ai-feedback', [\App\Http\Controllers\CRM\Kyc\AiReviewController::class, 'feedback'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/ai-review/backlog', [\App\Http\Controllers\CRM\Kyc\AiReviewController::class, 'backlog'])->middleware('role:admin');
+        Route::get('/ai-review/report', [\App\Http\Controllers\CRM\Kyc\AiReviewController::class, 'report'])->middleware('role:admin,sub_admin');
         Route::get('/queue', [KycQueueController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
         Route::get('/queue-count', [KycQueueController::class, 'count'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
         Route::get('/subjects/{subject}', [KycReviewController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');

@@ -1,5 +1,6 @@
 # CRM current state
 
+- Guided KYC (27 Sep): implemented locally with guided WP capture, AI policy and reviewer UI. 41 KYC tests / 236 assertions pass; build ready. Ian owns browser QA. AI Off; no push or deployment. See [task](tasks/kyc-guided-flow.md).
 Updated 2026-09-20. Check live Git status/HEAD before editing.
 Baseline inspected: `824c76712b46d0834ae712fb6442b992b1e3b0ef`, main.
 Existing checkout has unrelated changes: CLAUDE.md modified, a deleted performance

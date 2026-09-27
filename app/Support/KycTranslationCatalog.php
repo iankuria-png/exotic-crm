@@ -4,6 +4,17 @@ namespace App\Support;
 
 class KycTranslationCatalog
 {
+    public static function aiMessage(string $action, array $retake = []): string
+    {
+        if ($action === 'rejected') {
+            return 'We could not confirm that your selfie matches your ID. Please contact our team for a review.';
+        }
+        $labels = ['id_front' => 'ID front', 'id_back' => 'ID back', 'selfie' => 'selfie'];
+        $parts = array_map(fn ($kind) => $labels[$kind] ?? 'photo', $retake);
+
+        return 'Please retake your '.implode(' and ', $parts ?: ['photo']).' in good light, with all details visible and no glare.';
+    }
+
     public static function entries(): array
     {
         return [
