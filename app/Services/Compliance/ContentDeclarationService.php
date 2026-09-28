@@ -12,6 +12,7 @@ use InvalidArgumentException;
 class ContentDeclarationService
 {
     private const CONTENT_KINDS = [
+        'private_content',
         'profile_photo',
         'profile_video',
         'verified_status',

@@ -1,0 +1,239 @@
+<?php
+
+namespace App\Http\Controllers\Wp;
+
+use App\Http\Controllers\Controller;
+use App\Models\Client;
+use App\Models\PremiumContentAsset;
+use App\Models\PremiumContentEvent;
+use App\Models\PremiumContentOffer;
+use App\Models\VisitorContentPurchase;
+use App\Services\Kyc\KycSettingsService;
+use App\Services\Monetization\AccessService;
+use App\Services\Monetization\CheckoutService;
+use App\Services\Monetization\ListingEligibility;
+use App\Services\Monetization\OfferService;
+use App\Services\Monetization\PassService;
+use App\Services\Monetization\StatsService;
+use App\Services\Monetization\SyncService;
+use App\Services\MonetizationSettingsService;
+use App\Services\WalletService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class PremiumContentController extends Controller
+{
+    public function __construct(private MonetizationSettingsService $settings, private AccessService $access, private PassService $passes, private OfferService $offers) {}
+
+    private function platform(Request $r)
+    {
+        return $r->attributes->get('wallet_platform');
+    }
+
+    private function setting(Request $r)
+    {
+        return $this->settings->forPlatform($this->platform($r));
+    }
+
+    private function owner(Request $r): Client
+    {
+        return app(ListingEligibility::class)->assertOwner($this->platform($r)->id, (int) $r->input('wp_post_id'), (int) $r->input('wp_user_id'));
+    }
+
+    private function device(Request $r): string
+    {
+        return $this->access->device($this->setting($r), (string) $r->input('session_proof'));
+    }
+
+    public function config(Request $r)
+    {
+        $s = $this->setting($r);
+        $capabilities = $r->input('capabilities', []);
+        $missing = array_values(array_diff(['protected_storage', 'range_streaming', 'previews', 'media_guards'], $capabilities));
+        $ready = ! $missing && version_compare((string) $r->input('plugin_version', '0'), '1.3.15', '>=') && (! data_get($s->offer_policy_json, 'videos_enabled') || $r->boolean('storage.ffmpeg')) && $r->boolean('storage_ready') && data_get($s->readiness_json, 'ready') === true;
+        $report = array_merge($s->readiness_json ?? [], ['ready' => $ready, 'missing' => $missing, 'storage' => $r->input('storage'), 'checked_at' => now()->toIso8601String()]);
+        $s->update(['heartbeat_at' => now(), 'wp_revision' => (int) $r->input('cached_revision', 0), 'readiness_json' => $report]);
+
+        return response()->json(['effective' => $this->settings->runtime($s), 'readiness' => $s->readiness_json]);
+    }
+
+    public function ownerState(Request $r)
+    {
+        $client = $this->owner($r);
+        $s = $this->setting($r);
+        $decision = app(KycSettingsService::class)->privateContentUploadDecision($client);
+        $facts = app(ListingEligibility::class)->facts($client);
+        $pass = $this->passes->current($client);
+
+        return response()->json(['policy' => $this->settings->runtime($s), 'listing' => $facts, 'pass' => $pass, 'quotes' => $s->prices->where('is_active', true)->map(fn ($p) => $this->passes->quote($client, $p->duration_key))->values(), 'wallet' => app(WalletService::class)->summary($client), 'kyc' => $decision, 'content_permissions' => ['upload_private' => $decision['decision'], 'publish_offer' => $decision['decision']], 'assets' => PremiumContentAsset::where('client_id', $client->id)->whereNotIn('status', ['deleted', 'public'])->get(['public_id', 'wp_attachment_id', 'media_type', 'preview_url', 'status']), 'offers' => PremiumContentOffer::where('client_id', $client->id)->with('assets')->get()->map(fn ($o) => $this->offers->present($o)), 'notices' => PremiumContentEvent::where('client_id', $client->id)->whereIn('kind', ['sale_notice', 'pass_expiring', 'pass_expired'])->latest()->limit(5)->get(['kind', 'reason', 'created_at']), 'stats' => app(StatsService::class)->owner($client)]);
+    }
+
+    public function quote(Request $r)
+    {
+        return response()->json(['quote' => $this->passes->quote($this->owner($r), (string) $r->input('duration_key'))]);
+    }
+
+    public function activate(Request $r)
+    {
+        $r->validate(['duration_key' => 'required|in:2_weeks,1_month', 'intent' => 'required|in:activate,renew']);
+        $client = $this->owner($r);
+        $pass = $this->passes->activate($client, $r->all(), $r->attributes->get('wallet_idempotency_key'));
+        app(SyncService::class)->profile($client);
+
+        return response()->json(['pass' => $pass, 'wallet' => app(WalletService::class)->summary($client)]);
+    }
+
+    public function registerAsset(Request $r)
+    {
+        $client = $this->owner($r);
+        $s = $this->setting($r);
+        $this->settings->assertCommerce($s, 'checkout');
+        $facts = app(ListingEligibility::class)->facts($client);
+        abort_unless($facts['listing_active'] && ! $facts['held'] && $this->passes->current($client), 403, 'An active listing and pass are required.');
+        abort_if(app(KycSettingsService::class)->privateContentUploadDecision($client)['decision'] === 'block_with_verification_cta', 403, 'Verify your account before uploading private content.');
+        $data = $r->validate(['public_id' => 'required|uuid', 'wp_attachment_id' => 'required|integer|min:1', 'media_type' => 'required|in:photo,video', 'preview_url' => 'required|url|max:2048', 'content_fingerprint' => 'required|regex:/^[a-f0-9]{64}$/', 'duration_seconds' => 'nullable|integer|min:0|max:1800']);
+        abort_unless(data_get($s->offer_policy_json, $data['media_type'] === 'photo' ? 'photos_enabled' : 'videos_enabled'), 422);
+        $asset = PremiumContentAsset::firstOrCreate(['platform_id' => $client->platform_id, 'wp_attachment_id' => $data['wp_attachment_id']], $data + ['client_id' => $client->id, 'wp_post_id' => $client->wp_post_id]);
+        abort_unless($asset->client_id === $client->id && $asset->content_fingerprint === $data['content_fingerprint'], 409);
+
+        return response()->json(['asset' => $asset]);
+    }
+
+    public function saveOffer(Request $r, ?string $id = null)
+    {
+        $client = $this->owner($r);
+        $offer = $id ? PremiumContentOffer::where('platform_id', $client->platform_id)->where('public_id', $id)->firstOrFail() : null;
+        $saved = $this->offers->save($client, $r->all(), $offer, $r->attributes->get('wallet_idempotency_key'));
+        app(SyncService::class)->profile($client);
+
+        return response()->json(['offer' => $this->offers->present($saved)]);
+    }
+
+    public function catalog(Request $r)
+    {
+        $s = $this->setting($r);
+        $surface = $r->input('surface', 'profile');
+        if (! data_get($s->surface_policy_json, $surface === 'videos' ? 'videos_private_filter' : 'profile_section')) {
+            return response()->json(['offers' => []]);
+        }
+        $query = PremiumContentOffer::where('platform_id', $s->platform_id)->where('status', 'live')->with(['assets', 'client']);
+        if ($surface === 'videos') {
+            $query->whereHas('assets', fn ($q) => $q->where('media_type', 'video'));
+        } else {
+            $query->whereHas('client', fn ($q) => $q->where('wp_post_id', (int) $r->input('wp_post_id')));
+        }
+        $page = max(1, min(10000, (int) $r->input('page', 1)));
+        $perPage = $surface === 'videos' ? 12 : 200;
+        $total = 0;
+        $rows = [];
+        $offset = ($page - 1) * $perPage;
+        // Bounded batches avoid loading a market's full media registry into memory.
+        foreach ($query->orderByDesc('id')->lazy(100) as $offer) {
+            if (! $this->offers->available($offer, $s, $r->boolean('test_device'))) {
+                continue;
+            }
+            if ($total >= $offset && count($rows) < $perPage) {
+                $rows[] = $this->offers->present($offer);
+            }
+            $total++;
+        }
+
+        return response()->json(['enabled' => true, 'total' => $total, 'page' => $page, 'offers' => $rows]);
+    }
+
+    public function intent(Request $r)
+    {
+        $input = $r->validate(['offer_public_id' => 'required|uuid', 'provider_key' => 'required|string', 'visitor_phone' => 'required|string|max:30', 'session_proof' => 'required|string', 'test_device' => 'boolean']);
+
+        return response()->json(app(CheckoutService::class)->intent($this->platform($r), $input, $r->attributes->get('wallet_idempotency_key'), $r));
+    }
+
+    public function entitlements(Request $r)
+    {
+        return response()->json(['entitlements' => $this->access->entitlements($this->platform($r), $this->device($r))]);
+    }
+
+    public function restore(Request $r)
+    {
+        $r->validate(['visitor_phone' => 'required|string|max:30']);
+
+        return response()->json($this->access->restore($this->platform($r), $r->input('visitor_phone'), $this->device($r), (string) $r->input('visitor_ip', $r->ip())));
+    }
+
+    public function forget(Request $r)
+    {
+        DB::table('premium_content_purchase_devices')->where('device_hash', $this->device($r))->whereIn('purchase_id', VisitorContentPurchase::where('platform_id', $this->platform($r)->id)->select('id'))->delete();
+
+        return response()->json(['forgotten' => true]);
+    }
+
+    public function status(Request $r, string $ref)
+    {
+        $p = VisitorContentPurchase::where('platform_id', $this->platform($r)->id)->where('public_id', $ref)->firstOrFail();
+        $this->access->assertDevice($p, $this->device($r));
+        if ($p->status === 'pending_payment' && $p->payment?->status === 'failed') {
+            $p->update(['status' => 'failed']);
+        }
+
+        return response()->json($this->access->present($p));
+    }
+
+    public function grant(Request $r)
+    {
+        $p = VisitorContentPurchase::where('platform_id', $this->platform($r)->id)->where('public_id', $r->input('purchase_public_id'))->firstOrFail();
+        $asset = PremiumContentAsset::where('platform_id', $this->platform($r)->id)->where('public_id', $r->input('asset_public_id'))->firstOrFail();
+
+        return response()->json($this->access->grant($this->setting($r), $asset, $p, $this->device($r)));
+    }
+
+    public function report(Request $r)
+    {
+        $r->validate(['purchase_public_id' => 'required|uuid', 'reason' => 'required|string|min:5|max:1000']);
+        $p = VisitorContentPurchase::where('platform_id', $this->platform($r)->id)->where('public_id', $r->input('purchase_public_id'))->firstOrFail();
+        $this->access->assertDevice($p, $this->device($r));
+        PremiumContentEvent::create(['platform_id' => $p->platform_id, 'client_id' => $p->client_id, 'purchase_id' => $p->id, 'kind' => 'buyer_report', 'reason' => $r->input('reason')]);
+
+        return response()->json(['reported' => true]);
+    }
+
+    public function simulate(Request $r, string $ref)
+    {
+        abort_unless(app()->environment('local') && config('monetization.local_simulator'), 404);
+        $p = VisitorContentPurchase::where('platform_id', $this->platform($r)->id)->where('public_id', $ref)->firstOrFail();
+        abort_unless($p->is_sandbox && $p->payment?->isSandboxTest(), 403);
+        $this->access->assertDevice($p, $this->device($r));
+        $r->validate(['outcome' => 'required|in:success,failed,review']);
+        if ($r->input('outcome') === 'failed') {
+            abort_unless($p->status === 'pending_payment', 409);
+            $p->payment->update(['status' => 'failed']);
+            $p->update(['status' => 'failed']);
+        } else {
+            app(\App\Services\PaymentCompletionService::class)->complete($p->payment, $r->input('outcome') === 'success' ? ['amount' => $p->gross_amount, 'currency' => $p->currency] : []);
+        }
+
+        return response()->json($this->access->present($p->fresh()));
+    }
+
+    public function visibility(Request $r, string $id)
+    {
+        $r->validate(['action' => 'required|in:public,delete', 'confirmed' => 'boolean']);
+        $client = $this->owner($r);
+        $result = app(\App\Services\Monetization\AssetLifecycleService::class)->change($client, $id, $r->input('action'), $r->boolean('confirmed'));
+        app(SyncService::class)->profile($client);
+
+        return response()->json($result);
+    }
+
+    public function lifecycle(Request $r)
+    {
+        $client = Client::where('platform_id', $this->platform($r)->id)->where('wp_post_id', $r->input('wp_post_id'))->firstOrFail();
+        $r->validate(['status' => 'required|in:publish,private,draft,trash,deleted,pending']);
+        $client->update(['profile_status' => $r->input('status')]);
+        if ($r->input('status') === 'deleted') {
+            PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'kind' => 'profile_deleted', 'reason' => 'Protected purchases retained.']);
+        }
+        app(SyncService::class)->profile($client);
+
+        return response()->json(['saved' => true]);
+    }
+}

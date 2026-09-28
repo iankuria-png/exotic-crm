@@ -17,6 +17,8 @@ const escalationOptions = [
 function normalizeSettings(settings = {}) {
     return {
         ai_review: settings.ai_review || {},
+        private_content_upload_policy_default: settings.private_content_upload_policy_default || 'off',
+        private_content_upload_policy_per_platform: settings.private_content_upload_policy_per_platform || {},
         enabled_platform_ids: Array.isArray(settings.enabled_platform_ids) ? settings.enabled_platform_ids.map(Number) : [],
         required_document_kinds: Array.isArray(settings.required_document_kinds) ? settings.required_document_kinds : ['id_front', 'selfie'],
         max_doc_bytes: Number(settings.max_doc_bytes || 20 * 1024 * 1024),
@@ -98,6 +100,12 @@ export default function KycSetupWizard({
 
     return (
         <div className="space-y-5">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+                <h3 className="text-lg font-semibold">Private content verification</h3>
+                <p className="text-sm text-slate-500">Applies to private uploads and offer publication. Pass purchases and buyer access stay available. Disabled markets and exempt creators are never blocked.</p>
+                <label className="block text-sm">Default policy<select className="ml-3 min-h-11 rounded-md border border-slate-300 px-3" value={form.private_content_upload_policy_default} onChange={e => updateField('private_content_upload_policy_default', e.target.value)}><option value="off">Off</option><option value="prompt">Prompt · allow continuing</option><option value="require_approved">Require approved</option></select></label>
+                <div className="grid gap-3 md:grid-cols-2">{platforms.filter(p => enabledPlatformSet.has(Number(p.id))).map(p => <label className="flex min-h-11 items-center justify-between gap-3 text-sm" key={p.id}>{p.name}<select className="min-h-11 rounded-md border border-slate-300 px-3" value={form.private_content_upload_policy_per_platform[p.id] || ''} onChange={e => { const next = {...form.private_content_upload_policy_per_platform}; if (e.target.value) next[p.id] = e.target.value; else delete next[p.id]; updateField('private_content_upload_policy_per_platform', next); }}><option value="">Use default</option><option value="off">Off</option><option value="prompt">Prompt</option><option value="require_approved">Require approved</option></select></label>)}</div>
+            </section>
             <KycAiSettings value={form.ai_review} onChange={(value) => updateField('ai_review', value)} platforms={platforms} />
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

@@ -42,6 +42,7 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
+        $schedule->command('monetize:expire-passes')->hourly()->withoutOverlapping()->runInBackground();
         $tickStartedAt = microtime(true);
 
         // Live operations settings, resolved once per tick. Every option below

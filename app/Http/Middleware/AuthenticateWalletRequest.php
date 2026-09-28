@@ -31,7 +31,9 @@ class AuthenticateWalletRequest
         }
 
         try {
-            $context = $this->billingModeService->assertWalletAvailable($platform);
+            $context = $mode === 'access'
+                ? ['environment' => \App\Models\ContentMonetizationSetting::where('platform_id', $platformId)->value('premium_access_environment') ?: 'sandbox']
+                : $this->billingModeService->assertWalletAvailable($platform);
         } catch (\Throwable $exception) {
             return $this->error($exception->getMessage(), 'wallet_disabled', 403);
         }
@@ -65,6 +67,10 @@ class AuthenticateWalletRequest
             }
         }
 
+        if ($mode === 'write' && ($request->is('api/wp-svc/premium-content/*') || $request->is('api/wallet/monetization/*')) && !$request->is('api/wp-svc/premium-content/config','api/wp-svc/premium-content/lifecycle','api/wp-svc/premium-content/owner-state','api/wp-svc/premium-content/owner-stats','api/wp-svc/premium-content/catalog')) {
+            $setting=\App\Models\ContentMonetizationSetting::where('platform_id',$platformId)->first();
+            if(!$setting || (int)$request->header('X-Exotic-Premium-Revision') !== (int)$setting->config_revision)return $this->error('Private content settings changed. Refresh before continuing.','stale_premium_config',409);
+        }
         $request->attributes->set('wallet_platform', $platform);
         $request->attributes->set('wallet_context', $context);
         $request->attributes->set('wallet_environment', $environment);

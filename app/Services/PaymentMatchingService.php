@@ -30,6 +30,7 @@ class PaymentMatchingService
      */
     public function matchPayment(Payment $payment, ?string $prefix = null): array
     {
+        if ($payment->isVisitorPayment()) return ['matched' => false, 'confidence' => 'excluded', 'reason' => 'Visitor payments cannot match advertisers.'];
         if ($payment->client_id) {
             return [
                 'matched' => true,
@@ -111,6 +112,7 @@ class PaymentMatchingService
      */
     public function confirmMatch(Payment $payment, int $clientId, int $confirmedBy): Payment
     {
+        abort_if($payment->isVisitorPayment(), 422, 'Visitor payments cannot match advertisers.');
         $payment->update([
             'client_id' => $clientId,
             'match_confidence' => 'manual',
@@ -147,7 +149,7 @@ class PaymentMatchingService
      */
     public function batchMatch(?int $platformId = null): array
     {
-        $query = Payment::whereNull('client_id')
+        $query = Payment::excludingContactUnlocks()->whereNull('client_id')->excludingContactUnlocks()
             ->where('status', 'completed');
 
         if ($platformId) {
@@ -164,7 +166,7 @@ class PaymentMatchingService
         }
 
         $query = Payment::query()
-            ->whereNull('client_id')
+            ->whereNull('client_id')->excludingContactUnlocks()
             ->where('status', 'completed')
             ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
 
@@ -196,6 +198,7 @@ class PaymentMatchingService
      */
     public function dryRunMatchPayment(Payment $payment, ?string $prefix = null): array
     {
+        if ($payment->isVisitorPayment()) return ['matched' => false, 'confidence' => 'excluded', 'reason' => 'Visitor payments cannot match advertisers.'];
         if ($payment->client_id) {
             return [
                 'matched' => true,
@@ -259,7 +262,7 @@ class PaymentMatchingService
 
     public function dryRunBatchMatch(?int $platformId = null): array
     {
-        $query = Payment::whereNull('client_id')
+        $query = Payment::excludingContactUnlocks()->whereNull('client_id')->excludingContactUnlocks()
             ->where('status', 'completed');
 
         if ($platformId) {
@@ -276,7 +279,7 @@ class PaymentMatchingService
         }
 
         $query = Payment::query()
-            ->whereNull('client_id')
+            ->whereNull('client_id')->excludingContactUnlocks()
             ->where('status', 'completed')
             ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
 

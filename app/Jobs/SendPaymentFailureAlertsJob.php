@@ -54,7 +54,7 @@ class SendPaymentFailureAlertsJob implements ShouldQueue, ShouldBeUnique
             ])
             ->find($this->paymentId);
 
-        if (!$payment) {
+        if (!$payment || $payment->isVisitorPayment()) {
             return;
         }
 

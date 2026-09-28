@@ -1,3 +1,4 @@
+import Monetization from './Monetization';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -2744,6 +2745,7 @@ export default function ClientDetail() {
             // Staff can edit Expired/Archived profiles — the front-end edit lock
             // applies to the advertiser on the website, not to the CRM team, who
             // still need to work these accounts during a win-back.
+            { key: 'monetization', label: 'Monetize' },
             { key: 'edit_profile', label: 'Edit Profile' },
             {
                 key: 'profile_health',
@@ -5587,6 +5589,7 @@ export default function ClientDetail() {
                 <ContactUnlocksTab data={contactUnlockData} isLoading={contactUnlockLoading} client={client} />
             ) : null}
 
+            {activeTab === 'monetization' ? <Monetization clientId={client?.id} platformId={client?.platform_id} /> : null}
             {activeTab === 'stories' ? (
                 <ClientStoriesTab
                     clientId={id}

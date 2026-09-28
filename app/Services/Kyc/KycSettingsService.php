@@ -79,6 +79,18 @@ class KycSettingsService
         return $this->aiSettings()['document_types_per_platform'][(string) $platformId] ?? ['national_id', 'passport', 'driving_licence'];
     }
 
+    public function privateContentUploadDecision(Client $client): array
+    {
+        $s = $this->get();
+        $map = $s->private_content_upload_policy_per_platform ?? [];
+        $policy = $map[(string) $client->platform_id] ?? $s->private_content_upload_policy_default ?? 'off';
+        $exempt = !$client->kyc_required || $this->isExempt($client);
+        if (!$this->isPlatformEnabled($client->platform_id) || $exempt) $policy = 'off';
+        $status = $client->kycSubject?->status ?? 'unverified';
+        $decision = $status === 'approved' || $policy === 'off' ? 'allow' : ($policy === 'prompt' ? 'allow_with_prompt' : 'block_with_verification_cta');
+        return ['decision' => $decision, 'policy' => $policy, 'source' => array_key_exists((string) $client->platform_id, $map) ? 'market_override' : 'default', 'is_exempt' => $exempt, 'status' => $status];
+    }
+
     public function activeStorageDriver(): string
     {
         return (string) ($this->get()->active_storage_driver ?: 'db');
@@ -208,6 +220,9 @@ class KycSettingsService
         foreach (array_diff($payload['enabled_platform_ids'] ?? [], $settings->enabled_platform_ids ?? []) as $newPlatform) {
             $payload['ai_review'] = $payload['ai_review'] ?? $this->aiSettings();
             $payload['ai_review']['mode_per_platform'][(string) $newPlatform] = 'off';
+        }
+        foreach (array_merge([$payload['private_content_upload_policy_default'] ?? 'off'], array_values($payload['private_content_upload_policy_per_platform'] ?? [])) as $rule) {
+            if (!in_array($rule, ['off', 'prompt', 'require_approved'], true)) throw new InvalidArgumentException('Invalid private content verification policy.');
         }
         $settings->fill($payload);
         $settings->updated_by = $actor->id;

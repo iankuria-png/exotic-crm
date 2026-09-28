@@ -347,7 +347,7 @@ class LifecycleSmsService
                 }
                 // A visitor's unlock payment carries the advertiser's client_id;
                 // "your payment failed" would reach the wrong person.
-                if ((string) $payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK) {
+                if ($payment->isVisitorPayment()) {
                     return 'visitor_contact_unlock';
                 }
                 // Manual payments: the client likely already paid by proof and

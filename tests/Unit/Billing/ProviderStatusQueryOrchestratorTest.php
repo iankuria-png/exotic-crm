@@ -159,7 +159,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
             $billingModeService,
             Mockery::mock(HostedCheckoutService::class),
             $pesapalAdapter,
-            Mockery::mock(PawaPayCompatibilityAdapter::class)
+            Mockery::mock(PawaPayCompatibilityAdapter::class),
+            Mockery::mock(\App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter::class)
         );
 
         $verification = $orchestrator->verify($payment);
@@ -213,7 +214,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
             $billingModeService,
             Mockery::mock(HostedCheckoutService::class),
             Mockery::mock(PesapalCompatibilityAdapter::class),
-            $pawaPayAdapter
+            $pawaPayAdapter,
+            Mockery::mock(\App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter::class)
         );
 
         $verification = $orchestrator->verify($payment);
@@ -229,7 +231,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
             Mockery::mock(BillingModeService::class),
             Mockery::mock(HostedCheckoutService::class),
             Mockery::mock(PesapalCompatibilityAdapter::class),
-            Mockery::mock(PawaPayCompatibilityAdapter::class)
+            Mockery::mock(PawaPayCompatibilityAdapter::class),
+            Mockery::mock(\App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter::class)
         );
     }
 

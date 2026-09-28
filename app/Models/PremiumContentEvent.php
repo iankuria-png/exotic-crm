@@ -1,0 +1,12 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class PremiumContentEvent extends Model
+{
+    protected $guarded = [];
+
+    protected $casts = ['metadata_json' => 'array'];
+}

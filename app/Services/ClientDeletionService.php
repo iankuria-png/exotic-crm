@@ -352,6 +352,10 @@ class ClientDeletionService
 
     private function assertNoPaidEntitlement(Client $client): void
     {
+        if (\Illuminate\Support\Facades\Schema::hasTable('visitor_content_purchases') && \App\Models\VisitorContentPurchase::where('client_id', $client->id)->whereIn('status', ['active','review','pending_payment'])->exists()) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['client' => 'Resolve active private-content purchases before deleting this creator.']);
+        }
+        if (\Illuminate\Support\Facades\Schema::hasTable('wallet_transactions') && \App\Models\WalletTransaction::where('client_id',$client->id)->where('reference_type','premium_content_sale')->exists() && (float)app(\App\Services\Monetization\StatsService::class)->owner($client)['earned_outstanding'] > 0) throw \Illuminate\Validation\ValidationException::withMessages(['client'=>'This creator has earned wallet credit. Archive and retain the account.']);
         if ($client->deals()->currentlyActive()->exists()) {
             throw ClientLifecycleMutationException::paidEntitlement();
         }

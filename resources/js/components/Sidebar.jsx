@@ -53,7 +53,7 @@ function insertVisitorsGroup(groups) {
     groups.forEach((group) => {
         output.push(group);
         if (group.title === 'Revenue') {
-            output.push(visitorsGroup);
+            output.push({ ...visitorsGroup, items: [...visitorsGroup.items, { to: '/monetization', label: 'Monetize', icon: 'M4 6h16v14H4z M4 10h16 M14 15h3' }] });
         }
     });
 

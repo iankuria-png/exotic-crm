@@ -116,6 +116,8 @@ class CanonicalPaymentStateReducer
     private function defaultCompletionTransition(Payment $payment, array $context): string
     {
         return match ((string) $payment->purpose) {
+            'premium_content_sale' => 'premium_content_settled',
+            'monetize_pass' => 'monetize_pass_activated',
             'wallet_topup' => (bool) ($context['sandbox_suppressed'] ?? false)
                 ? 'wallet_funding_sandbox_succeeded'
                 : 'wallet_credit_succeeded',
@@ -133,6 +135,8 @@ class CanonicalPaymentStateReducer
         }
 
         return match ((string) $payment->purpose) {
+            'premium_content_sale' => 'premium_content_failed',
+            'monetize_pass' => 'monetize_pass_failed',
             'wallet_topup' => 'wallet_funding_failed',
             'subscription' => 'subscription_payment_failed',
             default => 'payment_failed',

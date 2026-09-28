@@ -17,6 +17,14 @@ class Payment extends Model
 {
     use HasFactory;
 
+    public const PURPOSE_PREMIUM_CONTENT_SALE = 'premium_content_sale';
+    public const PURPOSE_MONETIZE_PASS = 'monetize_pass';
+
+    public function isVisitorPayment(): bool
+    {
+        return in_array($this->purpose, [self::PURPOSE_VISITOR_CONTACT_UNLOCK, self::PURPOSE_PREMIUM_CONTENT_SALE], true);
+    }
+
     public const PURPOSE_SUBSCRIPTION = 'subscription';
     public const PURPOSE_WALLET_TOPUP = 'wallet_topup';
     public const PURPOSE_VISITOR_CONTACT_UNLOCK = 'visitor_contact_unlock';
@@ -26,6 +34,7 @@ class Payment extends Model
     protected static function booted(): void
     {
         $refresh = static function (Payment $payment): void {
+            if (in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE], true)) return;
             $clientId = $payment->client_id
                 ? (int) $payment->client_id
                 : (int) (Deal::query()->whereKey($payment->deal_id)->value('client_id') ?: 0);
@@ -36,7 +45,8 @@ class Payment extends Model
         static::saved($refresh);
         static::saved(static function (Payment $payment): void {
             if (
-                ! in_array((string) $payment->status, self::SUCCESSFUL_STATUSES, true)
+                in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE], true)
+                || ! in_array((string) $payment->status, self::SUCCESSFUL_STATUSES, true)
                 || (! $payment->wasRecentlyCreated && ! $payment->wasChanged(['status', 'client_id', 'completed_at']))
             ) {
                 return;
@@ -52,7 +62,7 @@ class Payment extends Model
             }
         });
         static::saved(static function (Payment $payment): void {
-            if (!$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
+            if ($payment->isVisitorPayment() || !$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
                 return;
             }
 
@@ -263,6 +273,8 @@ class Payment extends Model
         return $query->where(function ($builder) {
             $builder->whereNull('purpose')
                 ->orWhereNotIn('purpose', [
+                    self::PURPOSE_PREMIUM_CONTENT_SALE,
+                    self::PURPOSE_MONETIZE_PASS,
                     self::PURPOSE_WALLET_TOPUP,
                     self::PURPOSE_VISITOR_CONTACT_UNLOCK,
                 ]);
@@ -278,7 +290,7 @@ class Payment extends Model
     {
         return $query->where(function ($builder) {
             $builder->whereNull('purpose')
-                ->orWhere('purpose', '!=', self::PURPOSE_VISITOR_CONTACT_UNLOCK);
+                ->orWhereNotIn('purpose', [self::PURPOSE_VISITOR_CONTACT_UNLOCK, self::PURPOSE_PREMIUM_CONTENT_SALE]);
         });
     }
 

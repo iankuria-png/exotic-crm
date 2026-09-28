@@ -47,17 +47,18 @@ class ReconcilePendingPayments extends Command
                     ->where('immutable_until_terminal_state', true)
                     ->latest('id'),
             ])
-            ->where('status', 'pending')
+            ->whereIn('status', ['initiated','pending'])
             ->where(function ($query) {
-                $query->whereIn('provider_key', ['paystack', 'pesapal', 'pawapay'])
+                $query->whereIn('provider_key', ['paystack', 'pesapal', 'pawapay', 'kopokopo'])
                     ->orWhereHas('routingDecisions', function ($decisionQuery) {
                         $decisionQuery->where('immutable_until_terminal_state', true)
-                            ->whereIn('provider_type_key', ['paystack', 'pesapal', 'pawapay']);
+                            ->whereIn('provider_type_key', ['paystack', 'pesapal', 'pawapay', 'kopokopo']);
                     });
             })
             ->whereIn('purpose', [
                 Payment::PURPOSE_WALLET_TOPUP,
                 Payment::PURPOSE_SUBSCRIPTION,
+                Payment::PURPOSE_PREMIUM_CONTENT_SALE,
                 Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
             ])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))

@@ -29,6 +29,9 @@ class SettingsController extends Controller
         abort_unless(($request->user()->role ?? '') === 'admin' || ($request->user()->role ?? '') === 'sub_admin', 403, 'Unauthorized');
 
         $validated = $request->validate([
+            'private_content_upload_policy_default' => 'sometimes|in:off,prompt,require_approved',
+            'private_content_upload_policy_per_platform' => 'sometimes|array',
+            'private_content_upload_policy_per_platform.*' => 'in:off,prompt,require_approved',
             'ai_review' => 'sometimes|array:mode,mode_per_platform,paused,reject_requires_second_opinion_per_platform,auto_reject_enabled,auto_reject_enabled_per_platform,reject_requires_second_opinion,ladder,second_opinion_model,approve_threshold,reject_threshold,daily_cap_usd,qa_sample_pct,document_types_per_platform',
             'ai_review.paused' => 'sometimes|boolean',
             'ai_review.reject_requires_second_opinion_per_platform' => 'sometimes|array',
@@ -76,6 +79,17 @@ class SettingsController extends Controller
             'audit_retention_days' => 'nullable|integer|min:1',
         ]);
 
+        if ($request->user()->role === 'sub_admin') {
+            $current = $this->settingsService->get();
+            abort_if(isset($validated['private_content_upload_policy_default']) && $validated['private_content_upload_policy_default'] !== $current->private_content_upload_policy_default,403,'Only an admin can change the global private-content KYC policy.');
+            $old = $current->private_content_upload_policy_per_platform ?? [];
+            if (isset($validated['private_content_upload_policy_per_platform'])) {
+                $new = $validated['private_content_upload_policy_per_platform'];
+                foreach (array_unique(array_merge(array_keys($old),array_keys($new))) as $id) {
+                    if (($old[$id] ?? null) !== ($new[$id] ?? null)) app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($request->user(),(int)$id);
+                }
+            }
+        }
         try {
             return response()->json([
                 'settings' => $this->settingsService->update($validated, $request->user()),

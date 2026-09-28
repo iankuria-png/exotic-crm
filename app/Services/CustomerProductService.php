@@ -977,12 +977,10 @@ class CustomerProductService
             throw new InvalidArgumentException("This one's not linked to your account.");
         }
 
-        $unlock = VisitorContactUnlock::query()
-            ->where('platform_id', $account->platform_id)
-            ->where('public_token_hash', $this->hashToken($publicToken))
-            ->first();
+        ['unlock' => $unlock, 'denied' => $denied] = app(ContactUnlockAccessService::class)
+            ->resolve((int) $account->platform_id, $publicToken, $sessionProof);
 
-        if (! $unlock || ! hash_equals((string) $unlock->session_token_hash, $this->hashToken($sessionProof))) {
+        if (! $unlock || $denied !== null) {
             throw new InvalidArgumentException("This one's not linked to your account.");
         }
 
@@ -1071,7 +1069,6 @@ class CustomerProductService
             'contact' => [
                 'phone' => (string) $client->phone_normalized,
                 'whatsapp' => (string) $client->phone_normalized,
-                'email' => (string) $client->email,
             ],
         ];
     }

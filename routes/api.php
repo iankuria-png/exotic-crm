@@ -159,6 +159,7 @@ Route::middleware(['wp.service.auth'])->prefix('wp-svc/contact-unlock')->group(f
     Route::post('/intents', [WpContactUnlockController::class, 'createIntent']);
     Route::post('/status', [WpContactUnlockController::class, 'status']);
     Route::post('/reveal', [WpContactUnlockController::class, 'reveal']);
+    Route::post('/restore', [WpContactUnlockController::class, 'restore']);
     Route::post('/upgrade-quote', [WpContactUnlockController::class, 'upgradeQuote']);
     Route::post('/events', [WpContactUnlockController::class, 'event']);
 });
@@ -229,6 +230,19 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 
 // CRM Protected Routes (Sanctum token required)
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
+    Route::get('/settings/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'settings']);
+    Route::put('/settings/monetization/markets/{platform}', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSettings']);
+    Route::put('/settings/monetization/system', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSystem']);
+    Route::post('/settings/monetization/markets/{platform}/sync', [\App\Http\Controllers\CRM\MonetizationController::class, 'sync']);
+    Route::post('/clients/{client}/monetization/pass', [\App\Http\Controllers\CRM\MonetizationController::class, 'staffPass']);
+    Route::post('/monetization/assets/{asset}/purge', [\App\Http\Controllers\CRM\MonetizationController::class, 'purgeAsset']);
+    Route::post('/monetization/assets/{asset}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'assetHold']);
+    Route::get('/monetization/export', [\App\Http\Controllers\CRM\MonetizationController::class, 'export']);
+    Route::get('/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'index']);
+    Route::post('/monetization/purchases/{purchase}/{action}', [\App\Http\Controllers\CRM\MonetizationController::class, 'purchaseAction'])->where('action', 'refund|release-review');
+    Route::post('/monetization/offers/{offer}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'hold']);
+    Route::post('/monetization/assets/{asset}/staff-grant', [\App\Http\Controllers\CRM\MonetizationController::class, 'staffGrant']);
+
     // Auth
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
@@ -1271,4 +1285,22 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
             'payload' => $webhookPayload,
         ]);
     });
+});
+
+// Every premium route verifies the calling market's HMAC, including buyer access while selling is paused.
+Route::prefix('wp-svc/premium-content')->middleware(['wallet.auth:write', 'throttle:120,1'])->group(function () {
+    $controller = \App\Http\Controllers\Wp\PremiumContentController::class;
+    foreach (['config' => 'config', 'owner-state' => 'ownerState', 'assets' => 'registerAsset', 'offers' => 'saveOffer', 'catalog' => 'catalog', 'intents' => 'intent', 'lifecycle' => 'lifecycle', 'owner-stats' => 'ownerState'] as $path => $method) Route::post($path, [$controller, $method]);
+    Route::post('offers/{id}', [$controller, 'saveOffer']);
+    Route::post('assets/{id}/visibility', [$controller, 'visibility']);
+});
+Route::prefix('wp-svc/premium-content')->middleware(['wallet.auth:access', 'throttle:120,1'])->group(function () {
+    $controller = \App\Http\Controllers\Wp\PremiumContentController::class;
+    foreach (['entitlements' => 'entitlements', 'restore' => 'restore', 'devices/forget' => 'forget', 'reports' => 'report', 'access-grant' => 'grant'] as $path => $method) Route::post($path, [$controller, $method]);
+    Route::post('purchases/{ref}/status', [$controller, 'status']);
+    Route::post('purchases/{ref}/simulate', [$controller, 'simulate']);
+});
+Route::middleware('wallet.auth:write')->prefix('wallet/monetization')->group(function () {
+    Route::post('quote', [\App\Http\Controllers\Wp\PremiumContentController::class, 'quote']);
+    Route::post('activate', [\App\Http\Controllers\Wp\PremiumContentController::class, 'activate']);
 });

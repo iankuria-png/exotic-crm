@@ -719,6 +719,7 @@ class PaymentQueueController extends Controller
 
     public function confirmMatch(Request $request, Payment $payment)
     {
+        abort_if($payment->isVisitorPayment(), 422, 'Visitor payments cannot match advertisers.');
         $this->authorizePaymentAccess($request, $payment);
 
         $validated = $request->validate([

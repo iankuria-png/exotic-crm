@@ -199,6 +199,36 @@ class KopokopoService
         }
     }
 
+    public function paymentStatus(string $location, array $configOverride = []): array
+    {
+        $config = array_replace($this->configService->currentConfig(masked: false), $configOverride);
+        $base = parse_url((string) ($config['base_url'] ?? ''));
+        $url = parse_url($location);
+        // Only send the bearer token to this environment's configured provider origin.
+        if (!is_array($url) || !is_array($base)
+            || strtolower($url['scheme'] ?? '') !== 'https'
+            || strtolower($url['host'] ?? '') !== strtolower($base['host'] ?? '')
+            || ($url['port'] ?? 443) !== ($base['port'] ?? 443)
+            || isset($url['user']) || isset($url['pass']) || isset($url['query']) || isset($url['fragment'])
+            || !preg_match('~^/api/v1/incoming_payments/[a-zA-Z0-9-]+/?$~D', $url['path'] ?? '')
+        ) {
+            throw new \InvalidArgumentException('KopoKopo payment is missing a valid status URL for its provider environment.');
+        }
+        $token = $this->getAccessToken($configOverride);
+        if (!$token) {
+            throw new \RuntimeException('KopoKopo status authentication failed.');
+        }
+        $result = $this->client($configOverride)->StkService()->getStatus([
+            'location' => $location,
+            'accessToken' => $token,
+        ]);
+        if (($result['status'] ?? null) !== 'success' || !is_array($result['data'] ?? null)) {
+            throw new \RuntimeException('KopoKopo payment status is temporarily unavailable.');
+        }
+
+        return $result['data'];
+    }
+
     public function currentConfig(bool $masked = true): array
     {
         return $this->configService->currentConfig(masked: $masked);

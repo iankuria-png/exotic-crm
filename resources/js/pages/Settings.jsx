@@ -31,6 +31,7 @@ import DiagnosticsExportModal from '../components/settings/DiagnosticsExportModa
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import OperationsWorkspace from '../components/OperationsWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
+import MonetizationSettings from '../components/settings/monetization/MonetizationSettings';
 import KycSetupWizard from '../components/kyc/KycSetupWizard';
 import { useAuth } from '../hooks/useAuth';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
@@ -40,6 +41,7 @@ import kyc from '../services/kyc';
 const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
     { id: 'kyc', label: 'KYC' },
+    { id: 'monetization', label: 'Monetize' },
     { id: 'billing', label: 'Billing' },
     { id: 'seo-engine', label: 'SEO Engine' },
     { id: 'my-exotic', label: 'My Exotic' },
@@ -9569,6 +9571,8 @@ export default function Settings() {
                 return tab.id === 'integrations';
             }
 
+            if (tab.id === 'monetization') return ['admin', 'sub_admin'].includes(user?.role || '');
+
             if (tab.id === 'roles') {
                 return canViewRoles;
             }
@@ -9662,6 +9666,7 @@ export default function Settings() {
                     currentUserRole={user?.role || ''}
                 />
             ) : null}
+            {activeTab === 'monetization' ? <MonetizationSettings /> : null}
             {activeTab === 'kyc' ? (
                 <KycSetupWizard
                     settings={kycSettingsQuery.data?.settings}

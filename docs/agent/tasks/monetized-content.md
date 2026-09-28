@@ -1,0 +1,15 @@
+# Task: CRM commercial core and operations for monetized profile content
+
+- ID / project: monetized-content / Exotic CRM + WordPress
+- Updated / status: 2026-09-27, Private content and Settings control-plane feedback incorporated; awaiting explicit implementation approval.
+- Goal and acceptance criteria: own bi-weekly/monthly Monetize pricing, active-listing subsidies, passes, asset/single/bundle offers, entitlements, settlement and full-listed-price spend-wallet credits. Settings → Monetize is the sole audited control plane for global defaults, market overrides and WordPress runtime behavior; WordPress retains protected-file ownership.
+- Scope authorized by the current request: reuse existing provider routing, contact-unlock checkout patterns and advertiser wallets; add a Web Visitors-quality Monetize page and market configuration; coordinate with the WP profile media owner/visitor experience.
+- Source plan / decisions / relevant code: authoritative source and rendered plan are in the WP repository at `/Users/ian/Local Sites/exotic/app/public/plans/monetized-content-2026-09-27/plan.mdx` and `plan.html`. Relevant CRM sources inspected include `PaymentCompletionService`, `BillingGatewayService`, `WalletService`, `WalletCheckoutService`, contact-unlock models/services/controllers, `WebVisitors.jsx`, `ClientDetail.jsx`, `Sidebar.jsx`, `router.jsx` and `routes/api.php`.
+- History reconciliation: CRM HEAD `b99b2473`; WP HEAD `f94ab67de`. No existing monetized-content domain found. Preserve the current uncommitted contact-unlock access recovery and all other unrelated work.
+- Done with evidence: separated pass and sale payments; settled spend-wallet gross credit; mirrored ProductPrice duration semantics without attaching passes to Deals; defined subsidy snapshots, versioned bundles and immutable entitlements. Added Settings → Monetize with revisioned market/runtime policy. KYC remains owned by Settings → KYC: an additive Off/Prompt/Require-approved private-upload rule is resolved per market/client by KycSettingsService; pass activation, visitor checkout and restoration never hard-gate on advertiser KYC. The operations Setup view is read-only.
+- In progress / remaining: Ian reviews the final plan and explicitly approves implementation; application code remains untouched.
+- Next concrete action or command: review the rendered WP plan, then implement step 1 (purposes, system/market settings, revision resolver, prices, subsidy quote and domain models) after approval.
+- Verification: visual-plan `--check` passes with 40 blocks on 27 Sep. No CRM application tests are claimed because no application source changed.
+- Deployment: plan only; not implemented, committed, pushed, deployed or production-verified.
+- Files/hunks owned; unrelated working-tree/index changes to preserve: this task owns only this task record. Preserve all existing CRM modifications/untracked files, especially contact-unlock recovery and guided KYC.
+- Unresolved questions / blockers: explicit approval to begin implementation from the final configuration boundary.
