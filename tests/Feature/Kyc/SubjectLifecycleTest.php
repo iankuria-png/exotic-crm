@@ -11,8 +11,8 @@ use Tests\TestCase;
 
 class SubjectLifecycleTest extends TestCase
 {
-    use RefreshDatabase;
     use InteractsWithKycFixtures;
+    use RefreshDatabase;
 
     public function test_subject_moves_into_review_and_then_approved_with_verified_source(): void
     {
@@ -46,5 +46,19 @@ class SubjectLifecycleTest extends TestCase
         $this->assertSame(KycSubject::STATUS_APPROVED, $subject->status);
         $this->assertTrue((bool) $client->verified);
         $this->assertSame('kyc', $client->verified_source);
+    }
+
+    public function test_reverification_request_exposes_a_client_restart_path(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createClientForPlatform($platform);
+        $subject = $this->createSubjectForClient($client, ['status' => KycSubject::STATUS_REJECTED]);
+        $reviewer = $this->createKycUser('admin', [$platform->id]);
+
+        app(KycSubjectService::class)->reRequest($subject->fresh(['client', 'sites']), $reviewer, 'Manual re-verification requested from client detail');
+        $payload = app(KycSubjectService::class)->buildStatusPayload($subject->fresh('client'));
+
+        $this->assertSame(KycSubject::STATUS_EXPIRED, $payload['status']);
+        $this->assertTrue($payload['can_restart_submission']);
     }
 }

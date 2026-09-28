@@ -221,6 +221,7 @@ class KycSubjectService
             ...app(\App\Services\Kyc\Ai\KycAiReviewService::class)->publicStatus($subject),
             'subject_id' => (int) $subject->id,
             'status' => (string) $subject->status,
+            'can_restart_submission' => in_array($subject->status, [KycSubject::STATUS_EXPIRED, KycSubject::STATUS_REJECTED], true),
             'verified_at' => optional($subject->verified_at)->toIso8601String(),
             'expires_at' => optional($subject->expires_at)->toIso8601String(),
             'last_reason_user' => $subject->last_reason_user,
