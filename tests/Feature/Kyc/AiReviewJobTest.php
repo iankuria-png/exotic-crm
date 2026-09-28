@@ -59,6 +59,9 @@ class AiReviewJobTest extends TestCase
         $this->assertTrue($review->qa_sample);
         $this->assertTrue($review->subject->client->verified);
         $this->assertSame('kyc', $review->subject->client->verified_source);
+        $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'automation_queued']);
+        $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'provider_attempted']);
+        $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'policy_evaluated']);
     }
 
     public function test_replacement_during_provider_call_cannot_apply_old_approval(): void
@@ -154,6 +157,22 @@ class AiReviewJobTest extends TestCase
         $this->actingAsKycUser('sales', [$this->createPlatform()->id]);
         $this->getJson('/api/crm/kyc/queue?ai_filter=needs_human')->assertOk()->assertJsonPath('total', 0);
         $this->postJson('/api/crm/kyc/subjects/'.$review->subject_id.'/ai-review')->assertForbidden();
+    }
+
+    public function test_queue_counts_only_profiles_with_evidence_as_submissions(): void
+    {
+        $platform = $this->createPlatform();
+        $submittedClient = $this->createClientForPlatform($platform);
+        $submitted = $this->createSubjectForClient($submittedClient, ['status' => 'in_review', 'submitted_at' => now()]);
+        $this->createDbDocument($submitted, 'id_front');
+        $unsubmittedClient = $this->createClientForPlatform($platform);
+        $this->createSubjectForClient($unsubmittedClient, ['status' => 'unverified', 'submitted_at' => null]);
+        $this->actingAsKycUser('sales', [$platform->id]);
+
+        $this->getJson('/api/crm/kyc/queue')->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('operational.submissions', 1)
+            ->assertJsonPath('operational.unsubmitted_profiles', 1);
     }
 
     public function test_replacement_cancels_old_queued_work_and_reserves_new_set(): void

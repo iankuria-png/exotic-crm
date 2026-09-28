@@ -7,6 +7,7 @@ import KycAiFindings from './KycAiFindings';
 import KycRejectDialog from './KycRejectDialog';
 import KycRequestInfoDialog from './KycRequestInfoDialog';
 import KycDocumentViewer from './KycDocumentViewer';
+import KycReviewTimeline from './KycReviewTimeline';
 
 function statusPresentation(status) {
     const value = String(status || 'unverified');
@@ -299,8 +300,8 @@ export default function KycPanel({ client, canReview = true }) {
                 </div>
             </div>
 
-            <div className="mt-5 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                <div>
+            <div className="mt-5 grid gap-4 xl:grid-cols-[1.16fr_0.84fr]">
+                <div className="xl:order-2">
             <KycAiFindings review={subjectQuery.data?.ai_review} subjectId={subjectId} canReview={canActOnSubject} onRefresh={refreshAll} onRequestInfo={() => setShowRequestInfoDialog(true)} />
                 <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -329,9 +330,12 @@ export default function KycPanel({ client, canReview = true }) {
                         </div>
                     </div>
                 </div>
+                <div className="mt-4">
+                    <KycReviewTimeline events={subjectQuery.data?.review_events || []} telemetryAvailable={subjectQuery.data?.telemetry_available} review={subjectQuery.data?.ai_review} />
+                </div>
 
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-4 xl:order-1">
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <div className="flex items-center justify-between gap-3">
                             <div>

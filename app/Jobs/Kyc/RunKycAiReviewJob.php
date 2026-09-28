@@ -36,14 +36,23 @@ class RunKycAiReviewJob implements ShouldQueue
         try {
             $subject = $review->subject;
             $settings = $settingsService->aiSettings((int) $subject->client->platform_id);
+            app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'automation_started', 'Automated review started.', [
+                'effective_mode' => $settings['mode'],
+                'review_version' => (int) $review->review_version,
+                'queued_for_ms' => max(0, now()->diffInMilliseconds($review->created_at)),
+                'approve_threshold' => $settings['approve_threshold'],
+                'reject_threshold' => $settings['reject_threshold'],
+            ], $review);
             if (! $review->created_at->isToday() || $settings['mode'] === 'off' || ! $this->current($review, $subject)) {
                 $review->update(['status' => 'cancelled', 'reserved_usd' => 0, 'error' => 'disabled_or_superseded', 'completed_at' => now()]);
+                app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'automation_cancelled', 'Automated review was cancelled because settings changed or newer documents replaced this set.', ['reason' => 'disabled_or_superseded'], $review, 'warning');
 
                 return;
             }
             $used = (float) KycAiReview::where('created_at', '>=', now()->startOfDay())->sum(DB::raw('cost_usd + reserved_usd'));
             if ($used > (float) $settings['daily_cap_usd']) {
                 $review->update(['status' => 'skipped_cap', 'reserved_usd' => 0, 'completed_at' => now()]);
+                app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'automation_budget_limited', 'Automated review stopped because the daily budget is exhausted.', ['daily_cap_usd' => $settings['daily_cap_usd']], $review, 'warning');
 
                 return;
             }
@@ -52,11 +61,14 @@ class RunKycAiReviewJob implements ShouldQueue
             foreach (array_slice($settings['ladder'], 0, 2) as $index => $model) {
                 try {
                     $review->update(['model' => $model, 'fallback_used' => $index > 0]);
+                    app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'provider_attempted', $index > 0 ? 'Fallback provider attempt started.' : 'Primary provider attempt started.', ['model' => $model, 'attempt' => $index + 1, 'fallback' => $index > 0], $review);
                     $observations = $vision->inspect($review, $model);
                     $review->update(['model' => $model, 'fallback_used' => $index > 0]);
+                    app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'provider_observations_received', 'Provider observations passed schema validation.', ['model' => $model, 'attempt' => $index + 1], $review);
                     break;
                 } catch (\Throwable $e) {
                     $hadFailure = true;
+                    app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'provider_attempt_failed', 'Provider attempt did not return usable observations.', ['model' => $model, 'attempt' => $index + 1, 'reason' => $this->publicFailureReason($e->getMessage())], $review, 'warning');
                     // A refusal or malformed answer is not retried to evade a provider's decision.
                     if (in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response'])) {
                         throw $e;
@@ -73,6 +85,7 @@ class RunKycAiReviewJob implements ShouldQueue
                 }
                 $second = $vision->inspect($review, $settings['second_opinion_model']);
                 $review->update(['second_opinion_model' => $settings['second_opinion_model'], 'second_opinion' => $second]);
+                app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'second_opinion_received', 'Independent second opinion completed for a possible mismatch.', ['model' => $settings['second_opinion_model']], $review);
             }
             // Uploaded stills or duplicate pose frames never establish presence for automatic approval.
             $frames = $subject->documents()->whereIn('id', $review->document_ids)->where('kind', 'selfie')->get();
@@ -100,6 +113,15 @@ class RunKycAiReviewJob implements ShouldQueue
                     $review->human_agreed = $review->human_decision === $decision['recommendation'];
                 }
                 $review->save();
+                app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'policy_evaluated', 'Deterministic policy evaluated the returned observations.', [
+                    'recommendation' => $decision['recommendation'],
+                    'rule_codes' => $decision['reasons'],
+                    'retake' => $decision['retake'],
+                    'action' => $action,
+                    'effective_mode' => $review->mode,
+                    'approve_threshold' => $settings['approve_threshold'],
+                    'reject_threshold' => $settings['reject_threshold'],
+                ], $review, $decision['recommendation'] === 'human_urgent' ? 'warning' : 'info');
                 app(\App\Services\AuditService::class)->record(['platform_id' => (int) $subject->client->platform_id, 'action' => 'kyc.ai_review_completed', 'entity_type' => 'kyc_ai_review', 'entity_id' => $review->id, 'after_state' => ['mode' => $review->mode, 'action' => $action, 'recommendation' => $review->recommendation], 'reason' => 'Automated review of the consented document set']);
                 if (! $apply) {
                     return;
@@ -127,7 +149,9 @@ class RunKycAiReviewJob implements ShouldQueue
                 }
             });
         } catch (\Throwable $e) {
-            $review->refresh()->update(['status' => 'failed', 'error' => in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_not_configured', 'unsupported_document_format', 'invalid_image']) ? $e->getMessage() : 'automated_check_unavailable', 'latency_ms' => (int) ((microtime(true) - $started) * 1000), 'completed_at' => now(), 'reserved_usd' => max(0, 1 - $review->cost_usd)]);
+            $reason = in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_not_configured', 'unsupported_document_format', 'invalid_image']) ? $e->getMessage() : 'automated_check_unavailable';
+            $review->refresh()->update(['status' => 'failed', 'error' => $reason, 'latency_ms' => (int) ((microtime(true) - $started) * 1000), 'completed_at' => now(), 'reserved_usd' => max(0, 1 - $review->cost_usd)]);
+            app(\App\Services\Kyc\KycReviewEventService::class)->record($review->subject, 'automation_failed', 'Automated review did not produce a decision and remains for human review.', ['reason' => $reason], $review, 'warning');
         }
     }
 
@@ -141,6 +165,18 @@ class RunKycAiReviewJob implements ShouldQueue
 
     public function failed(?\Throwable $exception): void
     {
-        KycAiReview::whereKey($this->reviewId)->whereIn('status', ['queued', 'running'])->update(['status' => 'failed', 'error' => 'worker_timeout', 'completed_at' => now()]);
+        $review = KycAiReview::find($this->reviewId);
+        if ($review && in_array($review->status, ['queued', 'running'], true)) {
+            $review->update(['status' => 'failed', 'error' => 'worker_timeout', 'completed_at' => now()]);
+            app(\App\Services\Kyc\KycReviewEventService::class)->record($review->subject, 'automation_failed', 'Queue worker timed out before the review completed.', ['reason' => 'worker_timeout'], $review, 'warning');
+        }
+    }
+
+    private function publicFailureReason(string $reason): string
+    {
+        return match ($reason) {
+            'model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_not_configured', 'unsupported_document_format', 'invalid_image' => $reason,
+            default => 'provider_unavailable',
+        };
     }
 }

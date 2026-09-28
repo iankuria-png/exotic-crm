@@ -13,6 +13,23 @@ export function aiLabel(review) {
     return { approve: 'Recommends approval', retake: 'Photo retake needed', reject: 'Identity mismatch', human_urgent: 'Priority human review', human: 'Needs human review' }[review.recommendation] || 'Needs human review';
 }
 
+function unavailableExplanation(review) {
+    if (!review) return 'No automated attempt has been recorded for this submission. A reviewer can inspect the original evidence and decide.';
+    if (review.stale || review.error === 'superseded') return 'These findings belong to older photos and are not being used for this submission.';
+    if (review.status === 'skipped_cap') return 'The daily automation budget was reached before this check could start. This submission remains in the human queue.';
+    if (['queued', 'running'].includes(review.status)) return 'This attempt is waiting for, or being processed by, the approved provider. You can continue the human review now.';
+    const reasons = {
+        model_declined: 'The provider declined the comparison. We did not use another provider to work around that refusal, so a human must review the evidence.',
+        invalid_observation_schema: 'The provider response was not in the required format. No automated decision was made.',
+        incomplete_response: 'The provider stopped before returning a complete result. No automated decision was made.',
+        provider_not_configured: 'No approved provider is configured for this market.',
+        unsupported_document_format: 'One or more submitted files cannot be processed by the automated reviewer. Inspect the originals or request replacement photos.',
+        invalid_image: 'One or more submitted images could not be safely processed. Inspect the originals or request replacement photos.',
+        worker_timeout: 'The review worker did not finish in time. The attempt is left for a human rather than silently retried.',
+    };
+    return reasons[review.error] || 'This attempt did not produce a usable automated decision. Review the original evidence and recorded activity below.';
+}
+
 export default function KycAiFindings({ review, subjectId, canReview, onRefresh, onRequestInfo }) {
     const [feedbackOpen, setFeedbackOpen] = useState(false);
     const [note, setNote] = useState('');
@@ -46,9 +63,9 @@ export default function KycAiFindings({ review, subjectId, canReview, onRefresh,
         {notice ? <p role="status" className="px-5 pt-4 text-sm text-teal-800">{notice}</p> : null}
         {complete ? <>
             <dl className="divide-y divide-slate-100 px-5">{checks.map(([label, detail, pass]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-[145px_1fr]"><dt className="text-xs font-medium text-slate-500">{label}</dt><dd className="flex items-start gap-2 text-sm text-slate-800"><span className={pass ? 'text-emerald-600' : 'text-amber-600'} aria-label={pass ? 'Pass' : 'Check'}>{pass ? '✓' : '!'}</span>{detail}</dd></div>)}</dl>
-            {review.retake?.length ? <div className="mx-5 mb-4 border-l-2 border-amber-400 bg-amber-50 px-4 py-3"><p className="text-sm text-amber-900">{review.advertiser_message || `Retake: ${review.retake.join(', ').replaceAll('_', ' ')}`}</p>{canReview ? <button type="button" onClick={onRequestInfo} className="mt-2 text-xs font-semibold text-amber-900 underline underline-offset-4">Review message and request photos</button> : null}</div> : null}
+            {review.retake?.length ? <div className="mx-5 mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"><p className="text-sm text-amber-900">{review.advertiser_message || `Retake: ${review.retake.join(', ').replaceAll('_', ' ')}`}</p>{canReview ? <button type="button" onClick={onRequestInfo} className="mt-2 text-xs font-semibold text-amber-900 underline underline-offset-4">Review message and request photos</button> : null}</div> : null}
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3"><p className="text-[11px] leading-5 text-slate-500">{review.model} · {review.prompt_version} · {(review.latency_ms / 1000).toFixed(1)}s · ${Number(review.cost_usd || 0).toFixed(4)}{review.fallback_used ? ' · fallback used' : ''}<br />{review.completed_at ? new Date(review.completed_at).toLocaleString() : ''}</p>{canReview ? <button type="button" onClick={() => setFeedbackOpen(!feedbackOpen)} className="text-xs font-medium text-slate-600 underline underline-offset-4">Report an incorrect finding</button> : null}</div>
-        </> : <p className="px-5 py-5 text-sm leading-6 text-slate-500">{shadow ? 'Review the original photos and make your decision as usual.' : ['queued', 'running'].includes(review?.status) ? 'The photos are being checked privately. Findings will appear here automatically.' : review ? 'Review the original photos. This check has not produced a usable decision.' : 'Completed submissions with consent can be checked here. Older submissions need fresh consent from the advertiser.'}</p>}
+        </> : <p className="px-5 py-5 text-sm leading-6 text-slate-600">{shadow ? 'Review the original photos and make your decision as usual. Shadow findings remain separate until calibration review.' : unavailableExplanation(review)}</p>}
         {review?.human_agreed === false ? <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-600">A reviewer has flagged this result for calibration.</p> : null}
         {feedbackOpen ? <form className="space-y-3 border-t border-slate-200 bg-slate-50 p-5" onSubmit={(event) => { event.preventDefault(); feedback.mutate(); }}><label className="block text-sm font-medium text-slate-700">What did the check get wrong?<textarea autoFocus required minLength={5} maxLength={1000} value={note} onChange={(event) => setNote(event.target.value)} className="crm-textarea mt-2 w-full" rows={3} /></label><div className="flex justify-end gap-3"><button type="button" onClick={() => setFeedbackOpen(false)} className="px-3 py-2 text-sm text-slate-600">Cancel</button><button type="submit" disabled={feedback.isPending || note.trim().length < 5} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{feedback.isPending ? 'Saving…' : 'Save feedback'}</button></div></form> : null}
     </section>;

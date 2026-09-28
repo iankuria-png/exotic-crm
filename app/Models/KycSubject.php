@@ -56,6 +56,11 @@ class KycSubject extends Model
         return $this->belongsTo(KycAiReview::class, 'ai_last_review_id');
     }
 
+    public function reviewEvents()
+    {
+        return $this->hasMany(KycReviewEvent::class, 'subject_id');
+    }
+
     public function client()
     {
         return $this->belongsTo(Client::class);

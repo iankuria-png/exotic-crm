@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM\Kyc;
 
 use App\Http\Controllers\Controller;
+use App\Models\KycAiReview;
 use App\Models\KycDocument;
 use App\Models\KycSubject;
 use App\Services\Kyc\KycDocumentService;
@@ -23,7 +24,7 @@ class ReviewController extends Controller
 
     public function show(Request $request, KycSubject $subject)
     {
-        $subject->load(['client.platform', 'client.activeDeal.product', 'documents.uploadedBy', 'sites', 'reviewer']);
+        $subject->load(['client.platform', 'client.activeDeal.product', 'documents.uploadedBy', 'sites', 'reviewer', 'reviewEvents']);
         $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), (int) $subject->client->platform_id);
 
         return response()->json($this->subjectPayload($subject, $request));
@@ -144,9 +145,29 @@ class ReviewController extends Controller
 
     private function subjectPayload(KycSubject $subject, Request $request): array
     {
+        $events = $subject->reviewEvents->sortByDesc('occurred_at')->values();
+        $shadowReviewIds = KycAiReview::query()->whereIn('id', $events->pluck('ai_review_id')->filter())->where('mode', 'shadow')->pluck('id')->all();
+        // Timeline data is transformed below. Never serialize the underlying relation:
+        // a shadow review must not reveal stored observations through an eager relation.
+        $subject->unsetRelation('reviewEvents');
+
         return [
             'ai_review' => app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject),
             'subject' => $subject,
+            'review_events' => $events->map(function ($event) use ($shadowReviewIds) {
+                $shadow = in_array((int) $event->ai_review_id, $shadowReviewIds, true);
+
+                return [
+                    'id' => (int) $event->id,
+                    'event' => $event->event,
+                    'level' => $event->level,
+                    'summary' => $shadow ? 'Shadow review activity is withheld until calibration review.' : $event->summary,
+                    'metadata' => $shadow ? ['effective_mode' => 'shadow'] : $event->metadata,
+                    'occurred_at' => optional($event->occurred_at)->toIso8601String(),
+                    'ai_review_id' => $event->ai_review_id ? (int) $event->ai_review_id : null,
+                ];
+            }),
+            'telemetry_available' => $events->isNotEmpty(),
             'status_payload' => $this->subjectService->buildStatusPayload($subject),
             'documents' => $subject->documents->map(fn (KycDocument $document) => $this->transformDocument($document, $request))->values(),
             'review_capabilities' => [

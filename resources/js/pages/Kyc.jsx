@@ -26,6 +26,14 @@ function formatDate(value) {
     return date.toLocaleString();
 }
 
+function decodeDisplayName(value) {
+    const raw = String(value || '');
+    if (!raw.includes('&')) return raw;
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = raw;
+    return textarea.value;
+}
+
 function isHighRevenue(row) {
     const slug = String(row?.client?.active_deal?.product?.slug || row?.client?.active_deal?.product?.tier || '').toLowerCase();
     return slug.includes('vip') || slug.includes('premium') || slug.includes('featured');
@@ -100,6 +108,7 @@ export default function Kyc() {
 
     const enabledPlatformIds = settingsQuery.data?.settings?.enabled_platform_ids || [];
     const queueRows = queueQuery.data?.data || [];
+    const operational = queueQuery.data?.operational || {};
 
     const visibleRows = useMemo(() => {
         let rows = [...queueRows];
@@ -174,11 +183,11 @@ export default function Kyc() {
                 </section>
             ) : (
                 <>
-                    <section className="crm-surface px-5 py-5">
-                        <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr_1fr_auto]">
+                    <section className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                        <div className="flex flex-wrap items-end gap-3">
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">Platform</label>
-                                <select value={platformId} onChange={(event) => setPlatformId(event.target.value)} className="crm-select w-full">
+                                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
+                                <select value={platformId} onChange={(event) => setPlatformId(event.target.value)} className="crm-select min-w-[190px]">
                                     <option value="">All enabled markets</option>
                                     {(platformsQuery.data || []).map((platform) => (
                                         <option key={platform.id} value={platform.id} disabled={!enabledPlatformIds.includes(Number(platform.id))}>
@@ -188,8 +197,8 @@ export default function Kyc() {
                                 </select>
                             </div>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">Status</label>
-                                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="crm-select w-full">
+                                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Status</label>
+                                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="crm-select min-w-[155px]">
                                     <option value="">All statuses</option>
                                     <option value="in_review">In review</option>
                                     <option value="info_requested">Info requested</option>
@@ -199,15 +208,15 @@ export default function Kyc() {
                                 </select>
                             </div>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">Sort</label>
-                                <select value={sort} onChange={(event) => setSort(event.target.value)} className="crm-select w-full">
+                                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Priority</label>
+                                <select value={sort} onChange={(event) => setSort(event.target.value)} className="crm-select min-w-[190px]">
                                     <option value="oldest_in_review">Oldest in review first</option>
                                     <option value="overdue">Overdue first</option><option value="ai_flagged">Priority AI findings first</option>
                                 </select>
                             </div>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">Age</label>
-                                <select value={ageFilter} onChange={(event) => setAgeFilter(event.target.value)} className="crm-select w-full">
+                                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Age</label>
+                                <select value={ageFilter} onChange={(event) => setAgeFilter(event.target.value)} className="crm-select min-w-[120px]">
                                     <option value="">Any age</option>
                                     <option value="1">1+ day old</option>
                                     <option value="3">3+ days old</option>
@@ -220,15 +229,25 @@ export default function Kyc() {
                                     <input type="checkbox" checked={mineOnly} onChange={(event) => setMineOnly(event.target.checked)} disabled className="h-4 w-4 rounded border-slate-300 text-teal-600" />
                                     Mine only
                                 </label>
-                            ) : <div />}
+                            ) : null}
                         </div>
                     </section>
 
-                    <div className="flex flex-wrap items-center gap-2" aria-label="Automated review filters">
-                        {[['', 'All checks'], ['needs_human', 'Needs human'], ['qa', 'AI approvals · QA'], ['retake', 'Retake requested']].map(([key, label]) => <button key={key} type="button" aria-pressed={aiFilter === key} onClick={() => setAiFilter(key)} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${aiFilter === key ? 'border-teal-700 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600'}`}>{label}</button>)}
-                        <span className="ml-auto text-xs tabular-nums text-slate-500">{queueQuery.data?.total || 0} submissions</span>
+                    <div className="grid gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 sm:grid-cols-2 xl:grid-cols-5" aria-label="KYC operations summary">
+                        {[
+                            ['Submissions', operational.submissions ?? queueQuery.data?.total ?? 0, 'Completed evidence sets'],
+                            ['Needs a reviewer', operational.needs_human ?? 0, 'No usable automated outcome'],
+                            ['Checking now', operational.checking ?? 0, 'Queued or running'],
+                            ['Retakes open', operational.retakes ?? 0, 'Waiting on new photos'],
+                            ['No submission yet', operational.unsubmitted_profiles ?? 0, 'Profiles, excluded from queue'],
+                        ].map(([label, value, hint]) => <div key={label} className="bg-white px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{Number(value).toLocaleString()}</p><p className="mt-1 text-[11px] text-slate-500">{hint}</p></div>)}
                     </div>
-                    {queueQuery.isLoading ? <p role="status" className="p-6 text-sm text-slate-500">Loading submissions…</p> : null}
+
+                    <div className="flex flex-wrap items-center gap-2" aria-label="Automated review filters">
+                        {[['', 'All submissions'], ['needs_human', 'Needs human'], ['qa', 'AI approvals · QA'], ['retake', 'Retake requested']].map(([key, label]) => <button key={key} type="button" aria-pressed={aiFilter === key} onClick={() => setAiFilter(key)} className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${aiFilter === key ? 'border-teal-700 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>{label}</button>)}
+                        <span className="ml-auto text-xs tabular-nums text-slate-500">{queueQuery.data?.total || 0} matching submissions</span>
+                    </div>
+                    {queueQuery.isLoading ? <div role="status" className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-3"><div className="h-14 animate-pulse rounded-lg bg-slate-100" /><div className="h-14 animate-pulse rounded-lg bg-slate-100" /><div className="h-14 animate-pulse rounded-lg bg-slate-100" /><span className="sr-only">Loading submissions…</span></div> : null}
                     {queueQuery.isError ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Could not load the queue. <button type="button" onClick={() => queueQuery.refetch()} className="underline">Try again</button></p> : null}
                     <section className="crm-surface overflow-hidden px-0 py-0">
                         <div className="hidden overflow-x-auto sm:block">
@@ -252,8 +271,8 @@ export default function Kyc() {
                                             <td className="px-4 py-4 align-top"><input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleOne(row.id)} className="h-4 w-4 rounded border-slate-300 text-teal-600" /></td>
                                             <td className="px-4 py-4 align-top">
                                                 <div className="flex items-start gap-2">
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-slate-900">{row.client?.name || `Client #${row.client?.id}`}</p>
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-900">{decodeDisplayName(row.client?.name || `Client #${row.client?.id}`)}</p>
                                                         <p className="mt-1 text-xs text-slate-500">Subject #{row.id} • {row.client?.verified ? 'Public badge on' : 'Not publicly verified'}</p>
                                                     </div>
                                                     {isHighRevenue(row) ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">High revenue</span> : null}
@@ -277,7 +296,7 @@ export default function Kyc() {
                                 <div key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-900">{row.client?.name || `Client #${row.client?.id}`}</p>
+                                            <p className="text-sm font-semibold text-slate-900">{decodeDisplayName(row.client?.name || `Client #${row.client?.id}`)}</p>
                                             <p className="mt-1 text-xs text-slate-500">{row.client?.platform?.name || row.client?.platform?.platform_name || 'Unknown market'}</p>
                                         </div>
                                         <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleOne(row.id)} className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-600" />
@@ -296,13 +315,13 @@ export default function Kyc() {
                         </div>
 
                         {!queueQuery.isLoading && !queueQuery.isError && visibleRows.length === 0 ? (
-                            <div className="border-t border-slate-200 px-5 py-8 text-center text-sm text-slate-500">No submissions match these filters.</div>
+                            <div className="border-t border-slate-200 px-5 py-8 text-center text-sm text-slate-600"><p className="font-medium text-slate-800">No completed submissions match these filters.</p><p className="mt-1">Profiles that have not sent documents are counted separately above and are not treated as queue work.</p></div>
                         ) : null}
                     </section>
                     <nav className="flex items-center justify-between text-xs text-slate-600" aria-label="Queue pages"><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} className="rounded-lg border border-slate-200 px-3 py-2 disabled:opacity-40">Previous</button><span>Page {page} of {queueQuery.data?.last_page || 1}</span><button type="button" disabled={page >= (queueQuery.data?.last_page || 1)} onClick={() => setPage(page + 1)} className="rounded-lg border border-slate-200 px-3 py-2 disabled:opacity-40">Next</button></nav>
                 </>
             )}
-            {reviewRow ? <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/60 p-2 sm:p-5" onClick={(event) => {if (event.target === event.currentTarget) setReviewRow(null);}}><div role="dialog" aria-modal="true" aria-label={`Review ${reviewRow.client?.name || 'submission'}`} data-kyc-review-dialog className="w-full max-w-5xl overflow-y-auto rounded-xl bg-slate-50 shadow-xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4"><h2 className="text-base font-semibold text-slate-900">{reviewRow.client?.name} · Identity review</h2><button type="button" onClick={() => setReviewRow(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">Close review</button></div><KycPanel client={{...reviewRow.client, kyc_subject: {id:reviewRow.id, status:reviewRow.status}}} canReview={['admin','sub_admin','sales'].includes(role)} /></div></div> : null}
+            {reviewRow ? <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/60 p-0 sm:p-4" onClick={(event) => {if (event.target === event.currentTarget) setReviewRow(null);}}><div role="dialog" aria-modal="true" aria-label={`Review ${decodeDisplayName(reviewRow.client?.name || 'submission')}`} data-kyc-review-dialog className="flex h-full w-full max-w-7xl flex-col bg-slate-50 shadow-xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4"><div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Evidence review</p><h2 className="mt-1 text-base font-semibold text-slate-900">{decodeDisplayName(reviewRow.client?.name)} · Identity review</h2></div><button type="button" onClick={() => setReviewRow(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close review</button></div><div className="min-h-0 flex-1 overflow-y-auto"><KycPanel client={{...reviewRow.client, kyc_subject: {id:reviewRow.id, status:reviewRow.status}}} canReview={['admin','sub_admin','sales'].includes(role)} /></div></div></div> : null}
         </div>
     );
 }

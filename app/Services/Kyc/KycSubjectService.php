@@ -112,6 +112,9 @@ class KycSubjectService
             ])->save();
 
             $this->recordAuditAcrossSites($subject, $actor?->id, 'kyc.approved', $beforeSubject, $subject->fresh()->toArray(), $reason);
+            if ($actor) {
+                app(KycReviewEventService::class)->record($subject, 'reviewer_approved', 'Reviewer approved this submission.', ['reviewer_id' => (int) $actor->id, 'reason' => $reason]);
+            }
             $this->recordClientAudit($client, $actor?->id, $beforeClient, $client->fresh()->toArray(), $source === 'manual_crm_emergency' ? 'client.verified_emergency_set' : 'client.verified_status_update', $reason);
             app(KycStatusFanoutService::class)->dispatchSubject($subject->fresh(['client', 'sites']));
 
@@ -146,6 +149,9 @@ class KycSubjectService
             $client->forceFill(['verified' => false])->save();
 
             $this->recordAuditAcrossSites($subject, $actor?->id, 'kyc.rejected', $beforeSubject, $subject->fresh()->toArray(), $reasonUser);
+            if ($actor) {
+                app(KycReviewEventService::class)->record($subject, 'reviewer_rejected', 'Reviewer rejected this submission.', ['reviewer_id' => (int) $actor->id, 'reason' => $reasonUser], null, 'warning');
+            }
             $this->recordClientAudit($client, $actor?->id, $beforeClient, $client->fresh()->toArray(), 'client.verified_status_update', $reasonUser);
             app(KycStatusFanoutService::class)->dispatchSubject($subject->fresh(['client', 'sites']));
 
@@ -171,6 +177,9 @@ class KycSubjectService
             ])->save();
 
             $this->recordAuditAcrossSites($subject, $actor?->id, 'kyc.requested_info', $before, $subject->fresh()->toArray(), $reasonUser);
+            if ($actor) {
+                app(KycReviewEventService::class)->record($subject, 'reviewer_requested_photos', 'Reviewer returned the submission for more information or photos.', ['reviewer_id' => (int) $actor->id, 'reason' => $reasonUser], null, 'warning');
+            }
             app(KycStatusFanoutService::class)->dispatchSubject($subject->fresh(['client', 'sites']));
 
             return $subject->fresh(['client', 'sites']);

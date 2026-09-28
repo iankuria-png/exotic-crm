@@ -18,6 +18,7 @@ class QueueController extends Controller
     public function index(Request $request)
     {
         $query = KycSubject::query()->with(['client.platform', 'client.activeDeal.product', 'sites', 'aiLastReview'])
+            ->where(fn ($submission) => $submission->whereNotNull('submitted_at')->orWhereHas('documents'))
             ->whereHas('client', fn ($builder) => $builder->where('kyc_required', true));
 
         $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
@@ -64,6 +65,17 @@ class QueueController extends Controller
                 ->orderBy('updated_at');
         }
 
+        $summaryQuery = clone $query;
+        $operational = [
+            'submissions' => (clone $summaryQuery)->count(),
+            'needs_human' => (clone $summaryQuery)->where('status', 'in_review')->where(function ($q) {
+                $q->whereDoesntHave('aiLastReview')->orWhereHas('aiLastReview', fn ($review) => $review->whereNotIn('status', ['queued', 'running'])->orWhere('updated_at', '<', now()->subMinutes(10)));
+            })->count(),
+            'checking' => (clone $summaryQuery)->whereHas('aiLastReview', fn ($review) => $review->whereIn('status', ['queued', 'running'])->where('updated_at', '>=', now()->subMinutes(10)))->count(),
+            'retakes' => (clone $summaryQuery)->where('status', 'info_requested')->count(),
+            'unsubmitted_profiles' => $this->unsubmittedCount($request),
+        ];
+
         $page = $query->paginate(min(100, max(1, (int) $request->input('per_page', 25))));
         $page->getCollection()->transform(function ($subject) {
             $finding = app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject);
@@ -73,11 +85,25 @@ class QueueController extends Controller
             return $subject;
         });
 
-        return response()->json($page);
+        return response()->json(array_merge($page->toArray(), ['operational' => $operational]));
     }
 
     public function count(Request $request)
     {
         return response()->json($this->settingsService->queueCountForUser($request->user()));
+    }
+
+    private function unsubmittedCount(Request $request): int
+    {
+        $query = KycSubject::query()->whereNull('submitted_at')->whereDoesntHave('documents')->whereHas('client', fn ($builder) => $builder->where('kyc_required', true));
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        if (is_array($platformIds)) {
+            $query->whereHas('client', fn ($builder) => $builder->whereIn('platform_id', $platformIds ?: [0]));
+        }
+        if ($request->filled('platform_id')) {
+            $query->whereHas('client', fn ($builder) => $builder->where('platform_id', (int) $request->input('platform_id')));
+        }
+
+        return $query->count();
     }
 }

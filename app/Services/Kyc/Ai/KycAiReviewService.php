@@ -36,6 +36,17 @@ class KycAiReviewService
                 'status' => 'in_review', 'last_reason_user' => null, 'last_reason_internal' => null,
                 'review_version' => $subject->review_version + 1,
             ])->save();
+            app(\App\Services\Kyc\KycReviewEventService::class)->record(
+                $subject,
+                'submission_received',
+                'Completed document submission received.',
+                [
+                    'document_type' => $subject->document_type,
+                    'review_version' => (int) $subject->review_version,
+                    'documents' => app(\App\Services\Kyc\KycReviewEventService::class)->documentSet($subject, $ids),
+                    'consent_recorded_at' => $subject->ai_consent_at?->toIso8601String(),
+                ],
+            );
             $review = $this->queue($subject);
 
             return ['subject_id' => $subject->id, 'status' => 'in_review', 'ai_review' => $review?->status ?? 'disabled'];
@@ -49,6 +60,11 @@ class KycAiReviewService
             $settingsService = app(KycSettingsService::class);
             $settings = $settingsService->aiSettings((int) $subject->client->platform_id);
             if ($settings['mode'] === 'off') {
+                app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'automation_not_queued', 'Automated review is switched off for this market.', [
+                    'effective_mode' => 'off',
+                    'review_version' => (int) $subject->review_version,
+                ]);
+
                 return null;
             }
             abort_unless($subject->ai_consent_at && $subject->submitted_at && $subject->submitted_document_ids, 422, 'A completed submission with automated-review consent is required.');
@@ -77,6 +93,22 @@ class KycAiReviewService
                 'reason_codes' => $capReached ? ['daily_cap'] : [],
             ]);
             $subject->update(['ai_last_review_id' => $review->id]);
+            app(\App\Services\Kyc\KycReviewEventService::class)->record(
+                $subject,
+                $capReached ? 'automation_budget_limited' : 'automation_queued',
+                $capReached ? 'Automated review was not queued because the daily budget is exhausted.' : 'Automated review queued.',
+                [
+                    'effective_mode' => $settings['mode'],
+                    'review_version' => (int) $subject->review_version,
+                    'document_versions' => app(\App\Services\Kyc\KycReviewEventService::class)->documentSet($subject, $ids),
+                    'approve_threshold' => $settings['approve_threshold'],
+                    'reject_threshold' => $settings['reject_threshold'],
+                    'daily_cap_usd' => $settings['daily_cap_usd'],
+                    'queue_delay_seconds' => max(0, $delaySeconds),
+                ],
+                $review,
+                $capReached ? 'warning' : 'info',
+            );
             if (! $capReached) {
                 RunKycAiReviewJob::dispatch($review->id)->onQueue('kyc-ai')->delay(now()->addSeconds(max(0, $delaySeconds)))->afterCommit();
             }
