@@ -5,6 +5,7 @@ import api from '../../../services/api';
 const sections = ['Market & readiness', 'Pass pricing', 'Offers & limits', 'Surfaces & checkout'];
 const fieldClass = 'min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400';
 const names = { photos_enabled: 'Private photos', videos_enabled: 'Private videos', single_enabled: 'Single-item offers', bundles_enabled: 'Fixed bundles', min_price: 'Minimum price', max_price: 'Maximum price', bundle_min_items: 'Minimum bundle items', bundle_max_items: 'Maximum bundle items', live_offer_limit: 'Live offer limit', upload_max_bytes: 'Upload limit (bytes)', max_video_seconds: 'Video limit (seconds)', profile_section: 'Profile private section', home_private_content: 'Home · Private photos & videos', videos_private_filter: 'Videos private filter', show_prices: 'Show prices on previews', activation_kill_switch: 'Pause new pass activation', checkout_kill_switch: 'Pause new purchases' };
+const errorMessage = (error, fallback) => Object.values(error.response?.data?.errors || {}).flat()[0] || error.response?.data?.message || fallback;
 function Check({ label, checked, onChange }) { return <label className="flex min-h-11 items-center justify-between gap-4 rounded-md border border-slate-200 px-3 py-2 text-sm"><span>{label}</span><input type="checkbox" className="h-4 w-4 accent-slate-900" checked={!!checked} onChange={e => onChange(e.target.checked)} /></label>; }
 export default function MonetizationSettings() {
     const qc = useQueryClient();
@@ -17,13 +18,13 @@ export default function MonetizationSettings() {
     async function save(e) {
         e.preventDefault(); setBusy(true); setMessage('');
         try { const { data } = await api.put(`/crm/settings/monetization/markets/${form.platform_id}`, { ...form, reason }); setMessage(data.sync.status === 'synced' && data.credentials.status === 'synced' ? 'Saved and synced to WordPress.' : `Saved. WordPress needs attention: ${data.sync.message || data.credentials.message}`); await qc.invalidateQueries({ queryKey: ['monetization-settings'] }); }
-        catch (e) { setMessage(e.response?.data?.message || 'Could not save. Your changes are still here.'); }
+        catch (e) { setMessage(errorMessage(e, 'Could not save. Your changes are still here.')); }
         finally { setBusy(false); }
     }
     async function readiness() {
         setBusy(true);setMessage('Checking protected delivery…');
         try {const {data}=await api.post(`/crm/settings/monetization/markets/${form.platform_id}/sync`);setMessage(data.readiness?.ready?'Delivery checks passed and configuration synced.':`Delivery blocked: ${data.readiness?.error||'Inspect failed checks below.'}`);await qc.invalidateQueries({queryKey:['monetization-settings']});}
-        catch(e){setMessage(e.response?.data?.message||'Readiness check failed.');}finally{setBusy(false);}
+        catch(e){setMessage(errorMessage(e, 'Readiness check failed.'));}finally{setBusy(false);}
     }
     async function system(key, value) {
         if (reason.trim().length < 5) { setMessage('Enter an audit reason before changing global controls.'); return; }

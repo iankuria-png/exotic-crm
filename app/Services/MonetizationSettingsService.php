@@ -103,7 +103,21 @@ class MonetizationSettingsService
             }
             if ($data['rollout_mode'] === 'live') {
                 foreach ($data['checkout_policy']['allowed_providers'] as $provider) {
-                    app(BillingModeService::class)->providerContext($platform, $provider, true, 'production', 'premium_content');
+                    try {
+                        app(BillingModeService::class)->providerContext($platform, $provider, true, 'production', 'premium_content');
+                    } catch (\InvalidArgumentException $exception) {
+                        if ($exception->getMessage() !== 'Selected provider is disabled for this market.') {
+                            throw $exception;
+                        }
+
+                        $label = $provider === 'kopokopo' ? 'M-Pesa · KopoKopo' : 'PawaPay';
+
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'checkout_policy.allowed_providers' => [
+                                "$label is not enabled for this market. Enable it in Settings → Wallet System, or remove it from Surfaces & checkout.",
+                            ],
+                        ]);
+                    }
                 }
             }
             if ($data['rollout_mode'] === 'live') {

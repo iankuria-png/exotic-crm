@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class MonetizationContractTest extends TestCase
@@ -370,6 +371,47 @@ class MonetizationContractTest extends TestCase
         $this->settings->update(['heartbeat_at' => now()->subMinutes(16)]);
         $this->expectException(\Symfony\Component\HttpKernel\Exception\HttpException::class);
         app(MonetizationSettingsService::class)->assertCommerce($this->settings, 'checkout');
+    }
+
+    public function test_live_settings_name_a_disabled_checkout_provider_without_saving(): void
+    {
+        $this->mock(BillingModeService::class, function ($mock) {
+            $mock->shouldReceive('providerContext')
+                ->once()
+                ->andThrow(new \InvalidArgumentException('Selected provider is disabled for this market.'));
+        });
+
+        try {
+            app(MonetizationSettingsService::class)->save($this->market, [
+                'reason' => 'Enable paid photos',
+                'config_revision' => $this->settings->fresh()->config_revision,
+                'currency' => 'KES',
+                'enabled' => true,
+                'rollout_mode' => 'live',
+                'activation_kill_switch' => false,
+                'checkout_kill_switch' => false,
+                'prices' => [[
+                    'duration_key' => '1_month',
+                    'price' => 500,
+                    'subsidy_mode' => 'fixed',
+                    'subsidy_value' => 100,
+                    'is_active' => true,
+                ]],
+                'offer_policy' => $this->settings->offer_policy_json,
+                'surface_policy' => $this->settings->surface_policy_json,
+                'checkout_policy' => ['allowed_providers' => ['pawapay'], 'device_slots' => 3, 'restore_per_hour' => 5],
+                'delivery_policy' => ['grant_ttl' => 300],
+                'test_client_ids' => [],
+            ], 1);
+            $this->fail('Disabled providers must prevent live configuration.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'PawaPay is not enabled for this market. Enable it in Settings → Wallet System, or remove it from Surfaces & checkout.',
+                $exception->errors()['checkout_policy.allowed_providers'][0]
+            );
+        }
+
+        $this->assertSame(1, $this->settings->fresh()->config_revision);
     }
 
     public function test_refund_replay_cannot_credit_again(): void
