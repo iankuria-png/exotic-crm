@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\ClientMonetizationPass;
 use App\Models\ContentMonetizationSetting;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\PremiumContentAsset;
 use App\Models\PremiumContentEvent;
@@ -87,7 +88,17 @@ class MonetizationController extends Controller
     {
         $platformId = $r->integer('platform_id') ?: null;
         $this->authorizeMarket($r, $platformId);
-        $r->validate(['from' => 'nullable|date', 'to' => 'nullable|date|after_or_equal:from', 'status' => 'nullable|string|max:30', 'kind' => 'nullable|in:single,bundle']);
+        $r->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'status' => 'nullable|string|max:30',
+            'payment_status' => 'nullable|string|max:30',
+            'kind' => 'nullable|in:single,bundle',
+            'provider' => 'nullable|string|max:40',
+            'environment' => 'nullable|in:production,sandbox',
+            'search' => 'nullable|string|max:120',
+            'per_page' => 'nullable|integer|in:15,30,50',
+        ]);
         $scope = function ($q) use ($r, $platformId) {
             $this->markets->applyPlatformScope($q, $r->user());
             if ($platformId) {
@@ -99,20 +110,54 @@ class MonetizationController extends Controller
 
             return $q;
         };
-        $sales = $scope(VisitorContentPurchase::query())->when(! $r->boolean('include_tests'), fn ($q) => $q->where('is_sandbox', false));
+        $salesBase = $scope(VisitorContentPurchase::query())->when(! $r->boolean('include_tests'), fn ($q) => $q->where('is_sandbox', false));
         if ($r->filled('from')) {
-            $sales->whereDate('created_at', '>=', $r->input('from'));
+            $salesBase->whereDate('created_at', '>=', $r->input('from'));
         }
         if ($r->filled('to')) {
-            $sales->whereDate('created_at', '<=', $r->input('to'));
+            $salesBase->whereDate('created_at', '<=', $r->input('to'));
         }
+        $statusCounts = (clone $salesBase)->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
+        $attempts = (clone $salesBase)->count();
+        $successfulPayments = (clone $salesBase)->whereHas('payment', fn ($q) => $q->whereIn('status', Payment::SUCCESSFUL_STATUSES))->count();
+        $summary = [
+            'attempts' => $attempts,
+            'successful_payments' => $successfulPayments,
+            'completion_rate' => $attempts > 0 ? round(($successfulPayments / $attempts) * 100, 1) : 0,
+            'active' => (int) ($statusCounts['active'] ?? 0),
+            'failed' => (int) ($statusCounts['failed'] ?? 0),
+            'pending' => (int) ($statusCounts['pending_payment'] ?? 0),
+            'review' => (int) ($statusCounts['review'] ?? 0),
+            'refunded' => (int) ($statusCounts['refunded'] ?? 0),
+        ];
+        $sales = clone $salesBase;
         if ($r->filled('status')) {
             $sales->where('status', $r->input('status'));
         }
         if ($r->filled('kind')) {
             $sales->where('offer_kind', $r->input('kind'));
         }
-        $totals = (clone $sales)->where('status', 'active')->selectRaw('currency, SUM(gross_amount) as gross_sales, SUM(provider_fee) as provider_fees, SUM(creator_credit_amount) as credited, COUNT(*) as sales_count')->groupBy('currency')->get();
+        if ($r->filled('payment_status')) {
+            $sales->whereHas('payment', fn ($q) => $q->where('status', $r->input('payment_status')));
+        }
+        if ($r->filled('provider')) {
+            $sales->whereHas('payment', fn ($q) => $q->where('provider_key', $r->input('provider')));
+        }
+        if ($r->filled('environment')) {
+            $sales->whereHas('payment', fn ($q) => $q->where('provider_environment', $r->input('environment')));
+        }
+        if ($r->filled('search')) {
+            $term = trim((string) $r->input('search'));
+            $sales->where(function ($q) use ($term) {
+                $q->where('public_id', 'like', "%{$term}%")
+                    ->orWhere('visitor_phone_masked', 'like', "%{$term}%")
+                    ->orWhereHas('client', fn ($client) => $client->where('name', 'like', "%{$term}%"))
+                    ->orWhereHas('payment', fn ($payment) => $payment
+                        ->where('reference_number', 'like', "%{$term}%")
+                        ->orWhere('transaction_reference', 'like', "%{$term}%"));
+            });
+        }
+        $totals = (clone $salesBase)->where('status', 'active')->selectRaw('currency, SUM(gross_amount) as gross_sales, SUM(provider_fee) as provider_fees, SUM(creator_credit_amount) as credited, COUNT(*) as sales_count, AVG(gross_amount) as average_sale')->groupBy('currency')->get();
         $passes = $scope(ClientMonetizationPass::query())->when(! $r->boolean('include_tests'), fn ($q) => $q->where('is_sandbox', false));
         if ($r->filled('from')) {
             $passes->whereDate('created_at', '>=', $r->input('from'));
@@ -121,6 +166,10 @@ class MonetizationController extends Controller
             $passes->whereDate('created_at', '<=', $r->input('to'));
         }
         $activation = (clone $passes)->selectRaw('currency, SUM(list_amount) as list_value, SUM(subsidy_amount) as subsidy, SUM(paid_amount) as revenue')->groupBy('currency')->get();
+        $currentPasses = $scope(ClientMonetizationPass::query())->when(! $r->boolean('include_tests'), fn ($q) => $q->where('is_sandbox', false))->where('status', 'active')->where('expires_at', '>', now());
+        $summary['active_sellers'] = (clone $currentPasses)->distinct()->count('client_id');
+        $summary['expiring_sellers'] = (clone $currentPasses)->where('expires_at', '<=', now()->addDays(7))->distinct()->count('client_id');
+        $providers = Payment::query()->whereIn('id', (clone $salesBase)->whereNotNull('payment_id')->select('payment_id'))->whereNotNull('provider_key')->distinct()->orderBy('provider_key')->pluck('provider_key')->values();
         $clientQuery = $this->markets->applyPlatformScope(Client::query(), $r->user())->where(function ($q) use ($passes, $r) {
             $q->whereIn('id', (clone $passes)->select('client_id'));
             if ($r->integer('client_id')) {
@@ -129,14 +178,22 @@ class MonetizationController extends Controller
         });
         $creators = $clientQuery->limit(100)->get()->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'platform_id' => $c->platform_id, 'stats' => app(StatsService::class)->owner($c), 'pass' => app(\App\Services\Monetization\PassService::class)->current($c)]);
 
-        return response()->json(['wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with('client:id,name')->latest('id')->paginate(30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets', 'client:id,name']))->latest('id')->limit(100)->get(), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name']), 'can_manage' => $this->markets->isManager($r->user())]);
+        return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets', 'client:id,name']))->latest('id')->limit(100)->get(), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name']), 'can_manage' => $this->markets->isManager($r->user())]);
     }
 
     public function export(Request $r)
     {
         $platform = $r->integer('platform_id') ?: null;
         $this->authorizeMarket($r, $platform);
-        $r->validate(['surface' => 'required|in:sales,content', 'from' => 'nullable|date', 'to' => 'nullable|date|after_or_equal:from']);
+        $r->validate([
+            'surface' => 'required|in:sales,content',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'payment_status' => 'nullable|string|max:30',
+            'provider' => 'nullable|string|max:40',
+            'environment' => 'nullable|in:production,sandbox',
+            'search' => 'nullable|string|max:120',
+        ]);
         $sales = $r->input('surface') === 'sales';
         $q = $sales ? VisitorContentPurchase::query() : PremiumContentOffer::query();
         $this->markets->applyPlatformScope($q, $r->user());
@@ -154,6 +211,26 @@ class MonetizationController extends Controller
         }
         if ($r->filled('kind')) {
             $q->where($sales ? 'offer_kind' : 'kind', $r->input('kind'));
+        }
+        if ($sales && $r->filled('payment_status')) {
+            $q->whereHas('payment', fn ($payment) => $payment->where('status', $r->input('payment_status')));
+        }
+        if ($sales && $r->filled('provider')) {
+            $q->whereHas('payment', fn ($payment) => $payment->where('provider_key', $r->input('provider')));
+        }
+        if ($sales && $r->filled('environment')) {
+            $q->whereHas('payment', fn ($payment) => $payment->where('provider_environment', $r->input('environment')));
+        }
+        if ($sales && $r->filled('search')) {
+            $term = trim((string) $r->input('search'));
+            $q->where(function ($purchase) use ($term) {
+                $purchase->where('public_id', 'like', "%{$term}%")
+                    ->orWhere('visitor_phone_masked', 'like', "%{$term}%")
+                    ->orWhereHas('client', fn ($client) => $client->where('name', 'like', "%{$term}%"))
+                    ->orWhereHas('payment', fn ($payment) => $payment
+                        ->where('reference_number', 'like', "%{$term}%")
+                        ->orWhere('transaction_reference', 'like', "%{$term}%"));
+            });
         }
         if ($r->filled('from')) {
             $q->whereDate('created_at', '>=', $r->input('from'));

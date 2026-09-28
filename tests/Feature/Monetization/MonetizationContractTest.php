@@ -110,6 +110,34 @@ class MonetizationContractTest extends TestCase
         $this->assertSame([['currency' => 'KES', 'earned_outstanding' => '250.00', 'earned_spent' => '100.00', 'earned_reversed' => '0.00']], $totals);
     }
 
+    public function test_monetization_workspace_exposes_checkout_health_and_searchable_payment_detail(): void
+    {
+        $active = $this->purchase();
+        $active->update(['status' => 'active', 'creator_credit_amount' => 350]);
+        $active->payment->update(['status' => 'completed', 'reference_number' => 'SUCCESS-REF']);
+
+        $failed = $this->purchase();
+        $failed->update(['status' => 'failed']);
+        $failed->payment->update(['status' => 'failed', 'reference_number' => 'FAIL-REF', 'failure_reason' => 'Provider timed out']);
+
+        $this->purchase();
+        $admin = \App\Models\User::factory()->create(['role' => 'admin', 'status' => 'active']);
+
+        $response = $this->actingAs($admin, 'sanctum')->getJson('/api/crm/monetization?platform_id='.$this->market->id.'&status=failed&provider=kopokopo&search=FAIL-REF');
+
+        $response->assertOk()
+            ->assertJsonPath('summary.attempts', 3)
+            ->assertJsonPath('summary.successful_payments', 1)
+            ->assertJsonPath('summary.completion_rate', 33.3)
+            ->assertJsonPath('summary.active', 1)
+            ->assertJsonPath('summary.failed', 1)
+            ->assertJsonPath('summary.pending', 1)
+            ->assertJsonPath('sales.total', 1)
+            ->assertJsonPath('sales.data.0.payment.reference_number', 'FAIL-REF')
+            ->assertJsonPath('sales.data.0.payment.failure_reason', 'Provider timed out')
+            ->assertJsonPath('providers.0', 'kopokopo');
+    }
+
     public function test_provider_replay_credits_gross_once_and_never_provisions_a_listing(): void
     {
         $p = $this->purchase();

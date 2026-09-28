@@ -33,3 +33,31 @@ The setup was operationally unacceptable: a simple market enablement required cP
 5. Remove the need for staff to mutate production records via Tinker. A controlled admin action should align the market’s premium-access environment, bump the revision and sync it with an auditable outcome.
 6. Add deployment completeness checks so a missing required model cannot reach production. The first live owner-panel request failed because `VisitorContentPurchase.php` was absent from the deployed CRM tree.
 7. Provide an explicit final live readiness screen: configuration saved, revision acknowledged, all protected-delivery checks passed, and the precise remaining user action. It must distinguish configuration verification from a real payment transaction.
+
+## Checkpoint — 29 Sep: decision-ready Monetize workspace
+
+Ian reported that CRM Monetize exposed too little useful performance information and that
+the Sales table was difficult to investigate. The local workspace now adds a focused
+operational layer without changing payment, entitlement or settlement behavior.
+
+- Overview shows checkout attempts, successful-payment completion rate, active purchases,
+  failed/pending/review counts, active sellers and passes expiring within seven days.
+  Per-currency content GMV, average sale, purchase count and absorbed provider fees remain
+  separate from selling-pass list value, subsidy and revenue. Current creator credit is
+  labelled as a wallet position rather than date-filtered revenue.
+- Sales adds debounced search across purchase reference, creator, masked buyer and payment
+  reference; purchase/payment/offer/provider/environment filters; 15/30/50-row paging;
+  provider and payment status badges; masked buyer/access context; and visible provider
+  failure reasons. Existing refund and settlement-review permissions/actions remain.
+- The API supplies the explicit summary contract and safe joined payment fields while
+  preserving market authorization and sandbox exclusion. Export now honors the added
+  search/payment/provider/environment filters.
+- Verification: the complete `MonetizationContractTest` passes (29 tests, 117 assertions),
+  PHP lint and Pint pass, the CRM production build completes, and scoped whitespace checks
+  pass. The build retains the pre-existing Tailwind reduced-motion selector warning and
+  large-chunk warning. Ian owns browser QA; no payment, refund, settlement, deployment or
+  production data mutation was performed.
+
+Included in the current CRM shipment; deployment still requires the cPanel pull. The
+related WordPress creator-price input is recorded in the companion-experience task in the
+WordPress repository.

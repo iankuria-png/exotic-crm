@@ -1,6 +1,8 @@
 # CRM current state
 
 - Guided KYC (27 Sep): implemented locally with guided WP capture, AI policy and reviewer UI. 41 KYC tests / 236 assertions pass; build ready. Ian owns browser QA. AI Off; no push or deployment. See [task](tasks/kyc-guided-flow.md).
+- Monetized content (29 Sep): live on Kenya after CRM `bc9ef6ec` / `aea5da64` / `ea2230e5`, WordPress deployment and production configuration. Revision `10/10`, all six protected-delivery checks and owner availability verified; no real-money purchase, restoration or settlement test. The current CRM shipment adds checkout/seller metrics, separate content/pass revenue, searchable/filterable sales, payment/provider detail and visible failure reasons; 29 contract tests / 117 assertions and the production build pass. Deployment still requires the cPanel pull, and Ian owns browser QA. See the [task](tasks/monetized-content.md).
+
 Updated 2026-09-20. Check live Git status/HEAD before editing.
 Baseline inspected: `824c76712b46d0834ae712fb6442b992b1e3b0ef`, main.
 Existing checkout has unrelated changes: CLAUDE.md modified, a deleted performance
