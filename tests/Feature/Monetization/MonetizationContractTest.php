@@ -262,6 +262,47 @@ class MonetizationContractTest extends TestCase
         app(ListingEligibility::class)->assertOwner($this->market->id, $this->creator->wp_post_id, 999);
     }
 
+    public function test_missing_owner_cache_is_imported_on_first_monetization_visit(): void
+    {
+        $postId = 918273;
+        $userId = 382910;
+        $this->market->update([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $this->market->refresh();
+        $http = new \Illuminate\Http\Client\Factory;
+        $http->fake([
+            "https://kenya.example.test/wp-json/exotic-crm-sync/v1/clients/{$postId}" => Http::response([
+                'wp_post_id' => $postId,
+                'wp_user_id' => $userId,
+                'name' => 'New Creator',
+                'phone' => '0712345678',
+                'email' => 'new-creator@example.test',
+                'city' => 'Nairobi',
+                'post_status' => 'private',
+                'premium' => false,
+                'featured' => false,
+                'escort_expire' => null,
+                'verified' => false,
+                'needs_payment' => true,
+                'notactive' => true,
+                'main_image_url' => '',
+                'created_at' => now()->toDateTimeString(),
+                'modified_at' => now()->toDateTimeString(),
+            ], 200),
+        ]);
+        Http::swap($http);
+
+        $client = app(ListingEligibility::class)->assertOwner($this->market->id, $postId, $userId);
+
+        $this->assertSame($postId, (int) $client->wp_post_id);
+        $this->assertSame($userId, (int) $client->wp_user_id);
+        $this->assertSame('private', $client->profile_status);
+        Http::assertSentCount(1);
+    }
+
     public function test_grants_bind_asset_fingerprint_and_device_and_reject_refunds(): void
     {
         $p = $this->purchase();

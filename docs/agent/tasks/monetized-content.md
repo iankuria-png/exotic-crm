@@ -61,3 +61,22 @@ operational layer without changing payment, entitlement or settlement behavior.
 Included in the current CRM shipment; deployment still requires the cPanel pull. The
 related WordPress creator-price input is recorded in the companion-experience task in the
 WordPress repository.
+
+## Checkpoint — 29 Sep: first-login owner recovery
+
+A newly created WordPress profile could reach Private content before its corresponding
+CRM `clients` cache row existed. The owner-state request then leaked Laravel's
+`No query results for model [App\\Models\\Client]` exception into the creator workspace.
+
+- `ListingEligibility::assertOwner()` now performs a bounded single-profile WordPress
+  import when the market/profile cache row is missing, then applies the same market and
+  WordPress-user ownership check as every established profile.
+- If that source import cannot complete, CRM returns a stable 503 setup-pending message
+  and records the exception server-side. It does not create monetization access, a pass,
+  an entitlement or a payment.
+- A contract test covers the first-visit import. The complete monetization suite passes:
+  30 tests and 121 assertions; PHP lint, Pint and scoped whitespace checks also pass.
+
+Included in the current CRM shipment; deployment still requires the cPanel pull. The
+coordinated WordPress fallback is recorded in the companion-experience task; Ian owns
+browser QA and no account, payment or production mutation was performed.
