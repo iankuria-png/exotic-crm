@@ -86,7 +86,7 @@ browser QA and no account, payment or production mutation was performed.
 Implemented from the WP-repo plan `plans/expired-video-paywall-and-free-passes/plan.mdx`;
 full record in the WP task `docs/agent/tasks/expired-video-paywall-and-free-passes.md`.
 
-- Local commit `9e940cb2` (not pushed). Adds the Automation tab (media type, per-profile cap,
+- Commit `9e940cb2`, pushed to `origin/main` on 1 Oct (awaiting cPanel pull + migrate). Adds the Automation tab (media type, per-profile cap,
   inclusive length rule, fixed or length-scaled pricing, future/backfill runs with retry),
   admin same-escort bundles and multi-escort Exotic collections, frozen per-escort
   allocations credited atomically at fulfilment, and complimentary passes (new
