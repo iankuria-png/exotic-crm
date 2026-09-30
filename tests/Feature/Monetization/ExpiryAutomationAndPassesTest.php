@@ -319,4 +319,42 @@ class ExpiryAutomationAndPassesTest extends TestCase
         $this->postJson('/api/crm/settings/monetization/markets/'.$this->market->id.'/automations/runs/'.$run->public_id.'/retry')->assertOk()->assertJsonPath('retried', 1);
         $this->assertSame(['failed' => 0, 'skipped' => 1, 'status' => 'running'], ['failed' => $run->fresh()->failed_count, 'skipped' => $run->fresh()->skipped_count, 'status' => $run->fresh()->status]);
     }
+
+    public function test_active_subscription_passes_grant_in_batches_without_overlap(): void
+    {
+        $active = collect(range(1, 52))->map(fn ($i) => tap($this->creator('Active '.$i, ClientLifecycleState::ACTIVE))->update(['escort_expire' => now()->addMonth()->timestamp]));
+        $expired = $this->creator('Lapsed');
+        $service = app(ComplimentaryPassService::class);
+        $this->assertSame(52, $service->activeSubscriptionsRemaining($this->market)->count());
+
+        $first = $service->startCampaign($this->market, 'active_subscriptions', '1_month', [], 1, 50);
+        $this->assertSame(50, $first->total_count);
+        $this->assertSame($active->pluck('id')->sort()->take(50)->values()->all(), $first->items()->orderBy('client_id')->pluck('client_id')->all());
+        $this->assertSame(50, $first->rule_json['batch_size']);
+        // Escorts waiting in a running batch are not picked again.
+        $this->assertSame(2, $service->activeSubscriptionsRemaining($this->market)->count());
+        foreach ($first->items as $item) {
+            $service->processItem($item);
+        }
+        $this->assertSame('completed', $first->fresh()->status);
+        $this->assertSame(50, ClientMonetizationPass::where('grant_source', 'campaign_active_subscription')->count());
+
+        $second = $service->startCampaign($this->market, 'active_subscriptions', '1_month', [], 1, 100);
+        $this->assertSame(2, $second->total_count);
+        $this->assertNotContains($expired->id, $second->items()->pluck('client_id')->all());
+        foreach ($second->items as $item) {
+            $service->processItem($item);
+        }
+        $this->assertSame(0, $service->activeSubscriptionsRemaining($this->market)->count());
+        $this->assertSame('already_granted', $service->grant($active->first(), '1_month', 'campaign_active_subscription', 'another-run')['status']);
+        $this->assertSame(52, ClientMonetizationPass::where('grant_source', 'campaign_active_subscription')->count());
+        try {
+            $service->startCampaign($this->market, 'active_subscriptions', '1_month', [], 1, 50);
+            $this->fail('An empty batch started');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            $this->assertSame(409, $e->getStatusCode());
+        }
+        $admin = \App\Models\User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        $this->actingAs($admin, 'sanctum')->postJson('/api/crm/settings/monetization/markets/'.$this->market->id.'/automations/free-passes', ['scope' => 'active_subscriptions', 'duration_key' => '1_month', 'batch_size' => 75])->assertUnprocessable();
+    }
 }

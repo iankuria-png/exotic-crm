@@ -46,7 +46,7 @@ class MonetizationController extends Controller
         if ($s) {
             $expiry = app(\App\Services\Monetization\ExpiryAutomationService::class);
             $automation = ['expiry' => $this->settings->expiryPolicy($s), 'free_pass' => $this->settings->freePassPolicy($s),
-                'estimates' => ['expired_profiles' => $expiry->cohort($s->platform)->count(), 'active_subscriptions' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptions($s->platform)->count()],
+                'estimates' => ['expired_profiles' => $expiry->cohort($s->platform)->count(), 'active_subscriptions' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptions($s->platform)->count(), 'active_subscriptions_remaining' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptionsRemaining($s->platform)->count()],
                 'runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $s->platform_id)->latest('id')->limit(8)->get()->map(fn ($run) => $expiry->presentRun($run))->values()];
         }
 
@@ -398,8 +398,8 @@ class MonetizationController extends Controller
     public function startFreePasses(Request $r, Platform $platform)
     {
         $this->authorizeMarket($r, $platform->id, true);
-        $data = $r->validate(['scope' => 'required|in:active_subscriptions,selected', 'duration_key' => 'required|in:2_weeks,1_month', 'client_ids' => 'required_if:scope,selected|array|max:500', 'client_ids.*' => 'integer']);
-        $run = app(\App\Services\Monetization\ComplimentaryPassService::class)->startCampaign($platform, $data['scope'], $data['duration_key'], $data['client_ids'] ?? [], $r->user()->id);
+        $data = $r->validate(['scope' => 'required|in:active_subscriptions,selected', 'duration_key' => 'required|in:2_weeks,1_month', 'client_ids' => 'required_if:scope,selected|array|max:500', 'client_ids.*' => 'integer', 'batch_size' => 'nullable|integer|in:50,100,150']);
+        $run = app(\App\Services\Monetization\ComplimentaryPassService::class)->startCampaign($platform, $data['scope'], $data['duration_key'], $data['client_ids'] ?? [], $r->user()->id, isset($data['batch_size']) ? (int) $data['batch_size'] : null);
 
         return response()->json(['run_id' => $run->public_id, 'status' => $run->status, 'estimated_recipients' => $run->estimated_count, 'run' => app(\App\Services\Monetization\ExpiryAutomationService::class)->presentRun($run)]);
     }
@@ -409,7 +409,10 @@ class MonetizationController extends Controller
         $this->authorizeMarket($r, $platform->id, true);
         $service = app(\App\Services\Monetization\ExpiryAutomationService::class);
 
-        return response()->json(['runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $platform->id)->latest('id')->limit(8)->get()->map(fn ($run) => $service->presentRun($run))->values()]);
+        $passes = app(\App\Services\Monetization\ComplimentaryPassService::class);
+
+        return response()->json(['runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $platform->id)->latest('id')->limit(8)->get()->map(fn ($run) => $service->presentRun($run))->values(),
+            'estimates' => ['active_subscriptions' => $passes->activeSubscriptions($platform)->count(), 'active_subscriptions_remaining' => $passes->activeSubscriptionsRemaining($platform)->count()]]);
     }
 
     /** Retry only failed (or abandoned) items of one run; succeeded items are never repeated. */

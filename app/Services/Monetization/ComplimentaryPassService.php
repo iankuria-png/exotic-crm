@@ -42,6 +42,10 @@ class ComplimentaryPassService
             if (ClientMonetizationPass::where('client_id', $client->id)->whereIn('status', ['held', 'revoked'])->where('expires_at', '>', now())->exists()) {
                 return ['status' => 'held', 'pass' => null];
             }
+            // Active-subscription batches never stack: one unexpired batch pass covers the escort.
+            if ($source === 'campaign_active_subscription' && ($covering = ClientMonetizationPass::where('client_id', $client->id)->where('grant_source', $source)->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())->first())) {
+                return ['status' => 'already_granted', 'pass' => $covering];
+            }
             $s = $this->settings->forPlatform($client->platform);
             $price = $s->prices()->where('duration_key', $durationKey)->first();
             $days = (int) ($price?->duration_days ?: ($durationKey === '2_weeks' ? 14 : 30));
@@ -116,21 +120,38 @@ class ComplimentaryPassService
             });
     }
 
-    public function startCampaign(Platform $platform, string $scope, string $durationKey, array $clientIds, int $actor): MonetizationAutomationRun
+    /**
+     * Active subscribers still to receive an active-subscription batch pass: no unexpired
+     * batch pass yet and not waiting in a batch that is still processing. Oldest client first.
+     */
+    public function activeSubscriptionsRemaining(Platform $platform): Builder
+    {
+        return $this->activeSubscriptions($platform)
+            ->whereNotIn('id', ClientMonetizationPass::where('platform_id', $platform->id)->where('grant_source', 'campaign_active_subscription')->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())->whereNotNull('client_id')->select('client_id'))
+            ->whereNotIn('id', MonetizationAutomationItem::where('platform_id', $platform->id)->where('kind', 'pass_grant')->whereIn('status', ['queued', 'running'])->whereNotNull('client_id')->whereHas('run', fn ($r) => $r->where('kind', 'active_pass_grant'))->select('client_id'))
+            ->orderBy('id');
+    }
+
+    public function startCampaign(Platform $platform, string $scope, string $durationKey, array $clientIds, int $actor, ?int $batchSize = null): MonetizationAutomationRun
     {
         $s = $this->settings->forPlatform($platform);
         abort_unless($this->settings->runtime($s)['enabled'], 409, 'Private content must be enabled in this market before granting passes.');
         abort_unless(in_array($durationKey, ['2_weeks', '1_month'], true), 422, 'Choose a two-week or one-month pass.');
-        $ids = $scope === 'selected'
-            ? collect($clientIds)->map(fn ($id) => (int) $id)->filter()->unique()->values()
-            : $this->activeSubscriptions($platform)->orderBy('id')->pluck('id');
+        abort_unless($batchSize === null || in_array($batchSize, [50, 100, 150], true), 422, 'Choose a batch of 50, 100 or 150 escorts.');
         if ($scope === 'selected') {
+            $ids = collect($clientIds)->map(fn ($id) => (int) $id)->filter()->unique()->values();
             abort_if($ids->isEmpty(), 422, 'Select at least one escort.');
             abort_unless(Client::where('platform_id', $platform->id)->whereIn('id', $ids)->count() === $ids->count(), 403, 'A selected escort belongs to another market.');
         }
         $kind = $scope === 'selected' ? 'selected_pass_grant' : 'active_pass_grant';
-        $run = DB::transaction(function () use ($platform, $kind, $durationKey, $ids, $actor, $scope) {
-            $rule = ['scope' => $scope, 'duration_key' => $durationKey];
+        $run = DB::transaction(function () use ($platform, $kind, $durationKey, $actor, $scope, $batchSize, $s, &$ids) {
+            if ($scope !== 'selected') {
+                // Serialise batch starts per market so two batches can never pick the same escorts.
+                \App\Models\ContentMonetizationSetting::whereKey($s->id)->lockForUpdate()->first();
+                $ids = $this->activeSubscriptionsRemaining($platform)->when($batchSize, fn ($q) => $q->limit($batchSize))->pluck('id');
+                abort_if($ids->isEmpty(), 409, 'Every active subscription already has a free pass from an earlier batch.');
+            }
+            $rule = ['scope' => $scope, 'duration_key' => $durationKey, 'batch_size' => $scope === 'selected' ? null : $batchSize];
             $run = MonetizationAutomationRun::create(['public_id' => (string) Str::uuid(), 'platform_id' => $platform->id, 'kind' => $kind, 'status' => $ids->isEmpty() ? 'completed' : 'running', 'actor_id' => $actor, 'rule_json' => $rule, 'estimated_count' => $ids->count(), 'total_count' => $ids->count(), 'finished_at' => $ids->isEmpty() ? now() : null]);
             foreach ($ids->chunk(500) as $chunk) {
                 $now = now();
