@@ -116,6 +116,10 @@ class Handler extends ExceptionHandler
      */
     protected function unauthenticated($request, AuthenticationException $exception)
     {
+        if ($request->is('mcp/oauth/authorize') && ! $request->expectsJson()) {
+            return redirect('/login?next='.rawurlencode($request->getRequestUri()));
+        }
+
         return response()->json(['message' => $exception->getMessage()], 401);
     }
 

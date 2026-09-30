@@ -20,6 +20,16 @@ function consumePostLoginRedirect() {
     return isSafeInternalPath(stored) ? stored : '/';
 }
 
+function finishPostLogin(navigate) {
+    const destination = consumePostLoginRedirect();
+    if (destination.startsWith('/mcp/oauth/authorize?')) {
+        window.location.assign(destination);
+        return;
+    }
+
+    navigate(destination, { replace: true });
+}
+
 const highlights = [
     'Track leads, payments, and subscriptions from one workspace.',
     'Stay aligned with market teams through shared operational context.',
@@ -114,7 +124,7 @@ export default function Login() {
                         if (!cancelled && data?.token) {
                             rotateSessionToken();
                             storeAuthSnapshot(data.token, data.user);
-                            navigate(consumePostLoginRedirect(), { replace: true });
+                            finishPostLogin(navigate);
                         }
                     } catch {
                         if (!cancelled) {
@@ -143,7 +153,7 @@ export default function Login() {
 
         try {
             await login(email, password);
-            navigate(consumePostLoginRedirect(), { replace: true });
+            finishPostLogin(navigate);
         } catch (err) {
             setError(err.response?.data?.message || 'Invalid credentials');
         } finally {

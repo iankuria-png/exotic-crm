@@ -61,6 +61,47 @@ class AuthSettingsTest extends TestCase
         ])->assertUnprocessable();
     }
 
+    public function test_admin_can_add_verified_external_email_without_disabling_active_google_sso(): void
+    {
+        $admin = User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        Sanctum::actingAs($admin);
+
+        $service = app(AuthSettingsService::class);
+        $service->save(['google' => [
+            'client_id' => 'client-id.apps.googleusercontent.com',
+            'client_secret' => 'super-secret',
+            'redirect_uri' => 'https://crm.example.com/auth/google/callback',
+            'allowed_domains' => ['exotic-online.com'],
+            'allowed_emails' => ['ceo@exotic-online.com'],
+        ]], $admin->id);
+        $service->markGoogleTestResult(true, ['email' => 'admin@exotic-online.com'], $admin->id);
+        $service->activateGoogle($admin->id);
+        $service->save(['password_login_policy' => AuthSettingsService::PASSWORD_DISABLED], $admin->id);
+
+        $this->patchJson('/api/crm/settings/auth', [
+            'password_login_policy' => AuthSettingsService::PASSWORD_DISABLED,
+            'google' => [
+                'enabled' => true,
+                'primary' => true,
+                'client_id' => 'client-id.apps.googleusercontent.com',
+                'client_secret' => '',
+                'redirect_uri' => 'https://crm.example.com/auth/google/callback',
+                'allowed_domains' => ['exotic-online.com'],
+                'allowed_emails' => ['ceo@exotic-online.com', 'joolyan@gmail.com'],
+                'auto_link_existing_users' => true,
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('settings.google.enabled', true)
+            ->assertJsonPath('settings.google.ready', true)
+            ->assertJsonPath('settings.google.allowed_emails.1', 'joolyan@gmail.com');
+
+        $service->assertGoogleIdentityAllowed('JOOLYAN@GMAIL.COM', true, null);
+    }
+
     public function test_admin_only_password_policy_blocks_non_admin_login(): void
     {
         $admin = User::factory()->create([

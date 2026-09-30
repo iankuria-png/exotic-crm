@@ -25,7 +25,8 @@ class McpAuthenticate
         if (! $token || ! $token->tokenable) {
             $this->record($request, $requestId, null, null, 'refused', 'missing_ability');
 
-            return response()->json(['message' => 'Unauthenticated.'], 401);
+            return response()->json(['message' => 'Unauthenticated.'], 401)
+                ->header('WWW-Authenticate', $this->oauthChallenge());
         }
 
         $abilities = array_values(array_filter((array) $token->abilities));
@@ -37,7 +38,8 @@ class McpAuthenticate
             $reason = ! $token->tokenable->isActive() ? 'inactive_owner' : ($expiresAt && now()->greaterThanOrEqualTo($expiresAt) ? 'expired' : 'missing_ability');
             $this->record($request, $requestId, $token, $token->tokenable, 'refused', $reason);
 
-            return response()->json(['message' => 'MCP token is invalid or expired.'], 401);
+            return response()->json(['message' => 'MCP token is invalid or expired.'], 401)
+                ->header('WWW-Authenticate', $this->oauthChallenge());
         }
 
         if (! $this->settings->enabled()) {
@@ -72,6 +74,11 @@ class McpAuthenticate
         return str_starts_with(strtolower($header), 'bearer ')
             ? trim(substr($header, 7))
             : null;
+    }
+
+    private function oauthChallenge(): string
+    {
+        return 'Bearer resource_metadata="'.url('/.well-known/oauth-protected-resource').'", scope="mcp:read"';
     }
 
     private function record(Request $request, string $requestId, ?PersonalAccessToken $token, $user, string $status, string $reason): void

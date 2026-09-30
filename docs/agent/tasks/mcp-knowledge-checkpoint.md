@@ -186,3 +186,38 @@
   passed: 39 tests / 248 assertions. Pint passed for the two changed PHP files;
   no frontend source or generated build asset changed. Commit/push is authorised;
   cPanel deployment remains separately unauthorised.
+
+## 2026-09-30 external Google account exception
+
+- Ian requested MCP access for `joolyan@gmail.com`. MCP OAuth uses the existing CRM
+  user session; Google login checks verified identity against Workspace domains or
+  exact email overrides. A CRM user with this email must already exist and be active.
+- The production screenshot shows Google SSO active and password login disabled.
+  Current Settings submitted `google.enabled: false`, and changing any allowed email
+  reset the live Google test. Together these prevented an admin from saving the
+  exception while password login was disabled.
+- Local fix: Settings preserves the current enabled flag; email override changes
+  retain the successful test and active SSO. Changes to Workspace domains, OAuth
+  client ID, secret or redirect still require a new live test and activation.
+- Verification: `AuthSettingsTest.php` passed 12 tests / 30 assertions on the first
+  edit; the focused exception test passed 1 test / 4 assertions after narrowing
+  the domain rule. PHP lint and `git diff --check` passed. Vite build passed with
+  the pre-existing forecast CSS and bundle-size advisories. Pint's findings in
+  `AuthSettingsService.php` are identical on HEAD and the changed file.
+- Ian then reported the connector's exact error as `Unauthenticated.`. A live
+  unauthenticated `POST /api/mcp` returned 401 with no `WWW-Authenticate` OAuth
+  discovery header, and opening `/mcp/oauth/authorize` without a CRM web session
+  returned a raw JSON 401. Both were reproduced read-only on production.
+- Local MCP repair adds the protected-resource challenge to 401 responses,
+  directs signed-out browser approval requests through CRM login with the
+  original same-origin OAuth URL, and performs a full browser navigation back
+  to the approval route after sign-in. The other CRM API 401 responses stay JSON.
+- Final focused verification: 42 tests / 203 assertions passed across MCP
+  endpoint, OAuth/grant and auth-settings suites; five changed MCP/auth PHP files
+  passed Pint, PHP lint and diff checks passed, and Vite build passed with the
+  same existing advisories. `AuthSettingsService.php` Pint findings match HEAD.
+- Local only. No production allowlist update, user provisioning, OAuth-audience
+  change, push or deployment occurred. After deployment, an admin must add the
+  exact email in Settings → Security → Allowed email overrides and confirm the
+  existing CRM user. If Google itself reports `org_internal`, the Google Cloud
+  OAuth app audience must allow external accounts before the CRM exception can work.

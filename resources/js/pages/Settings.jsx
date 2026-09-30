@@ -9324,7 +9324,7 @@ function SecuritySettingsWorkspace() {
             password_login_policy: form.password_login_policy,
             require_google_for_non_admin: form.require_google_for_non_admin,
             google: {
-                enabled: false,
+                enabled: form.google.enabled,
                 primary: form.google.primary,
                 client_id: form.google.client_id,
                 client_secret: form.google.client_secret,

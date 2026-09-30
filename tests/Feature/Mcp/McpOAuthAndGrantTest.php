@@ -17,6 +17,20 @@ class McpOAuthAndGrantTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_browser_authorization_sends_a_signed_out_user_to_login_and_back(): void
+    {
+        $path = '/mcp/oauth/authorize?'.http_build_query([
+            'response_type' => 'code',
+            'client_id' => 'client-id',
+            'state' => 'return-state',
+        ]);
+
+        $this->get($path, ['Accept' => 'text/html'])
+            ->assertRedirect('/login?next='.rawurlencode($path));
+
+        $this->getJson($path)->assertUnauthorized();
+    }
+
     public function test_oauth_authorization_code_pkce_refresh_and_revoke_are_read_only(): void
     {
         Config::set('mcp.enabled', true);

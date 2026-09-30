@@ -15,6 +15,18 @@ class McpEndpointTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_missing_bearer_token_advertises_oauth_discovery(): void
+    {
+        $this->postJson('/api/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'initialize',
+            'params' => [],
+        ])
+            ->assertUnauthorized()
+            ->assertHeader('WWW-Authenticate', 'Bearer resource_metadata="'.url('/.well-known/oauth-protected-resource').'", scope="mcp:read"');
+    }
+
     public function test_modern_discovery_requires_matching_transport_metadata(): void
     {
         Config::set('mcp.enabled', true);
@@ -89,7 +101,8 @@ class McpEndpointTest extends TestCase
                 'method' => 'initialize',
                 'params' => [],
             ])
-            ->assertUnauthorized();
+            ->assertUnauthorized()
+            ->assertHeader('WWW-Authenticate', 'Bearer resource_metadata="'.url('/.well-known/oauth-protected-resource').'", scope="mcp:read"');
     }
 
     public function test_codex_can_initialize_and_list_tools_with_standard_streamable_http_requests(): void

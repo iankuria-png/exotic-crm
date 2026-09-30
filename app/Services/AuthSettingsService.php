@@ -93,7 +93,9 @@ class AuthSettingsService
         foreach (['allowed_domains', 'allowed_emails'] as $key) {
             if (array_key_exists($key, $googleInput)) {
                 $value = $this->normalizeList($googleInput[$key]);
-                $googleConfigChanged = $googleConfigChanged || $value !== (array) ($next['google'][$key] ?? []);
+                if ($key === 'allowed_domains') {
+                    $googleConfigChanged = $googleConfigChanged || $value !== (array) ($next['google'][$key] ?? []);
+                }
                 $next['google'][$key] = $value;
             }
         }
