@@ -80,3 +80,20 @@ CRM `clients` cache row existed. The owner-state request then leaked Laravel's
 Included in the current CRM shipment; deployment still requires the cPanel pull. The
 coordinated WordPress fallback is recorded in the companion-experience task; Ian owns
 browser QA and no account, payment or production mutation was performed.
+
+## Checkpoint — 1 Oct: expired-profile automation, admin bundles and free passes
+
+Implemented from the WP-repo plan `plans/expired-video-paywall-and-free-passes/plan.mdx`;
+full record in the WP task `docs/agent/tasks/expired-video-paywall-and-free-passes.md`.
+
+- Local commit `9e940cb2` (not pushed). Adds the Automation tab (media type, per-profile cap,
+  inclusive length rule, fixed or length-scaled pricing, future/backfill runs with retry),
+  admin same-escort bundles and multi-escort Exotic collections, frozen per-escort
+  allocations credited atomically at fulfilment, and complimentary passes (new
+  subscriptions, active subscriptions, selected escorts) queued after owned time.
+- Decision: escorts may edit automated prices within market limits; taking an item off
+  sale records `owner_opted_out_at`, honoured by later expiry runs.
+- Verification: 118 tests / 556 assertions across monetization, provisioning, expiry and
+  wallet suites; Pint; Vite build; migrate/rollback/migrate on scratch SQLite.
+- Deployment needs push + cPanel pull + `php artisan migrate`, plugin 1.3.16 and the theme
+  hunks together. No payment, grant, conversion or production mutation was performed.
