@@ -235,3 +235,15 @@
   responses, confirm the compiled asset loaded, then an admin adds
   `joolyan@gmail.com` as an exact email override and verifies an active CRM
   user with the same address before reconnecting the MCP client.
+
+## 2026-09-30 live verification
+
+- At 14:02 UTC, production returned the new `WWW-Authenticate` protected-resource
+  header from `POST /api/mcp` and redirected a signed-out browser request for
+  `/mcp/oauth/authorize` to `/login?next=...`. The login HTML references the
+  committed `app-CIrup94X.js` asset, which returned 200. Google SSO remained
+  enabled in the public auth configuration with password policy disabled.
+- This verifies the deployed public auth paths and frontend asset, not an
+  authenticated end-to-end connector sign-in. The admin-only allowlist and
+  existence/status of `joolyan@gmail.com` were not accessible from public
+  checks, so the requested account's access remains unverified.
