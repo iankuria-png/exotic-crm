@@ -29,6 +29,120 @@ class MonetizationSettingsService
         ])->load('prices');
     }
 
+    public const EXPIRY_POLICY_DEFAULTS = [
+        'enabled' => false, 'apply_to_future_expiries' => false, 'media_types' => ['video'],
+        'max_per_type' => ['video' => 2, 'photo' => 0],
+        'video_duration' => ['mode' => 'any', 'min_seconds' => null, 'max_seconds' => null],
+        'pricing' => ['mode' => 'fixed', 'fixed_amount' => 500, 'min_amount' => 500, 'max_amount' => 1000, 'round_increment' => 50, 'photo_amount' => 300],
+    ];
+
+    public const FREE_PASS_DEFAULTS = ['new_subscriptions_enabled' => false, 'duration_key' => '1_month', 'effective_from' => null];
+
+    /** The saved expiry rule merged over neutral defaults, so older rows load unchanged. */
+    public function expiryPolicy(ContentMonetizationSetting $s): array
+    {
+        $saved = $s->expiry_video_policy_json ?? [];
+        $policy = array_replace(self::EXPIRY_POLICY_DEFAULTS, $saved);
+        foreach (['max_per_type', 'video_duration', 'pricing'] as $group) {
+            $policy[$group] = array_replace(self::EXPIRY_POLICY_DEFAULTS[$group], $saved[$group] ?? []);
+        }
+
+        return $policy;
+    }
+
+    public function freePassPolicy(ContentMonetizationSetting $s): array
+    {
+        return array_replace(self::FREE_PASS_DEFAULTS, $s->free_pass_policy_json ?? []);
+    }
+
+    /** Validate an expiry media/count/duration/price rule against the market's offer policy. */
+    public function validateExpiryPolicy(array $input, array $offerPolicy): array
+    {
+        $data = Validator::make($input, [
+            'enabled' => 'required|boolean', 'apply_to_future_expiries' => 'required|boolean',
+            'media_types' => 'present|array', 'media_types.*' => ['distinct', Rule::in(['photo', 'video'])],
+            'max_per_type.video' => 'required|integer|min:0|max:20', 'max_per_type.photo' => 'required|integer|min:0|max:20',
+            'video_duration.mode' => ['required', Rule::in(['any', 'up_to', 'at_least', 'between'])],
+            'video_duration.min_seconds' => 'nullable|required_if:video_duration.mode,at_least,between|integer|min:0|max:1800',
+            'video_duration.max_seconds' => 'nullable|required_if:video_duration.mode,up_to,between|integer|min:1|max:1800',
+            'pricing.mode' => ['required', Rule::in(['fixed', 'duration_scale'])],
+            'pricing.fixed_amount' => 'required_if:pricing.mode,fixed|nullable|integer|min:1',
+            'pricing.min_amount' => 'required_if:pricing.mode,duration_scale|nullable|integer|min:1',
+            'pricing.max_amount' => 'required_if:pricing.mode,duration_scale|nullable|integer|min:1',
+            'pricing.round_increment' => 'required|integer|min:1|max:100000',
+            'pricing.photo_amount' => 'nullable|integer|min:1',
+        ], [], ['video_duration.min_seconds' => 'minimum length', 'video_duration.max_seconds' => 'maximum length'])->validate();
+        $types = array_values($data['media_types']);
+        $mode = $data['video_duration']['mode'];
+        $min = in_array($mode, ['at_least', 'between'], true) ? (int) $data['video_duration']['min_seconds'] : null;
+        $max = in_array($mode, ['up_to', 'between'], true) ? (int) $data['video_duration']['max_seconds'] : null;
+        // A disabled rule is stored as drafted; it is checked in full when it is switched on,
+        // so unrelated saves (pass pricing, surfaces) never fail on untouched defaults.
+        $fail = fn (string $key, string $message) => $data['enabled'] ? throw \Illuminate\Validation\ValidationException::withMessages([$key => [$message]]) : null;
+        if ($data['enabled'] && ! $types) {
+            $fail('media_types', 'Choose Videos, Photos or both before enabling automation.');
+        }
+        foreach ($types as $type) {
+            if (! ($offerPolicy[$type === 'photo' ? 'photos_enabled' : 'videos_enabled'] ?? false)) {
+                $fail('media_types', 'Enable private '.$type.'s in Offers & limits first.');
+            }
+            if ((int) $data['max_per_type'][$type] < 1) {
+                $fail('max_per_type.'.$type, 'Choose at least one '.$type.' per profile.');
+            }
+        }
+        if ($mode === 'between' && $min >= $max) {
+            $fail('video_duration.max_seconds', 'The maximum length must be longer than the minimum length.');
+        }
+        $marketMax = (int) ($offerPolicy['max_video_seconds'] ?? 1800);
+        if (($min !== null && $min > $marketMax) || ($max !== null && $max > $marketMax)) {
+            $fail('video_duration', 'Video length cannot exceed the market maximum of '.$marketMax.' seconds.');
+        }
+        $pricing = $data['pricing'];
+        $inLimits = fn ($amount) => $amount === null || ((int) $amount >= (int) $offerPolicy['min_price'] && (int) $amount <= (int) $offerPolicy['max_price']);
+        $amounts = $pricing['mode'] === 'fixed' ? ['pricing.fixed_amount' => $pricing['fixed_amount']] : ['pricing.min_amount' => $pricing['min_amount'], 'pricing.max_amount' => $pricing['max_amount']];
+        if (in_array('photo', $types, true)) {
+            $amounts['pricing.photo_amount'] = $pricing['photo_amount'] ?? null;
+            if (empty($pricing['photo_amount'])) {
+                $fail('pricing.photo_amount', 'Set the fixed photo price.');
+            }
+        }
+        foreach ($amounts as $key => $amount) {
+            if (! $inLimits($amount)) {
+                $fail($key, 'Prices must stay within '.$offerPolicy['min_price'].'–'.$offerPolicy['max_price'].'.');
+            }
+        }
+        if ($pricing['mode'] === 'duration_scale') {
+            if ((int) $pricing['min_amount'] > (int) $pricing['max_amount']) {
+                $fail('pricing.max_amount', 'The highest price must be at least the lowest price.');
+            }
+            [$from, $to] = $this->scaleBounds(['video_duration' => ['mode' => $mode, 'min_seconds' => $min, 'max_seconds' => $max]], $marketMax);
+            if ($from >= $to) {
+                $fail('video_duration', 'Length-scaled pricing needs a length range.');
+            }
+            if (in_array('video', $types, true) === false) {
+                $fail('pricing.mode', 'Length-scaled pricing applies to videos. Select Videos or use a fixed price.');
+            }
+        }
+
+        return [
+            'enabled' => (bool) $data['enabled'], 'apply_to_future_expiries' => (bool) $data['apply_to_future_expiries'], 'media_types' => $types,
+            'max_per_type' => ['video' => in_array('video', $types, true) ? (int) $data['max_per_type']['video'] : 0, 'photo' => in_array('photo', $types, true) ? (int) $data['max_per_type']['photo'] : 0],
+            'video_duration' => ['mode' => $mode, 'min_seconds' => $min, 'max_seconds' => $max],
+            'pricing' => ['mode' => $pricing['mode'], 'fixed_amount' => isset($pricing['fixed_amount']) ? (int) $pricing['fixed_amount'] : null, 'min_amount' => isset($pricing['min_amount']) ? (int) $pricing['min_amount'] : null, 'max_amount' => isset($pricing['max_amount']) ? (int) $pricing['max_amount'] : null, 'round_increment' => (int) $pricing['round_increment'], 'photo_amount' => isset($pricing['photo_amount']) ? (int) $pricing['photo_amount'] : null],
+        ];
+    }
+
+    /** Length range used by length-scaled pricing: open-ended filters use 0 or the market maximum. */
+    public function scaleBounds(array $policy, int $marketMax): array
+    {
+        $duration = $policy['video_duration'];
+
+        return [
+            in_array($duration['mode'], ['at_least', 'between'], true) ? (int) $duration['min_seconds'] : 0,
+            in_array($duration['mode'], ['up_to', 'between'], true) ? (int) $duration['max_seconds'] : $marketMax,
+        ];
+    }
+
     public function runtime(ContentMonetizationSetting $s): array
     {
         $system = $this->system();
@@ -77,7 +191,13 @@ class MonetizationSettingsService
             'checkout_policy.device_slots' => 'required|integer|min:1|max:3', 'checkout_policy.restore_per_hour' => 'required|integer|min:1|max:10',
             'delivery_policy.grant_ttl' => 'required|integer|min:60|max:300',
             'test_client_ids' => 'array', 'test_client_ids.*' => 'integer',
+            'expiry_video_policy' => 'sometimes|array', 'free_pass_policy' => 'sometimes|array',
+            'free_pass_policy.new_subscriptions_enabled' => 'required_with:free_pass_policy|boolean',
+            'free_pass_policy.duration_key' => ['required_with:free_pass_policy', Rule::in(['2_weeks', '1_month'])],
         ])->validate();
+        if (isset($data['expiry_video_policy'])) {
+            $data['expiry_video_policy'] = $this->validateExpiryPolicy($data['expiry_video_policy'], $data['offer_policy']);
+        }
         foreach ($data['prices'] as $price) {
             abort_if((float) $price['subsidy_value'] > ($price['subsidy_mode'] === 'percentage' ? 100 : (float) $price['price']), 422, 'Subsidy cannot exceed the pass price.');
         }
@@ -131,6 +251,15 @@ class MonetizationSettingsService
                 $s->{$key.'_policy_json'} = $data[$key.'_policy'];
             }
             $s->checkout_policy_json = array_merge($s->checkout_policy_json, ['wallet_sale_credit' => 'gross']);
+            if (isset($data['expiry_video_policy'])) {
+                $s->expiry_video_policy_json = $data['expiry_video_policy'];
+            }
+            if (isset($data['free_pass_policy'])) {
+                $previous = $this->freePassPolicy($s);
+                $enabled = (bool) $data['free_pass_policy']['new_subscriptions_enabled'];
+                // Only subscriptions activated after the policy is switched on qualify.
+                $s->free_pass_policy_json = ['new_subscriptions_enabled' => $enabled, 'duration_key' => $data['free_pass_policy']['duration_key'], 'effective_from' => $enabled ? ($previous['new_subscriptions_enabled'] && $previous['effective_from'] ? $previous['effective_from'] : now()->toIso8601String()) : null];
+            }
             $s->config_revision++;
             $s->save();
             $s->prices()->whereNotIn('duration_key', array_column($data['prices'], 'duration_key'))->update(['is_active' => false]);

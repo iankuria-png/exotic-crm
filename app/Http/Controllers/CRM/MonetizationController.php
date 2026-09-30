@@ -42,7 +42,15 @@ class MonetizationController extends Controller
         $this->authorizeMarket($r, $selected, true);
         $s = $selected ? $this->settings->forPlatform(Platform::findOrFail($selected)) : null;
 
-        return response()->json(['supported_currencies' => $s ? (app(\App\Services\WalletSettingsService::class)->runtimePlatformConfig($s->platform)['supported_currencies'] ?? [$s->currency]) : [], 'platforms' => $platforms, 'system' => $this->settings->system(), 'market' => $s, 'effective' => $s ? $this->settings->runtime($s) : null, 'audit' => $selected ? PremiumContentEvent::where('platform_id', $selected)->where('kind', 'settings_changed')->latest()->limit(20)->get() : [], 'can_edit_system' => $r->user()->role === 'admin']);
+        $automation = null;
+        if ($s) {
+            $expiry = app(\App\Services\Monetization\ExpiryAutomationService::class);
+            $automation = ['expiry' => $this->settings->expiryPolicy($s), 'free_pass' => $this->settings->freePassPolicy($s),
+                'estimates' => ['expired_profiles' => $expiry->cohort($s->platform)->count(), 'active_subscriptions' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptions($s->platform)->count()],
+                'runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $s->platform_id)->latest('id')->limit(8)->get()->map(fn ($run) => $expiry->presentRun($run))->values()];
+        }
+
+        return response()->json(['automation' => $automation, 'supported_currencies' => $s ? (app(\App\Services\WalletSettingsService::class)->runtimePlatformConfig($s->platform)['supported_currencies'] ?? [$s->currency]) : [], 'platforms' => $platforms, 'system' => $this->settings->system(), 'market' => $s, 'effective' => $s ? $this->settings->runtime($s) : null, 'audit' => $selected ? PremiumContentEvent::where('platform_id', $selected)->where('kind', 'settings_changed')->latest()->limit(20)->get() : [], 'can_edit_system' => $r->user()->role === 'admin']);
     }
 
     public function saveSettings(Request $r, Platform $platform)
@@ -178,7 +186,7 @@ class MonetizationController extends Controller
         });
         $creators = $clientQuery->limit(100)->get()->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'platform_id' => $c->platform_id, 'stats' => app(StatsService::class)->owner($c), 'pass' => app(\App\Services\Monetization\PassService::class)->current($c)]);
 
-        return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets', 'client:id,name']))->latest('id')->limit(100)->get(), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name']), 'can_manage' => $this->markets->isManager($r->user())]);
+        return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'offer:id,title,origin,bundle_scope', 'allocations.client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets.client:id,name', 'client:id,name']))->latest('id')->limit(100)->get()->map(fn ($o) => $o->toArray() + ['needs_attention' => $o->origin === PremiumContentOffer::ORIGIN_ADMIN_BUNDLE && ($o->status === 'paused' && str_starts_with((string) $o->paused_by, 'member') || $o->assets->contains(fn ($a) => $a->status !== 'ready')), 'creator_count' => $o->assets->pluck('client_id')->unique()->count()]), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name', 'currency_code']), 'can_manage' => $this->markets->isManager($r->user())]);
     }
 
     public function export(Request $r)
@@ -261,9 +269,11 @@ class MonetizationController extends Controller
                     abort_if($p->is_sandbox, 422, 'Sandbox refunds cannot link a real wallet debit.');
                     abort_if(VisitorContentPurchase::where('id', '!=', $p->id)->where('metadata_json->refund->wallet_adjustment_id', (int) $data['wallet_adjustment_id'])->exists(), 422, 'This wallet adjustment is already linked to another refund.');
                     $t = WalletTransaction::lockForUpdate()->findOrFail($data['wallet_adjustment_id']);
-                    abort_unless($t->client_id === $p->client_id && $t->type === 'debit' && $t->currency_code === $p->currency && $t->performed_by && $t->reference_type === 'admin_adjustment', 422, 'Link an existing staff wallet debit for this creator and currency.');
+                    abort_unless(in_array($t->client_id, $p->allocations()->pluck('client_id')->filter()->all() ?: [$p->client_id], true) && $t->type === 'debit' && $t->currency_code === $p->currency && $t->performed_by && $t->reference_type === 'admin_adjustment', 422, 'Link an existing staff wallet debit for this creator and currency.');
                 }
                 $p->update(['status' => 'refunded', 'metadata_json' => array_merge($p->metadata_json ?? [], ['refund' => $data])]);
+                // Original allocation amounts are never recomputed; each credited share is marked for reversal.
+                $p->allocations()->where('status', 'credited')->update(['status' => 'reversed']);
             } else {
                 abort_unless($p->status === 'review', 409, 'This purchase is not awaiting review.');
                 abort_unless(isset($data['settled_amount'], $data['settled_currency']), 422, 'Enter the verified provider settlement amount and currency.');
@@ -339,6 +349,9 @@ class MonetizationController extends Controller
             $asset = PremiumContentAsset::whereKey($asset->id)->lockForUpdate()->firstOrFail();
             abort_if($asset->status === 'deleted', 409, 'This file has been deleted.');
             $asset->update(['status' => $data['held'] ? 'held' : 'ready', 'held_at' => $data['held'] ? now() : null]);
+            if ($data['held']) {
+                app(\App\Services\Monetization\AdminBundleService::class)->pauseCollectionsContaining($asset, 'Support held an item in this collection.');
+            }
             PremiumContentEvent::create(['platform_id' => $asset->platform_id, 'client_id' => $asset->client_id, 'actor_id' => $r->user()->id, 'kind' => 'asset_hold', 'reason' => $data['reason'], 'metadata_json' => ['asset_id' => $asset->id, 'held' => $data['held']]]);
         });
         $s = $this->settings->forPlatform(Platform::findOrFail($asset->platform_id));
@@ -370,6 +383,110 @@ class MonetizationController extends Controller
         $sync = app(SyncService::class)->push($this->settings->forPlatform(Platform::findOrFail($asset->platform_id)), ['assets' => [['public_id' => $asset->public_id, 'status' => 'deleted', 'purge' => true]]]);
 
         return response()->json(['saved' => true, 'sync' => $sync]);
+    }
+
+    public function startExpiredBackfill(Request $r, Platform $platform)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $data = $r->validate(['scope' => 'required|in:currently_expired', 'settings_revision' => 'required|integer']);
+        $service = app(\App\Services\Monetization\ExpiryAutomationService::class);
+        $run = $service->startBackfill($platform, (int) $data['settings_revision'], $r->user()->id);
+
+        return response()->json(['run_id' => $run->public_id, 'status' => $run->status, 'estimated_profiles' => $run->estimated_count, 'run' => $service->presentRun($run)]);
+    }
+
+    public function startFreePasses(Request $r, Platform $platform)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $data = $r->validate(['scope' => 'required|in:active_subscriptions,selected', 'duration_key' => 'required|in:2_weeks,1_month', 'client_ids' => 'required_if:scope,selected|array|max:500', 'client_ids.*' => 'integer']);
+        $run = app(\App\Services\Monetization\ComplimentaryPassService::class)->startCampaign($platform, $data['scope'], $data['duration_key'], $data['client_ids'] ?? [], $r->user()->id);
+
+        return response()->json(['run_id' => $run->public_id, 'status' => $run->status, 'estimated_recipients' => $run->estimated_count, 'run' => app(\App\Services\Monetization\ExpiryAutomationService::class)->presentRun($run)]);
+    }
+
+    public function automationRuns(Request $r, Platform $platform)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $service = app(\App\Services\Monetization\ExpiryAutomationService::class);
+
+        return response()->json(['runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $platform->id)->latest('id')->limit(8)->get()->map(fn ($run) => $service->presentRun($run))->values()]);
+    }
+
+    /** Retry only failed (or abandoned) items of one run; succeeded items are never repeated. */
+    public function retryRun(Request $r, Platform $platform, string $run)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $model = \App\Models\MonetizationAutomationRun::where('platform_id', $platform->id)->where('public_id', $run)->firstOrFail();
+        $ids = $model->items()->where(fn ($q) => $q->where('status', 'failed')->orWhere(fn ($stuck) => $stuck->where('status', 'running')->where('updated_at', '<', now()->subMinutes(10))))->pluck('id');
+        DB::transaction(function () use ($ids, $model) {
+            foreach (\App\Models\MonetizationAutomationItem::whereIn('id', $ids)->lockForUpdate()->get() as $item) {
+                $previous = $item->status;
+                $item->update(['status' => 'queued', 'result_code' => null]);
+                \App\Services\Monetization\ExpiryAutomationService::tally($model->id, $previous, 'queued');
+            }
+        });
+        $ids->each(fn ($id) => \App\Jobs\ProcessMonetizationAutomationItem::dispatch($id));
+
+        return response()->json(['retried' => $ids->count(), 'run' => app(\App\Services\Monetization\ExpiryAutomationService::class)->presentRun($model->fresh())]);
+    }
+
+    public function creatorSearch(Request $r)
+    {
+        $data = $r->validate(['platform_id' => 'required|integer', 'q' => 'nullable|string|max:80']);
+        $this->authorizeMarket($r, (int) $data['platform_id'], true);
+        $term = trim((string) ($data['q'] ?? ''));
+        $rows = Client::where('platform_id', $data['platform_id'])->where('client_type', 'escort')->whereNull('closed_at')
+            ->when($term !== '', fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', "%{$term}%")->orWhere('phone', 'like', "%{$term}%")->orWhere('id', ctype_digit($term) ? (int) $term : 0)))
+            ->orderBy('name')->limit(25)->get(['id', 'name', 'phone', 'lifecycle_state', 'profile_status']);
+        $passes = app(\App\Services\Monetization\PassService::class);
+
+        return response()->json(['creators' => $rows->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'phone' => $c->phone ? '•••'.substr((string) $c->phone, -4) : null, 'lifecycle_state' => $c->lifecycle_state, 'pass' => $passes->current($c)?->only(['id', 'expires_at', 'grant_source', 'paid_amount'])])]);
+    }
+
+    public function bundleCandidates(Request $r)
+    {
+        $data = $r->validate(['platform_id' => 'required|integer', 'q' => 'nullable|string|max:80']);
+        $this->authorizeMarket($r, (int) $data['platform_id'], true);
+
+        return response()->json(['items' => app(\App\Services\Monetization\AdminBundleService::class)->candidates(Platform::findOrFail($data['platform_id']), $data['q'] ?? null)]);
+    }
+
+    public function bundlePreview(Request $r)
+    {
+        $data = $r->validate(['platform_id' => 'required|integer', 'asset_public_ids' => 'required|array|min:2|max:50', 'asset_public_ids.*' => 'uuid', 'amount' => 'nullable|integer|min:1']);
+        $this->authorizeMarket($r, (int) $data['platform_id'], true);
+        $preview = app(\App\Services\Monetization\AdminBundleService::class)->preview(Platform::findOrFail($data['platform_id']), $data['asset_public_ids'], isset($data['amount']) ? (float) $data['amount'] : null);
+
+        return response()->json(['scope' => $preview['scope'], 'creator_count' => count($preview['creator_ids']), 'item_count' => $preview['assets']->count(), 'suggested_amount' => $preview['suggested'], 'allocation_preview' => $preview['allocation_preview']]);
+    }
+
+    public function createBundle(Request $r)
+    {
+        $data = $r->validate(['platform_id' => 'required|integer', 'attempt' => 'nullable|uuid']);
+        $this->authorizeMarket($r, (int) $data['platform_id'], true);
+        $platform = Platform::findOrFail($data['platform_id']);
+        $service = app(\App\Services\Monetization\AdminBundleService::class);
+        $offer = $service->create($platform, $r->all(), $r->user()->id, $data['attempt'] ?? null);
+        $preview = app(\App\Services\Monetization\PurchaseAllocationService::class)->preview($offer, (float) $offer->amount);
+        $this->syncBundleProfiles($offer);
+
+        return response()->json(['offer_public_id' => $offer->public_id, 'scope' => $offer->bundle_scope, 'creator_count' => count($preview), 'item_count' => $offer->assets->count(), 'allocation_preview' => $preview]);
+    }
+
+    public function updateBundle(Request $r, PremiumContentOffer $offer)
+    {
+        $this->authorizeMarket($r, $offer->platform_id, true);
+        $saved = app(\App\Services\Monetization\AdminBundleService::class)->update($offer, $r->all(), $r->user()->id);
+        $this->syncBundleProfiles($saved);
+
+        return response()->json(['offer' => $saved, 'allocation_preview' => app(\App\Services\Monetization\PurchaseAllocationService::class)->preview($saved, (float) $saved->amount)]);
+    }
+
+    private function syncBundleProfiles(PremiumContentOffer $offer): void
+    {
+        foreach (Client::whereIn('id', $offer->assets->pluck('client_id')->unique())->get() as $client) {
+            app(SyncService::class)->profile($client);
+        }
     }
 
     public function staffGrant(Request $r, PremiumContentAsset $asset)

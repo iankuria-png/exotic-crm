@@ -55,6 +55,7 @@ class CheckoutService
                 'visitor_phone_hash' => hash_hmac('sha256', $phone, $s->device_pepper), 'visitor_phone_masked' => str_repeat('*', max(0, strlen($phone) - 4)).substr($phone, -4),
                 'first_device_hash' => $device, 'public_token_hash' => hash('sha256', Str::random(64)), 'idempotency_key_hash' => $hash, 'is_sandbox' => $sandbox,
             ]);
+            app(PurchaseAllocationService::class)->freeze($purchase, $offer);
             $access->bind($purchase, $device, 3);
             $created = true;
 

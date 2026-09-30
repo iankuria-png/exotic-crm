@@ -261,6 +261,12 @@ class ExpiredSubscriptionReconciler
             'created_at' => now(),
         ]);
 
+        // Expired-profile media automation (publicly reachable lifecycle markets only).
+        // Queued after commit; it never changes the expiry outcome.
+        if ($lifecycleEnabled) {
+            app(\App\Services\Monetization\ExpiryAutomationService::class)->queueNaturalExpiry($syncedClient->fresh() ?? $syncedClient);
+        }
+
         // Keep action 'expired' for both policies so reconcile summaries tally either
         // outcome as a handled expiry; the policy is recorded for auditing.
         $row['action'] = 'expired';

@@ -22,6 +22,11 @@ class VisitorContentPurchase extends Model
         return $this->belongsTo(Client::class);
     }
 
+    public function allocations()
+    {
+        return $this->hasMany(VisitorContentPurchaseAllocation::class, 'purchase_id');
+    }
+
     public function offer()
     {
         return $this->belongsTo(PremiumContentOffer::class);

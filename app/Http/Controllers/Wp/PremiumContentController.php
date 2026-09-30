@@ -65,7 +65,32 @@ class PremiumContentController extends Controller
         $facts = app(ListingEligibility::class)->facts($client);
         $pass = $this->passes->current($client);
 
-        return response()->json(['policy' => $this->settings->runtime($s), 'listing' => $facts, 'pass' => $pass, 'quotes' => $s->prices->where('is_active', true)->map(fn ($p) => $this->passes->quote($client, $p->duration_key))->values(), 'wallet' => app(WalletService::class)->summary($client), 'kyc' => $decision, 'content_permissions' => ['upload_private' => $decision['decision'], 'publish_offer' => $decision['decision']], 'assets' => PremiumContentAsset::where('client_id', $client->id)->whereNotIn('status', ['deleted', 'public'])->get(['public_id', 'wp_attachment_id', 'media_type', 'preview_url', 'status']), 'offers' => PremiumContentOffer::where('client_id', $client->id)->with('assets')->get()->map(fn ($o) => $this->offers->present($o)), 'notices' => PremiumContentEvent::where('client_id', $client->id)->whereIn('kind', ['sale_notice', 'pass_expiring', 'pass_expired'])->latest()->limit(5)->get(['kind', 'reason', 'created_at']), 'stats' => app(StatsService::class)->owner($client)]);
+        return response()->json(['policy' => $this->settings->runtime($s), 'listing' => $facts, 'pass' => $pass, 'quotes' => $s->prices->where('is_active', true)->map(fn ($p) => $this->passes->quote($client, $p->duration_key))->values(), 'wallet' => app(WalletService::class)->summary($client), 'kyc' => $decision, 'content_permissions' => ['upload_private' => $decision['decision'], 'publish_offer' => $decision['decision']], 'assets' => PremiumContentAsset::where('client_id', $client->id)->whereNotIn('status', ['deleted', 'public'])->get(['public_id', 'wp_attachment_id', 'media_type', 'preview_url', 'status', 'origin', 'duration_seconds']), 'offers' => PremiumContentOffer::where('client_id', $client->id)->with('assets')->get()->map(fn ($o) => $this->offers->present($o)), 'notices' => PremiumContentEvent::where('client_id', $client->id)->whereIn('kind', ['sale_notice', 'pass_expiring', 'pass_expired', 'free_pass_granted', 'expiry_media_moved'])->latest()->limit(5)->get(['kind', 'reason', 'created_at']), 'stats' => app(StatsService::class)->owner($client), 'automation' => $this->automationState($client), 'collections' => $this->collections($client)]);
+    }
+
+    /** Items Exotic moved when the listing expired, for the owner's one-time explanation. */
+    private function automationState(Client $client): array
+    {
+        $offers = PremiumContentOffer::where('client_id', $client->id)->where('origin', PremiumContentOffer::ORIGIN_EXPIRY)->whereIn('status', ['live', 'paused'])->get(['id', 'published_at', 'created_at', 'status']);
+
+        return ['moved_count' => $offers->count(), 'live_count' => $offers->where('status', 'live')->count(), 'moved_at' => $offers->max('created_at')?->toIso8601String(), 'listing_expired' => app(\App\Services\Monetization\ExpiryAutomationService::class)->publiclyRestricted($client)];
+    }
+
+    /** Exotic collections that include this escort's items: her items, share and credited earnings only. */
+    private function collections(Client $client): array
+    {
+        return PremiumContentOffer::where('platform_id', $client->platform_id)->where('bundle_scope', 'multi_creator')->whereIn('status', ['live', 'paused'])
+            ->whereHas('assets', fn ($q) => $q->where('premium_content_assets.client_id', $client->id))->with('assets')->latest('id')->limit(20)->get()
+            ->map(function ($offer) use ($client) {
+                $mine = $offer->assets->where('client_id', $client->id);
+                $creators = $offer->assets->pluck('client_id')->unique()->count();
+                $earned = \App\Models\VisitorContentPurchaseAllocation::where('client_id', $client->id)->where('status', 'credited')->whereHas('purchase', fn ($p) => $p->where('offer_id', $offer->id)->where('is_sandbox', false))->sum('amount_minor');
+                $share = app(\App\Services\Monetization\PurchaseAllocationService::class)->preview($offer, (float) $offer->amount);
+
+                return ['public_id' => $offer->public_id, 'title' => $offer->title, 'status' => $offer->status, 'version' => $offer->version, 'amount' => $offer->amount, 'currency' => $offer->currency, 'creator_count' => $creators,
+                    'your_share' => collect($share)->firstWhere('client_id', $client->id)['amount'] ?? '0.00', 'credited' => number_format($earned / 100, 2, '.', ''),
+                    'your_items' => $mine->map(fn ($a) => ['public_id' => $a->public_id, 'media_type' => $a->media_type, 'preview_url' => $a->preview_url])->values()->all()];
+            })->all();
     }
 
     public function quote(Request $r)
@@ -103,6 +128,12 @@ class PremiumContentController extends Controller
     {
         $client = $this->owner($r);
         $offer = $id ? PremiumContentOffer::where('platform_id', $client->platform_id)->where('public_id', $id)->firstOrFail() : null;
+        if ($offer && $offer->isMultiCreator()) {
+            abort_unless($r->input('status') === 'paused', 422, 'You can remove your items from this collection.');
+            $saved = app(\App\Services\Monetization\AdminBundleService::class)->withdraw($client, $offer);
+
+            return response()->json(['offer' => $this->offers->present($saved)]);
+        }
         $saved = $this->offers->save($client, $r->all(), $offer, $r->attributes->get('wallet_idempotency_key'));
         app(SyncService::class)->profile($client);
 
@@ -113,17 +144,19 @@ class PremiumContentController extends Controller
     {
         $s = $this->setting($r);
         $surface = $r->input('surface', 'profile');
-        if (! data_get($s->surface_policy_json, $surface === 'videos' ? 'videos_private_filter' : 'profile_section')) {
+        if (! data_get($s->surface_policy_json, ['videos' => 'videos_private_filter', 'collections' => 'home_private_content'][$surface] ?? 'profile_section')) {
             return response()->json(['offers' => []]);
         }
         $query = PremiumContentOffer::where('platform_id', $s->platform_id)->where('status', 'live')->with(['assets', 'client']);
-        if ($surface === 'videos') {
+        if ($surface === 'collections') {
+            $query->where('bundle_scope', 'multi_creator');
+        } elseif ($surface === 'videos') {
             $query->whereHas('assets', fn ($q) => $q->where('media_type', 'video'));
         } else {
             $query->whereHas('client', fn ($q) => $q->where('wp_post_id', (int) $r->input('wp_post_id')));
         }
         $page = max(1, min(10000, (int) $r->input('page', 1)));
-        $perPage = $surface === 'videos' ? 12 : 200;
+        $perPage = $surface === 'profile' ? 200 : 12;
         $total = 0;
         $rows = [];
         $offset = ($page - 1) * $perPage;

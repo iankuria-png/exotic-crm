@@ -255,6 +255,14 @@ class SubscriptionProvisioningService
             ]);
         }
 
+        // Complimentary selling pass for a genuinely new subscription. Queued after
+        // commit and isolated: a grant problem can never undo this activation.
+        try {
+            \App\Jobs\GrantNewSubscriptionPass::dispatch((int) $deal->id)->afterCommit();
+        } catch (\Throwable $exception) {
+            Log::warning('Free selling pass could not be queued; activation stands.', ['deal_id' => (int) $deal->id, 'error' => $exception->getMessage()]);
+        }
+
         if (($options['emit_deal_activated_timeline'] ?? true) === true) {
             TimelineEvent::create([
                 'platform_id' => (int) $client->platform_id,

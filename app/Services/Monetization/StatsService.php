@@ -70,8 +70,11 @@ class StatsService
                 }
             }
         }
-        $q = VisitorContentPurchase::where('client_id', $client->id)->where('is_sandbox', false)->where('status', 'active');
+        // Allocation rows carry each escort's own earning, including Exotic collection shares.
+        $q = \App\Models\VisitorContentPurchaseAllocation::where('client_id', $client->id)->where('status', 'credited')
+            ->whereHas('purchase', fn ($p) => $p->where('is_sandbox', false)->where('status', 'active'));
+        $month = (int) (clone $q)->whereHas('purchase', fn ($p) => $p->where('purchased_at', '>=', now()->startOfMonth()))->sum('amount_minor');
 
-        return ['currency' => $currency, 'gross_sales' => number_format($sales / 100, 2, '.', ''), 'earned_outstanding' => number_format($earned / 100, 2, '.', ''), 'earned_reversed' => number_format($reversed / 100, 2, '.', ''), 'earned_spent' => number_format($spent / 100, 2, '.', ''), 'month_sales' => number_format((float) (clone $q)->where('purchased_at', '>=', now()->startOfMonth())->sum('gross_amount'), 2, '.', ''), 'sales_count' => $q->count()];
+        return ['currency' => $currency, 'gross_sales' => number_format($sales / 100, 2, '.', ''), 'earned_outstanding' => number_format($earned / 100, 2, '.', ''), 'earned_reversed' => number_format($reversed / 100, 2, '.', ''), 'earned_spent' => number_format($spent / 100, 2, '.', ''), 'month_sales' => number_format($month / 100, 2, '.', ''), 'sales_count' => $q->count()];
     }
 }

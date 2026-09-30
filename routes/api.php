@@ -234,6 +234,15 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::put('/settings/monetization/markets/{platform}', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSettings']);
     Route::put('/settings/monetization/system', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSystem']);
     Route::post('/settings/monetization/markets/{platform}/sync', [\App\Http\Controllers\CRM\MonetizationController::class, 'sync']);
+    Route::post('/settings/monetization/markets/{platform}/automations/expired-content', [\App\Http\Controllers\CRM\MonetizationController::class, 'startExpiredBackfill']);
+    Route::post('/settings/monetization/markets/{platform}/automations/free-passes', [\App\Http\Controllers\CRM\MonetizationController::class, 'startFreePasses']);
+    Route::get('/settings/monetization/markets/{platform}/automations/runs', [\App\Http\Controllers\CRM\MonetizationController::class, 'automationRuns']);
+    Route::post('/settings/monetization/markets/{platform}/automations/runs/{run}/retry', [\App\Http\Controllers\CRM\MonetizationController::class, 'retryRun']);
+    Route::get('/monetization/creators/search', [\App\Http\Controllers\CRM\MonetizationController::class, 'creatorSearch']);
+    Route::get('/monetization/content/bundle-candidates', [\App\Http\Controllers\CRM\MonetizationController::class, 'bundleCandidates']);
+    Route::post('/monetization/content/bundles/preview', [\App\Http\Controllers\CRM\MonetizationController::class, 'bundlePreview']);
+    Route::post('/monetization/content/bundles', [\App\Http\Controllers\CRM\MonetizationController::class, 'createBundle']);
+    Route::put('/monetization/content/bundles/{offer}', [\App\Http\Controllers\CRM\MonetizationController::class, 'updateBundle']);
     Route::post('/clients/{client}/monetization/pass', [\App\Http\Controllers\CRM\MonetizationController::class, 'staffPass']);
     Route::post('/monetization/assets/{asset}/purge', [\App\Http\Controllers\CRM\MonetizationController::class, 'purgeAsset']);
     Route::post('/monetization/assets/{asset}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'assetHold']);

@@ -19,6 +19,7 @@ class AssetLifecycleService
             $buyers = VisitorContentPurchase::where('platform_id', $client->platform_id)->whereIn('status', ['active', 'review', 'pending_payment'])->get()->filter(fn ($p) => collect($p->entitlement_snapshot_json)->contains('public_id', $publicId))->count();
             abort_if($action === 'delete' && $buyers > 0, 409, 'People have purchased this item or have a payment pending. Remove it from sale instead.');
             abort_if($action === 'public' && $buyers > 0 && ! $confirmed, 409, 'Buyers paid for this item. Confirm that you want to make a public copy.');
+            abort_if($action === 'public' && $asset->origin === PremiumContentOffer::ORIGIN_EXPIRY && ! app(ListingEligibility::class)->facts($client)['listing_active'], 409, 'Renew your listing before moving this video back to your public gallery. You can take it off sale now.');
             $minimum = (int) data_get(app(\App\Services\MonetizationSettingsService::class)->forPlatform($client->platform)->offer_policy_json, 'bundle_min_items', 2);
             abort_if($offers->contains(fn ($o) => $o->kind === 'bundle' && $o->status === 'live' && $o->assets()->count() - 1 < $minimum), 409, 'Removing this item would leave a live bundle below its minimum. Edit or pause that bundle first.');
             foreach ($offers as $offer) {
@@ -26,9 +27,10 @@ class AssetLifecycleService
                     $offer->assets()->detach($asset->id);
                     $offer->increment('version');
                 } else {
-                    $offer->update(['status' => 'retired', 'paused_by' => 'owner', 'version' => $offer->version + 1]);
+                    $offer->update(['status' => 'retired', 'paused_by' => 'owner', 'version' => $offer->version + 1, 'owner_opted_out_at' => $offer->origin === PremiumContentOffer::ORIGIN_EXPIRY ? ($offer->owner_opted_out_at ?? now()) : $offer->owner_opted_out_at]);
                 }
             }
+            app(AdminBundleService::class)->pauseCollectionsContaining($asset, $action === 'public' ? 'An item in this collection was made public by its escort.' : 'An item in this collection was deleted by its escort.');
             // Retain protected bytes for existing entitlements, even after a public copy is made.
             if ($action === 'delete') {
                 $asset->update(['status' => 'deleted', 'deleted_at' => now()]);
