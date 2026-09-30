@@ -221,3 +221,17 @@
   exact email in Settings → Security → Allowed email overrides and confirm the
   existing CRM user. If Google itself reports `org_internal`, the Google Cloud
   OAuth app audience must allow external accounts before the CRM exception can work.
+
+## 2026-09-30 shipment checkpoint
+
+- CRM commit `19d5facc` was pushed to `origin/main` after confirming the remote
+  was its direct parent `4da3d413`. Unrelated contact-unlock work and the mixed
+  state-index edit remained unstaged.
+- A post-push read-only production probe still returned 401 without the MCP
+  `WWW-Authenticate` discovery header and 401 on signed-out browser consent.
+  This confirms the cPanel pull has not occurred yet; pushing alone did not
+  deploy the repair. No production account or allowlist was changed.
+- Next: Ian pulls the CRM repository on cPanel. Recheck the two public auth
+  responses, confirm the compiled asset loaded, then an admin adds
+  `joolyan@gmail.com` as an exact email override and verifies an active CRM
+  user with the same address before reconnecting the MCP client.
