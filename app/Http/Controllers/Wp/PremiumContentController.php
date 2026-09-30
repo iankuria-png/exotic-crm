@@ -65,7 +65,7 @@ class PremiumContentController extends Controller
         $facts = app(ListingEligibility::class)->facts($client);
         $pass = $this->passes->current($client);
 
-        return response()->json(['policy' => $this->settings->runtime($s), 'listing' => $facts, 'pass' => $pass, 'quotes' => $s->prices->where('is_active', true)->map(fn ($p) => $this->passes->quote($client, $p->duration_key))->values(), 'wallet' => app(WalletService::class)->summary($client), 'kyc' => $decision, 'content_permissions' => ['upload_private' => $decision['decision'], 'publish_offer' => $decision['decision']], 'assets' => PremiumContentAsset::where('client_id', $client->id)->whereNotIn('status', ['deleted', 'public'])->get(['public_id', 'wp_attachment_id', 'media_type', 'preview_url', 'status', 'origin', 'duration_seconds']), 'offers' => PremiumContentOffer::where('client_id', $client->id)->with('assets')->get()->map(fn ($o) => $this->offers->present($o)), 'notices' => PremiumContentEvent::where('client_id', $client->id)->whereIn('kind', ['sale_notice', 'pass_expiring', 'pass_expired', 'free_pass_granted', 'expiry_media_moved'])->latest()->limit(5)->get(['kind', 'reason', 'created_at']), 'stats' => app(StatsService::class)->owner($client), 'automation' => $this->automationState($client), 'collections' => $this->collections($client)]);
+        return response()->json(['policy' => $this->settings->runtime($s), 'listing' => $facts, 'pass' => $pass, 'free_pass' => $this->passes->claimable($client)?->only(['id', 'duration_key', 'duration_days', 'grant_source', 'created_at']), 'quotes' => $s->prices->where('is_active', true)->map(fn ($p) => $this->passes->quote($client, $p->duration_key))->values(), 'wallet' => app(WalletService::class)->summary($client), 'kyc' => $decision, 'content_permissions' => ['upload_private' => $decision['decision'], 'publish_offer' => $decision['decision']], 'assets' => PremiumContentAsset::where('client_id', $client->id)->whereNotIn('status', ['deleted', 'public'])->get(['public_id', 'wp_attachment_id', 'media_type', 'preview_url', 'status', 'origin', 'duration_seconds']), 'offers' => PremiumContentOffer::where('client_id', $client->id)->with('assets')->get()->map(fn ($o) => $this->offers->present($o)), 'notices' => PremiumContentEvent::where('client_id', $client->id)->whereIn('kind', ['sale_notice', 'pass_expiring', 'pass_expired', 'free_pass_granted', 'expiry_media_moved'])->latest()->limit(5)->get(['kind', 'reason', 'created_at']), 'stats' => app(StatsService::class)->owner($client), 'automation' => $this->automationState($client), 'collections' => $this->collections($client)]);
     }
 
     /** Items Exotic moved when the listing expired, for the owner's one-time explanation. */
@@ -100,9 +100,12 @@ class PremiumContentController extends Controller
 
     public function activate(Request $r)
     {
-        $r->validate(['duration_key' => 'required|in:2_weeks,1_month', 'intent' => 'required|in:activate,renew']);
+        $r->validate(['intent' => 'required|in:activate,renew,claim', 'duration_key' => 'required_unless:intent,claim|nullable|in:2_weeks,1_month']);
         $client = $this->owner($r);
-        $pass = $this->passes->activate($client, $r->all(), $r->attributes->get('wallet_idempotency_key'));
+        // A granted free pass is claimed through the same signed activation call; no wallet debit.
+        $pass = $r->input('intent') === 'claim'
+            ? $this->passes->claim($client, (string) $r->attributes->get('wallet_idempotency_key'))
+            : $this->passes->activate($client, $r->all(), $r->attributes->get('wallet_idempotency_key'));
         app(SyncService::class)->profile($client);
 
         return response()->json(['pass' => $pass, 'wallet' => app(WalletService::class)->summary($client)]);

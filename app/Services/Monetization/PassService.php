@@ -18,6 +18,43 @@ class PassService
         return ClientMonetizationPass::where('client_id', $client->id)->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())->orderByDesc('expires_at')->first();
     }
 
+    /** The oldest free pass waiting to be claimed, if any. */
+    public function claimable(Client $client): ?ClientMonetizationPass
+    {
+        return ClientMonetizationPass::where('client_id', $client->id)->where('status', 'granted')->orderBy('id')->first();
+    }
+
+    /**
+     * Claim a granted free pass. Its full term starts now, or queues after any pass the
+     * escort already owns. A replayed attempt returns the pass it claimed.
+     */
+    public function claim(Client $client, string $attempt): ClientMonetizationPass
+    {
+        return DB::transaction(function () use ($client, $attempt) {
+            $client = Client::whereKey($client->id)->lockForUpdate()->firstOrFail();
+            $hash = hash('sha256', 'claim:'.$client->platform_id.':'.$client->id.':'.$attempt);
+            if ($old = ClientMonetizationPass::where('client_id', $client->id)->where('eligibility_snapshot_json->claim_attempt', $hash)->first()) {
+                return $old;
+            }
+            $pass = ClientMonetizationPass::where('client_id', $client->id)->where('status', 'granted')->orderBy('id')->lockForUpdate()->first();
+            abort_unless($pass, 409, 'There is no free pass to claim. Refresh the page.');
+            $facts = $this->eligibility->facts($client);
+            abort_unless($facts['listing_active'], 403, 'Selling private content needs an active listing.');
+            abort_if($facts['held'] || ClientMonetizationPass::where('client_id', $client->id)->whereIn('status', ['held', 'revoked'])->where('expires_at', '>', now())->exists(), 409, 'Selling is on hold. Contact support.');
+            ClientMonetizationPass::where('client_id', $client->id)->where('expires_at', '<=', now())->whereIn('status', ['active', 'queued'])->update(['status' => 'expired', 'active_marker' => null]);
+            $current = $this->current($client);
+            $start = $current ? $current->expires_at->copy() : now();
+            $pass->update([
+                'status' => $current ? 'queued' : 'active', 'active_marker' => $current ? null : 1,
+                'starts_at' => $start, 'expires_at' => $start->copy()->addDays($pass->duration_days), 'claimed_at' => now(),
+                'eligibility_snapshot_json' => array_merge($pass->eligibility_snapshot_json ?? [], ['claim_attempt' => $hash, 'claimed_listing' => $facts['listing_active']]),
+            ]);
+            \App\Models\PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'kind' => 'free_pass_claimed', 'reason' => 'Free selling pass claimed through '.$pass->expires_at->toDateString().'.', 'metadata_json' => ['pass_id' => $pass->id]]);
+
+            return $pass->fresh();
+        }, 3);
+    }
+
     public function quote(Client $client, string $duration): array
     {
         $s = $this->settings->forPlatform($client->platform);

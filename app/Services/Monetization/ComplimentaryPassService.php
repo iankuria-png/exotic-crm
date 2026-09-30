@@ -42,27 +42,26 @@ class ComplimentaryPassService
             if (ClientMonetizationPass::where('client_id', $client->id)->whereIn('status', ['held', 'revoked'])->where('expires_at', '>', now())->exists()) {
                 return ['status' => 'held', 'pass' => null];
             }
-            // Active-subscription batches never stack: one unexpired batch pass covers the escort.
-            if ($source === 'campaign_active_subscription' && ($covering = ClientMonetizationPass::where('client_id', $client->id)->where('grant_source', $source)->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())->first())) {
+            // Active-subscription batches never stack: an unclaimed or unexpired batch pass covers the escort.
+            if ($source === 'campaign_active_subscription' && ($covering = ClientMonetizationPass::where('client_id', $client->id)->where('grant_source', $source)->where(fn ($q) => $q->where('status', 'granted')->orWhere(fn ($live) => $live->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())))->first())) {
                 return ['status' => 'already_granted', 'pass' => $covering];
             }
             $s = $this->settings->forPlatform($client->platform);
             $price = $s->prices()->where('duration_key', $durationKey)->first();
             $days = (int) ($price?->duration_days ?: ($durationKey === '2_weeks' ? 14 : 30));
             $list = number_format((float) ($price?->price ?? 0), 2, '.', '');
-            ClientMonetizationPass::where('client_id', $client->id)->where('expires_at', '<=', now())->whereIn('status', ['active', 'queued'])->update(['status' => 'expired', 'active_marker' => null]);
-            $current = app(PassService::class)->current($client);
-            $start = $current ? $current->expires_at->copy() : now();
+            // The escort claims the pass at the end of the private-content journey; its term is
+            // placed after any owned time only then (see PassService::claim). Until claimed it sells nothing.
             $pass = ClientMonetizationPass::create([
                 'client_id' => $client->id, 'platform_id' => $client->platform_id, 'price_id' => $price?->id,
-                'status' => $current ? 'queued' : 'active', 'active_marker' => $current ? null : 1,
-                'starts_at' => $start, 'expires_at' => $start->copy()->addDays($days), 'duration_key' => $durationKey, 'duration_days' => $days,
+                'status' => 'granted', 'active_marker' => null,
+                'starts_at' => now(), 'expires_at' => now()->addDays($days), 'duration_key' => $durationKey, 'duration_days' => $days,
                 'currency' => $s->currency, 'list_amount' => $list, 'subsidy_amount' => $list, 'paid_amount' => 0,
                 'eligibility_snapshot_json' => ['complimentary' => true, 'grant_source' => $source, 'source_key' => $sourceKey, 'actor_id' => $actorId],
                 'is_sandbox' => $s->rollout_mode === 'sandbox', 'idempotency_key_hash' => $hash,
                 'grant_source' => $source, 'source_deal_id' => $dealId, 'grant_run_id' => $runId,
             ]);
-            PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'actor_id' => $actorId, 'kind' => 'free_pass_granted', 'reason' => 'A free selling pass was added through '.$pass->expires_at->toDateString().'.', 'metadata_json' => ['pass_id' => $pass->id, 'grant_source' => $source, 'source_key' => $sourceKey]]);
+            PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'actor_id' => $actorId, 'kind' => 'free_pass_granted', 'reason' => 'You have a free '.($days === 14 ? '2-week' : $days.'-day').' selling pass to claim in Private content.', 'metadata_json' => ['pass_id' => $pass->id, 'grant_source' => $source, 'source_key' => $sourceKey]]);
 
             return ['status' => 'granted', 'pass' => $pass];
         }, 3);
@@ -127,7 +126,7 @@ class ComplimentaryPassService
     public function activeSubscriptionsRemaining(Platform $platform): Builder
     {
         return $this->activeSubscriptions($platform)
-            ->whereNotIn('id', ClientMonetizationPass::where('platform_id', $platform->id)->where('grant_source', 'campaign_active_subscription')->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())->whereNotNull('client_id')->select('client_id'))
+            ->whereNotIn('id', ClientMonetizationPass::where('platform_id', $platform->id)->where('grant_source', 'campaign_active_subscription')->where(fn ($q) => $q->where('status', 'granted')->orWhere(fn ($live) => $live->whereIn('status', ['active', 'queued'])->where('expires_at', '>', now())))->whereNotNull('client_id')->select('client_id'))
             ->whereNotIn('id', MonetizationAutomationItem::where('platform_id', $platform->id)->where('kind', 'pass_grant')->whereIn('status', ['queued', 'running'])->whereNotNull('client_id')->whereHas('run', fn ($r) => $r->where('kind', 'active_pass_grant'))->select('client_id'))
             ->orderBy('id');
     }

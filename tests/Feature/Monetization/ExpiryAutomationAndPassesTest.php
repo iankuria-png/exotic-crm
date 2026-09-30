@@ -26,6 +26,7 @@ use App\Services\PaymentCompletionService;
 use App\Services\WalletSyncService;
 use App\Support\ClientLifecycleState;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
@@ -262,21 +263,57 @@ class ExpiryAutomationAndPassesTest extends TestCase
         $this->assertTrue(collect($this->app->make(\App\Http\Controllers\CRM\MonetizationController::class)->index(tap(\Illuminate\Http\Request::create('/api/crm/monetization', 'GET', ['platform_id' => $this->market->id]))->setUserResolver(fn () => $admin))->getData(true)['content'])->firstWhere('id', $offer->id)['needs_attention']);
     }
 
-    public function test_free_pass_queues_after_paid_time_and_replays_once(): void
+    public function test_free_pass_waits_to_be_claimed_then_queues_after_paid_time(): void
     {
         $this->creator->update(['lifecycle_state' => ClientLifecycleState::ACTIVE, 'escort_expire' => now()->addMonth()->timestamp]);
         $paid = ClientMonetizationPass::create(['client_id' => $this->creator->id, 'platform_id' => $this->market->id, 'status' => 'active', 'active_marker' => 1, 'starts_at' => now()->subDays(4), 'expires_at' => now()->addDays(10), 'duration_key' => '2_weeks', 'duration_days' => 14, 'currency' => 'KES', 'list_amount' => 300, 'subsidy_amount' => 0, 'paid_amount' => 300, 'eligibility_snapshot_json' => [], 'idempotency_key_hash' => str_repeat('1', 64)]);
         $service = app(ComplimentaryPassService::class);
+        $passes = app(\App\Services\Monetization\PassService::class);
         $first = $service->grant($this->creator, '1_month', 'campaign_selected', 'fixture');
         $this->assertSame('granted', $first['status']);
-        $this->assertSame('queued', $first['pass']->status);
-        $this->assertTrue($first['pass']->starts_at->equalTo($paid->fresh()->expires_at));
-        $this->assertSame('0.00', $first['pass']->paid_amount);
-        $this->assertSame('300.00', $paid->fresh()->paid_amount);
-        $this->assertTrue($paid->fresh()->expires_at->equalTo($paid->expires_at));
+        $this->assertSame('granted', $first['pass']->status);
+        $this->assertSame($paid->id, $passes->current($this->creator)->id, 'An unclaimed grant never becomes the current pass');
+        $this->assertSame($first['pass']->id, $passes->claimable($this->creator)->id);
         $this->assertSame('already_granted', $service->grant($this->creator, '1_month', 'campaign_selected', 'fixture')['status']);
+
+        $claimed = $passes->claim($this->creator, 'claim-1');
+        $this->assertSame('queued', $claimed->status);
+        $this->assertTrue($claimed->starts_at->equalTo($paid->fresh()->expires_at));
+        $this->assertTrue($claimed->expires_at->equalTo($paid->fresh()->expires_at->copy()->addDays(30)));
+        $this->assertNotNull($claimed->claimed_at);
+        $this->assertSame('0.00', $claimed->paid_amount);
+        $this->assertSame('300.00', $paid->fresh()->paid_amount);
+        $this->assertSame($claimed->id, $passes->claim($this->creator, 'claim-1')->id, 'A replayed claim returns the same pass');
+        $this->assertNull($passes->claimable($this->creator));
+        try {
+            $passes->claim($this->creator, 'claim-2');
+            $this->fail('Claimed a pass that was not granted');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            $this->assertSame(409, $e->getStatusCode());
+        }
         $this->assertSame(2, ClientMonetizationPass::count());
         $this->assertSame(0, WalletTransaction::count());
+    }
+
+    public function test_claim_starts_the_term_now_and_needs_an_active_listing(): void
+    {
+        $service = app(ComplimentaryPassService::class);
+        $passes = app(\App\Services\Monetization\PassService::class);
+        $service->grant($this->creator, '2_weeks', 'campaign_selected', 'expired-escort');
+        try {
+            $passes->claim($this->creator, 'too-early');
+            $this->fail('An expired listing claimed a free pass');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+        }
+        $this->assertSame('granted', $passes->claimable($this->creator)->status);
+        $this->creator->update(['lifecycle_state' => ClientLifecycleState::ACTIVE, 'escort_expire' => now()->addMonth()->timestamp]);
+        $this->travel(5)->days();
+        $claimed = $passes->claim($this->creator, 'after-renewal');
+        $this->assertSame('active', $claimed->status);
+        $this->assertSame(1, $claimed->active_marker);
+        $this->assertTrue($claimed->starts_at->isSameMinute(now()));
+        $this->assertTrue($claimed->expires_at->isSameMinute(now()->addDays(14)), 'Days waiting before the claim are not lost');
     }
 
     public function test_new_subscription_grants_once_and_renewal_or_trial_does_not(): void
@@ -293,6 +330,7 @@ class ExpiryAutomationAndPassesTest extends TestCase
         $this->assertNull($service->grantForNewSubscription($deal(['subscription_lifecycle' => 'new', 'is_free_trial' => true])->id));
         $this->assertNull($service->grantForNewSubscription($deal(['subscription_lifecycle' => 'new', 'activated_at' => now()->subDays(2)])->id));
         $pass = ClientMonetizationPass::sole();
+        $this->assertSame('granted', $pass->status);
         $this->assertSame('policy_new_subscription', $pass->grant_source);
         $this->assertSame($new->id, $pass->source_deal_id);
         $this->assertTrue($pass->isComplimentary());
@@ -356,5 +394,22 @@ class ExpiryAutomationAndPassesTest extends TestCase
         }
         $admin = \App\Models\User::factory()->create(['role' => 'admin', 'status' => 'active']);
         $this->actingAs($admin, 'sanctum')->postJson('/api/crm/settings/monetization/markets/'.$this->market->id.'/automations/free-passes', ['scope' => 'active_subscriptions', 'duration_key' => '1_month', 'batch_size' => 75])->assertUnprocessable();
+    }
+
+    public function test_claim_migration_returns_unused_grants_and_keeps_used_or_paid_passes(): void
+    {
+        $make = fn (Client $client, string $source, float $paid, string $key) => ClientMonetizationPass::create(['client_id' => $client->id, 'platform_id' => $this->market->id, 'status' => 'active', 'active_marker' => 1, 'starts_at' => now()->subDay(), 'expires_at' => now()->addDays(20), 'duration_key' => '1_month', 'duration_days' => 30, 'currency' => 'KES', 'list_amount' => 500, 'subsidy_amount' => 500 - $paid, 'paid_amount' => $paid, 'eligibility_snapshot_json' => [], 'idempotency_key_hash' => str_repeat($key, 64), 'grant_source' => $source]);
+        $unused = $make($this->creator, 'campaign_active_subscription', 0, '2');
+        $user = $this->creator('Uploader', ClientLifecycleState::ACTIVE);
+        $this->asset($user, 'creator', 'photo');
+        $used = $make($user, 'campaign_selected', 0, '3');
+        $payer = $this->creator('Payer', ClientLifecycleState::ACTIVE);
+        $paid = $make($payer, 'wallet', 400, '4');
+        DB::table('client_monetization_passes')->update(['claimed_at' => null]);
+        (require database_path('migrations/2026_10_01_100000_add_claim_step_to_complimentary_passes.php'))->up();
+        $this->assertSame(['granted', null, null], [$unused->fresh()->status, $unused->fresh()->active_marker, $unused->fresh()->claimed_at]);
+        $this->assertSame('active', $used->fresh()->status);
+        $this->assertNotNull($used->fresh()->claimed_at);
+        $this->assertSame(['active', null], [$paid->fresh()->status, $paid->fresh()->claimed_at]);
     }
 }
