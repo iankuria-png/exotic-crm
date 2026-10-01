@@ -78,7 +78,7 @@ class ScheduleDispatcher
         foreach ($runs as $run) {
             $platform = Platform::query()->find($run->platform_id);
             $connection = DbScanConnection::query()->where('platform_id', $run->platform_id)->first();
-            $blocked = $platform ? $this->gate->check($platform, $connection, 'scan') : 'health';
+            $blocked = $platform ? $this->gate->check($platform, $connection, 'scan', LoadOverride::forRun($run)) : 'health';
             if ($blocked === null && $run->pause_reason === 'window' && $platform) {
                 $schedule = $run->pass?->schedule_id ? DbScanSchedule::query()->find($run->pass->schedule_id) : null;
                 if ($schedule && ! ScheduleWindow::isOpen((array) $schedule->window, $platform->timezone ?: 'UTC', $now)) {

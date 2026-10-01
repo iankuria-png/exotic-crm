@@ -47,11 +47,17 @@ class PassController
         ?int $scheduleId = null,
         bool $bypassWindow = false,
         string $mode = 'scan',
+        ?array $loadOverride = null,
     ): DbScanPass {
         $platformIds = array_values(array_unique(array_map('intval', $platformIds)));
         sort($platformIds);
 
-        $pass = DB::transaction(function () use ($platformIds, $profile, $trigger, $actorId, $ruleSubset, $verbose, $idempotencyKey, $scheduleId, $bypassWindow, $mode) {
+        if ($loadOverride !== null && ($trigger !== 'manual' || $mode !== 'scan' || $scheduleId !== null || count($platformIds) !== 1
+            || (int) ($loadOverride['platform_id'] ?? 0) !== $platformIds[0] || (int) ($loadOverride['actor_id'] ?? 0) !== $actorId)) {
+            throw new \InvalidArgumentException('Load overrides require one manual market scan and its actor.');
+        }
+
+        $pass = DB::transaction(function () use ($platformIds, $profile, $trigger, $actorId, $ruleSubset, $verbose, $idempotencyKey, $scheduleId, $bypassWindow, $mode, $loadOverride) {
             if ($idempotencyKey && $actorId) {
                 $existing = DbScanPass::query()->where('triggered_by', $actorId)->where('idempotency_key', $idempotencyKey)->first();
                 if ($existing) {
@@ -76,12 +82,16 @@ class PassController
                 'schedule_id' => $scheduleId,
                 'triggered_by' => $actorId,
                 'idempotency_key' => $idempotencyKey,
-                'scope' => ['platform_ids' => $platformIds],
+                'scope' => ['platform_ids' => $platformIds, 'load_override' => $loadOverride],
                 'rules' => $ruleSubset,
                 'verbose' => $verbose,
                 'bypass_window' => $bypassWindow,
                 'status' => 'queued',
             ]);
+
+            if ($loadOverride !== null) {
+                app(\App\Services\DbScanner\DbScanAuditWriter::class)->record($actorId, 'pass', $pass->id, 'load_override_granted', null, $loadOverride, $platformIds[0]);
+            }
 
             foreach ($platformIds as $platformId) {
                 $platform = Platform::query()->findOrFail($platformId);
@@ -215,6 +225,9 @@ class PassController
             if (! in_array($locked->status, ['paused', 'pausing'], true)) {
                 throw new InvalidTransitionException('Only a paused pass can be resumed.');
             }
+            if (isset($locked->scope['load_override']) && LoadOverride::ended($locked->scope['load_override'])) {
+                throw new InvalidTransitionException(ScannerGate::describe('override_expired'));
+            }
 
             foreach (DbScanMarketRun::query()->where('pass_id', $pass->id)->lockForUpdate()->get() as $run) {
                 if ($run->status === 'running' && $run->control === 'pause') {
@@ -242,9 +255,9 @@ class PassController
      * safe checkpoint, then stop. The sweep is stopped so no continuation is
      * ever created for it; a new Scan now starts a new sweep.
      */
-    public function stop(DbScanPass $pass): DbScanPass
+    public function stop(DbScanPass $pass, ?int $actorId = null): DbScanPass
     {
-        DB::transaction(function () use ($pass) {
+        DB::transaction(function () use ($pass, $actorId) {
             $locked = DbScanPass::query()->whereKey($pass->id)->lockForUpdate()->first();
             if (in_array($locked->status, DbScanPass::TERMINAL, true)) {
                 throw new InvalidTransitionException('This pass has already finished.');
@@ -265,7 +278,13 @@ class PassController
                     $this->terminator->terminateLocked($run, 'stopped', 'stopped_by_operator');
                 }
             }
-            $locked->forceFill(['status' => 'stopping'])->save();
+            $scope = $locked->scope;
+            if (isset($scope['load_override']) && empty($scope['load_override']['revoked_at'])) {
+                $before = $scope['load_override'];
+                $scope['load_override']['revoked_at'] = now()->toIso8601String();
+                app(\App\Services\DbScanner\DbScanAuditWriter::class)->record($actorId, 'pass', $locked->id, 'load_override_revoked', $before, $scope['load_override'], (int) $scope['load_override']['platform_id']);
+            }
+            $locked->forceFill(['status' => 'stopping', 'scope' => $scope])->save();
         });
         $this->passStatus->refresh((int) $pass->id);
 

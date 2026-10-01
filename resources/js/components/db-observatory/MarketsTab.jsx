@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
+import { LoadOverridePrompt } from './LoadOverride';
 import { useToast } from '../ToastProvider';
 import {
     apiError, Drawer, Empty, ErrorState, fmtAgo, fmtBytes, fmtDateTime, humanize, InertCode, Loading, Panel, Status,
@@ -44,6 +45,7 @@ function ConnectionForm({ platformId, onSaved }) {
             tls_ca: form.tls_ca || null,
         }),
         onSuccess: (res) => {
+            setResult(null);
             toast.success(res.preflight_status === 'passed' ? 'Connection saved.' : 'Connection saved — run preflight to approve it.');
             queryClient.invalidateQueries({ queryKey: ['dbo'] });
             onSaved?.();
@@ -52,7 +54,7 @@ function ConnectionForm({ platformId, onSaved }) {
     });
 
     const preflight = useMutation({
-        mutationFn: () => dbObservatory.preflight(platformId),
+        mutationFn: (reason) => dbObservatory.preflight(platformId, reason ? { override_reason: reason } : {}),
         onSuccess: (res) => { setResult(res); toast.success('Preflight passed.'); queryClient.invalidateQueries({ queryKey: ['dbo'] }); },
         onError: (e) => { setResult(e?.response?.data || { status: 'failed', message: apiError(e) }); queryClient.invalidateQueries({ queryKey: ['dbo'] }); },
     });
@@ -104,8 +106,11 @@ function ConnectionForm({ platformId, onSaved }) {
                 <button type="button" className="crm-btn-secondary" disabled={!c || preflight.isPending} onClick={() => preflight.mutate()}>{preflight.isPending ? 'Running preflight…' : 'Run preflight'}</button>
                 {c ? <span className="flex items-center gap-1.5 text-xs text-slate-500">Config v{c.config_version} · preflight <Status value={c.preflight_status} /> {c.preflight_at ? fmtAgo(c.preflight_at) : ''}</span> : null}
             </div>
+            {shown?.code === 'load' && shown.load ? (
+                <LoadOverridePrompt key={`${platformId}-${c?.config_version}`} load={shown.load} market={row.market || row.name || 'this market'} preflight pending={preflight.isPending || save.isPending} onRun={(reason) => preflight.mutate(reason)} />
+            ) : null}
             <p className="text-xs text-slate-500">Changing host, database, prefix or credentials creates a new configuration version and requires a fresh preflight before any scan. Preflight reads only identity, grants, session settings and table names — never row values.</p>
-            {shown ? (
+            {shown && !(shown.code === 'load' && shown.load) ? (
                 <div className={`rounded-lg border px-3 py-2 text-sm ${shown.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
                     <p className="font-semibold">{shown.message}</p>
                     {shown.capabilities?.engine ? <p className="mt-1 text-xs">Engine {shown.capabilities.engine} · TLS {shown.capabilities.tls} · timeout {shown.capabilities.statement_timeout_seconds}s</p> : null}

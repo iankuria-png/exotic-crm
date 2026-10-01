@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
 import ConfirmDialog from '../ConfirmDialog';
+import { LoadOverrideBanner } from './LoadOverride';
 import { useToast } from '../ToastProvider';
 import {
     apiError, ConfidenceBadge, Empty, ErrorState, fmtDateTime, fmtNumber, fmtTime, humanize, InertCode, Loading, Meter, Panel,
@@ -32,21 +33,22 @@ function PassControls({ pass, canOperate }) {
 
     if (!canOperate || !pass || TERMINAL_PASS.includes(pass.status)) return null;
     const paused = ['paused', 'pausing'].includes(pass.status);
+    const expired = pass.load_override && (pass.load_override.revoked_at || Date.parse(pass.load_override.expires_at) <= Date.now());
 
     return (
         <div className="flex flex-wrap gap-2">
             {paused ? (
-                <button type="button" className="crm-btn-secondary" disabled={mutation.isPending} onClick={() => mutation.mutate({ action: 'resume' })}>Resume</button>
+                <button type="button" className="crm-btn-secondary" disabled={mutation.isPending || expired} onClick={() => mutation.mutate({ action: 'resume' })}>Resume</button>
             ) : (
                 <button type="button" className="crm-btn-secondary" disabled={mutation.isPending || pass.status === 'stopping'} onClick={() => mutation.mutate({ action: 'pause' })}>Pause</button>
             )}
-            <button type="button" className="crm-btn-danger" disabled={mutation.isPending || pass.status === 'stopping'} onClick={() => setConfirmStop(true)}>Stop this scan</button>
+            <button type="button" className="crm-btn-danger" disabled={mutation.isPending || pass.status === 'stopping'} onClick={() => setConfirmStop(true)}>{pass.load_override ? 'Revoke & stop' : 'Stop this scan'}</button>
             <ConfirmDialog
                 open={confirmStop}
                 tone="danger"
-                title="Stop this scan?"
+                title={pass.load_override ? 'Revoke override and stop this scan?' : 'Stop this scan?'}
                 message="Running markets commit their current chunk and stop; unstarted markets end now. The sweep is closed and nothing is resolved. A later Scan now starts a new sweep. Schedules are not affected."
-                confirmLabel="Stop scan"
+                confirmLabel={pass.load_override ? 'Revoke & stop' : 'Stop scan'}
                 isPending={mutation.isPending}
                 onCancel={() => setConfirmStop(false)}
                 onConfirm={() => mutation.mutate({ action: 'stop' })}
@@ -261,6 +263,7 @@ export function RunDetail({ runId, canOperate, onBack, onOpenFindings }) {
                 </div>
             </div>
 
+            <LoadOverrideBanner pass={passQuery.data?.pass} />
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
                 {[
                     ['Surfaces', `${progress.surfaces_done ?? 0}/${progress.surfaces_total ?? 0}`],
@@ -378,7 +381,7 @@ export default function RunsTab({ canOperate, onOpenRun, onOpenFindings, openRun
                             <button type="button" onClick={() => setExpanded(expanded === pass.id ? null : pass.id)} className="grid w-full grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 md:grid-cols-[minmax(0,1.4fr)_8rem_10rem_9rem_7rem]">
                                 <div className="min-w-0">
                                     <p className="truncate text-sm font-semibold text-slate-900">Pass {pass.id} · <span className="capitalize">{pass.profile}</span>{pass.mode !== 'scan' ? ` · ${pass.mode}` : ''}{pass.rules ? ` · ${pass.rules.join(', ')}` : ''}</p>
-                                    <p className="text-xs text-slate-500">{humanize(pass.trigger)} · {fmtDateTime(pass.created_at)}{pass.sweep_id ? ` · sweep ${pass.sweep_id}` : ''}</p>
+                                    <p className="text-xs text-slate-500">{humanize(pass.trigger)} · {fmtDateTime(pass.created_at)}{pass.sweep_id ? ` · sweep ${pass.sweep_id}` : ''}{pass.load_override ? <span className="ml-2 font-semibold text-amber-800">Load override</span> : null}</p>
                                 </div>
                                 <div className="hidden md:block"><Meter fraction={pass.markets_total ? pass.markets_done / pass.markets_total : 0} /><p className="mt-1 text-xs text-slate-500">{pass.markets_done}/{pass.markets_total} markets</p></div>
                                 <div className="hidden text-xs text-slate-500 md:block">{Object.entries(pass.run_statuses).map(([s, n]) => `${n} ${humanize(s).toLowerCase()}`).join(' · ')}</div>
@@ -387,6 +390,7 @@ export default function RunsTab({ canOperate, onOpenRun, onOpenFindings, openRun
                             </button>
                             {expanded === pass.id ? (
                                 <div className="space-y-2 bg-slate-50/70 px-4 py-3">
+                                    <LoadOverrideBanner pass={pass} />
                                     <PassControls pass={pass} canOperate={canOperate} />
                                     <div className="overflow-x-auto">
                                         <table className="w-full min-w-[36rem] text-sm">

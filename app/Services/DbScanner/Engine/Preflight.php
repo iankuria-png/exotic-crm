@@ -49,24 +49,27 @@ class Preflight
     /**
      * @return array{status: string, code: ?string, message: string, capabilities: array, run_id: ?int}
      */
-    public function run(DbScanConnection $connection, ?int $actorId): array
+    public function run(DbScanConnection $connection, ?int $actorId, ?array $loadOverride = null): array
     {
         $platform = Platform::query()->findOrFail($connection->platform_id);
 
-        $reason = $this->gate->check($platform, $connection, 'preflight');
+        $reason = $this->gate->check($platform, $connection, 'preflight', $loadOverride);
         if ($reason !== null) {
-            return ['status' => 'blocked', 'code' => $reason, 'message' => ScannerGate::describe($reason), 'capabilities' => [], 'run_id' => null];
+            return ['status' => 'blocked', 'code' => $reason, 'message' => ScannerGate::describe($reason), 'capabilities' => [], 'run_id' => null, 'load' => $this->gate->loadStatus()];
         }
 
         $token = Str::random(40);
-        $run = DB::transaction(function () use ($connection, $actorId, $token) {
+        $run = DB::transaction(function () use ($connection, $actorId, $token, $loadOverride) {
             if ($this->admission->marketBusy((int) $connection->platform_id)) {
                 throw new MarketBusyException([(int) $connection->platform_id]);
             }
             $pass = DbScanPass::query()->create([
                 'trigger' => 'manual', 'mode' => 'preflight', 'profile' => 'quick', 'triggered_by' => $actorId,
-                'scope' => ['platform_ids' => [(int) $connection->platform_id]], 'status' => 'running', 'started_at' => now(),
+                'scope' => ['platform_ids' => [(int) $connection->platform_id], 'load_override' => $loadOverride], 'status' => 'running', 'started_at' => now(),
             ]);
+            if ($loadOverride !== null) {
+                $this->audit->record($actorId, 'pass', $pass->id, 'load_override_granted', null, $loadOverride, (int) $connection->platform_id);
+            }
             $run = DbScanMarketRun::query()->create([
                 'pass_id' => $pass->id, 'platform_id' => $connection->platform_id, 'mode' => 'preflight', 'profile' => 'quick',
                 'status' => 'running', 'generation' => 1, 'owner_token' => $token, 'started_at' => now(), 'heartbeat_at' => now(),
@@ -86,6 +89,15 @@ class Preflight
         $code = null;
         $message = 'Preflight passed: read-only session, schema-scoped SELECT grants and core tables verified.';
 
+        $controlReason = null;
+        if ($loadOverride !== null) {
+            $reader->setControl(function () use ($platform, $connection, $loadOverride, &$controlReason): void {
+                $controlReason = $this->gate->check($platform, $connection, 'preflight', $loadOverride);
+                if ($controlReason !== null) {
+                    throw new ReaderException(ReaderException::CONTROL_ABORT);
+                }
+            });
+        }
         try {
             $reader->open();
             $capabilities['engine'] = mb_substr($reader->engine(), 0, 80);
@@ -116,8 +128,8 @@ class Preflight
                 $message = 'Rejected: multisite tables found; phase 1 supports single-site schemas only.';
             }
         } catch (ReaderException $e) {
-            $code = $e->errorCode;
-            $message = $e->getMessage();
+            $code = $controlReason ?? $e->errorCode;
+            $message = $controlReason !== null ? ScannerGate::describe($controlReason) : $e->getMessage();
         } catch (\Throwable) {
             $code = 'internal_error';
             $message = 'Preflight failed unexpectedly; nothing was read beyond metadata.';

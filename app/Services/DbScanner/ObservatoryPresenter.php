@@ -110,6 +110,7 @@ class ObservatoryPresenter
             'schedule_id' => $pass->schedule_id,
             'sweep_id' => $pass->sweep_id,
             'triggered_by' => $pass->triggered_by,
+            'load_override' => $pass->scope['load_override'] ?? null,
             'rules' => $pass->rules,
             'verbose' => (bool) $pass->verbose,
             'created_at' => $pass->created_at?->toIso8601String(),

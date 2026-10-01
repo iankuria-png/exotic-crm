@@ -519,10 +519,14 @@ class DbObservatoryConfigController extends Controller
     public function preflight(Request $request, int $platform, Preflight $preflight): JsonResponse
     {
         $this->ensureConfigure($request);
+        $data = $request->validate(['override_reason' => ['nullable', 'string', 'min:10', 'max:500']]);
+        $override = isset($data['override_reason'])
+            ? \App\Services\DbScanner\Engine\LoadOverride::issue($platform, (int) $request->user()->id, 'preflight', $data['override_reason'])
+            : null;
         $connection = DbScanConnection::query()->where('platform_id', $platform)->firstOrFail();
 
         try {
-            $result = $preflight->run($connection, (int) $request->user()->id);
+            $result = $preflight->run($connection, (int) $request->user()->id, $override);
         } catch (MarketBusyException) {
             return response()->json(['message' => 'This market has an active scan; preflight waits until it ends.'], 409);
         } catch (HostBusyException $e) {

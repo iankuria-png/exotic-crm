@@ -8,6 +8,7 @@ import dbObservatory from '../services/dbObservatory';
 import OverviewTab from '../components/db-observatory/OverviewTab';
 import RunsTab from '../components/db-observatory/RunsTab';
 import FindingsTab from '../components/db-observatory/FindingsTab';
+import { LoadOverridePrompt } from '../components/db-observatory/LoadOverride';
 import MarketsTab from '../components/db-observatory/MarketsTab';
 import RulesTab from '../components/db-observatory/RulesTab';
 import SchedulesTab from '../components/db-observatory/SchedulesTab';
@@ -32,23 +33,26 @@ function ScanNowDialog({ open, onClose, markets, preselect, onStarted }) {
     const [selected, setSelected] = useState([]);
     const [verbose, setVerbose] = useState(false);
     const [blocked, setBlocked] = useState(null);
+    const [load, setLoad] = useState(null);
     const key = useMemo(() => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
     React.useEffect(() => {
         if (open) {
             setSelected(preselect ? [preselect] : []);
             setBlocked(null);
+            setLoad(null);
         }
     }, [open, preselect]);
 
     const start = useMutation({
-        mutationFn: () => dbObservatory.startPass({ profile, markets: selected.length === eligible.length && eligible.length > 1 ? 'all' : selected, verbose, idempotency_key: key }),
+        mutationFn: (overrideReason) => dbObservatory.startPass({ ...(overrideReason ? { override_reason: overrideReason } : {}), profile, markets: selected.length === eligible.length && eligible.length > 1 ? 'all' : selected, verbose, idempotency_key: key }),
         onSuccess: (res) => {
             toast.success(`Pass ${res.pass_id} queued for ${res.markets} market(s).`);
             queryClient.invalidateQueries({ queryKey: ['dbo'] });
             onStarted(res);
         },
         onError: (error) => {
+            setLoad(error?.response?.data?.load || null);
             if (error?.response?.status === 423 && error.response.data?.blocked) {
                 setBlocked(error.response.data.blocked);
             }
@@ -63,7 +67,7 @@ function ScanNowDialog({ open, onClose, markets, preselect, onStarted }) {
             open={open}
             onClose={onClose}
             title="Scan now"
-            subtitle="Runs within the same load, health, credential and per-host limits as scheduled scans."
+            subtitle="Choose markets and a profile. If load protection blocks a single market, an administrator can request a temporary override."
             width="max-w-xl"
             footer={(
                 <div className="flex items-center justify-between gap-3">
@@ -111,6 +115,13 @@ function ScanNowDialog({ open, onClose, markets, preselect, onStarted }) {
                 <p className="mt-3 text-xs text-slate-500">Markets on the same database host run one at a time. A market that already has an active scan cannot be selected twice; the whole request is refused instead.</p>
             </fieldset>
 
+            {load && selected.some((id) => blocked?.some((b) => b.platform_id === id && b.reason === 'load')) ? (
+                <div className="mt-4">
+                    {selected.length === 1 ? (
+                        <LoadOverridePrompt key={`${selected[0]}-${profile}`} load={load} market={eligible.find((m) => m.platform_id === selected[0])?.market || 'this market'} pending={start.isPending} onRun={(reason) => start.mutate(reason)} />
+                    ) : <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">A load override is available for one market at a time. Select a single market to continue.</p>}
+                </div>
+            ) : null}
             <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={verbose} onChange={(e) => setVerbose(e.target.checked)} /> Verbose debug events
             </label>

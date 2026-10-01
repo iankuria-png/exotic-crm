@@ -27,7 +27,7 @@ class ScannerGate
         private readonly LoadShedder $shedder,
     ) {}
 
-    public function check(Platform $platform, ?DbScanConnection $connection, string $mode = 'scan'): ?string
+    public function check(Platform $platform, ?DbScanConnection $connection, string $mode = 'scan', ?array $loadOverride = null): ?string
     {
         $row = $this->settings->row(true);
         if ($row->emergency_stop) {
@@ -50,15 +50,21 @@ class ScannerGate
             return 'credentials';
         }
 
-        if ($reason = $this->loadReason()) {
+        if ($loadOverride !== null && ((int) ($loadOverride['platform_id'] ?? 0) !== (int) $platform->id || ($loadOverride['mode'] ?? null) !== $mode)) {
+            return 'override_expired';
+        }
+        if ($reason = $this->loadReason($loadOverride)) {
             return $reason;
         }
 
         return $this->healthReason($platform);
     }
 
-    public function loadReason(): ?string
+    public function loadReason(?array $loadOverride = null): ?string
     {
+        if ($loadOverride !== null && LoadOverride::ended($loadOverride)) {
+            return 'override_expired';
+        }
         if (! config('db_scanner.gates.require_ops_state', true)) {
             return null;
         }
@@ -79,10 +85,25 @@ class ScannerGate
         }
 
         if ((int) $state['level'] > (int) config('db_scanner.gates.max_load_level', 0)) {
-            return 'load';
+            return $loadOverride !== null && (int) $state['level'] < 3 ? null : 'load';
         }
 
         return null;
+    }
+
+    public function loadStatus(): array
+    {
+        $state = $this->shedder->state();
+
+        return [
+            'level' => $state['level'] ?? null,
+            'label' => $state['level_label'] ?? null,
+            'signal' => $state['trigger_signal'] ?? null,
+            'value' => $state['trigger_value'] ?? null,
+            'threshold' => $state['threshold'] ?? null,
+            'sampled_at' => $state['sampled_at'] ?? $state['evaluated_at'] ?? null,
+            'override_allowed' => $this->loadReason() === 'load' && (int) ($state['level'] ?? 3) < 3,
+        ];
     }
 
     public function healthReason(Platform $platform): ?string
@@ -117,6 +138,7 @@ class ScannerGate
             'credentials' => 'This market has no enabled scanner credentials with a passing preflight for the current configuration.',
             'ops_state_missing' => 'Platform load state is unavailable, so scanning waits (fail closed).',
             'ops_state_stale' => 'Platform load state is stale, so scanning waits (fail closed).',
+            'override_expired' => 'This load override has ended. Stop this scan, then start a new scan to request another override.',
             'load' => 'The platform is under load (degradation level 1 or higher).',
             'health' => 'The market is not healthy.',
             'health_stale' => 'The market health check is older than ten minutes.',

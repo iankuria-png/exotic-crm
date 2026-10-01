@@ -109,7 +109,7 @@ class ScanExecutor
             return 'partial';
         }
 
-        $reason = $this->gate->check($platform, $connection, 'scan');
+        $reason = $this->gate->check($platform, $connection, 'scan', LoadOverride::forRun($run));
         if ($reason !== null) {
             return $this->blocked($run, $reason);
         }
@@ -187,6 +187,12 @@ class ScanExecutor
 
             $schema = $this->discovery->discover($reader, $target->prefix);
             $state = $run->cursor ?: $this->initialState($run, $rules, $schema);
+            if (LoadOverride::forRun($run) !== null) {
+                foreach ($state['surfaces'] as &$surface) {
+                    $surface['batch_rows'] = min(250, (int) $surface['batch_rows']);
+                }
+                unset($surface);
+            }
             $state['engine'] = $reader->engine();
             $state['schema'] = $schema->summary();
 
@@ -582,6 +588,11 @@ class ScanExecutor
                 $this->abort = 'global_pause';
                 throw new ReaderException(ReaderException::CONTROL_ABORT);
             }
+            // An in-flight query retains its normal statement timeout.
+            if (($override = LoadOverride::forRun($run)) !== null && ($reason = $this->gate->loadReason($override))) {
+                $this->abort = 'gate:'.$reason;
+                throw new ReaderException(ReaderException::CONTROL_ABORT);
+            }
         }
 
         if ($now - $lastRenew >= 30) {
@@ -643,6 +654,13 @@ class ScanExecutor
 
             if ($outcome === 'pause' || $outcome === 'global_pause') {
                 return $this->terminator->pauseLocked($locked, $outcome === 'pause' ? 'manual' : 'operator_global');
+            }
+
+            if (str_starts_with($outcome, 'gate:')) {
+                $reason = substr($outcome, 5);
+                $this->log->log($locked, 'warn', ScannerGate::describe($reason), ['gate' => $reason]);
+
+                return $this->terminator->pauseLocked($locked, $reason === 'override_expired' ? $reason : 'load');
             }
 
             if ($outcome === 'stop') {
@@ -729,7 +747,7 @@ class ScanExecutor
             return 'paused';
         }
 
-        $this->terminator->pause($run, in_array($reason, ['health', 'health_stale'], true) ? 'health' : 'load');
+        $this->terminator->pause($run, $reason === 'override_expired' ? $reason : (in_array($reason, ['health', 'health_stale'], true) ? 'health' : 'load'));
 
         return 'paused';
     }

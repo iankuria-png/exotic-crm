@@ -10,6 +10,7 @@ use App\Models\DbScanRule;
 use App\Models\Platform;
 use App\Services\DbScanner\DbScanAuditWriter;
 use App\Services\DbScanner\Engine\InvalidTransitionException;
+use App\Services\DbScanner\Engine\LoadOverride;
 use App\Services\DbScanner\Engine\MarketBusyException;
 use App\Services\DbScanner\Engine\PassController;
 use App\Services\DbScanner\Engine\ScannerGate;
@@ -41,6 +42,7 @@ class DbObservatoryPassController extends Controller
             'markets.*' => ['integer'],
             'rules' => ['nullable', 'array', 'max:60'],
             'rules.*' => ['string', Rule::exists('db_scan_rules', 'key')->where('retired', false)],
+            'override_reason' => ['nullable', 'string', 'min:10', 'max:500'],
             'verbose' => ['sometimes', 'boolean'],
             'idempotency_key' => ['nullable', 'string', 'max:80'],
         ]);
@@ -51,9 +53,17 @@ class DbObservatoryPassController extends Controller
             return response()->json(['message' => 'No market has enabled scanner credentials with a passing preflight.'], 423);
         }
 
+        $override = null;
+        if (isset($data['override_reason'])) {
+            if (! is_array($data['markets']) || count($requested) !== 1) {
+                return response()->json(['message' => 'A load override requires exactly one selected market.'], 422);
+            }
+            $override = LoadOverride::issue($requested[0], (int) $request->user()->id, 'scan', $data['override_reason']);
+        }
+
         $blocked = [];
         foreach (Platform::query()->whereIn('id', $requested)->get() as $platform) {
-            $reason = $this->gate->check($platform, DbScanConnection::query()->where('platform_id', $platform->id)->first(), 'scan');
+            $reason = $this->gate->check($platform, DbScanConnection::query()->where('platform_id', $platform->id)->first(), 'scan', $override);
             if ($reason !== null) {
                 $blocked[] = ['platform_id' => $platform->id, 'market' => $platform->name, 'reason' => $reason, 'message' => ScannerGate::describe($reason)];
             }
@@ -62,7 +72,7 @@ class DbObservatoryPassController extends Controller
             abort(404);
         }
         if ($blocked !== []) {
-            return response()->json(['message' => 'Scanner admission is blocked for '.count($blocked).' market(s).', 'blocked' => $blocked], 423);
+            return response()->json(['message' => 'Scanner admission is blocked for '.count($blocked).' market(s).', 'blocked' => $blocked, 'load' => $this->gate->loadStatus()], 423);
         }
 
         try {
@@ -74,6 +84,7 @@ class DbObservatoryPassController extends Controller
                 ! empty($data['rules']) ? array_values($data['rules']) : null,
                 (bool) ($data['verbose'] ?? false),
                 $data['idempotency_key'] ?? null,
+                loadOverride: $override,
             );
         } catch (MarketBusyException $e) {
             return response()->json([
@@ -143,7 +154,7 @@ class DbObservatoryPassController extends Controller
             $updated = match ($action) {
                 'pause' => $this->passes->pause($model),
                 'resume' => $this->passes->resume($model),
-                'stop' => $this->passes->stop($model),
+                'stop' => $this->passes->stop($model, (int) $request->user()->id),
             };
         } catch (InvalidTransitionException $e) {
             return response()->json(['message' => $e->getMessage()], 409);

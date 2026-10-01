@@ -1,7 +1,7 @@
 # Task: CRM market database scanner (Database Observatory)
 
 - ID / project: CRM Database Observatory; plan `plans/market-db-scanner-2026-09-16/` (local, untracked).
-- Updated / status: 1 October 2026; phase 1 implemented, verified locally, committed and pushed for cPanel pull. Not deployed or enabled in production; no production scan run.
+- Updated / status: 2 October 2026; phase 1 deployed and migrations/packs confirmed by Ian. Kenya reader saved; preflight was blocked by measured level 2 load (73 PHP processes against a threshold of 48). Scoped load override verified for shipment with compiled assets; its production deployment and first successful canary remain pending.
 - Goal: continuously scan eligible market WordPress databases for malware and integrity findings with attributable, inert evidence, explicit coverage, durable progress and bounded production load.
 - Authorization: Ian asked to implement the plan end to end and ship once verified, with his own manual QA preferred over browser automation.
 
@@ -38,6 +38,39 @@
 4. Set `DB_SCANNER_ENABLED=true`, enable scanning in Schedules & limits, scan one shared-host and one remote canary (Quick, then Standard, then Deep), watch query p95, timeouts, market health and callback latency; then five markets; then enable schedules.
 5. Rollback: scanning off + schedules off, Stop active scans, confirm no scanner workers/leases, then revert code. Never roll back the migration; credential revocation is the database-level emergency stop.
 
+## Scoped load override (2 October 2026)
+
+Ian authorized implementation and shipment after the Kenya credential check was blocked by elevated load.
+
+- Admins can submit a reason (10–500 characters) for one credential check or a manual scan of exactly one selected market. The backend creates the scope, actor and expiry; the client cannot choose a duration or extend an existing grant.
+- Credential checks get one synchronous attempt (maximum 60-second exception). Manual scans get 15 minutes from admission, including queue wait, one reader for that run and row traversal batches capped at 250. Inventory/aggregate queries retain their existing statement and byte limits.
+- Only load levels 1 and 2 are bypassed. Critical level 3, missing/stale load state, emergency stop, scanner off/pause, market health, credentials/preflight, SELECT-only/TLS, market/host leases and daily/time budgets still apply. Preflight remains available while scanning is off.
+- Workers recheck an override and load between statements at the existing two-second control cadence. An in-flight query retains its normal timeout (at most 10 seconds). Expiry pauses the run; Resume does not renew it. Use **Revoke & stop**, then a new Scan now if another override is needed.
+- The permission is stored in the existing pass scope JSON. No migration or new environment variable. Scheduled runs and sweep continuations never inherit it. A partial sweep continuation waits for normal admission.
+- Grants and revocation are audited in the same transaction as the mutation. Runs shows a load-override badge, reason, actor, expiry countdown and **Revoke & stop**. The credential/scan dialog shows the measured signal and threshold when load blocks the request.
+
+### Deploy and run the Kenya canary
+
+The initial migration and pack synchronization already succeeded; this follow-up needs neither repeated migrations nor another pack sync.
+
+```bash
+cd ~/crm.exotic-online.com
+git pull --ff-only
+php artisan config:cache
+```
+
+1. Reload the CRM. Open **DB Observatory → Markets → Kenya → Reader connection**, then **Run preflight**.
+2. If the load panel appears at level 1 or 2, enter a reason such as `First Kenya canary during production setup`, then **Run credential check once**. Wait for Passed. The override applies to the saved connection.
+3. To scan, ensure `.env` has `DB_SCANNER_ENABLED=true`, run `php artisan config:cache` after any edit, and enable the scanner in **Schedules & limits**. Keep schedules disabled during the canary.
+4. Choose **Scan now → Quick → Kenya only → Start quick scan**. If load blocks it, enter the reason and click **Run this scan under load**. The existing minute scheduler starts the scanner worker; no new cron or permanent worker is needed.
+5. Open the new pass in **Runs** to see the override countdown, progress, findings and coverage. **Revoke & stop** stops this scan and closes its sweep. Critical or stale load has no override button; retry when the load reading permits admission.
+
+### Verification
+
+- Focused override tests cover level-2 scans and smaller batches, metadata-only preflight with scanning off, unchanged global state, admin/single-market/reason validation, critical/missing/stale/health/credential/switch rejection, idempotent retries, expiry, revocation, no inheritance, between-read checks and audit-write rollback.
+- Verification on 2 October against base HEAD `50981715`: full `artisan test --filter=DbScanner` passed 58 tests / 585 assertions in 104.88 s (3 opt-in MySQL skips). The subsequently added audit-rollback test passed separately (1 test / 5 assertions), for 59 unique passing tests. Changed PHP lint and Pint passed. `npm run build` passed with existing forecast CSS-selector and bundle-size warnings; compiled assets included. Local tests use disposable SQLite fixtures; this change does not alter the MySQL reader or grant/TLS enforcement.
+- Ian owns browser QA and production canary verification. This shipment does not establish a successful production credential check or scan.
+
 ## Next action
 
-Ian's manual QA locally (see the summary in chat for the local setup), then cPanel pull + steps above. Phase 2 (alerts, custom rules, reputation, vulnerability lookups) and phase 3 (files/HTTP probes) remain unstarted.
+After this follow-up is pushed, pull in cPanel and follow the deploy/run steps above. Phase 2 (alerts, custom rules, reputation, vulnerability lookups) and phase 3 (files/HTTP probes) remain unstarted.

@@ -41,7 +41,7 @@ const dbObservatory = {
     updateSettings: (payload) => data(api.put(`${base}/settings`, payload)),
     connections: () => data(api.get(`${base}/connections`)),
     updateConnection: (platformId, payload) => data(api.put(`${base}/connections/${platformId}`, payload)),
-    preflight: (platformId) => data(api.post(`${base}/connections/${platformId}/preflight`, null, { timeout: 90_000 })),
+    preflight: (platformId, payload = {}) => data(api.post(`${base}/connections/${platformId}/preflight`, payload, { timeout: 90_000 })),
 
     audit: (params) => data(api.get(`${base}/audit`, { params })),
 };
