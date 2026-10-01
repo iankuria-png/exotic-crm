@@ -1142,6 +1142,58 @@ Route::get('/users', [AuthController::class, 'getUsers']);
 
 // Platform routes
 Route::get('/platforms', [PlatformController::class, 'platform']);
+// Database Observatory (market database scanner). Every route passes the full
+// CRM middleware chain; per-action permissions and market scope are enforced in
+// the controllers (view: admin/sub-admin on assigned markets; operate and
+// configure: admin). Mutations are rate limited per user.
+Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])
+    ->prefix('crm/db-observatory')
+    ->group(function () {
+        $observatory = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryController::class;
+        $findings = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryFindingController::class;
+        $passes = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryPassController::class;
+        $config = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryConfigController::class;
+
+        Route::get('/overview', [$observatory, 'overview']);
+        Route::get('/markets', [$observatory, 'markets']);
+        Route::get('/markets/{platform}/inventory', [$observatory, 'inventory'])->whereNumber('platform');
+        Route::get('/passes', [$observatory, 'passes']);
+        Route::get('/passes/{pass}', [$observatory, 'pass'])->whereNumber('pass');
+        Route::get('/market-runs/{run}', [$observatory, 'run'])->whereNumber('run');
+        Route::get('/market-runs/{run}/events', [$observatory, 'events'])->whereNumber('run');
+        Route::get('/market-runs/{run}/coverage', [$observatory, 'coverage'])->whereNumber('run');
+        Route::get('/audit', [$observatory, 'audit']);
+
+        Route::get('/findings', [$findings, 'index']);
+        Route::get('/findings/export', [$findings, 'export'])->middleware('throttle:10,1');
+        Route::get('/findings/{finding}', [$findings, 'show'])->whereNumber('finding');
+        Route::patch('/findings/{finding}', [$findings, 'update'])->whereNumber('finding')->middleware('throttle:60,1');
+        Route::post('/findings/{finding}/suppressions', [$findings, 'suppress'])->whereNumber('finding')->middleware('throttle:10,1');
+        Route::delete('/suppressions/{suppression}', [$findings, 'revokeSuppression'])->whereNumber('suppression')->middleware('throttle:10,1');
+
+        Route::get('/rules', [$config, 'rules']);
+        Route::get('/lists', [$config, 'lists']);
+        Route::get('/schedules', [$config, 'schedules']);
+        Route::get('/settings', [$config, 'settings']);
+        Route::get('/connections', [$config, 'connections']);
+
+        Route::middleware('throttle:10,1')->group(function () use ($passes, $config) {
+            Route::post('/passes', [$passes, 'store']);
+            Route::post('/passes/{pass}/pause', [$passes, 'pause'])->whereNumber('pass');
+            Route::post('/passes/{pass}/resume', [$passes, 'resume'])->whereNumber('pass');
+            Route::post('/passes/{pass}/stop', [$passes, 'stop'])->whereNumber('pass');
+            Route::post('/rules/{rule}/test', [$passes, 'testRule']);
+            Route::put('/rules/{rule}', [$config, 'updateRule']);
+            Route::put('/lists/{list}', [$config, 'updateList']);
+            Route::post('/schedules', [$config, 'storeSchedule']);
+            Route::patch('/schedules/{schedule}', [$config, 'updateSchedule'])->whereNumber('schedule');
+            Route::delete('/schedules/{schedule}', [$config, 'destroySchedule'])->whereNumber('schedule');
+            Route::put('/settings', [$config, 'updateSettings']);
+            Route::put('/connections/{platform}', [$config, 'updateConnection'])->whereNumber('platform');
+            Route::post('/connections/{platform}/preflight', [$config, 'preflight'])->whereNumber('platform');
+        });
+    });
+
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin'])->group(function () {
     Route::post('/platforms', [PlatformController::class, 'store']);
     Route::put('/platforms/{id}', [PlatformController::class, 'update']);

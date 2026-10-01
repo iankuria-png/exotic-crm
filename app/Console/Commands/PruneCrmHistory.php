@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class PruneCrmHistory extends Command
 {
@@ -45,7 +46,48 @@ class PruneCrmHistory extends Command
             'audit logs'
         );
 
+        $this->pruneDatabaseObservatory($chunk, $maxBatches, $dryRun);
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Database Observatory retention: run events and chunk ledgers 30 days,
+     * observations of findings resolved more than 180 days ago, governance
+     * audit 365 days. Active or suppressed finding evidence is never pruned.
+     */
+    private function pruneDatabaseObservatory(int $chunk, int $maxBatches, bool $dryRun): void
+    {
+        if (! Schema::hasTable('db_scan_events')) {
+            return;
+        }
+
+        $retention = (array) config('db_scanner.retention', []);
+        $this->prune('db_scan_events', 'at', Carbon::now()->subDays((int) ($retention['event_days'] ?? 30)), $chunk, $maxBatches, $dryRun, 'scanner run events');
+        $this->prune('db_scan_chunks', 'committed_at', Carbon::now()->subDays((int) ($retention['event_days'] ?? 30)), $chunk, $maxBatches, $dryRun, 'scanner chunk ledger rows');
+        $summaryCutoff = Carbon::now()->subDays((int) ($retention['run_summary_days'] ?? 180));
+        $this->prune('db_scan_rule_coverage', 'created_at', $summaryCutoff, $chunk, $maxBatches, $dryRun, 'scanner rule coverage rows');
+        $this->prune('db_scan_surface_coverage', 'created_at', $summaryCutoff, $chunk, $maxBatches, $dryRun, 'scanner surface coverage rows');
+        $this->prune('db_scan_audit_events', 'created_at', Carbon::now()->subDays((int) ($retention['audit_days'] ?? 365)), $chunk, $maxBatches, $dryRun, 'scanner audit events');
+
+        $cutoff = Carbon::now()->subDays((int) ($retention['resolved_evidence_days'] ?? 180));
+        $resolved = DB::table('db_scan_findings')->where('status', 'resolved')->where('resolved_at', '<', $cutoff)->pluck('id')->all();
+        if ($resolved === []) {
+            return;
+        }
+
+        $candidates = DB::table('db_scan_observations')->whereIn('finding_id', $resolved)->where('created_at', '<', $cutoff)->count();
+        if ($dryRun) {
+            $this->info(sprintf('Would delete %d scanner observations of findings resolved before %s.', $candidates, $cutoff->toDateTimeString()));
+
+            return;
+        }
+
+        $deleted = 0;
+        foreach (array_chunk($resolved, 500) as $ids) {
+            $deleted += DB::table('db_scan_observations')->whereIn('finding_id', $ids)->where('created_at', '<', $cutoff)->delete();
+        }
+        $this->info(sprintf('Deleted %d scanner observations of findings resolved before %s.', $deleted, $cutoff->toDateTimeString()));
     }
 
     private function positiveOption(string $option, string $configKey): int

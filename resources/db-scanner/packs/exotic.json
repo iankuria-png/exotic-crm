@@ -1,0 +1,105 @@
+{
+    "pack": "exotic",
+    "version": "1.0.0",
+    "reviewed_by": "Ian K",
+    "reviewed_at": "2026-10-01",
+    "license": "Exotic network baselines.",
+    "rules": [
+        {
+            "key": "seo.malformed_links",
+            "category": "seo",
+            "kind": "signature",
+            "title": "Malformed links",
+            "matcher": "malformed_links",
+            "surfaces": [
+                "posts.content",
+                "options.values",
+                "postmeta.code"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "http:/https:// and curly-quote hrefs (found in Zimbabwe's footer widget) produce broken links Google crawls as 404s.",
+            "remediation": "Fix the href in the widget or post.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "seo.retired_parameters",
+            "category": "seo",
+            "kind": "signature",
+            "title": "Retired URL parameters",
+            "matcher": "retired_parameters",
+            "surfaces": [
+                "posts.content"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.retired_parameters"
+            ],
+            "why": "Retired parameters such as escortwp_profile_image_link create duplicate URLs.",
+            "remediation": "Remove the parameter from stored links.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "seo.ambiguous_slug_aliases",
+            "category": "seo",
+            "kind": "structured",
+            "title": "Shared old profile slugs",
+            "matcher": "slug_aliases",
+            "surfaces": [
+                "postmeta.slug_aliases"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "_wp_old_slug values held by more than one profile make old URLs return 404.",
+            "remediation": "Remove duplicate old-slug rows.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.yoast_crawl_baseline",
+            "category": "config",
+            "kind": "structured",
+            "title": "Yoast crawl baseline",
+            "matcher": "yoast_crawl_baseline",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "The theme answers searches with a real 404; Yoast search cleanup filters would 301 them to the homepage, which Google reads as soft 404s.",
+            "remediation": "Restore the network crawl settings in Yoast → Settings → Crawl optimisation.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        }
+    ]
+}

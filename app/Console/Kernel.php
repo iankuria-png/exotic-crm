@@ -201,6 +201,53 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_prune_history.log'));
 
+        // Database Observatory (market database scanner). Registered only when
+        // the deployment switch DB_SCANNER_ENABLED is on; the admin setting is
+        // a second, live switch checked by every command and slice. Dispatch
+        // and recovery are bounded CRM-only commands. The two workers consume
+        // only the db_scan queue, one 45-second slice each per minute, and are
+        // not even started while no scanner run is waiting or running.
+        if ((bool) config('db_scanner.enabled')) {
+            $schedule->command('crm:db-scan-dispatch')
+                ->name('crm_db_scan_dispatch')
+                ->everyMinute()
+                ->withoutOverlapping(5)
+                ->onOneServer()
+                ->runInBackground()
+                ->sendOutputTo(storage_path('logs/crm_db_scan_dispatch.log'));
+
+            $schedule->command('crm:db-scan-recover')
+                ->name('crm_db_scan_recover')
+                ->everyMinute()
+                ->withoutOverlapping(5)
+                ->onOneServer()
+                ->runInBackground()
+                ->sendOutputTo(storage_path('logs/crm_db_scan_recover.log'));
+
+            $scanQueueIdle = function (): bool {
+                try {
+                    return ! \App\Models\DbScanMarketRun::query()->whereIn('status', ['queued', 'waiting_lock', 'running'])->exists();
+                } catch (\Throwable) {
+                    return true;
+                }
+            };
+
+            foreach ([1, 2] as $worker) {
+                $schedule->command(sprintf(
+                    'queue:work %s --queue=%s --timeout=60 --max-time=55 --max-jobs=1 --tries=1 --sleep=3',
+                    (string) config('db_scanner.queue_connection', 'database_long'),
+                    (string) config('db_scanner.queue', 'db_scan')
+                ))
+                    ->name('db_scan_worker_'.$worker)
+                    ->everyMinute()
+                    ->withoutOverlapping(5)
+                    ->onOneServer()
+                    ->runInBackground()
+                    ->skip($scanQueueIdle)
+                    ->sendOutputTo(storage_path('logs/db_scan_worker.log'));
+            }
+        }
+
         // SEO Recovery: markets on `daily_trickle` pacing work through their
         // backlog of legacy-offline profiles a quota at a time. Markets on
         // manual pacing (the default) are untouched by this.

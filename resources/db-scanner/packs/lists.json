@@ -1,0 +1,411 @@
+{
+    "version": "1.0.0",
+    "lists": [
+        {
+            "key": "allow.admin_email_domains",
+            "kind": "allowlist",
+            "description": "Email domains expected for administrators",
+            "entries": [
+                "exotic-online.com",
+                "exotic-africa.com"
+            ]
+        },
+        {
+            "key": "lexicon.fake_admin_domains",
+            "kind": "lexicon",
+            "description": "Fake or support-style administrator email domains",
+            "entries": [
+                "wordpress.com",
+                "wordpress.org",
+                "example.com",
+                "admin.com",
+                "test.com"
+            ]
+        },
+        {
+            "key": "lexicon.suspicious_usernames",
+            "kind": "lexicon",
+            "description": "Generic or attacker-style admin logins",
+            "entries": [
+                "admin",
+                "administrator",
+                "support",
+                "support_admin",
+                "supportadmin",
+                "wpadmin",
+                "wp-admin",
+                "wp_admin",
+                "developer",
+                "dev",
+                "test",
+                "tester",
+                "root",
+                "sysadmin",
+                "backup",
+                "adm1n",
+                "webmaster",
+                "wordpress"
+            ]
+        },
+        {
+            "key": "allow.plugins",
+            "kind": "allowlist",
+            "description": "Approved plugin directories (or root-level files)",
+            "entries": [
+                "advanced-access-manager",
+                "advanced-ads",
+                "advanced-custom-fields",
+                "aryo-activity-log",
+                "auto-sizes",
+                "backwpup",
+                "better-search-replace",
+                "broken-link-checker",
+                "classic-editor",
+                "classic-widgets",
+                "dominant-color-images",
+                "email-log",
+                "embed-optimizer",
+                "epe-push",
+                "exotic-age-gate",
+                "exotic-campaigns",
+                "exotic-chat-landing",
+                "exotic-crm-sync",
+                "exotic-font-manager",
+                "exotic-kyc",
+                "exotic-legal-pages",
+                "golden-star-hunt",
+                "image-prioritizer",
+                "loginizer",
+                "loginizer-security",
+                "nextend-facebook-connect",
+                "ninjateam-telegram",
+                "optimization-detective",
+                "performance-lab",
+                "speculation-rules",
+                "support-board-cloud",
+                "web-worker-offloading",
+                "webp-uploads",
+                "webpushr-web-push-notifications",
+                "wordpress-seo",
+                "wordpress-seo-premium",
+                "wp-laravel-sso",
+                "wpseo-video"
+            ]
+        },
+        {
+            "key": "allow.cron_hooks",
+            "kind": "allowlist",
+            "description": "Approved cron hooks (entries ending in * are reviewed prefixes)",
+            "entries": [
+                "wp_version_check",
+                "wp_update_plugins",
+                "wp_update_themes",
+                "wp_scheduled_delete",
+                "delete_expired_transients",
+                "wp_scheduled_auto_draft_delete",
+                "wp_privacy_delete_old_export_files",
+                "recovery_mode_clean_expired_keys",
+                "wp_site_health_scheduled_check",
+                "wp_https_detection",
+                "wp_update_user_counts",
+                "wp_delete_temp_updater_backups",
+                "wp_split_shared_term_batch",
+                "upgrader_scheduled_cleanup",
+                "importer_scheduled_cleanup",
+                "wp_maybe_auto_update",
+                "wp_batch_split_terms",
+                "wp_update_comment_type_batch",
+                "wp_delete_temp_updater_backups",
+                "wpseo*",
+                "yoast*",
+                "action_scheduler*",
+                "backwpup*",
+                "aryo*",
+                "loginizer*",
+                "exotic*",
+                "epe_*",
+                "webpushr*",
+                "blc_*",
+                "advanced-ads*",
+                "advanced_ads*",
+                "advads*",
+                "nsl_*",
+                "email_log*",
+                "aam_*",
+                "perflab*",
+                "od_*",
+                "golden_star*",
+                "sb_*",
+                "support_board*",
+                "telegram*",
+                "ninjateam*",
+                "wp_privacy_personal_data_cleanup_requests",
+                "escortwp*",
+                "el_trigger_notify_email_when_log_threshold_met",
+                "aal/*",
+                "acf_*",
+                "rank_math*",
+                "jetpack*"
+            ]
+        },
+        {
+            "key": "ioc.option_names",
+            "kind": "ioc",
+            "description": "Option names used by known malware families (source: crm:db-scan-report, Sucuri write-ups)",
+            "entries": [
+                "default_mont_options",
+                "ad_code",
+                "hide_admin",
+                "hide_logged_in",
+                "display_ad",
+                "ip_admin",
+                "cookies_admin",
+                "logged_admin",
+                "log_install",
+                "wds_protected_links",
+                "wds_protected_posts",
+                "wds_protection_enabled",
+                "_pre_user_id"
+            ]
+        },
+        {
+            "key": "ioc.strings",
+            "kind": "ioc",
+            "description": "Vetted exact campaign strings (add with source and date)",
+            "entries": []
+        },
+        {
+            "key": "ioc.domains",
+            "kind": "ioc",
+            "description": "Vetted malicious domains (add with source and date)",
+            "entries": []
+        },
+        {
+            "key": "lexicon.pharma",
+            "kind": "lexicon",
+            "description": "Pharma spam terms",
+            "entries": [
+                "viagra",
+                "cialis",
+                "levitra",
+                "tramadol",
+                "phentermine",
+                "xanax"
+            ]
+        },
+        {
+            "key": "lexicon.casino",
+            "kind": "lexicon",
+            "description": "Gambling spam terms",
+            "entries": [
+                "online casino",
+                "slot gacor",
+                "togel",
+                "judi online"
+            ]
+        },
+        {
+            "key": "lexicon.loans",
+            "kind": "lexicon",
+            "description": "Loans and counterfeit spam terms",
+            "entries": [
+                "payday loan",
+                "replica watches"
+            ]
+        },
+        {
+            "key": "lexicon.cn_escort_spam",
+            "kind": "lexicon",
+            "description": "Chinese escort-spam terms",
+            "entries": [
+                "外围",
+                "微信",
+                "上门",
+                "同步",
+                "wechat",
+                "weixin"
+            ]
+        },
+        {
+            "key": "lexicon.japanese_keyword",
+            "kind": "lexicon",
+            "description": "Japanese keyword-hack terms",
+            "entries": [
+                "スーパーコピー",
+                "激安",
+                "通販",
+                "ブランドコピー"
+            ]
+        },
+        {
+            "key": "lexicon.shorteners",
+            "kind": "lexicon",
+            "description": "URL shorteners",
+            "entries": [
+                "bit.ly",
+                "rb.gy",
+                "tinyurl.com",
+                "is.gd",
+                "cutt.ly",
+                "shorturl.at",
+                "t.co",
+                "ow.ly",
+                "rebrand.ly",
+                "wa.link"
+            ]
+        },
+        {
+            "key": "lexicon.retired_parameters",
+            "kind": "lexicon",
+            "description": "Retired URL parameters",
+            "entries": [
+                "escortwp_profile_image_link"
+            ]
+        },
+        {
+            "key": "allow.script_hosts",
+            "kind": "allowlist",
+            "description": "Approved third-party script hosts",
+            "entries": [
+                "apis.google.com",
+                "google-analytics.com",
+                "gstatic.com",
+                "google.com",
+                "recaptcha.net",
+                "connect.facebook.net",
+                "platform.twitter.com",
+                "static.cloudflareinsights.com",
+                "cdnjs.cloudflare.com",
+                "cdn.jsdelivr.net",
+                "cdn.webpushr.com",
+                "telegram.org",
+                "chimpstatic.com",
+                "list-manage.com",
+                "cloud.board.support"
+            ]
+        },
+        {
+            "key": "allow.iframe_hosts",
+            "kind": "allowlist",
+            "description": "Approved iframe hosts",
+            "entries": [
+                "youtube.com",
+                "youtube-nocookie.com",
+                "player.vimeo.com",
+                "vimeo.com",
+                "google.com",
+                "maps.google.com",
+                "facebook.com",
+                "instagram.com",
+                "tiktok.com",
+                "twitter.com",
+                "x.com",
+                "t.me",
+                "telegram.org"
+            ]
+        },
+        {
+            "key": "allow.network_domains",
+            "kind": "allowlist",
+            "description": "Network domains treated as our own (every market domain is added automatically)",
+            "entries": [
+                "exotic-ads.com",
+                "exotic-online.com",
+                "exotic-africa.com",
+                "erotic-africa.com"
+            ]
+        },
+        {
+            "key": "allow.outbound_domains",
+            "kind": "allowlist",
+            "description": "Approved outbound link and redirect domains",
+            "entries": [
+                "wa.me",
+                "api.whatsapp.com",
+                "t.me",
+                "google.com",
+                "youtube.com",
+                "facebook.com",
+                "instagram.com",
+                "twitter.com",
+                "x.com",
+                "tiktok.com"
+            ]
+        },
+        {
+            "key": "allow.gtm_containers",
+            "kind": "allowlist",
+            "description": "Approved Google Tag Manager container IDs (per market)",
+            "entries": []
+        },
+        {
+            "key": "allow.scripts",
+            "kind": "allowlist",
+            "description": "Writing systems allowed in content (CJK, Cyrillic, Greek)",
+            "entries": []
+        },
+        {
+            "key": "allow.known_options",
+            "kind": "allowlist",
+            "description": "Reviewed option names that look like core internals",
+            "entries": []
+        },
+        {
+            "key": "allow.serialized_classes",
+            "kind": "allowlist",
+            "description": "Serialized classes (entries ending in * are prefixes)",
+            "entries": [
+                "stdClass",
+                "WP_*",
+                "WpOrg*",
+                "Requests_*",
+                "Yoast*",
+                "WPSEO_*",
+                "ActionScheduler*",
+                "ArrayObject",
+                "DateTime*",
+                "Elementor*",
+                "FS_*",
+                "__PHP_Incomplete_Class"
+            ]
+        },
+        {
+            "key": "allow.trigger_hashes",
+            "kind": "allowlist",
+            "description": "Reviewed trigger definition hashes (never names)",
+            "entries": []
+        },
+        {
+            "key": "allow.tables",
+            "kind": "allowlist",
+            "description": "Known plugin tables (suffix after the prefix; * marks a reviewed prefix)",
+            "entries": [
+                "yoast_*",
+                "aryo_activity_log",
+                "email_log",
+                "loginizer_*",
+                "wpmailsmtp_*",
+                "e_*",
+                "wfls_*",
+                "redirection_*",
+                "advads_*",
+                "exotic_*",
+                "epe_*",
+                "sb_*",
+                "webpushr_*",
+                "nextend_*",
+                "social_users",
+                "blc_*",
+                "backwpup_*",
+                "aam_*",
+                "wpcode*",
+                "od_*",
+                "golden_star_*",
+                "ninjateam_*",
+                "bwpup_*",
+                "campaign_daily_stats",
+                "profile_analytics_*"
+            ]
+        }
+    ]
+}

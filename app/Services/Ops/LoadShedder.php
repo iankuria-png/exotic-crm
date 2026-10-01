@@ -49,6 +49,10 @@ class LoadShedder
         'bulk_bio' => self::LEVEL_CAUTIOUS,
         'pbn_seed' => self::LEVEL_CAUTIOUS,
         'geocoding' => self::LEVEL_CAUTIOUS,
+        // Database Observatory. Listed so the ops board shows what a shed
+        // costs; the scanner's own gate reads the level directly and fails
+        // closed at level 1 even while enforcement is observe-only.
+        'market_db_scan' => self::LEVEL_CAUTIOUS,
         'push_campaigns' => self::LEVEL_LIMP,
         'ai_briefings' => self::LEVEL_LIMP,
         'retention_insights' => self::LEVEL_LIMP,

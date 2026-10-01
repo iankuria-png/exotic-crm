@@ -1,0 +1,1130 @@
+{
+    "pack": "core",
+    "version": "1.0.0",
+    "reviewed_by": "Ian K",
+    "reviewed_at": "2026-10-01",
+    "license": "Independently authored; thresholds follow wp doctor defaults.",
+    "rules": [
+        {
+            "key": "access.admin_unexpected_email",
+            "category": "access",
+            "kind": "structured",
+            "title": "Administrator with an unexpected email",
+            "matcher": "admin_unexpected_email",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.admin_email_domains",
+                "lexicon.fake_admin_domains"
+            ],
+            "why": "Attackers create administrators with support-style or look-alike addresses (Zimbabwe: support_admin@wordpress.com).",
+            "remediation": "Confirm who owns the account. If nobody does, remove it, then check for the mechanism that created it (triggers, cron, snippets).",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.hidden_admin_capabilities",
+            "category": "access",
+            "kind": "structured",
+            "title": "Hidden administrator capability",
+            "matcher": "hidden_admin_capabilities",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Privileged grants under a non-site capability key or a legacy user_level can hide an administrator from the Users screen.",
+            "remediation": "Remove the foreign capability row after confirming it is not a migrated legitimate key; stale grants from an old prefix can simply be deleted.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.admin_count_drift",
+            "category": "access",
+            "kind": "drift",
+            "title": "New administrator",
+            "matcher": "admin_count_drift",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "A new administrator since the last complete snapshot is the most common persistence step after a compromise.",
+            "remediation": "Confirm the new administrator with the team. Unexplained accounts should be removed and the site treated as compromised.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.forged_registration",
+            "category": "access",
+            "kind": "structured",
+            "title": "Out-of-sequence registration date",
+            "matcher": "forged_registration",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "days": 30
+            },
+            "lists": [],
+            "why": "Backdated registration dates are used by trigger and SQL backdoors to make a new administrator look old.",
+            "remediation": "Compare with access logs; if the account is not known, remove it.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.suspicious_usernames",
+            "category": "access",
+            "kind": "structured",
+            "title": "Generic or attacker-style admin username",
+            "matcher": "suspicious_usernames",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.suspicious_usernames"
+            ],
+            "why": "Generic logins like admin or support_admin are common on attacker-created accounts.",
+            "remediation": "Rename or remove the account after confirming ownership.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.application_passwords",
+            "category": "access",
+            "kind": "drift",
+            "title": "Administrator application passwords",
+            "matcher": "application_passwords",
+            "surfaces": [
+                "usermeta.app_passwords"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Application passwords allow API access that bypasses the login form and 2FA. Only presence and byte length are read — never the value.",
+            "remediation": "Revoke application passwords that nobody can account for.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.open_registration",
+            "category": "access",
+            "kind": "structured",
+            "title": "Privileged open registration",
+            "matcher": "open_registration",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Open registration with a privileged default role lets anyone create an account that can change the site.",
+            "remediation": "Set the default role back to the normal member role or disable registration.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.mysql_triggers",
+            "category": "persistence",
+            "kind": "schema_object",
+            "title": "Database trigger",
+            "matcher": "mysql_triggers",
+            "surfaces": [
+                "schema.triggers"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.trigger_hashes"
+            ],
+            "why": "Triggers are used to re-create admins or block cleanup. Our escort_live_url_sync triggers are approved only by exact definition hash.",
+            "remediation": "Export the definition, drop the trigger if it is not ours, then check cron for a hook that re-creates it.",
+            "references": [
+                "https://blog.sucuri.net/2024/11/php-reinfector-and-backdoor-malware-target-wordpress-sites.html"
+            ],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.mysql_events_routines",
+            "category": "persistence",
+            "kind": "schema_object",
+            "title": "Scheduled event or stored routine",
+            "matcher": "mysql_events_routines",
+            "surfaces": [
+                "schema.events_routines"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "A clean WordPress schema has no events, procedures or functions; they can run SQL without WordPress.",
+            "remediation": "Export and drop the object after confirming nobody on the team created it.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.plugin_not_allowlisted",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Active plugin not on the approved list",
+            "matcher": "plugin_not_allowlisted",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.plugins"
+            ],
+            "why": "An active plugin nobody installed is how crawl-page-optimizer appeared on Zimbabwe.",
+            "remediation": "Confirm who installed it. If nobody did, deactivate it, remove its files and check for other persistence.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.plugin_path_suspicious",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Suspicious plugin path",
+            "matcher": "plugin_path_suspicious",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Hidden or core-mimicking plugin paths are used to disguise malicious plugins. A root-level single-file plugin is valid WordPress and not suspicious alone.",
+            "remediation": "Inspect the plugin files on disk before removing.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.plugin_theme_drift",
+            "category": "persistence",
+            "kind": "drift",
+            "title": "Plugin or theme changed",
+            "matcher": "plugin_theme_drift",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Unexpected activation, deactivation or theme switches are early signs of tampering.",
+            "remediation": "Confirm the change with whoever manages the market.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.cron_unknown_hooks",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Unknown cron hook",
+            "matcher": "cron_unknown_hooks",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.cron_hooks"
+            ],
+            "why": "Reinfectors schedule cron hooks that rewrite injected content after cleanup.",
+            "remediation": "Identify the plugin that registers the hook; unknown hooks with code-like arguments should be removed together with their source.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.cron_volume",
+            "category": "persistence",
+            "kind": "threshold",
+            "title": "Cron volume",
+            "matcher": "cron_volume",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "max_events": 50,
+                "max_duplicates": 10
+            },
+            "lists": [],
+            "why": "More than 50 events or more than 10 copies of one hook (wp doctor thresholds) usually means a broken or abusive scheduler.",
+            "remediation": "Clear duplicate events and fix the plugin that schedules them.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.ioc_option_names",
+            "category": "persistence",
+            "kind": "ioc_list",
+            "title": "Malware-family option name",
+            "matcher": "ioc_option_names",
+            "surfaces": [
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "ioc.option_names"
+            ],
+            "why": "Option names used by WP-VCD, Monit and similar families. Names can collide with legitimate software, so this is a review signal unless content corroborates.",
+            "remediation": "Inspect the option value; remove it if it is not owned by an installed plugin.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.lookalike_options",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Look-alike autoloaded option",
+            "matcher": "lookalike_options",
+            "surfaces": [
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_bytes": 1024
+            },
+            "lists": [
+                "allow.known_options"
+            ],
+            "why": "Payloads hide in large autoloaded options named like core internals.",
+            "remediation": "Confirm which plugin owns the option; add genuine names to the known-options list.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.encoded_payloads",
+            "category": "persistence",
+            "kind": "signature",
+            "title": "PHP decode or execution function stored",
+            "matcher": "encoded_payloads",
+            "surfaces": [
+                "options.values",
+                "postmeta.code",
+                "postmeta.values",
+                "usermeta.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "eval, base64_decode and similar functions stored as data are a review signal; the malware rules escalate when decoding reveals an executable sink.",
+            "remediation": "Inspect the value and its owner plugin.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.serialized_objects",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Unexpected serialized object",
+            "matcher": "serialized_objects",
+            "surfaces": [
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.serialized_classes"
+            ],
+            "why": "Serialized objects of unknown classes can be used for object-injection gadgets.",
+            "remediation": "Identify the owning plugin; add reviewed class prefixes to the serialized-class allowlist.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.code_snippet_stores",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Active stored code",
+            "matcher": "code_snippet_stores",
+            "surfaces": [
+                "snippets.code",
+                "posts.content",
+                "options.values",
+                "postmeta.code"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "WPCode, Code Snippets, header/footer options and builder custom code are favourite places to persist injected scripts.",
+            "remediation": "Review the snippet; remove anything the team does not recognise.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.script_injection",
+            "category": "content",
+            "kind": "signature",
+            "title": "Script or iframe in content",
+            "matcher": "script_injection",
+            "surfaces": [
+                "posts.content",
+                "options.values",
+                "terms.descriptions",
+                "postmeta.code"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.script_hosts",
+                "allow.iframe_hosts"
+            ],
+            "why": "Script tags, unapproved iframes and event handlers in posts, widgets and terms need review; malware rules escalate only with corroborating behaviour.",
+            "remediation": "Confirm the embed is intended; remove it otherwise.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.unexpected_script",
+            "category": "content",
+            "kind": "signature",
+            "title": "Unexpected writing system",
+            "matcher": "unexpected_script",
+            "surfaces": [
+                "posts.content",
+                "options.values",
+                "terms.descriptions",
+                "users.names"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "cjk_min": 5,
+                "cyrillic_min": 20,
+                "greek_min": 20
+            },
+            "lists": [
+                "allow.scripts"
+            ],
+            "why": "CJK, Cyrillic or Greek text on these markets is usually injected SEO spam. Foreign text alone is never a malware finding.",
+            "remediation": "Allow the script for this market if it is legitimate; otherwise remove the content.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.spam_lexicon",
+            "category": "content",
+            "kind": "ioc_list",
+            "title": "Spam vocabulary",
+            "matcher": "spam_lexicon",
+            "surfaces": [
+                "posts.content",
+                "postmeta.code",
+                "options.values",
+                "comments.approved"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.pharma",
+                "lexicon.casino",
+                "lexicon.loans",
+                "lexicon.cn_escort_spam",
+                "lexicon.japanese_keyword"
+            ],
+            "why": "Pharma, casino, loans, Japanese keyword and Chinese escort-spam vocabulary are the signature of SEO spam injection.",
+            "remediation": "Remove the spam text; disable a list for a market only if the vocabulary is legitimate there.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.hidden_text",
+            "category": "content",
+            "kind": "signature",
+            "title": "Hidden links",
+            "matcher": "hidden_text",
+            "surfaces": [
+                "posts.content",
+                "options.values",
+                "terms.descriptions"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Links hidden with CSS are a classic SEO-spam technique; screen-reader helpers are excluded.",
+            "remediation": "Remove the hidden block.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.mass_created_posts",
+            "category": "content",
+            "kind": "threshold",
+            "title": "Burst of published posts",
+            "matcher": "mass_created_posts",
+            "surfaces": [
+                "posts.daily_volume"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_posts": 50,
+                "factor": 10
+            },
+            "lists": [],
+            "why": "A day with far more published posts than the market's median usually means automated spam publishing.",
+            "remediation": "Review the posts published that day and remove spam; then find the account or API key used.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.orphan_authors",
+            "category": "content",
+            "kind": "structured",
+            "title": "Posts without an author",
+            "matcher": "orphan_authors",
+            "surfaces": [
+                "posts.orphan_authors"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Published content whose author no longer exists can be left behind by deleted attacker accounts.",
+            "remediation": "Reassign or remove the posts.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.seo_meta_injection",
+            "category": "content",
+            "kind": "signature",
+            "title": "Spam in SEO titles or descriptions",
+            "matcher": "seo_meta_injection",
+            "surfaces": [
+                "postmeta.code"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.pharma",
+                "lexicon.casino",
+                "lexicon.loans",
+                "lexicon.cn_escort_spam",
+                "lexicon.japanese_keyword"
+            ],
+            "why": "Injected links or spam vocabulary in Yoast or Rank Math titles changes what Google shows for our pages.",
+            "remediation": "Edit the SEO title or description back.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.external_redirects",
+            "category": "content",
+            "kind": "structured",
+            "title": "Redirect to an external domain",
+            "matcher": "external_redirects",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.outbound_domains"
+            ],
+            "why": "Yoast redirects that send our paths to other domains leak traffic and rankings.",
+            "remediation": "Remove the redirect unless it is an intended partner link.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.outbound_domains",
+            "category": "content",
+            "kind": "drift",
+            "title": "New outbound domain",
+            "matcher": "outbound_domains",
+            "surfaces": [
+                "posts.content",
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.outbound_domains"
+            ],
+            "why": "New outbound domains in content since the previous complete sweep can indicate link injection.",
+            "remediation": "Confirm the link is intended; approve the domain for the market or remove the link.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.shortener_links",
+            "category": "content",
+            "kind": "structured",
+            "title": "URL shortener links",
+            "matcher": "shortener_links",
+            "surfaces": [
+                "posts.content"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.shorteners"
+            ],
+            "why": "Shortened links hide their destination.",
+            "remediation": "Replace shortened links with direct ones.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.comment_links",
+            "category": "content",
+            "kind": "structured",
+            "title": "Approved comments with links",
+            "matcher": "comment_links",
+            "surfaces": [
+                "comments.approved"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Approved comments with links are a spam channel.",
+            "remediation": "Unapprove or delete spam comments and tighten moderation.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.site_url_mismatch",
+            "category": "config",
+            "kind": "structured",
+            "title": "Site URL mismatch",
+            "matcher": "site_url_mismatch",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "siteurl or home pointing elsewhere hijacks every link and redirect on the site.",
+            "remediation": "Restore siteurl and home to the platform domain.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.search_engines_blocked",
+            "category": "config",
+            "kind": "structured",
+            "title": "Search engines blocked",
+            "matcher": "search_engines_blocked",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "blog_public = 0 tells search engines not to index the market.",
+            "remediation": "Untick Settings → Reading → Discourage search engines.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.admin_email_drift",
+            "category": "config",
+            "kind": "drift",
+            "title": "Admin email changed",
+            "matcher": "admin_email_drift",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "A changed site admin email redirects password resets and security notices.",
+            "remediation": "Confirm the change; restore the company address otherwise.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.upload_path_changed",
+            "category": "config",
+            "kind": "structured",
+            "title": "Upload path changed",
+            "matcher": "upload_path_changed",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "A custom upload path can make uploads executable or serve them from elsewhere.",
+            "remediation": "Clear upload_path and upload_url_path unless intended.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "config.permalink_drift",
+            "category": "config",
+            "kind": "drift",
+            "title": "Permalink settings changed",
+            "matcher": "permalink_drift",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Permalink changes break every indexed URL.",
+            "remediation": "Restore the previous structure if the change was not planned.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.autoload_size",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Autoload size",
+            "matcher": "autoload_size",
+            "surfaces": [
+                "options.autoload"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "max_bytes": 921600
+            },
+            "lists": [],
+            "why": "Autoloaded options load on every request; above 900 KB they slow every page (wp doctor threshold). Runtime filters cannot be observed through the database.",
+            "remediation": "Set large rarely-used options to autoload off.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.expired_transients",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Expired transients",
+            "matcher": "expired_transients",
+            "surfaces": [
+                "options.transients_expired"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {
+                "max": 1000
+            },
+            "lists": [],
+            "why": "Many expired transients bloat the options table.",
+            "remediation": "Delete expired transients.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.revision_bloat",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Revision bloat",
+            "matcher": "revision_bloat",
+            "surfaces": [
+                "posts.revision_counts"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Posts with many revisions bloat the posts table and can preserve old injected content.",
+            "remediation": "Limit revisions and clean old ones.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.orphaned_meta",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Orphaned postmeta",
+            "matcher": "orphaned_meta",
+            "surfaces": [
+                "postmeta.orphans"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {
+                "max": 1000
+            },
+            "lists": [],
+            "why": "Metadata for deleted posts wastes space.",
+            "remediation": "Clean orphaned postmeta.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.unexpected_tables",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Unexpected table",
+            "matcher": "unexpected_tables",
+            "surfaces": [
+                "schema.tables"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.tables"
+            ],
+            "why": "Tables that are not core, known plugin tables or allowlisted, and parallel copies such as backupdb_*, need an owner.",
+            "remediation": "Identify the owner; drop abandoned copies after backup.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.table_integrity",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Table integrity",
+            "matcher": "table_integrity",
+            "surfaces": [
+                "schema.tables"
+            ],
+            "severity": "info",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Tables without primary keys, MyISAM tables and mixed collations cause corruption and replication problems.",
+            "remediation": "Convert to InnoDB and add primary keys.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.table_growth",
+            "category": "hygiene",
+            "kind": "drift",
+            "title": "Table growth",
+            "matcher": "table_growth",
+            "surfaces": [
+                "schema.tables"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "factor": 2,
+                "min_bytes": 10485760
+            },
+            "lists": [],
+            "why": "Sharp table growth (by engine estimate) can reveal spam floods or logging loops.",
+            "remediation": "Inspect the table contents.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.cron_overdue",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Cron overdue",
+            "matcher": "cron_overdue",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Events overdue by more than 24 hours mean WP-Cron is not running, so scheduled expiry and cleanup stall.",
+            "remediation": "Check the server cron calling wp-cron.php.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.action_scheduler_backlog",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Action Scheduler backlog",
+            "matcher": "action_scheduler_backlog",
+            "surfaces": [
+                "actionscheduler.summary"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "deep"
+            ],
+            "thresholds": {
+                "max": 100
+            },
+            "lists": [],
+            "why": "Failed or stale pending actions indicate background processing problems.",
+            "remediation": "Investigate the failing hook; purge old failed actions.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        }
+    ]
+}

@@ -24,6 +24,7 @@ import Pbn from './pages/Pbn';
 import Setup from './pages/Setup';
 import NotFound from './pages/NotFound';
 import NetworkCheck from './pages/NetworkCheck';
+import DbObservatory from './pages/DbObservatory';
 import Team from './pages/Team';
 import Kyc from './pages/Kyc';
 import FieldHome from './pages/Field/FieldHome';
@@ -177,6 +178,7 @@ export default function AppRouter() {
                 <Route path="pbn" element={<Pbn />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="network-check" element={<NetworkCheck />} />
+                <Route path="db-observatory" element={<DbObservatory />} />
                 <Route path="*" element={<NotFound />} />
             </Route>
         </Routes>
