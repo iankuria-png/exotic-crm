@@ -16,7 +16,8 @@ class ProviderStatusQueryOrchestrator
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter,
-        private readonly PawaPayCompatibilityAdapter $pawaPayCompatibilityAdapter
+        private readonly PawaPayCompatibilityAdapter $pawaPayCompatibilityAdapter,
+        private readonly \App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter $kopoKopoCompatibilityAdapter
     ) {
     }
 
@@ -25,8 +26,8 @@ class ProviderStatusQueryOrchestrator
         $payment->loadMissing(['platform']);
 
         $provider = $this->resolveProviderType($payment);
-        if (!in_array($provider, ['paystack', 'pesapal', 'pawapay'], true)) {
-            throw new InvalidArgumentException('Live provider checks are available only for Paystack, Pesapal, and pawaPay payments.');
+        if (!in_array($provider, ['paystack', 'pesapal', 'pawapay', 'kopokopo'], true)) {
+            throw new InvalidArgumentException('Live provider checks are available only for Paystack, Pesapal, pawaPay, and KopoKopo payments.');
         }
 
         $context = $this->billingModeService->providerContext(
@@ -38,6 +39,7 @@ class ProviderStatusQueryOrchestrator
         );
 
         $verification = match ($provider) {
+            'kopokopo' => $this->kopoKopoCompatibilityAdapter->verify($payment, $context, (string) $payment->transaction_reference),
             'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
                 $payment,
                 $context,
@@ -56,6 +58,7 @@ class ProviderStatusQueryOrchestrator
         };
 
         $providerReference = match ($provider) {
+            'kopokopo' => (string) $payment->transaction_reference,
             'pesapal' => $this->resolvePesapalTrackingId($payment, $options),
             'pawapay' => $this->resolvePawaPayDepositId($payment, $options),
             default => (string) ($options['reference'] ?? $payment->transaction_reference ?: $payment->reference_number),
@@ -283,6 +286,7 @@ class ProviderStatusQueryOrchestrator
         }
 
         return match ((string) $payment->purpose) {
+            Payment::PURPOSE_PREMIUM_CONTENT_SALE => BillingSurface::PremiumContent->value,
             Payment::PURPOSE_VISITOR_CONTACT_UNLOCK => BillingSurface::ContactUnlock->value,
             Payment::PURPOSE_WALLET_TOPUP => BillingSurface::WalletFunding->value,
             default => BillingSurface::SubscriptionLink->value,
@@ -300,6 +304,7 @@ class ProviderStatusQueryOrchestrator
             BillingSurface::SubscriptionInvoice->value => BillingSurface::SubscriptionInvoice->value,
             BillingSurface::WalletFunding->value => BillingSurface::WalletFunding->value,
             BillingSurface::WalletAutoRenew->value => BillingSurface::WalletAutoRenew->value,
+            BillingSurface::PremiumContent->value => BillingSurface::PremiumContent->value,
             BillingSurface::ContactUnlock->value => BillingSurface::ContactUnlock->value,
             BillingSurface::ManualConfirmation->value => BillingSurface::ManualConfirmation->value,
             BillingSurface::SelfCheckout->value => BillingSurface::SelfCheckout->value,
@@ -326,6 +331,7 @@ class ProviderStatusQueryOrchestrator
     private function expectedProviderReference(Payment $payment, string $provider): string
     {
         return match ($provider) {
+            'kopokopo' => trim((string) $payment->transaction_reference),
             'pesapal' => trim((string) (
                 $payment->transaction_reference
                 ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
