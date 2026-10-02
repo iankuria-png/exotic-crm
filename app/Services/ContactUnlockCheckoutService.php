@@ -341,7 +341,7 @@ class ContactUnlockCheckoutService
         return sprintf('Contact unlock checkout could not be started. Reference %s.', $reference);
     }
 
-    private function normalizePhone(string $phone, string $prefix): string
+    public function normalizePhone(string $phone, string $prefix): string
     {
         $digits = preg_replace('/\D+/', '', $phone);
         $prefix = preg_replace('/\D+/', '', $prefix);

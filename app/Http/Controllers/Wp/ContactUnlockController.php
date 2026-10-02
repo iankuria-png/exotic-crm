@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Wp;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Platform;
+use App\Services\ContactUnlockAccessService;
 use App\Services\ContactUnlockCheckoutService;
 use App\Services\ContactUnlockEventService;
 use App\Services\ContactUnlockPricingService;
@@ -21,7 +22,8 @@ class ContactUnlockController extends Controller
         private readonly ContactUnlockCheckoutService $checkoutService,
         private readonly ContactUnlockRevealService $revealService,
         private readonly ContactUnlockUpgradeQuoteService $upgradeQuoteService,
-        private readonly ContactUnlockEventService $eventService
+        private readonly ContactUnlockEventService $eventService,
+        private readonly ContactUnlockAccessService $accessService
     ) {}
 
     public function config(Request $request): JsonResponse
@@ -192,6 +194,25 @@ class ContactUnlockController extends Controller
             (string) $validated['session_proof'],
             (int) $validated['target_wp_post_id'],
             (int) $platform->id
+        ));
+    }
+
+    public function restore(Request $request): JsonResponse
+    {
+        $platform = $this->platform($request);
+        $validated = $request->validate([
+            'visitor_phone' => 'required|string|max:40',
+            'session_proof' => 'required|string|min:20|max:190',
+            'target_wp_post_id' => 'required|integer|min:1',
+            'visitor_ip' => 'nullable|string|max:64',
+        ]);
+
+        return $this->noStore($this->accessService->restore(
+            $platform,
+            (string) $validated['visitor_phone'],
+            (string) $validated['session_proof'],
+            (int) $validated['target_wp_post_id'],
+            $validated['visitor_ip'] ?? null
         ));
     }
 

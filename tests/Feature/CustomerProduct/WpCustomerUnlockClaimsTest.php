@@ -140,7 +140,8 @@ class WpCustomerUnlockClaimsTest extends TestCase
         $mine = $this->memberBody(['claim_id' => $claimId]);
         $this->postJson('/api/wp-svc/customer/unlocks/reveal', $mine, $this->signHeaders($platform->id, $mine))
             ->assertOk()
-            ->assertJsonPath('contact.phone', '254711222333');
+            ->assertJsonPath('contact.phone', '254711222333')
+            ->assertJsonMissingPath('contact.email');
 
         $firstFeedback = $this->memberBody(['claim_id' => $claimId, 'outcome' => CustomerReachabilityFeedback::OUTCOME_NO_ANSWER]);
         $this->postJson('/api/wp-svc/customer/reachability', $firstFeedback, $this->signHeaders($platform->id, $firstFeedback))

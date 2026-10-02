@@ -12,6 +12,10 @@ use Illuminate\Validation\ValidationException;
 
 class ContactUnlockEventService
 {
+    public function __construct(
+        private readonly ContactUnlockAccessService $accessService
+    ) {}
+
     public function record(
         Platform $platform,
         int $wpPostId,
@@ -41,7 +45,7 @@ class ContactUnlockEventService
         $referrerHost = $this->cleanHost((string) data_get($browser, 'referrer_host', ''));
         $trafficSource = $this->trafficSource($referrerHost);
         $localHour = $this->localHour(data_get($browser, 'timezone_offset_minutes'));
-        $unlock = $this->resolveUnlock($publicToken, $sessionHash, (int) $platform->id);
+        $unlock = $this->resolveUnlock($publicToken, $sessionProof, (int) $platform->id);
 
         $event = ContactUnlockEvent::query()->firstOrCreate(
             ['event_id_hash' => $eventHash],
@@ -78,18 +82,16 @@ class ContactUnlockEventService
         ];
     }
 
-    private function resolveUnlock(?string $publicToken, string $sessionHash, int $platformId): ?VisitorContactUnlock
+    private function resolveUnlock(?string $publicToken, string $sessionProof, int $platformId): ?VisitorContactUnlock
     {
         $token = trim((string) $publicToken);
         if ($token === '') {
             return null;
         }
 
-        return VisitorContactUnlock::query()
-            ->where('platform_id', $platformId)
-            ->where('public_token_hash', $this->hashToken($token))
-            ->where('session_token_hash', $sessionHash)
-            ->first();
+        ['unlock' => $unlock, 'denied' => $denied] = $this->accessService->resolve($platformId, $token, $sessionProof);
+
+        return $denied === null ? $unlock : null;
     }
 
     private function trafficSource(string $host): string

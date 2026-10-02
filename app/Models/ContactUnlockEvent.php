@@ -26,6 +26,10 @@ class ContactUnlockEvent extends Model
         self::TYPE_UPSELL_CLICK,
     ];
 
+    // Recorded by the CRM itself; never accepted from the browser event endpoint.
+    public const TYPE_REVEAL_DENIED = 'reveal_denied';
+    public const TYPE_ACCESS_RESTORED = 'access_restored';
+
     protected $fillable = [
         'platform_id',
         'client_id',
