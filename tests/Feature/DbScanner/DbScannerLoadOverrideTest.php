@@ -249,4 +249,71 @@ class DbScannerLoadOverrideTest extends TestCase
         $this->assertSame(0, DbScanMarketRun::query()->count());
         Queue::assertNothingPushed();
     }
+
+    public function test_market_toggle_bypasses_all_load_checks_but_keeps_emergency_and_credentials(): void
+    {
+        $market = $this->market();
+        $connection = DbScanConnection::query()->firstOrFail();
+        $this->assertTrue($connection->load_gate_enabled);
+        $connection->update(['load_gate_enabled' => false]);
+        $this->freshOpsState(3);
+        $this->postJson('/api/crm/db-observatory/connections/'.$market->id.'/preflight')->assertOk();
+        Cache::forget(LoadShedder::STATE_CACHE_KEY);
+        $this->start($market, ['override_reason' => null])->assertStatus(202);
+        $this->drain();
+        $this->assertContains(DbScanMarketRun::query()->where('mode', 'scan')->firstOrFail()->status, ['completed', 'completed_with_gaps']);
+        DbScanSetting::current()->update(['emergency_stop' => true]);
+        $this->start($market, ['override_reason' => null])->assertStatus(423)->assertJsonPath('blocked.0.reason', 'emergency_stop');
+        DbScanSetting::current()->update(['emergency_stop' => false]);
+        $connection->refresh()->update(['preflight_status' => 'never']);
+        $this->start($market, ['override_reason' => null])->assertStatus(423)->assertJsonPath('blocked.0.reason', 'credentials');
+    }
+
+    public function test_market_toggle_is_persisted_audited_admin_only_and_keeps_preflight_proof(): void
+    {
+        $market = $this->market();
+        $connection = DbScanConnection::query()->firstOrFail();
+        $connection->update(['host' => 'localhost', 'port' => 3306, 'tls_mode' => 'none']);
+        $payload = ['host' => 'localhost', 'port' => 3306, 'database' => 'market_db', 'prefix' => 'wp_', 'tls_mode' => 'none', 'load_gate_enabled' => false, 'revision' => $connection->revision];
+        $connection->update(['database' => 'market_db']);
+        $url = '/api/crm/db-observatory/connections/'.$market->id;
+        $this->putJson($url, $payload)->assertOk()->assertJsonPath('load_gate_enabled', false)->assertJsonPath('preflight_status', 'passed');
+        $this->assertTrue($connection->fresh()->preflightValid());
+        $event = DbScanAuditEvent::query()->where('entity', 'connection')->latest('id')->firstOrFail();
+        $this->assertTrue($event->before['load_gate_enabled']);
+        $this->assertFalse($event->after['load_gate_enabled']);
+        $this->getJson('/api/crm/db-observatory/connections')->assertOk()->assertJsonPath('data.0.connection.load_gate_enabled', false);
+        Sanctum::actingAs($this->adminUser('sub_admin', [$market->id]));
+        $this->putJson($url, $payload)->assertForbidden();
+    }
+
+    public function test_reenabling_a_market_gate_blocks_the_next_worker_checkpoint_and_other_markets_stay_protected(): void
+    {
+        $market = $this->market();
+        $other = $this->market('Zimbabwe');
+        $connection = DbScanConnection::query()->where('platform_id', $market->id)->firstOrFail();
+        $connection->update(['load_gate_enabled' => false]);
+        $this->freshOpsState(3);
+        $this->start($other, ['override_reason' => null])->assertStatus(423);
+        $this->start($market, ['override_reason' => null])->assertStatus(202);
+        $run = DbScanMarketRun::query()->firstOrFail();
+        $gate = app(\App\Services\DbScanner\Engine\ScannerGate::class);
+        $this->assertNull($gate->runLoadReason($run));
+        $connection->update(['load_gate_enabled' => true]);
+        $this->assertSame('load', $gate->runLoadReason($run));
+        $this->drain();
+        $this->assertSame('load', $run->fresh()->pause_reason);
+    }
+
+    public function test_mysql_access_messages_distinguish_login_database_and_table_permissions_without_driver_text(): void
+    {
+        foreach ([1045 => 'login', 1044 => 'cannot access', 1142 => 'cannot read', 1227 => 'permission'] as $number => $expected) {
+            $exception = new \PDOException('password=do-not-display');
+            $exception->errorInfo = ['HY000', $number, 'password=do-not-display'];
+            $safe = ReaderException::fromThrowable($exception);
+            $this->assertSame('access_denied', $safe->errorCode);
+            $this->assertStringContainsString($expected, $safe->getMessage());
+            $this->assertStringNotContainsString('do-not-display', $safe->getMessage());
+        }
+    }
 }

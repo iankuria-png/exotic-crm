@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
-import { LoadOverridePrompt } from './LoadOverride';
 import { useToast } from '../ToastProvider';
 import {
     apiError, Drawer, Empty, ErrorState, fmtAgo, fmtBytes, fmtDateTime, humanize, InertCode, Loading, Panel, Status,
 } from './shared';
 
-function ConnectionForm({ platformId, onSaved }) {
+function ConnectionForm({ platformId, onSaved, onScan }) {
     const toast = useToast();
     const queryClient = useQueryClient();
     const connections = useQuery({ queryKey: ['dbo', 'connections'], queryFn: dbObservatory.connections });
@@ -15,108 +14,130 @@ function ConnectionForm({ platformId, onSaved }) {
     const c = row?.connection;
     const [form, setForm] = useState(null);
     const [result, setResult] = useState(null);
+    const [dirty, setDirty] = useState(false);
+    const [phase, setPhase] = useState(null);
 
     useEffect(() => {
-        if (!row) return;
+        if (!row || dirty) return;
         setForm({
-            host: c?.host ?? row.suggested.host ?? '',
-            port: c?.port ?? 3306,
-            socket: c?.socket ?? '',
-            database: c?.database ?? row.suggested.database ?? '',
-            prefix: c?.prefix ?? row.suggested.prefix ?? 'wp_',
-            username: '',
-            password: '',
-            tls_mode: c?.tls_mode ?? 'none',
-            tls_ca: '',
-            host_group: c?.host_group ?? '',
-            enabled: c?.enabled ?? false,
+            host: c?.host ?? row.suggested.host ?? 'localhost', port: c?.port ?? 3306,
+            socket: c?.socket ?? '', database: c?.database ?? row.suggested.database ?? '',
+            prefix: c?.prefix ?? row.suggested.prefix ?? 'wp_', username: '', password: '',
+            tls_mode: c?.tls_mode ?? 'none', tls_ca: '', host_group: c?.host_group ?? '',
+            enabled: c?.enabled ?? true, load_gate_enabled: c?.load_gate_enabled ?? true,
             revision: c?.revision ?? null,
         });
-    }, [row?.platform_id, c?.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [row?.platform_id, c?.revision, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const save = useMutation({
-        mutationFn: () => dbObservatory.updateConnection(platformId, {
-            ...form,
-            port: Number(form.port) || 3306,
-            socket: form.socket || null,
-            host: form.host || null,
-            username: form.username || null,
-            password: form.password || null,
-            tls_ca: form.tls_ca || null,
-        }),
-        onSuccess: (res) => {
-            setResult(null);
-            toast.success(res.preflight_status === 'passed' ? 'Connection saved.' : 'Connection saved — run preflight to approve it.');
-            queryClient.invalidateQueries({ queryKey: ['dbo'] });
+        mutationFn: async (test) => {
+            setPhase('saving');
+            const saved = await dbObservatory.updateConnection(platformId, {
+                ...form, port: Number(form.port) || 3306, socket: form.socket || null,
+                host: form.host || null, username: form.username || null,
+                password: form.password || null, tls_ca: form.tls_ca || null,
+            });
+            // Refresh before clearing dirty, so the next edit uses the saved revision.
+            await queryClient.invalidateQueries({ queryKey: ['dbo', 'connections'] });
+            setForm((previous) => ({ ...previous, revision: saved.revision, username: '', password: '', tls_ca: '' }));
+            setDirty(false);
             onSaved?.();
+            if (test) {
+                setPhase('testing');
+                return dbObservatory.preflight(platformId);
+            }
+            return null;
         },
-        onError: (e) => toast.error(apiError(e)),
+        onSuccess: (res) => {
+            setResult(res);
+            toast.success(res ? 'Connection verified. You can now scan this market.' : 'Connection settings saved.');
+        },
+        onError: (error) => {
+            setResult({ status: 'failed', ...error?.response?.data, message: apiError(error) });
+            toast.error(apiError(error));
+        },
+        onSettled: () => { setPhase(null); queryClient.invalidateQueries({ queryKey: ['dbo'] }); },
     });
 
-    const preflight = useMutation({
-        mutationFn: (reason) => dbObservatory.preflight(platformId, reason ? { override_reason: reason } : {}),
-        onSuccess: (res) => { setResult(res); toast.success('Preflight passed.'); queryClient.invalidateQueries({ queryKey: ['dbo'] }); },
-        onError: (e) => { setResult(e?.response?.data || { status: 'failed', message: apiError(e) }); queryClient.invalidateQueries({ queryKey: ['dbo'] }); },
-    });
-
-    if (connections.isLoading || !form) return <Loading rows={3} />;
     if (connections.isError) return <ErrorState error={connections.error} onRetry={connections.refetch} />;
-
+    if (connections.isLoading || !form) return <Loading rows={3} />;
+    const change = (key, value) => { setForm({ ...form, [key]: value }); setDirty(true); setResult(null); };
     const field = (key, label, props = {}) => (
-        <label className="block text-xs font-semibold text-slate-600">
-            {label}
-            <input className="crm-input mt-1" value={form[key] ?? ''} onChange={(e) => setForm({ ...form, [key]: e.target.value })} {...props} />
+        <label className="block text-xs font-semibold text-slate-600">{label}
+            <input className="crm-input mt-1" value={form[key] ?? ''} disabled={save.isPending} onChange={(e) => change(key, e.target.value)} {...props} />
         </label>
     );
-    const shown = result || (c?.preflight_error ? { status: 'failed', message: c.preflight_error } : null);
+    const shown = result || (!dirty && c?.preflight_error ? { status: 'failed', code: c.preflight_error_code, message: c.preflight_error } : null);
+    const ready = !dirty && !save.isPending && (result?.status === 'passed' || (!result && c?.preflight_status === 'passed'));
+    const gateChanged = form.load_gate_enabled !== (c?.load_gate_enabled ?? true);
 
     return (
-        <div className="space-y-4">
-            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                Use a <span className="font-semibold">dedicated SELECT-only</span> MySQL/MariaDB account for this market's schema. The scanner never falls back to the payment/sync credentials. Remote hosts require verified TLS; secrets are write-only and encrypted.
+        <div className="space-y-5">
+            <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600" aria-label="Setup progress">
+                <span className="rounded-md bg-slate-100 px-2 py-1">1 · Enter connection</span>
+                <span className={`rounded-md px-2 py-1 ${ready ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100'}`}>2 · {ready ? 'Connection verified' : 'Save & test'}</span>
+                <span className="rounded-md bg-slate-100 px-2 py-1">3 · Run first scan</span>
             </div>
+            <details className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <summary className="cursor-pointer font-semibold text-slate-700">First-time cPanel setup</summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-slate-600">
+                    <li>Create a separate database user in cPanel → Manage My Databases.</li>
+                    <li>Under Add User To Database, assign it to <strong>{form.database || 'this market’s database'}</strong>. Select only SELECT and save.</li>
+                    <li>Enter the full username including its cPanel prefix, and the password below.</li>
+                </ol>
+                <p className="mt-2 text-xs text-slate-500">Creating the user alone does not give it access to a database. The scanner checks read-only access before scanning.</p>
+            </details>
             <div className="grid gap-3 sm:grid-cols-2">
-                {field('host', 'Host', { placeholder: 'localhost or db.example.com' })}
+                {field('host', 'Database host', { placeholder: 'localhost or db.example.com' })}
+                {field('database', 'Database name')}
+                {field('prefix', 'WordPress table prefix')}
                 {field('port', 'Port', { type: 'number' })}
-                {field('socket', 'Unix socket (optional)', { placeholder: '/var/lib/mysql/mysql.sock' })}
-                {field('database', 'Database')}
-                {field('prefix', 'Table prefix')}
-                {field('host_group', 'Host group', { placeholder: 'auto from host' })}
-                {field('username', c?.username_configured ? 'Username (leave blank to keep)' : 'Username', { autoComplete: 'off' })}
-                {field('password', c?.password_configured ? 'Password (leave blank to keep)' : 'Password', { type: 'password', autoComplete: 'new-password' })}
-                <label className="block text-xs font-semibold text-slate-600">
-                    TLS
-                    <select className="crm-select mt-1 w-full" value={form.tls_mode} onChange={(e) => setForm({ ...form, tls_mode: e.target.value })}>
-                        <option value="none">None (local host or socket only)</option>
-                        <option value="verify">Verify server certificate</option>
-                    </select>
-                </label>
-                <label className="flex items-center gap-2 self-end pb-2 text-sm text-slate-700">
-                    <input type="checkbox" checked={Boolean(form.enabled)} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-                    Enabled for scans
-                </label>
+                {field('username', c?.username_configured ? 'Username · saved' : 'Full database username', { autoComplete: 'off', placeholder: c?.username_configured ? 'Leave empty to keep saved username' : 'e.g. exotickenya_crm_scanner_kenya' })}
+                {field('password', c?.password_configured ? 'Password · saved' : 'Database password', { type: 'password', autoComplete: 'new-password', placeholder: c?.password_configured ? 'Leave empty to keep saved password' : 'Password for the database user' })}
             </div>
-            {form.tls_mode === 'verify' ? (
-                <label className="block text-xs font-semibold text-slate-600">CA certificate (PEM, optional{c?.tls_ca_configured ? '; leave blank to keep' : ''})
-                    <textarea className="crm-input crm-mono mt-1 min-h-[5rem] text-xs" value={form.tls_ca} onChange={(e) => setForm({ ...form, tls_ca: e.target.value })} />
-                </label>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="crm-btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save connection'}</button>
-                <button type="button" className="crm-btn-secondary" disabled={!c || preflight.isPending} onClick={() => preflight.mutate()}>{preflight.isPending ? 'Running preflight…' : 'Run preflight'}</button>
-                {c ? <span className="flex items-center gap-1.5 text-xs text-slate-500">Config v{c.config_version} · preflight <Status value={c.preflight_status} /> {c.preflight_at ? fmtAgo(c.preflight_at) : ''}</span> : null}
-            </div>
-            {shown?.code === 'load' && shown.load ? (
-                <LoadOverridePrompt key={`${platformId}-${c?.config_version}`} load={shown.load} market={row.market || row.name || 'this market'} preflight pending={preflight.isPending || save.isPending} onRun={(reason) => preflight.mutate(reason)} />
-            ) : null}
-            <p className="text-xs text-slate-500">Changing host, database, prefix or credentials creates a new configuration version and requires a fresh preflight before any scan. Preflight reads only identity, grants, session settings and table names — never row values.</p>
-            {shown && !(shown.code === 'load' && shown.load) ? (
-                <div className={`rounded-lg border px-3 py-2 text-sm ${shown.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
-                    <p className="font-semibold">{shown.message}</p>
-                    {shown.capabilities?.engine ? <p className="mt-1 text-xs">Engine {shown.capabilities.engine} · TLS {shown.capabilities.tls} · timeout {shown.capabilities.statement_timeout_seconds}s</p> : null}
-                    {shown.capabilities?.grant_summary?.length ? <InertCode className="mt-2 !text-slate-200">{shown.capabilities.grant_summary.join('\n')}</InertCode> : null}
+            <p className="text-xs text-slate-500">Saved credentials are encrypted and never displayed. Enter replacements only when changing them. “localhost” means the database server on the CRM host.</p>
+            <label className="block text-xs font-semibold text-slate-600">Connection security
+                <select className="crm-select mt-1 w-full" value={form.tls_mode} disabled={save.isPending} onChange={(e) => change('tls_mode', e.target.value)}>
+                    <option value="none">Local connection (no TLS)</option>
+                    <option value="verify">Remote connection (verify TLS certificate)</option>
+                </select>
+            </label>
+            {form.tls_mode === 'verify' ? <label className="block text-xs font-semibold text-slate-600">CA certificate (PEM, optional; leave blank to keep saved)
+                <textarea className="crm-input crm-mono mt-1 min-h-[5rem] text-xs" value={form.tls_ca} disabled={save.isPending} onChange={(e) => change('tls_ca', e.target.value)} />
+            </label> : null}
+            <details className="text-sm text-slate-600">
+                <summary className="cursor-pointer font-semibold">Advanced connection settings</summary>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {field('socket', 'Unix socket (optional)', { placeholder: 'Leave empty to use the server default' })}
+                    {field('host_group', 'Shared database host group', { placeholder: 'Automatic from host' })}
                 </div>
-            ) : null}
+            </details>
+            <section className={`rounded-lg border px-4 py-3 ${form.load_gate_enabled ? 'border-slate-200' : 'border-amber-300 bg-amber-50'}`}>
+                <div className="flex items-center justify-between gap-4">
+                    <div><h4 className="text-sm font-semibold text-slate-900">Load gate</h4><p className="mt-1 text-xs text-slate-600">{form.load_gate_enabled ? 'Pause this market when platform load is high.' : 'Ignore platform load for this market’s checks and scans.'}</p></div>
+                    <button type="button" role="switch" aria-label="Load gate" aria-checked={form.load_gate_enabled} disabled={save.isPending} onClick={() => change('load_gate_enabled', !form.load_gate_enabled)} className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${form.load_gate_enabled ? 'border-teal-300 bg-teal-50 text-teal-900' : 'border-amber-400 bg-white text-amber-950'}`}>
+                        <span className={`h-3 w-3 rounded-full ${form.load_gate_enabled ? 'bg-teal-600' : 'bg-amber-500'}`} />{form.load_gate_enabled ? 'On' : 'Off'}
+                    </button>
+                </div>
+                <p className="mt-2 text-xs text-slate-600">{gateChanged ? 'Unsaved change — choose Save settings or Save & test below. ' : ''}Off stays off until you turn it on again. It bypasses all load readings, including Critical and missing readings, for this market only. Emergency stop, database permissions and health checks still apply.</p>
+            </section>
+            <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={form.enabled} disabled={save.isPending} onChange={(e) => change('enabled', e.target.checked)} />Enable this market for scans after its connection passes</label>
+            <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className="crm-btn-primary" disabled={save.isPending} onClick={() => { setResult(null); save.mutate(true); }}>{phase === 'testing' ? 'Testing connection…' : phase === 'saving' ? 'Saving…' : 'Save & test connection'}</button>
+                <button type="button" className="crm-btn-secondary" disabled={save.isPending} onClick={() => save.mutate(false)}>Save settings</button>
+                {dirty ? <span className="text-xs text-amber-800">Unsaved changes</span> : c?.preflight_at ? <span className="text-xs text-slate-500">Last checked {fmtAgo(c.preflight_at)}</span> : null}
+            </div>
+            {shown ? <div role="status" className={`rounded-lg border px-3 py-3 text-sm ${shown.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
+                <p className="font-semibold">{shown.message}</p>
+                {shown.code === 'access_denied' ? <p className="mt-2 text-xs">Check the full username, password and cPanel database assignment. Turning off the load gate cannot grant database access.</p> : null}
+                {['load', 'ops_state_missing', 'ops_state_stale'].includes(shown.code) ? <p className="mt-2 text-xs">To proceed without load checks, switch Load gate off above and choose Save & test connection.</p> : null}
+                {shown.errors ? <ul className="mt-2 list-disc pl-4 text-xs">{Object.values(shown.errors).flat().map((message, i) => <li key={i}>{message}</li>)}</ul> : null}
+                {shown.capabilities?.engine ? <p className="mt-2 text-xs">Engine {shown.capabilities.engine} · TLS {shown.capabilities.tls} · query timeout {shown.capabilities.statement_timeout_seconds}s</p> : null}
+            </div> : null}
+            {ready ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-sm font-semibold text-emerald-900">Connection verified{form.enabled ? ' — ready for your first scan.' : '. Enable this market above to scan.'}</p>
+                {form.enabled && onScan ? <button type="button" className="crm-btn-primary" onClick={onScan}>Scan this market</button> : null}
+            </div> : null}
         </div>
     );
 }
@@ -238,7 +259,8 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                                         <td className="px-2 py-2.5">
                                             {m.connection.configured ? (
                                                 <div className="flex flex-wrap items-center gap-1">
-                                                    <Status value={m.connection.preflight_status} label={`preflight ${m.connection.preflight_status}`} />
+                                                    <Status value={m.connection.preflight_status} label={m.connection.preflight_status === 'passed' ? 'Connection verified' : `Connection ${m.connection.preflight_status === 'never' ? 'not tested' : m.connection.preflight_status}`} />
+                                                    {m.connection.load_gate_enabled === false ? <span className="mt-1 block text-xs font-semibold text-amber-800">Load gate off</span> : null}
                                                     {!m.connection.enabled ? <Status value="stopped" label="disabled" /> : null}
                                                 </div>
                                             ) : <span className="text-xs text-slate-400">Not configured</span>}
@@ -284,7 +306,7 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                 ) : null}
                 width="max-w-3xl"
             >
-                {selected ? (view === 'connection' && canConfigure ? <ConnectionForm platformId={selected.platform_id} /> : <Inventory platformId={selected.platform_id} />) : null}
+                {selected ? (view === 'connection' && canConfigure ? <ConnectionForm platformId={selected.platform_id} onScan={canOperate ? () => { setOpen(null); onScanMarket(selected.platform_id); } : null} /> : <Inventory platformId={selected.platform_id} />) : null}
             </Drawer>
         </>
     );

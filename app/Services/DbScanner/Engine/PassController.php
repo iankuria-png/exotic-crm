@@ -225,7 +225,9 @@ class PassController
             if (! in_array($locked->status, ['paused', 'pausing'], true)) {
                 throw new InvalidTransitionException('Only a paused pass can be resumed.');
             }
-            if (isset($locked->scope['load_override']) && LoadOverride::ended($locked->scope['load_override'])) {
+            $override = $locked->scope['load_override'] ?? null;
+            $connection = $override ? DbScanConnection::query()->where('platform_id', $override['platform_id'])->first() : null;
+            if ($override && LoadOverride::ended($override) && $connection?->load_gate_enabled !== false) {
                 throw new InvalidTransitionException(ScannerGate::describe('override_expired'));
             }
 

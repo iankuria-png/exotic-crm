@@ -15,6 +15,7 @@ class DbScanConnection extends Model
         'password' => 'encrypted',
         'tls_ca' => 'encrypted',
         'enabled' => 'boolean',
+        'load_gate_enabled' => 'boolean',
         'port' => 'integer',
         'config_version' => 'integer',
         'preflight_config_version' => 'integer',

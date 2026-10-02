@@ -160,6 +160,7 @@ class DbObservatoryController extends Controller
                 'connection' => $c ? array_filter([
                     'configured' => true,
                     'enabled' => (bool) $c->enabled,
+                    'load_gate_enabled' => $c->load_gate_enabled !== false,
                     'preflight_status' => $c->preflightValid() ? 'passed' : ($c->preflight_status === 'passed' ? 'stale' : $c->preflight_status),
                     'preflight_at' => $c->preflight_at?->toIso8601String(),
                     'preflight_error' => $c->preflight_error,

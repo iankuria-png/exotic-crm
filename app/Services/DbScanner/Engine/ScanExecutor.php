@@ -589,7 +589,7 @@ class ScanExecutor
                 throw new ReaderException(ReaderException::CONTROL_ABORT);
             }
             // An in-flight query retains its normal statement timeout.
-            if (($override = LoadOverride::forRun($run)) !== null && ($reason = $this->gate->loadReason($override))) {
+            if ($reason = $this->gate->runLoadReason($run)) {
                 $this->abort = 'gate:'.$reason;
                 throw new ReaderException(ReaderException::CONTROL_ABORT);
             }

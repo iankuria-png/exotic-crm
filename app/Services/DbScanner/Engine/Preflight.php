@@ -90,14 +90,12 @@ class Preflight
         $message = 'Preflight passed: read-only session, schema-scoped SELECT grants and core tables verified.';
 
         $controlReason = null;
-        if ($loadOverride !== null) {
-            $reader->setControl(function () use ($platform, $connection, $loadOverride, &$controlReason): void {
-                $controlReason = $this->gate->check($platform, $connection, 'preflight', $loadOverride);
-                if ($controlReason !== null) {
-                    throw new ReaderException(ReaderException::CONTROL_ABORT);
-                }
-            });
-        }
+        $reader->setControl(function () use ($platform, $connection, $loadOverride, &$controlReason): void {
+            $controlReason = $this->gate->check($platform, $connection->fresh(), 'preflight', $loadOverride);
+            if ($controlReason !== null) {
+                throw new ReaderException(ReaderException::CONTROL_ABORT);
+            }
+        });
         try {
             $reader->open();
             $capabilities['engine'] = mb_substr($reader->engine(), 0, 80);

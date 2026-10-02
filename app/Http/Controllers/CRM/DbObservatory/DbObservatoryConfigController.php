@@ -416,6 +416,7 @@ class DbObservatoryConfigController extends Controller
                     'password_configured' => (bool) $c->password,
                     'config_version' => $c->config_version,
                     'enabled' => (bool) $c->enabled,
+                    'load_gate_enabled' => $c->load_gate_enabled !== false,
                     'preflight_status' => $c->preflightValid() ? 'passed' : ($c->preflight_status === 'passed' ? 'stale' : $c->preflight_status),
                     'preflight_at' => $c->preflight_at?->toIso8601String(),
                     'preflight_error_code' => $c->preflight_error_code,
@@ -447,6 +448,7 @@ class DbObservatoryConfigController extends Controller
             'tls_ca' => ['nullable', 'string', 'max:20000'],
             'host_group' => ['nullable', 'string', 'max:120'],
             'enabled' => ['sometimes', 'boolean'],
+            'load_gate_enabled' => ['sometimes', 'boolean'],
             'revision' => ['nullable', 'integer'],
         ]);
         if (empty($data['host']) && empty($data['socket'])) {
@@ -462,7 +464,7 @@ class DbObservatoryConfigController extends Controller
             if ($model && isset($data['revision']) && (int) $data['revision'] !== (int) $model->revision) {
                 abort(409, 'This connection was changed by someone else; reload and try again.');
             }
-            $before = $model?->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'config_version']);
+            $before = $model?->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'config_version']);
 
             $model ??= new DbScanConnection(['platform_id' => $platform, 'driver' => 'mysql', 'config_version' => 0, 'revision' => 0, 'preflight_status' => 'never']);
             $credentialFields = ['host', 'port', 'socket', 'database', 'prefix', 'tls_mode'];
@@ -491,6 +493,10 @@ class DbObservatoryConfigController extends Controller
                 $model->enabled = (bool) $data['enabled'];
             }
 
+            if (array_key_exists('load_gate_enabled', $data)) {
+                $model->load_gate_enabled = (bool) $data['load_gate_enabled'];
+            }
+
             // Rotation creates a new configuration version and voids preflight proof.
             if ($changed || ! $model->exists) {
                 $model->config_version = (int) $model->config_version + 1;
@@ -501,7 +507,7 @@ class DbObservatoryConfigController extends Controller
             $model->updated_by = $request->user()->id;
             $model->save();
 
-            $this->audit->record((int) $request->user()->id, 'connection', $model->id, $changed ? 'rotate' : 'update', $before, $model->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'config_version']) + ['credentials_changed' => $changed], $platform);
+            $this->audit->record((int) $request->user()->id, 'connection', $model->id, $changed ? 'rotate' : 'update', $before, $model->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'config_version']) + ['credentials_changed' => $changed], $platform);
 
             return $model;
         });
@@ -512,6 +518,7 @@ class DbObservatoryConfigController extends Controller
             'preflight_status' => $model->preflightValid() ? 'passed' : $model->preflight_status,
             'host_group' => $model->host_group,
             'enabled' => (bool) $model->enabled,
+            'load_gate_enabled' => $model->load_gate_enabled !== false,
             'revision' => $model->revision,
         ]);
     }

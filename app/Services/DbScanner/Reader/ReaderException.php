@@ -55,7 +55,14 @@ class ReaderException extends RuntimeException
         ?Throwable $previous = null,
         public readonly ?int $driverCode = null,
     ) {
-        parent::__construct(self::MESSAGES[$errorCode] ?? 'Scanner reader error.', 0, $previous);
+        $message = $errorCode === self::ACCESS_DENIED ? match ($driverCode) {
+            1045 => 'MySQL rejected this login. Check the full cPanel database username (including its prefix), password and allowed host.',
+            1044 => 'This user cannot access the selected database. In cPanel, add the user to this database and grant SELECT.',
+            1142, 1143 => 'This user cannot read a required table or column. Grant SELECT on all tables in this database.',
+            1227 => 'MySQL denied a required permission during the connection check. Review the reader grants and server session policy.',
+            default => self::MESSAGES[self::ACCESS_DENIED],
+        } : (self::MESSAGES[$errorCode] ?? 'Scanner reader error.');
+        parent::__construct($message, 0, $previous);
     }
 
     public function isTransient(): bool

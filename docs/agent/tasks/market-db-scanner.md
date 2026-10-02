@@ -38,6 +38,29 @@
 4. Set `DB_SCANNER_ENABLED=true`, enable scanning in Schedules & limits, scan one shared-host and one remote canary (Quick, then Standard, then Deep), watch query p95, timeouts, market health and callback latency; then five markets; then enable schedules.
 5. Rollback: scanning off + schedules off, Stop active scans, confirm no scanner workers/leases, then revert code. Never roll back the migration; credential revocation is the database-level emergency stop.
 
+## Simplified setup and persistent market load gate (2 October follow-up)
+
+This supersedes the timed-override setup instructions below. Ian explicitly requested a persistent toggle and easier setup after repeated credential failures.
+
+- Markets → Reader connection now has **Save & test connection**, explicit saved-credential indicators, a cPanel assignment checklist, advanced settings collapsed, inline errors and **Scan this market** after verification.
+- **Load gate → Off**, then **Save & test connection** (or **Save settings**) persists until an admin switches it back on. It bypasses all load admission, including Critical and missing/stale telemetry, for this market's connection checks, manual scans, scheduled scans and continuations. Other markets and global CRM load policy are unaffected. No reason or timer required.
+- Emergency stop, scanner enable/pause, health, credentials, read-only/TLS validation and concurrency/budget limits remain. Running workers read the current gate policy at checkpoints, so re-enabling takes effect during work. Gate changes are audited and do not invalidate credential proof.
+- MySQL errors now distinguish login rejection (1045), database access (1044), table/column permissions (1142/1143) and required server permission (1227), without exposing raw driver messages or credentials.
+- A new additive migration `2026_10_02_010000_add_load_gate_to_db_scan_connections` defaults every existing market to gate On.
+
+Deploy this follow-up:
+
+```bash
+cd ~/crm.exotic-online.com
+git pull --ff-only
+php artisan migrate --force
+php artisan config:cache
+```
+
+Reload the CRM → Markets → Kenya → Reader connection → Load gate Off → **Save & test connection**. Once verified, choose **Scan this market**. If MySQL still refuses access, follow the specific error and the cPanel checklist; disabling load cannot grant database permissions. Global scanner enablement (`DB_SCANNER_ENABLED=true` plus Schedules & limits → enabled) remains required for scans.
+
+Local verification against base `7d2a78cf`: 14 focused tests / 124 assertions passed (105.64 s); 43 API, lifecycle, safety and scheduler regressions / 426 assertions passed (147.20 s). Changed PHP lint/Pint and production build passed; existing forecast CSS-selector and bundle-size warnings remain. Compiled assets included. Ian owns browser QA and the production connection/scan verification.
+
 ## Scoped load override (2 October 2026)
 
 Ian authorized implementation and shipment after the Kenya credential check was blocked by elevated load.

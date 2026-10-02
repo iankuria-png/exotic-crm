@@ -50,6 +50,10 @@ class ScannerGate
             return 'credentials';
         }
 
+        if ($connection->load_gate_enabled === false) {
+            return $this->healthReason($platform);
+        }
+
         if ($loadOverride !== null && ((int) ($loadOverride['platform_id'] ?? 0) !== (int) $platform->id || ($loadOverride['mode'] ?? null) !== $mode)) {
             return 'override_expired';
         }
@@ -58,6 +62,16 @@ class ScannerGate
         }
 
         return $this->healthReason($platform);
+    }
+
+    public function runLoadReason(\App\Models\DbScanMarketRun $run): ?string
+    {
+        $connection = DbScanConnection::query()->where('platform_id', $run->platform_id)->first();
+        if ($connection?->load_gate_enabled === false) {
+            return null;
+        }
+
+        return $this->loadReason(LoadOverride::forRun($run));
     }
 
     public function loadReason(?array $loadOverride = null): ?string
