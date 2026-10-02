@@ -133,6 +133,19 @@ class SweepFinalizer
             }
         }
 
+        if ($rules->active('hygiene.autoloaded_secret_options') && $this->surfaceComplete($state, 'options.values')) {
+            $min = (int) $rules->threshold('hygiene.autoloaded_secret_options', 'min_options', 100);
+            foreach ((array) ($acc['hygiene.autoloaded_secret_options'] ?? []) as $pattern => $data) {
+                if ((int) $data['count'] < $min) {
+                    continue;
+                }
+                $hits[] = $this->sweepHit('hygiene.autoloaded_secret_options', 'Many secret-named options are autoloaded on every request', 'autoloaded_secrets:'.$pattern, [
+                    'name_pattern' => $pattern, 'options' => (int) $data['count'], 'bytes' => (int) ($data['bytes'] ?? 0),
+                    'note' => 'Values were never read; counted by name and size only.',
+                ], 'options.values');
+            }
+        }
+
         $snapshotId = $this->sweepSnapshotId($run);
         if ($rules->active('content.outbound_domains') && $snapshotId) {
             $complete = $this->surfaceComplete($state, 'posts.content') && $this->surfaceComplete($state, 'options.values');
@@ -252,8 +265,12 @@ class SweepFinalizer
                 continue;
             }
 
-            if ($surfaceKey === 'sweep' || in_array($finding->rule_key, ['content.shortener_links', 'content.comment_links'], true)) {
-                $source = $finding->rule_key === 'content.comment_links' ? 'comments.approved' : 'posts.content';
+            if ($surfaceKey === 'sweep' || in_array($finding->rule_key, ['content.shortener_links', 'content.comment_links', 'hygiene.autoloaded_secret_options'], true)) {
+                $source = match ($finding->rule_key) {
+                    'content.comment_links' => 'comments.approved',
+                    'hygiene.autoloaded_secret_options' => 'options.values',
+                    default => 'posts.content',
+                };
                 if ($this->surfaceComplete($state, $source)) {
                     $this->recorder->resolve($finding, $run, 'Not present in a complete sweep of '.$source.'.');
                     $resolved++;

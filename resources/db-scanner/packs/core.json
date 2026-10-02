@@ -181,6 +181,108 @@
             "enabled": true
         },
         {
+            "key": "access.role_grants_admin_capability",
+            "category": "access",
+            "kind": "structured",
+            "title": "Non-administrator role with site-control capabilities",
+            "matcher": "role_privilege_risk",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Roles other than administrator that can edit theme or plugin code, install plugins, manage users or options, or that grant the literal \"administrator\" capability are admin-equivalent for anyone holding them.",
+            "remediation": "Remove code-editing and user-management capabilities from staff roles (Advanced Access Manager or the role editor) unless there is a documented need.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.lookalike_account_email_domains",
+            "category": "access",
+            "kind": "structured",
+            "title": "Accounts on an email domain the network may not control",
+            "matcher": "lookalike_email_domains",
+            "surfaces": [
+                "users.email_domains"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_accounts": 10
+            },
+            "lists": [
+                "lexicon.placeholder_email_domains"
+            ],
+            "why": "Password-reset emails for these accounts go to that domain. A www-prefixed or one-letter-off copy of the site domain, or a placeholder domain owned by someone else, lets whoever controls it reset those passwords.",
+            "remediation": "Replace placeholder emails with addresses the owner controls, or a domain the network owns and receives mail for.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.login_attack_pressure",
+            "category": "access",
+            "kind": "threshold",
+            "title": "Failed-login pressure",
+            "matcher": "login_attack_pressure",
+            "surfaces": [
+                "activity.failed_logins"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "failed_7d": 1000
+            },
+            "lists": [],
+            "why": "Thousands of failed logins from hundreds of IPs in a week is credential stuffing. Read from the Activity Log plugin table when present.",
+            "remediation": "Confirm login rate limiting (Loginizer) is active, consider a WAF challenge on wp-login.php and xmlrpc.php, and force resets for targeted accounts.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.autoloaded_secret_options",
+            "category": "hygiene",
+            "kind": "threshold",
+            "title": "Bulk autoloaded secret options",
+            "matcher": "autoloaded_secret_options",
+            "surfaces": [
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_options": 100
+            },
+            "lists": [],
+            "why": "Hundreds of secret-named options (such as per-user login tokens) set to autoload are read into memory on every request and often outlive their users. Counted by name and size only; values are never read.",
+            "remediation": "Set them to not autoload and purge entries for users that no longer exist; ideally move tokens to user meta with expiry.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
             "key": "persistence.mysql_triggers",
             "category": "persistence",
             "kind": "schema_object",

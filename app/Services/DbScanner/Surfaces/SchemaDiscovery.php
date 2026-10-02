@@ -19,7 +19,7 @@ class SchemaDiscovery
         'options', 'users', 'usermeta', 'posts', 'postmeta', 'comments', 'commentmeta', 'terms', 'termmeta',
         'term_taxonomy', 'term_relationships', 'links', 'snippets', 'actionscheduler_actions', 'actionscheduler_claims',
         'actionscheduler_groups', 'actionscheduler_logs', 'blogs', 'blogmeta', 'site', 'sitemeta', 'signups',
-        'registration_log', 'blog_versions',
+        'registration_log', 'blog_versions', 'aryo_activity_log',
     ];
 
     public function discover(MarketDbReader $reader, string $prefix): SchemaInfo

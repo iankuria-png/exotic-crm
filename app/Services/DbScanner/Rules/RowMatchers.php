@@ -23,6 +23,8 @@ class RowMatchers
         'script_injection', 'unexpected_script', 'spam_lexicon', 'hidden_text', 'seo_meta_injection', 'shortener_links',
         'comment_links', 'outbound_domains', 'malformed_links', 'retired_parameters', 'ioc_option_names',
         'lookalike_options', 'encoded_payloads', 'serialized_objects', 'code_snippet_stores',
+        // Tallied by SurfaceScanner from excluded secret names; no value matcher.
+        'autoloaded_secret_options',
     ];
 
     private const PHP_EXEC = '/(?<![\w>$-])(eval|assert|system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|create_function)\s*\(/i';
@@ -115,6 +117,8 @@ class RowMatchers
 
     private function remoteLoader(string $key, RuleSet $rules, RowContext $ctx, ContentAnalysis $a): ?Hit
     {
+        $widgets = $rules->list('lexicon.known_widget_scripts', $key);
+
         foreach ($a->scripts() as $script) {
             if ($script['src'] === null || $script['host'] === '') {
                 continue;
@@ -123,25 +127,39 @@ class RowMatchers
                 continue; // handled by the GTM container check below
             }
             if (! $a->hosts->isApprovedScript($script['host'])) {
-                return $this->hit($key, $rules, $ctx, 'External script loaded from an unapproved host', $script['text'], $script['offset'], ['external_script', 'host:'.$script['host']], $script['chain'], 'strong', 'injected_loader', extra: ['remote_host' => $script['host']]);
+                return $this->loaderHit($key, $rules, $ctx, 'External script loaded from an unapproved host', $script['text'], $script['offset'], ['external_script', 'host:'.$script['host']], $script['chain'], $script['host'], $this->isKnownWidget($script['src'], $widgets));
             }
         }
 
         foreach ($a->layers() as $layer) {
             $t = $layer['text'];
+            $dynamic = (bool) preg_match('/createElement\s*\(\s*\\\\?["\']script\\\\?["\']\s*\)/i', $t);
 
-            if (preg_match('/createElement\s*\(\s*\\\\?["\']script\\\\?["\']\s*\)/i', $t)
-                && preg_match('/\.src\s*=\s*\\\\?["\'`]((?:https?:)?\/\/[^"\'`\s\\\\]+)/i', $t, $m, PREG_OFFSET_CAPTURE)) {
+            if ($dynamic && preg_match('/\.src\s*=\s*\\\\?["\'`]((?:https?:)?\/\/[^"\'`\s\\\\]+)/i', $t, $m, PREG_OFFSET_CAPTURE)) {
                 $host = HostContext::hostOf($m[1][0]);
                 if ($host !== '' && $host !== 'googletagmanager.com' && ! $a->hosts->isApprovedScript($host)) {
-                    return $this->hit($key, $rules, $ctx, 'Dynamic script loader pointing at an unapproved host', $t, $m[0][1], ['dynamic_script_element', 'host:'.$host], $layer['chain'], 'strong', 'injected_loader', extra: ['remote_host' => $host]);
+                    return $this->loaderHit($key, $rules, $ctx, 'Dynamic script loader pointing at an unapproved host', $t, $m[0][1], ['dynamic_script_element', 'host:'.$host], $layer['chain'], $host, $this->isKnownWidget($m[1][0], $widgets));
+                }
+            } elseif ($dynamic && preg_match('/\.src\s*=\s*[A-Za-z_$(]/', $t, $m, PREG_OFFSET_CAPTURE)) {
+                // The URL is assembled at runtime (vendor snippets and malware
+                // both do this). Judge it by the URL literals it is built from.
+                if (preg_match_all('#["\'`]((?:https?:)?//([a-z0-9.-]+\.[a-z]{2,})[^"\'`\s]*)#i', $t, $um, PREG_SET_ORDER)) {
+                    foreach ($um as $u) {
+                        $host = HostContext::hostOf($u[1]);
+                        if ($host === '' || $host === 'googletagmanager.com' || $a->hosts->isApprovedScript($host)) {
+                            continue;
+                        }
+                        $widget = $this->isKnownWidget($u[1], $widgets);
+
+                        return $this->hit($key, $rules, $ctx, $widget ? 'Known third-party widget script (runtime-built loader)' : 'Script loader builds its URL at runtime from an unapproved host', $t, $m[0][1], ['dynamic_script_element', 'computed_src', 'host:'.$host], $layer['chain'], 'needs_review', $widget ? 'third_party_widget' : 'injected_loader', 'warn', extra: ['remote_host' => $host]);
+                    }
                 }
             }
 
             if (preg_match('/\bimport\s*\(\s*["\'`]((?:https?:)?\/\/[^"\'`\s]+)/i', $t, $m, PREG_OFFSET_CAPTURE)) {
                 $host = HostContext::hostOf($m[1][0]);
                 if ($host !== '' && ! $a->hosts->isApprovedScript($host)) {
-                    return $this->hit($key, $rules, $ctx, 'Dynamic import from an unapproved host', $t, $m[0][1], ['dynamic_import', 'host:'.$host], $layer['chain'], 'strong', 'injected_loader', extra: ['remote_host' => $host]);
+                    return $this->loaderHit($key, $rules, $ctx, 'Dynamic import from an unapproved host', $t, $m[0][1], ['dynamic_import', 'host:'.$host], $layer['chain'], $host, false);
                 }
             }
 
@@ -162,6 +180,46 @@ class RowMatchers
         }
 
         return null;
+    }
+
+    /**
+     * Strong only where the loader actually runs for visitors. Known vendor
+     * widgets (newsletter forms, analytics) and loaders sitting in an ordinary
+     * plugin option — which execute only if that plugin prints them — are
+     * review items, not malware verdicts.
+     */
+    private function loaderHit(string $key, RuleSet $rules, RowContext $ctx, string $title, string $text, ?int $offset, array $signals, array $chain, string $host, bool $knownWidget): Hit
+    {
+        if ($knownWidget) {
+            return $this->hit($key, $rules, $ctx, 'Known third-party widget script from a shared host', $text, $offset, array_merge($signals, ['known_widget']), $chain, 'needs_review', 'third_party_widget', 'warn', extra: ['remote_host' => $host]);
+        }
+        if ($chain === [] && $this->isDormantStore($ctx)) {
+            return $this->hit($key, $rules, $ctx, $title.' (stored in a plugin option; runs only if that plugin outputs it)', $text, $offset, array_merge($signals, ['plugin_option']), $chain, 'needs_review', 'stored_loader', 'warn', extra: ['remote_host' => $host]);
+        }
+
+        return $this->hit($key, $rules, $ctx, $title, $text, $offset, $signals, $chain, 'strong', 'injected_loader', extra: ['remote_host' => $host]);
+    }
+
+    /**
+     * @param  array<int, string>  $widgets  host/path fragments of reviewed vendor widget scripts
+     */
+    private function isKnownWidget(string $url, array $widgets): bool
+    {
+        $url = strtolower(preg_replace('#^(https?:)?//#i', '', html_entity_decode($url)) ?? '');
+        foreach ($widgets as $fragment) {
+            $fragment = strtolower(trim((string) $fragment));
+            if ($fragment !== '' && str_contains($url, $fragment)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** An option that is neither rendered sitewide (widgets, theme mods) nor a code store. */
+    private function isDormantStore(RowContext $ctx): bool
+    {
+        return $ctx->surface === 'options.values' && ! $this->isPublicContent($ctx) && ! $this->isCodeStore($ctx);
     }
 
     private function redirectOverlay(string $key, RuleSet $rules, RowContext $ctx, ContentAnalysis $a): ?Hit

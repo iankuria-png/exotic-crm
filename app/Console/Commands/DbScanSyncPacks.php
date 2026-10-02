@@ -26,13 +26,14 @@ class DbScanSyncPacks extends Command
             $this->line(sprintf('  %-8s v%s', $pack, $version));
         }
         $this->info(sprintf(
-            '%sRules: %d created, %d updated, %d new versions, %d retired · lists seeded %d · schedules seeded %d',
+            '%sRules: %d created, %d updated, %d new versions, %d retired · lists seeded %d (+%d shipped entries merged) · schedules seeded %d',
             ($summary['dry_run'] ?? false) ? '[dry run] ' : '',
             $summary['created'],
             $summary['updated'],
             $summary['versions'],
             $summary['retired'],
             $summary['lists_seeded'],
+            $summary['list_entries_added'] ?? 0,
             $summary['schedules_seeded']
         ));
 

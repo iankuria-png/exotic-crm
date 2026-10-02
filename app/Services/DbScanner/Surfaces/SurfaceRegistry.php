@@ -84,6 +84,8 @@ class SurfaceRegistry
             'posts.orphan_authors' => ['posts', 'users'],
             'postmeta.slug_aliases', 'postmeta.orphans' => ['postmeta', 'posts'],
             'actionscheduler.summary' => ['actionscheduler_actions'],
+            'users.email_domains' => ['users'],
+            'activity.failed_logins' => ['aryo_activity_log'],
             default => [],
         };
     }
@@ -112,6 +114,8 @@ class SurfaceRegistry
             new Surface('posts.revision_counts', 'inventory', 'Revisions per post', table: 'posts', profiles: $deep),
             new Surface('postmeta.slug_aliases', 'inventory', 'Shared old profile slugs', table: 'postmeta', profiles: $deep),
             new Surface('postmeta.orphans', 'inventory', 'Postmeta without a post', table: 'postmeta', profiles: $deep),
+            new Surface('users.email_domains', 'inventory', 'Account email domains (counts only)', table: 'users', profiles: $standard),
+            new Surface('activity.failed_logins', 'inventory', 'Failed logins in the Activity Log (7 days)', table: 'aryo_activity_log', profiles: $standard, core: false),
             new Surface('actionscheduler.summary', 'inventory', 'Action Scheduler backlog', table: 'actionscheduler_actions', profiles: $deep, core: false),
 
             // Row surfaces — keyset traversal.

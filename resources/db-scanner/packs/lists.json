@@ -89,7 +89,8 @@
                 "wordpress-seo",
                 "wordpress-seo-premium",
                 "wp-laravel-sso",
-                "wpseo-video"
+                "wpseo-video",
+                "exotic-profile-chat"
             ]
         },
         {
@@ -145,7 +146,21 @@
                 "aal/*",
                 "acf_*",
                 "rank_math*",
-                "jetpack*"
+                "jetpack*",
+                "wordfence*",
+                "wsal*",
+                "wpo_*",
+                "itsec_*",
+                "wpmudev*",
+                "sucuriscan*",
+                "imagify*",
+                "ai1wm*",
+                "wphb*",
+                "mainwp*",
+                "mls_*",
+                "ppmwp_*",
+                "check_plugin_updates-*",
+                "puc_cron_check_updates*"
             ]
         },
         {
@@ -305,6 +320,25 @@
             ]
         },
         {
+            "key": "lexicon.known_widget_scripts",
+            "kind": "lexicon",
+            "description": "Reviewed vendor widget scripts (host/path fragments) treated as needs-review, not malware",
+            "entries": [
+                "downloads.mailchimp.com/js/mc-validate.js",
+                "chimpstatic.com/mcjs-connected/",
+                "list-manage.com/subscribe",
+                "static.hotjar.com/c/hotjar-"
+            ]
+        },
+        {
+            "key": "lexicon.placeholder_email_domains",
+            "kind": "lexicon",
+            "description": "Placeholder email domains used on profile accounts that the network does not control (verify ownership)",
+            "entries": [
+                "exotic.com"
+            ]
+        },
+        {
             "key": "allow.network_domains",
             "kind": "allowlist",
             "description": "Network domains treated as our own (every market domain is added automatically)",
@@ -404,7 +438,11 @@
                 "ninjateam_*",
                 "bwpup_*",
                 "campaign_daily_stats",
-                "profile_analytics_*"
+                "profile_analytics_*",
+                "escort_live_urls",
+                "escorts_from_counts",
+                "litespeed_*",
+                "fsmpt_*"
             ]
         }
     ]

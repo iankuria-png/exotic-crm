@@ -181,18 +181,33 @@ class PackSynchronizer
             $summary['retired'] = DbScanRule::query()->whereNotIn('key', $seen)->where('retired', false)->update(['retired' => true, 'enabled' => false]);
 
             foreach ($loaded['lists'] as $list) {
-                $exists = DbScanList::query()->where('key', $list['key'])->where('scope_key', 'network')->exists();
-                if (! $exists) {
+                $existing = DbScanList::query()->where('key', $list['key'])->where('scope_key', 'network')->lockForUpdate()->first();
+                $shipped = fn ($v) => ['value' => (string) $v, 'note' => 'Shipped default', 'added_by' => null, 'added_at' => now()->toIso8601String()];
+                if (! $existing) {
                     DbScanList::query()->create([
                         'key' => $list['key'],
                         'scope_key' => 'network',
                         'platform_id' => null,
                         'kind' => $list['kind'],
                         'description' => $list['description'] ?? null,
-                        'entries' => array_map(fn ($v) => ['value' => (string) $v, 'note' => 'Shipped default', 'added_by' => null, 'added_at' => now()->toIso8601String()], $list['entries']),
+                        'entries' => array_map($shipped, $list['entries']),
                         'revision' => 1,
                     ]);
                     $summary['lists_seeded']++;
+
+                    continue;
+                }
+
+                // New shipped defaults join existing lists, except values an
+                // admin deliberately removed (recorded in the list audit trail).
+                $present = array_map(fn ($e) => (string) (is_array($e) ? ($e['value'] ?? '') : $e), (array) $existing->entries);
+                $removed = $this->removedListValues($list['key']);
+                $missing = array_values(array_diff(array_map('strval', $list['entries']), $present, $removed));
+                if ($missing !== []) {
+                    $existing->entries = array_merge((array) $existing->entries, array_map($shipped, $missing));
+                    $existing->revision = (int) $existing->revision + 1;
+                    $existing->save();
+                    $summary['list_entries_added'] = ($summary['list_entries_added'] ?? 0) + count($missing);
                 }
             }
 
@@ -249,6 +264,21 @@ class PackSynchronizer
         if ($problems !== []) {
             throw new RuntimeException(implode(' ', $problems));
         }
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function removedListValues(string $key): array
+    {
+        $removed = [];
+        foreach (\App\Models\DbScanAuditEvent::query()->where('entity', 'list')->where('entity_id', $key)->where('action', 'update')->get(['after']) as $event) {
+            foreach ((array) ($event->after['removed'] ?? []) as $value) {
+                $removed[] = (string) $value;
+            }
+        }
+
+        return array_values(array_unique($removed));
     }
 
     private function definition(array $rule): array

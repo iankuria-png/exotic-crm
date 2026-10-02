@@ -97,3 +97,13 @@ php artisan config:cache
 ## Next action
 
 After this follow-up is pushed, pull in cPanel and follow the deploy/run steps above. Phase 2 (alerts, custom rules, reputation, vulnerability lookups) and phase 3 (files/HTTP probes) remain unstarted.
+
+## Kenya production dump review (2 Oct 2026)
+
+Read-only forensic review of `exotickenya_wp334` (phpMyAdmin export, imported locally as `kenya_review_20261002`) compared with a deep scan. Tuning shipped after it:
+
+- Fixed false negative: capability reads stopped at 5,000 rows, hiding the two newest admins (`Ciocio`, `anytg`/gmail, created 1 Oct by `owino_547de2`). Now keyset-paged.
+- Upgraded: roles granting the literal `administrator` capability or `level_10` count as privileged; new rules for risky staff roles (`wpseo_manager`, `subadmin` can edit theme/plugin code; `customerservice` grants `administrator`), lookalike/placeholder account email domains (`www.exotickenya.com`, `exotikkenya.com`, `exotic.com`), Activity Log failed-login pressure (6,806 in 7 days), bulk autoloaded secret options (6,784 `logintoken#`, names/sizes only).
+- Downgraded: known vendor widget scripts (Mailchimp, Hotjar) and loaders in ordinary plugin options (dormant Alexa Certify) to needs-review; runtime-built loader URLs are now detected.
+- Allowlisted network tables, Exotic Profile Chat and well-known plugins' cron hooks; pack sync now merges new shipped list entries unless an admin removed them.
+- Still for humans: `exotic-security-scanner` (installed 30 Sep by `owino_547de2`, no source in local repos), `mnx_*` agent (likely host-installed, verify `mu-plugins`), deleted plugin-installing users 17698/18383 with no deletion log, NextScripts PHP blob `__plugins_cache_242` (dormant, delete), `_bak_20260917` tables.

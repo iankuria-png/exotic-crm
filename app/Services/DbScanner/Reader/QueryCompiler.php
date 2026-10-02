@@ -303,16 +303,51 @@ class QueryCompiler
     // Inventory templates
     // ------------------------------------------------------------------
 
-    public function capabilityRows(string $usermeta, int $maxBytes, int $limit = 5000): CompiledQuery
+    /**
+     * One keyset page of capability/user-level rows after a umeta_id.
+     * Callers page until exhausted: large markets hold more rows than any
+     * single bounded read, and the newest (most interesting) accounts sort last.
+     */
+    public function capabilityRows(string $usermeta, int $maxBytes, int $afterId = 0, int $limit = 2000): CompiledQuery
     {
         $this->assertColumns($usermeta, ['umeta_id', 'user_id', 'meta_key', 'meta_value']);
-        $limit = max(1, min(5000, $limit));
+        $limit = max(1, min(2000, $limit));
 
         return $this->make(
             'capability_rows',
             'SELECT umeta_id AS __k, user_id, meta_key, '.$this->octetLength('meta_value').' AS len, '.$this->byteSlice('meta_value', $maxBytes).' AS v
-             FROM '.$this->q($usermeta)." WHERE meta_key LIKE ? ESCAPE '!' OR meta_key LIKE ? ESCAPE '!' ORDER BY umeta_id LIMIT ".$limit,
-            ['%capabilities', '%user!_level']
+             FROM '.$this->q($usermeta)." WHERE umeta_id > ? AND (meta_key LIKE ? ESCAPE '!' OR meta_key LIKE ? ESCAPE '!') ORDER BY umeta_id LIMIT ".$limit,
+            [$afterId, '%capabilities', '%user!_level']
+        );
+    }
+
+    /**
+     * Account counts per email domain — aggregate only, never an address.
+     */
+    public function emailDomainCounts(string $users): CompiledQuery
+    {
+        $this->assertColumns($users, ['user_email']);
+
+        return $this->make(
+            'email_domain_counts',
+            $this->dialect === 'sqlite'
+                ? "SELECT LOWER(SUBSTR(user_email, INSTR(user_email, '@') + 1)) AS d, COUNT(*) AS n FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
+                : "SELECT LOWER(SUBSTRING_INDEX(user_email, '@', -1)) AS d, COUNT(*) AS n FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
+        );
+    }
+
+    /**
+     * Failed-login pressure from the Activity Log plugin table (aggregate).
+     */
+    public function failedLoginSummary(string $table, int $since): CompiledQuery
+    {
+        $this->assertColumns($table, ['action', 'hist_time', 'hist_ip', 'object_name']);
+
+        return $this->make(
+            'failed_login_summary',
+            'SELECT object_name AS username, COUNT(*) AS n, COUNT(DISTINCT hist_ip) AS ips FROM '.$this->q($table)
+            ." WHERE action = 'failed_login' AND hist_time >= ? GROUP BY object_name ORDER BY n DESC LIMIT 200",
+            [$since]
         );
     }
 

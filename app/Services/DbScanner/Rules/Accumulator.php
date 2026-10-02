@@ -12,7 +12,7 @@ final class Accumulator
     /** @var array<string, array<string, array{count: int, samples: array<int, int|string>}>> */
     public array $buckets = [];
 
-    public function add(string $ruleKey, string $bucket, int|string $sample): void
+    public function add(string $ruleKey, string $bucket, int|string $sample, int $bytes = 0): void
     {
         $bucket = mb_substr($bucket, 0, 190);
         if (! isset($this->buckets[$ruleKey][$bucket])) {
@@ -22,6 +22,9 @@ final class Accumulator
             $this->buckets[$ruleKey][$bucket] = ['count' => 0, 'samples' => []];
         }
         $this->buckets[$ruleKey][$bucket]['count']++;
+        if ($bytes > 0) {
+            $this->buckets[$ruleKey][$bucket]['bytes'] = (int) ($this->buckets[$ruleKey][$bucket]['bytes'] ?? 0) + $bytes;
+        }
         if (count($this->buckets[$ruleKey][$bucket]['samples']) < 5) {
             $this->buckets[$ruleKey][$bucket]['samples'][] = $sample;
         }
@@ -41,6 +44,9 @@ final class Accumulator
                     $stored[$ruleKey][$bucket] = ['count' => 0, 'samples' => []];
                 }
                 $stored[$ruleKey][$bucket]['count'] += (int) $data['count'];
+                if (isset($data['bytes'])) {
+                    $stored[$ruleKey][$bucket]['bytes'] = (int) ($stored[$ruleKey][$bucket]['bytes'] ?? 0) + (int) $data['bytes'];
+                }
                 $stored[$ruleKey][$bucket]['samples'] = array_slice(
                     array_values(array_unique(array_merge($stored[$ruleKey][$bucket]['samples'], $data['samples']))),
                     0,

@@ -24,10 +24,21 @@ class InventoryCollector
         'wpseo', 'taxonomy_profile_url', 'wpseo-premium-redirects-base',
     ];
 
+    /**
+     * Capabilities that amount to site control. `administrator` as a granted
+     * capability and `level_10` matter because many plugins gate admin screens
+     * with current_user_can('administrator') or the legacy level checks.
+     */
     public const PRIVILEGED_CAPS = [
         'manage_options', 'edit_users', 'create_users', 'promote_users', 'delete_users', 'activate_plugins',
-        'install_plugins', 'edit_plugins', 'edit_themes', 'update_core', 'unfiltered_upload', 'manage_network',
+        'install_plugins', 'edit_plugins', 'edit_themes', 'edit_files', 'update_core', 'unfiltered_upload',
+        'manage_network', 'administrator', 'level_10',
     ];
+
+    /** Capabilities that let a user run PHP or take over accounts directly. */
+    public const CODE_EXECUTION_CAPS = ['edit_plugins', 'edit_themes', 'edit_files', 'install_plugins', 'update_core', 'unfiltered_upload'];
+
+    private const CAPABILITY_ROW_LIMIT = 200000;
 
     private const VALUE_CAP = 65536;
 
@@ -103,6 +114,8 @@ class InventoryCollector
             'postmeta.slug_aliases' => 'slug_aliases',
             'postmeta.orphans' => 'orphan_postmeta',
             'actionscheduler.summary' => 'action_scheduler',
+            'users.email_domains' => 'email_domains',
+            'activity.failed_logins' => 'failed_logins',
             default => $surfaceKey,
         };
     }
@@ -237,6 +250,28 @@ class InventoryCollector
                 $n = (int) ($reader->fetchScalar($c->orphanPostmeta($schema->table('postmeta'), $schema->table('posts')), 'n') ?? 0);
 
                 return [['complete' => true, 'data' => ['count' => $n]], $complete];
+
+            case 'users.email_domains':
+                $rows = $reader->select($c->emailDomainCounts($schema->table('users')));
+
+                return [['complete' => true, 'data' => array_map(fn ($r) => ['domain' => mb_substr((string) $r['d'], 0, 120), 'accounts' => (int) $r['n']], $rows)], $complete];
+
+            case 'activity.failed_logins':
+                $rows = $reader->select($c->failedLoginSummary($schema->table('aryo_activity_log'), now()->subDays(7)->timestamp));
+                $total = array_sum(array_map(fn ($r) => (int) $r['n'], $rows));
+
+                return [['complete' => true, 'data' => [
+                    'window_days' => 7,
+                    'failed' => $total,
+                    'usernames' => count($rows),
+                    // Usernames are masked; only counts and IP spread are kept.
+                    'top' => array_map(fn ($r) => [
+                        'username' => self::maskLogin((string) $r['username']),
+                        'failed' => (int) $r['n'],
+                        'ips' => (int) $r['ips'],
+                    ], array_slice($rows, 0, 8)),
+                    'max_ips_per_username' => $rows === [] ? 0 : max(array_map(fn ($r) => (int) $r['ips'], $rows)),
+                ]], $complete];
 
             case 'actionscheduler.summary':
                 $rows = $reader->select($c->actionSchedulerSummary($schema->table('actionscheduler_actions'), now()->subDays(7)->format('Y-m-d H:i:s')));
@@ -376,7 +411,22 @@ class InventoryCollector
             $privilegedRoles[] = 'administrator';
         }
 
-        $rows = $reader->select($c->capabilityRows($schema->table('usermeta'), self::VALUE_CAP));
+        // Page through every capability row: a single bounded read silently
+        // dropped the newest accounts on large markets.
+        $rows = [];
+        $after = 0;
+        $truncated = false;
+        do {
+            $page = $reader->select($c->capabilityRows($schema->table('usermeta'), self::VALUE_CAP, $after));
+            foreach ($page as $row) {
+                $rows[] = $row;
+                $after = (int) $row['__k'];
+            }
+            if (count($rows) >= self::CAPABILITY_ROW_LIMIT) {
+                $truncated = true;
+                break;
+            }
+        } while (count($page) === 2000);
         $siteRoles = [];
         $foreign = [];
         $levels = [];
@@ -448,6 +498,8 @@ class InventoryCollector
 
         $legacyLevel = [];
         foreach ($levels as $userId => $level) {
+            // A role that grants level_10 already makes the user privileged
+            // (above); only a stale level on an ordinary role is anomalous.
             if ($level >= 10 && ! in_array($userId, $adminIds, true)) {
                 $legacyLevel[] = ['user_id' => $userId, 'login' => mb_substr((string) ($users[$userId]['user_login'] ?? ''), 0, 60)];
             }
@@ -462,8 +514,28 @@ class InventoryCollector
             }
         }
 
+        $members = [];
+        foreach ($siteRoles as $info) {
+            foreach ($info['roles'] as $role) {
+                $members[$role] = ($members[$role] ?? 0) + 1;
+            }
+        }
+        $roleRisk = [];
+        foreach ((array) $roles as $role => $info) {
+            if ($role === 'administrator' || ! $info['privileged']) {
+                continue;
+            }
+            $roleRisk[] = [
+                'role' => $role,
+                'members' => (int) ($members[$role] ?? 0),
+                'privileged_caps' => $info['caps'],
+                'code_execution_caps' => array_values(array_intersect($info['caps'], self::CODE_EXECUTION_CAPS)),
+                'administrator_capability' => in_array('administrator', $info['caps'], true),
+            ];
+        }
+
         return [
-            'complete' => count($rows) < 5000,
+            'complete' => ! $truncated,
             'roles_known' => $roles !== null,
             'privileged_roles' => $privilegedRoles,
             'data' => [
@@ -471,6 +543,8 @@ class InventoryCollector
                 'hidden' => $hidden,
                 'legacy_level' => $legacyLevel,
                 'app_passwords' => $appPasswords,
+                'role_risk' => $roleRisk,
+                'capability_rows' => count($rows),
             ],
         ];
     }
@@ -482,6 +556,19 @@ class InventoryCollector
         }
 
         return $this->parser->parse($value);
+    }
+
+    public static function maskLogin(string $login): string
+    {
+        $login = trim($login);
+        if ($login === '') {
+            return '(blank)';
+        }
+        if (in_array(strtolower($login), ['admin', 'administrator', 'root', 'test', 'wordpress'], true)) {
+            return strtolower($login);
+        }
+
+        return mb_substr($login, 0, 2).'***';
     }
 
     public static function hmac(string $value): string

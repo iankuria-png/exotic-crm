@@ -88,6 +88,17 @@ class SurfaceScanner
         foreach ($enumerated as $row) {
             if ($surface->secretLabel && $this->secrets->isProtected((string) ($row[$surface->secretLabel] ?? ''))) {
                 $result->excluded++;
+                // Name and byte length only: bulk autoloaded secrets (per-user
+                // login tokens and the like) load into every request.
+                if ($surface->key === 'options.values' && $rules->active('hygiene.autoloaded_secret_options')
+                    && in_array(strtolower((string) ($row['autoload'] ?? '')), ['yes', 'on', 'auto-on', 'auto'], true)) {
+                    $pattern = preg_replace('/[0-9a-f]{8,}|\d+/i', '#', (string) $row[$surface->secretLabel]) ?? '';
+                    $bytes = 0;
+                    foreach ($values as $column) {
+                        $bytes += (int) ($row['__len_'.$column] ?? 0);
+                    }
+                    $result->accumulator->add('hygiene.autoloaded_secret_options', mb_substr($pattern, 0, 120), (int) $row['__k'], $bytes);
+                }
 
                 continue;
             }

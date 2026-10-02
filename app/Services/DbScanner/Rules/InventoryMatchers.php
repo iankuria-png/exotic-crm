@@ -19,7 +19,7 @@ class InventoryMatchers
         'admin_email_drift', 'upload_path_changed', 'yoast_crawl_baseline', 'permalink_drift', 'external_redirects',
         'autoload_size', 'mass_created_posts', 'orphan_authors', 'expired_transients', 'revision_bloat',
         'slug_aliases', 'orphaned_meta', 'action_scheduler_backlog', 'unexpected_tables', 'table_integrity',
-        'table_growth',
+        'table_growth', 'role_privilege_risk', 'lookalike_email_domains', 'login_attack_pressure',
     ];
 
     /**
@@ -84,7 +84,7 @@ class InventoryMatchers
             );
         }
         foreach ($c['administrators']['data']['legacy_level'] ?? [] as $row) {
-            $hits[] = $this->hit($key, 'user_level 10 on an account without a privileged role', 'usermeta', 'level:'.$row['user_id'], ['user_id' => $row['user_id'], 'login' => $row['login']], ['legacy_user_level'], 'users.privileged', $row['user_id'], 'needs_review', 'warn');
+            $hits[] = $this->hit($key, 'Stale user_level 10 on an account whose role does not grant it', 'usermeta', 'level:'.$row['user_id'], ['user_id' => $row['user_id'], 'login' => $row['login']], ['legacy_user_level'], 'users.privileged', $row['user_id'], 'needs_review', 'warn');
         }
 
         return $hits;
@@ -173,6 +173,80 @@ class InventoryMatchers
         }
 
         return [];
+    }
+
+    /**
+     * Non-administrator roles that grant site control. Code-execution
+     * capabilities (theme/plugin file editing, installs) are admin-equivalent.
+     */
+    private function rolePrivilegeRisk(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $hits = [];
+        foreach ($c['administrators']['data']['role_risk'] ?? [] as $role) {
+            $code = $role['code_execution_caps'] ?? [];
+            $title = $code !== []
+                ? 'Non-administrator role can edit or install code ('.implode(', ', $code).')'
+                : (($role['administrator_capability'] ?? false)
+                    ? 'Non-administrator role grants the literal "administrator" capability'
+                    : 'Non-administrator role holds site-control capabilities');
+            $hits[] = $this->hit($key, $title, 'options', 'role:'.$role['role'], [
+                'role' => $role['role'],
+                'members' => $role['members'],
+                'privileged_caps' => $role['privileged_caps'],
+            ], array_map(fn ($cap) => 'cap:'.$cap, $role['privileged_caps']), 'users.privileged', null, 'needs_review', $code !== [] && $role['members'] > 0 ? 'critical' : null);
+        }
+
+        return $hits;
+    }
+
+    /**
+     * Many accounts whose password resets go to a domain the network may not
+     * control: www.<site>, near-misses of the site domain, or listed domains.
+     */
+    private function lookalikeEmailDomains(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $site = $rules->siteHost();
+        $listed = array_map('strtolower', $rules->list('lexicon.placeholder_email_domains', $key));
+        $min = (int) $rules->threshold($key, 'min_accounts', 10);
+        $hits = [];
+        foreach ($c['email_domains']['data'] ?? [] as $row) {
+            $domain = strtolower((string) $row['domain']);
+            if ($domain === '' || (int) $row['accounts'] < $min || $domain === $site) {
+                continue;
+            }
+            $reason = null;
+            if ($site !== '' && $domain === 'www.'.$site) {
+                $reason = 'www_prefixed_site_domain';
+            } elseif ($site !== '' && strlen($domain) > 4 && levenshtein($domain, $site) <= 2) {
+                $reason = 'near_miss_of_site_domain';
+            } elseif (in_array($domain, $listed, true)) {
+                $reason = 'listed_placeholder_domain';
+            }
+            if ($reason) {
+                $hits[] = $this->hit($key, 'Accounts use an email domain the network may not control', 'users', 'email_domain:'.$domain, [
+                    'domain' => $domain, 'accounts' => (int) $row['accounts'], 'site' => $site, 'reason' => $reason,
+                ], [$reason], 'users.email_domains', null, 'needs_review');
+            }
+        }
+
+        return $hits;
+    }
+
+    private function loginAttackPressure(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $data = $c['failed_logins']['data'] ?? null;
+        $threshold = (int) $rules->threshold($key, 'failed_7d', 1000);
+        if (! $data || (int) $data['failed'] < $threshold) {
+            return [];
+        }
+
+        return [$this->hit($key, 'Sustained failed-login pressure in the last 7 days', 'aryo_activity_log', 'failed_logins_7d', [
+            'failed_logins' => (int) $data['failed'],
+            'usernames_targeted' => (int) $data['usernames'],
+            'max_ips_against_one_username' => (int) $data['max_ips_per_username'],
+            'top_targets' => $data['top'],
+            'threshold' => $threshold,
+        ], ['credential_stuffing'], 'activity.failed_logins', null, null)];
     }
 
     // ------------------------------------------------------------------
