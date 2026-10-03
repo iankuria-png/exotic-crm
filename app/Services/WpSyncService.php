@@ -692,6 +692,18 @@ class WpSyncService
     }
 
     /**
+     * Give a VVIP profile its homepage campaign, or revert one (plugin 1.3.19+).
+     *
+     * WordPress only treats a profile as VVIP when an active homepage campaign
+     * is linked to it; /activate sets just the VIP pair. Payload: expires_at,
+     * crm_deal_id, dry_run, or mode=revert with the `before` block to restore.
+     */
+    public function setVvipPlacement(int $postId, array $payload): array
+    {
+        return $this->post("/clients/{$postId}/vvip-placement", $payload);
+    }
+
+    /**
      * Deactivate a client profile
      */
     public function deactivateClient(int $postId): array

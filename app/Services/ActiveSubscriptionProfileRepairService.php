@@ -222,6 +222,15 @@ class ActiveSubscriptionProfileRepairService
     }
 
     /**
+     * The same "entitles a live profile" deal scope, for callers that select
+     * deals of one plan (e.g. the VVIP placement backfill).
+     */
+    public function scopeFutureActiveDeals($query)
+    {
+        return $this->applyFutureActiveDealScope($query);
+    }
+
+    /**
      * What counts as a deal that entitles a profile to be live.
      *
      * Must stay identical to ExpiredSubscriptionReconciler's protective scope,
