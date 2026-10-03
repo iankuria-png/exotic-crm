@@ -97,3 +97,16 @@ full record in the WP task `docs/agent/tasks/expired-video-paywall-and-free-pass
   wallet suites; Pint; Vite build; migrate/rollback/migrate on scratch SQLite.
 - Deployment needs push + cPanel pull + `php artisan migrate`, plugin 1.3.16 and the theme
   hunks together. No payment, grant, conversion or production mutation was performed.
+
+### Checkpoint 2026-10-03 — card video previews (`ad899ecb`)
+
+- Private videos carry a blurred teaser (`teaser_url`, `teaser_strength`, `teaser_generated_at`)
+  cut by WordPress plugin 1.3.17 from the protected original; `teaser_policy_json` (On, strength
+  colours/shapes/outlines, default shapes) is in runtime so WordPress encodes new uploads.
+- `TeaserService` backfill (`teaser_backfill` runs, `teaser_generate` items keyed by the new
+  `asset_id` column, dispatched 3s apart) calls signed `POST premium-content/teaser`; 410 → skipped
+  `file_missing`, 404 → `wordpress_outdated`, 423 → `wordpress_busy` (retry). Automation tab has the
+  Video previews on cards section. Catalog surface `profiles` batches homepage cards (≤60 ids).
+- Verification: 5 new tests in `VideoTeaserTest`; 48 monetization tests; migrate/rollback/migrate
+  on scratch SQLite. Any deploy order is safe; full WP record in the WordPress task
+  `docs/agent/tasks/expired-video-paywall-and-free-passes.md`.
