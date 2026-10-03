@@ -10,6 +10,7 @@ import Deals from './pages/Deals';
 import Payments from './pages/Payments';
 import Monetization from './pages/Monetization';
 import WebVisitors from './pages/WebVisitors';
+import SendLove from './pages/SendLove';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
@@ -144,6 +145,7 @@ export default function AppRouter() {
                 <Route path="payments" element={<Payments />} />
                 <Route path="visitors" element={<WebVisitors />} />
                 <Route path="monetization" element={<Monetization />} />
+                <Route path="send-love" element={<SendLove />} />
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />

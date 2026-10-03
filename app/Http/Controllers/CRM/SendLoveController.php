@@ -151,6 +151,116 @@ class SendLoveController extends Controller
             'can_manage' => app(MarketAuthorizationService::class)->isManager($r->user())]);
     }
 
+    /**
+     * Send Love workspace overview. Native currencies stay separate; gift counts are the
+     * currency-neutral measure used for the daily trend.
+     */
+    public function overview(Request $r)
+    {
+        $q = $this->query($r);
+        $sent = (clone $q)->where('love_gifts.status', 'sent');
+        $attempts = (clone $q)->count();
+        $sentCount = (clone $sent)->count();
+        $trend = (clone $sent);
+        if (! $r->filled('from')) {
+            $trend->where('love_gifts.created_at', '>=', now()->subDays(29)->startOfDay());
+        }
+
+        return response()->json([
+            'totals' => (clone $sent)->selectRaw('currency, SUM(amount) as gross, AVG(amount) as average, SUM(creator_credit_amount) as creator_credit, COUNT(*) as gifts')->groupBy('currency')->get(),
+            'summary' => [
+                'attempts' => $attempts,
+                'sent' => $sentCount,
+                'completion_rate' => $attempts ? round(100 * $sentCount / $attempts, 1) : 0,
+                'statuses' => (clone $q)->selectRaw('love_gifts.status as status, COUNT(*) as count')->groupBy('love_gifts.status')->pluck('count', 'status'),
+                'senders' => (clone $sent)->distinct()->count('visitor_phone_hash'),
+                'creators' => (clone $sent)->distinct()->count('client_id'),
+                'notes' => (clone $sent)->whereNotNull('message')->count(),
+                'contact_shared' => (clone $sent)->where('contact_shared', true)->count(),
+                'reported' => (clone $q)->whereNotNull('metadata_json->reported_at')->count(),
+            ],
+            'trend_window' => $r->filled('from') ? 'filtered' : 'last_30_days',
+            'trend' => $trend->selectRaw('DATE(love_gifts.created_at) as day, currency, COUNT(*) as gifts, SUM(amount) as gross')->groupBy('day', 'currency')->orderBy('day')->get(),
+            'amounts' => (clone $sent)->selectRaw('currency, amount, COUNT(*) as gifts')->groupBy('currency', 'amount')->orderByDesc('gifts')->limit(8)->get(),
+            'top_creators' => (clone $sent)->selectRaw('client_id, currency, SUM(amount) as gross, COUNT(*) as gifts')->groupBy('client_id', 'currency')->with('client:id,name')->orderByDesc('gross')->limit(8)->get(),
+            'failures' => (clone $q)->where('love_gifts.status', 'failed')->join('payments', 'payments.id', '=', 'love_gifts.payment_id')->selectRaw('payments.failure_reason as failure_reason, COUNT(*) as count')->groupBy('payments.failure_reason')->orderByDesc('count')->get(),
+            'markets' => $this->marketsFor($r)->map(fn (Platform $p) => ['id' => $p->id, 'name' => $p->name, 'currency' => $p->currency_code])->values(),
+        ]);
+    }
+
+    /** Private notes are moderation data: managers only, and never the sender's number. */
+    public function notes(Request $r)
+    {
+        app(MarketAuthorizationService::class)->ensureManager($r->user());
+        $r->validate(['state' => 'nullable|in:visible,reported,hidden_by_creator,removed_by_staff']);
+        $base = $this->query($r)->whereIn('love_gifts.status', ['sent', 'review', 'refunded'])
+            ->where(fn ($w) => $w->whereNotNull('message')->orWhere('message_state', '!=', 'visible')->orWhere('contact_shared', true));
+        $counts = [
+            'all' => (clone $base)->count(),
+            'visible' => (clone $base)->where('message_state', 'visible')->count(),
+            'reported' => (clone $base)->whereNotNull('metadata_json->reported_at')->count(),
+            'hidden_by_creator' => (clone $base)->where('message_state', 'hidden_by_creator')->count(),
+            'removed_by_staff' => (clone $base)->where('message_state', 'removed_by_staff')->count(),
+        ];
+        $q = clone $base;
+        match ($r->input('state')) {
+            'reported' => $q->whereNotNull('metadata_json->reported_at'),
+            null => null,
+            default => $q->where('message_state', $r->input('state')),
+        };
+        $page = $q->with(['client:id,name', 'payment:id,reference_number'])->latest('love_gifts.id')
+            ->paginate($r->integer('per_page') ?: 20, ['love_gifts.id', 'love_gifts.public_id', 'love_gifts.platform_id', 'love_gifts.client_id', 'love_gifts.payment_id', 'love_gifts.status', 'love_gifts.amount', 'love_gifts.currency', 'love_gifts.message', 'love_gifts.sender_name', 'love_gifts.message_state', 'love_gifts.contact_shared', 'love_gifts.is_sandbox', 'love_gifts.sent_at', 'love_gifts.created_at', 'love_gifts.metadata_json']);
+        $page->getCollection()->transform(function (LoveGift $g) {
+            $row = $g->only(['id', 'public_id', 'platform_id', 'status', 'amount', 'currency', 'message', 'sender_name', 'message_state', 'contact_shared', 'is_sandbox', 'sent_at', 'created_at']);
+
+            return $row + ['reported_at' => data_get($g->metadata_json, 'reported_at'), 'client' => $g->client?->only(['id', 'name']), 'payment_reference' => $g->payment?->reference_number];
+        });
+
+        return response()->json(['notes' => $page, 'counts' => $counts]);
+    }
+
+    /** Per-market setup and readiness for the workspace Setup tab. */
+    public function markets(Request $r)
+    {
+        $this->authorizeLove($r);
+        $settings = app(SettingsService::class);
+        $system = app(\App\Services\MonetizationSettingsService::class)->system();
+
+        return response()->json([
+            'global_paused' => (bool) $system->send_love_kill_switch,
+            'can_manage' => app(MarketAuthorizationService::class)->isManager($r->user()),
+            'markets' => $this->marketsFor($r)->map(function (Platform $p) use ($settings) {
+                $s = $settings->forPlatform($p);
+                $environment = $s->rollout_mode === 'live' ? 'production' : 'sandbox';
+                $providers = collect($s->allowed_providers_json ?? [])->map(function ($key) use ($p, $environment) {
+                    try {
+                        app(\App\Services\BillingModeService::class)->providerContext($p, $key, true, $environment, 'send_love');
+
+                        return ['key' => $key, 'ready' => true, 'message' => null];
+                    } catch (\Throwable $e) {
+                        return ['key' => $key, 'ready' => false, 'message' => $e->getMessage()];
+                    }
+                })->values();
+                $week = LoveGift::where('platform_id', $p->id)->where('status', 'sent')->where('is_sandbox', false)->where('sent_at', '>=', now()->subDays(7));
+
+                return [
+                    'platform' => ['id' => $p->id, 'name' => $p->name, 'currency' => $p->currency_code],
+                    'enabled' => (bool) $s->enabled, 'rollout_mode' => $s->rollout_mode, 'kill_switch' => (bool) $s->kill_switch, 'currency' => $s->currency,
+                    'config_revision' => (int) $s->config_revision, 'wp_revision' => (int) $s->wp_revision, 'in_sync' => (int) $s->wp_revision === (int) $s->config_revision,
+                    'presets' => $s->presets_json ?? [], 'default_preset' => (int) $s->default_preset, 'creator_share_bps' => (int) $s->creator_share_bps,
+                    'providers' => $providers, 'test_creators' => count($s->test_client_ids ?? []),
+                    'gifts_7d' => (clone $week)->count(), 'gross_7d' => (float) (clone $week)->sum('amount'),
+                ];
+            })->values(),
+        ]);
+    }
+
+    private function marketsFor(Request $r)
+    {
+        return app(MarketAuthorizationService::class)->applyPlatformScope(Platform::query(), $r->user(), 'platforms.id')
+            ->whereIn('platforms.id', SendLoveSetting::query()->select('platform_id'))->orderBy('name')->get();
+    }
+
     public function export(Request $r)
     {
         $q = $this->query($r);

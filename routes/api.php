@@ -236,6 +236,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::put('/settings/send-love-system', [\App\Http\Controllers\CRM\SendLoveController::class, 'saveSystem']);
     Route::get('/monetization/love', [\App\Http\Controllers\CRM\SendLoveController::class, 'index']);
     Route::get('/monetization/love/export', [\App\Http\Controllers\CRM\SendLoveController::class, 'export']);
+    Route::get('/monetization/love/overview', [\App\Http\Controllers\CRM\SendLoveController::class, 'overview']);
+    Route::get('/monetization/love/notes', [\App\Http\Controllers\CRM\SendLoveController::class, 'notes']);
+    Route::get('/monetization/love/markets', [\App\Http\Controllers\CRM\SendLoveController::class, 'markets']);
     Route::post('/monetization/love/{gift}/{action}', [\App\Http\Controllers\CRM\SendLoveController::class, 'action'])->where('action', 'refund|remove-note|clear-contact');
     Route::get('/settings/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'settings']);
     Route::put('/settings/monetization/markets/{platform}', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSettings']);
