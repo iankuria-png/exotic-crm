@@ -322,6 +322,7 @@ class PaymentQueueController extends Controller
             ->paginate($request->get('per_page', 25));
 
         $payments->getCollection()->transform(function (Payment $payment) {
+            $payment->setAttribute('visitor_product', app(\App\Services\PaymentPresenter::class)->visitorProduct($payment));
             if ($payment->platform) {
                 $payment->platform->setAttribute(
                     'payment_link_providers',

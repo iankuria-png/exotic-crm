@@ -75,6 +75,11 @@ class StatsService
             ->whereHas('purchase', fn ($p) => $p->where('is_sandbox', false)->where('status', 'active'));
         $month = (int) (clone $q)->whereHas('purchase', fn ($p) => $p->where('purchased_at', '>=', now()->startOfMonth()))->sum('amount_minor');
 
-        return ['currency' => $currency, 'gross_sales' => number_format($sales / 100, 2, '.', ''), 'earned_outstanding' => number_format($earned / 100, 2, '.', ''), 'earned_reversed' => number_format($reversed / 100, 2, '.', ''), 'earned_spent' => number_format($spent / 100, 2, '.', ''), 'month_sales' => number_format($month / 100, 2, '.', ''), 'sales_count' => $q->count()];
+        $monthPurchases = \App\Models\VisitorContentPurchase::whereIn('id', (clone $q)->select('purchase_id'))->where('purchased_at', '>=', now()->startOfMonth());
+        $top = (clone $q)->whereHas('purchase', fn($p) => $p->where('purchased_at', '>=', now()->startOfMonth()))->with('purchase.offer')->get()->groupBy(fn($a) => $a->purchase->offer_id)->map(function($rows) {
+            return ['title' => $rows->first()->purchase->offer?->title, 'sales' => $rows->count(), 'amount' => number_format($rows->sum('amount_minor') / 100, 2, '.', '')];
+        })->sortByDesc(fn($r) => (float)$r['amount'])->take(5)->values()->all();
+
+        return ['month_count' => (clone $monthPurchases)->count(), 'month_buyers' => (clone $monthPurchases)->distinct()->count('visitor_phone_hash'), 'top_sellers' => $top, 'currency' => $currency, 'gross_sales' => number_format($sales / 100, 2, '.', ''), 'earned_outstanding' => number_format($earned / 100, 2, '.', ''), 'earned_reversed' => number_format($reversed / 100, 2, '.', ''), 'earned_spent' => number_format($spent / 100, 2, '.', ''), 'month_sales' => number_format($month / 100, 2, '.', ''), 'sales_count' => $q->count()];
     }
 }

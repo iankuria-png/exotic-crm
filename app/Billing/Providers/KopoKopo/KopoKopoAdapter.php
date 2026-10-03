@@ -34,6 +34,7 @@ class KopoKopoAdapter extends AbstractProviderAdapter
                     BillingSurface::WalletAutoRenew,
                     BillingSurface::ContactUnlock,
                     BillingSurface::PremiumContent,
+                    BillingSurface::SendLove,
                 ],
                 rails: [BillingRail::MobileMoney],
                 transportModes: [TransportMode::Push, TransportMode::ServerToServerCollection],

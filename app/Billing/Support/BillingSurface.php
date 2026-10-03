@@ -9,6 +9,7 @@ enum BillingSurface: string
     case SubscriptionInvoice = 'subscription_invoice';
     case WalletFunding = 'wallet_funding';
     case WalletAutoRenew = 'wallet_auto_renew';
+    case SendLove = 'send_love';
     case PremiumContent = 'premium_content';
     case ContactUnlock = 'contact_unlock';
     case ManualConfirmation = 'manual_confirmation';

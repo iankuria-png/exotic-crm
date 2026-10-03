@@ -256,7 +256,7 @@ class ReportingCurrencyService
             ->groupBy('payments.platform_id')
             ->groupByRaw($platformCountryExpression)
             ->groupByRaw($platformNameExpression)
-            ->groupByRaw($currencyExpression)
+            ->groupBy('currency')
             ->get();
 
         return $this->normalizeEventRows($rows, $target, $allowLiveFetch);

@@ -59,6 +59,7 @@ class ReconcilePendingPayments extends Command
                 Payment::PURPOSE_WALLET_TOPUP,
                 Payment::PURPOSE_SUBSCRIPTION,
                 Payment::PURPOSE_PREMIUM_CONTENT_SALE,
+                Payment::PURPOSE_SEND_LOVE,
                 Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
             ])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))

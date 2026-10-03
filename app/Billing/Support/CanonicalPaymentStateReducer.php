@@ -117,6 +117,7 @@ class CanonicalPaymentStateReducer
     {
         return match ((string) $payment->purpose) {
             'premium_content_sale' => 'premium_content_settled',
+            'send_love' => 'send_love_settled',
             'monetize_pass' => 'monetize_pass_activated',
             'wallet_topup' => (bool) ($context['sandbox_suppressed'] ?? false)
                 ? 'wallet_funding_sandbox_succeeded'
@@ -136,6 +137,7 @@ class CanonicalPaymentStateReducer
 
         return match ((string) $payment->purpose) {
             'premium_content_sale' => 'premium_content_failed',
+            'send_love' => 'send_love_failed',
             'monetize_pass' => 'monetize_pass_failed',
             'wallet_topup' => 'wallet_funding_failed',
             'subscription' => 'subscription_payment_failed',

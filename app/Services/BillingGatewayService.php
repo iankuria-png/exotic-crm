@@ -216,6 +216,46 @@ class BillingGatewayService
         ]));
     }
 
+    public function initiateSendLove(
+        Payment $payment,
+        string $provider,
+        array $options = [],
+        ?Request $request = null
+    ): array {
+        if ((string) $payment->purpose !== Payment::PURPOSE_SEND_LOVE) {
+            throw new InvalidArgumentException('Only Send Love payments can use this checkout path.');
+        }
+
+        $payment->loadMissing(['client', 'platform']);
+        $platform = $payment->platform ?: Platform::query()->findOrFail((int) $payment->platform_id);
+        $environmentOverride = $options['environment'] ?? ($payment->provider_environment ?: null);
+        $context = $this->billingModeService->providerContext(
+            $platform,
+            $provider,
+            true,
+            $environmentOverride,
+            BillingSurface::SendLove->value
+        );
+
+        $payment->forceFill([
+            'provider_key' => $provider,
+            'provider_environment' => $context['environment'] ?? $payment->provider_environment,
+            'payment_data' => array_merge($payment->payment_data ?? [], [
+                'billing_surface' => BillingSurface::SendLove->value,
+                'provider' => $provider,
+            ]),
+        ])->save();
+
+        $dispatchContext = array_merge($context, [
+            'provider_key' => $provider,
+        ]);
+
+        return app(ProviderRoutingDispatcher::class)->dispatch($payment, $dispatchContext, array_merge($options, [
+            'request' => $request,
+            'description' => $options['description'] ?? 'Exotic gift',
+        ]));
+    }
+
     public function initiateContactUnlock(
         Payment $payment,
         string $provider,
@@ -562,7 +602,7 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if (!in_array((string) $payment->purpose, [Payment::PURPOSE_WALLET_TOPUP, Payment::PURPOSE_SUBSCRIPTION, Payment::PURPOSE_VISITOR_CONTACT_UNLOCK, Payment::PURPOSE_PREMIUM_CONTENT_SALE], true)
+        if (!in_array((string) $payment->purpose, [Payment::PURPOSE_WALLET_TOPUP, Payment::PURPOSE_SUBSCRIPTION, Payment::PURPOSE_VISITOR_CONTACT_UNLOCK, Payment::PURPOSE_PREMIUM_CONTENT_SALE, Payment::PURPOSE_SEND_LOVE], true)
             || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)
         ) {
             throw new InvalidArgumentException('M-Pesa callback does not target a supported payment.');
@@ -1100,7 +1140,7 @@ class BillingGatewayService
         $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
         $billingSurface = (string) ($paymentData['billing_surface'] ?? ($payment->purpose === Payment::PURPOSE_VISITOR_CONTACT_UNLOCK ? BillingSurface::ContactUnlock->value : 'wallet_topup'));
         $requestMeta = $this->requestMetaFromRequest($request, [
-            'channel' => match($billingSurface) { BillingSurface::ContactUnlock->value => 'contact_unlock_stk', BillingSurface::PremiumContent->value => 'premium_content_stk', default => 'wallet_topup_stk' },
+            'channel' => match($billingSurface) { BillingSurface::ContactUnlock->value => 'contact_unlock_stk', BillingSurface::PremiumContent->value => 'premium_content_stk', BillingSurface::SendLove->value => 'send_love_stk', default => 'wallet_topup_stk' },
             'phone_masked' => $this->maskPhoneForAttempt($phone),
             'amount' => (float) $payment->amount,
             'purpose' => $payment->purpose,

@@ -7,6 +7,22 @@ use Illuminate\Support\Str;
 
 class PaymentPresenter
 {
+    public function visitorProduct(Payment $payment): ?array
+    {
+        if ($payment->purpose === Payment::PURPOSE_SEND_LOVE) {
+            $payment->loadMissing('loveGift.client');
+            return ['label' => 'Send love', 'recipients' => $payment->loveGift?->client ? [['id' => $payment->loveGift->client->id, 'name' => $payment->loveGift->client->name]] : []];
+        }
+        if ($payment->purpose === Payment::PURPOSE_PREMIUM_CONTENT_SALE) {
+            $payment->loadMissing('contentPurchase.allocations.client', 'contentPurchase.client');
+            $purchase = $payment->contentPurchase;
+            $clients = $purchase?->allocations->pluck('client')->filter()->unique('id') ?? collect();
+            if ($clients->isEmpty() && $purchase?->client) $clients = collect([$purchase->client]);
+            return ['label' => 'Private content', 'recipients' => $clients->map(fn($c) => ['id' => $c->id, 'name' => $c->name])->values()->all()];
+        }
+        return null;
+    }
+
     public function paymentMethod(Payment $payment): array
     {
         $payment->loadMissing('manualSubmission');

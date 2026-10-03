@@ -230,6 +230,13 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 
 // CRM Protected Routes (Sanctum token required)
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
+    Route::get('/settings/send-love/{platform}', [\App\Http\Controllers\CRM\SendLoveController::class, 'settings']);
+    Route::put('/settings/send-love/{platform}', [\App\Http\Controllers\CRM\SendLoveController::class, 'save']);
+    Route::post('/settings/send-love/{platform}/sync', [\App\Http\Controllers\CRM\SendLoveController::class, 'sync']);
+    Route::put('/settings/send-love-system', [\App\Http\Controllers\CRM\SendLoveController::class, 'saveSystem']);
+    Route::get('/monetization/love', [\App\Http\Controllers\CRM\SendLoveController::class, 'index']);
+    Route::get('/monetization/love/export', [\App\Http\Controllers\CRM\SendLoveController::class, 'export']);
+    Route::post('/monetization/love/{gift}/{action}', [\App\Http\Controllers\CRM\SendLoveController::class, 'action'])->where('action', 'refund|remove-note|clear-contact');
     Route::get('/settings/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'settings']);
     Route::put('/settings/monetization/markets/{platform}', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSettings']);
     Route::put('/settings/monetization/system', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSystem']);
@@ -1365,4 +1372,14 @@ Route::prefix('wp-svc/premium-content')->middleware(['wallet.auth:access', 'thro
 Route::middleware('wallet.auth:write')->prefix('wallet/monetization')->group(function () {
     Route::post('quote', [\App\Http\Controllers\Wp\PremiumContentController::class, 'quote']);
     Route::post('activate', [\App\Http\Controllers\Wp\PremiumContentController::class, 'activate']);
+});
+
+Route::prefix('wp-svc/send-love')->middleware(['wallet.auth:access', 'throttle:120,1'])->group(function () {
+    $c = \App\Http\Controllers\Wp\SendLoveController::class;
+    foreach (['config'=>'config','intents'=>'intent','owner-summary'=>'summary','gifts/seen'=>'seen','visibility'=>'visibility'] as $path=>$method) Route::post($path,[$c,$method]);
+    Route::post('gifts/{ref}/status',[$c,'status']);
+    Route::post('gifts/{ref}/resend',[$c,'resend']);
+    Route::post('gifts/{ref}/hide',[$c,'hide']);
+    Route::post('gifts/{ref}/report',[$c,'report']);
+    Route::post('gifts/{ref}/simulate',[$c,'simulate']);
 });

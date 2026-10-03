@@ -36,6 +36,7 @@ class PawaPayAdapter extends AbstractProviderAdapter
                     BillingSurface::ProxyHostedCheckout,
                     BillingSurface::ContactUnlock,
                     BillingSurface::PremiumContent,
+                    BillingSurface::SendLove,
                 ],
                 rails: [BillingRail::MobileMoney],
                 transportModes: [TransportMode::ServerToServerCollection, TransportMode::Redirect],

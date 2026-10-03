@@ -352,6 +352,7 @@ class ClientDeletionService
 
     private function assertNoPaidEntitlement(Client $client): void
     {
+        if (\Illuminate\Support\Facades\Schema::hasTable('love_gifts') && \App\Models\LoveGift::where('client_id', $client->id)->whereIn('status', ['sent','review','pending_payment'])->exists()) throw \Illuminate\Validation\ValidationException::withMessages(['client'=>'Resolve gifts before deleting this creator. Archive and retain the account.']);
         if (\Illuminate\Support\Facades\Schema::hasTable('visitor_content_purchases') && \App\Models\VisitorContentPurchase::where('client_id', $client->id)->whereIn('status', ['active','review','pending_payment'])->exists()) {
             throw \Illuminate\Validation\ValidationException::withMessages(['client' => 'Resolve active private-content purchases before deleting this creator.']);
         }

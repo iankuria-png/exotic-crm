@@ -1501,7 +1501,7 @@ export default function Payments() {
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import', 'orphan_manual_import']);
-    const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet', 'subscription', 'contact_unlock']);
+    const allowedPurposeFilters = new Set(['wallet_topup', 'non_wallet', 'subscription', 'contact_unlock', 'send_love', 'premium_content_sale']);
     const allowedCollectionChannelFilters = new Set(['self_service', 'manual', 'other']);
     const allowedManualSubmissionFilters = new Set(['with_proof', 'without_proof', 'pending_review', 'verified', 'rejected']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
@@ -3058,7 +3058,7 @@ export default function Payments() {
                             Wallet top-up
                         </span>
                     )
-                    : <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>
+                    : row.visitor_product ? <div className="space-y-1"><span className="inline-flex rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-700">{row.visitor_product.label}</span>{row.visitor_product.recipients.map(c => <a key={c.id} className="block text-xs text-slate-600 hover:underline" href={`/clients/${c.id}`}>{c.name}</a>)}</div> : <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>
             ),
         },
         {
@@ -3793,6 +3793,8 @@ export default function Payments() {
                             { value: 'subscription', label: 'Subscriptions only' },
                             { value: 'wallet_topup', label: 'Wallet top-ups' },
                             { value: 'contact_unlock', label: 'Visitor unlocks' },
+                            { value: 'send_love', label: 'Send love' },
+                            { value: 'premium_content_sale', label: 'Private content' },
                         ]}
                     />
 

@@ -25,7 +25,7 @@ class PaymentQueueQueryBuilder
             'matched' => 'nullable|in:matched,unmatched',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
-            'purpose' => 'nullable|in:wallet_topup,non_wallet,subscription,contact_unlock',
+            'purpose' => 'nullable|in:wallet_topup,non_wallet,subscription,contact_unlock,send_love,premium_content_sale',
             'collection_channel' => 'nullable|in:self_service,manual,other',
             'manual_submission' => 'nullable|in:with_proof,without_proof,pending_review,verified,rejected',
             'environment' => 'nullable|in:production,sandbox',
@@ -400,6 +400,8 @@ class PaymentQueueQueryBuilder
         match ($purposeFilter) {
             'wallet_topup' => $query->walletTopups(),
             'subscription' => $query->subscriptionRevenue(),
+            'send_love' => $query->sendLove(),
+            'premium_content_sale' => $query->where('purpose', Payment::PURPOSE_PREMIUM_CONTENT_SALE),
             'contact_unlock' => $query->contactUnlockRevenue(),
             'non_wallet' => $query->excludingWalletTopups(),
             default => $query->excludingWalletTopups(),

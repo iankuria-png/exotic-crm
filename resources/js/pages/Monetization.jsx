@@ -4,10 +4,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../services/api';
 import PageHeader from '../components/PageHeader';
+import LoveGifts from '../components/monetization/LoveGifts';
 import AdminBundleBuilder from '../components/monetization/AdminBundleBuilder';
 
 const input = 'min-h-11 rounded-md border border-slate-300 bg-white px-3 text-sm';
-const tabs = ['Overview','Sales','Creators','Content','Safety','Setup'];
+const tabs = ['Overview','Love','Sales','Creators','Content','Safety','Setup'];
 const money = (n,c) => `${c} ${Number(n || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const localDate=value=>{const date=new Date(value),year=date.getFullYear(),month=String(date.getMonth()+1).padStart(2,'0'),day=String(date.getDate()).padStart(2,'0');return `${year}-${month}-${day}`;};
 export default function Monetization({ clientId = null, platformId = null }) {
@@ -60,6 +61,7 @@ export default function Monetization({ clientId = null, platformId = null }) {
         {!clientId && <PageHeader title="Monetize" subtitle="Content sales, creator earnings and selling-pass performance." />}
         <div className="rounded-lg border border-slate-200 bg-white p-4"><div className="mb-3"><h2 className="text-sm font-semibold text-slate-950">Controls</h2><p className="mt-1 text-xs text-slate-500">Market and date range apply to sales, pass revenue and export. Active sellers and wallet balances remain current.</p></div><div className="flex flex-wrap items-end gap-3"><label className="text-xs font-medium text-slate-500">Market<select aria-label="Market" className={`${input} mt-1 block`} value={market} onChange={e=>{setMarket(e.target.value);setPage(1);}}><option value="">All authorised markets</option>{data?.platforms.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label><label className="text-xs font-medium text-slate-500">From<input type="date" className={`${input} mt-1 block`} value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}} /></label><label className="text-xs font-medium text-slate-500">To<input type="date" className={`${input} mt-1 block`} value={to} onChange={e=>{setTo(e.target.value);setPage(1);}} /></label><div className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-50 p-1">{[['Today',1],['7D',7],['30D',30],['All time',0]].map(([range,days])=><button type="button" className="rounded-md px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-slate-950" onClick={()=>applyRange(days)} key={range}>{range}</button>)}</div><label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={tests} onChange={e=>{setTests(e.target.checked);setPage(1);}} />Include sandbox</label></div></div>
         <div role="tablist" aria-label="Monetize workspace" className="flex flex-wrap gap-1 border-b border-slate-200">{tabs.map(t=><button key={t} role="tab" aria-selected={tab===t} onClick={()=>setTab(t)} className={`min-h-11 border-b-2 px-4 text-sm ${tab===t?'border-slate-900 font-semibold text-slate-900':'border-transparent text-slate-500'}`}>{t}</button>)}</div>
+        {tab==='Love' && <LoveGifts market={market} clientId={clientId} from={from} to={to} tests={tests} />}
         {query.isPending && <p role="status">Loading private content activity…</p>}{query.isError && <p role="alert">Could not load activity. <button onClick={()=>query.refetch()}>Try again</button></p>}
         {data && <div role="tabpanel" className="space-y-4">
             {tab==='Overview' && <Overview data={data} tests={tests} onOpenSales={(nextStatus='')=>{resetSales();setStatus(nextStatus);setTab('Sales');}} />}
