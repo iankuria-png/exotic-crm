@@ -73,7 +73,7 @@ class VvipPlacementBackfillService
      *
      * @return array<string, mixed>
      */
-    public function place(Client $client, Deal $deal, bool $dryRun): array
+    public function place(Client $client, Deal $deal, bool $dryRun, bool $flagOnly = false): array
     {
         $response = WpSyncService::forPlatform((int) $client->platform_id)->setVvipPlacement(
             (int) $client->wp_post_id,
@@ -81,6 +81,7 @@ class VvipPlacementBackfillService
                 'expires_at' => $this->placementExpiry($deal, $client),
                 'crm_deal_id' => (int) $deal->id,
                 'dry_run' => $dryRun,
+                'flag_only' => $flagOnly,
             ]
         );
 
@@ -120,6 +121,7 @@ class VvipPlacementBackfillService
             'reason' => $response['reason'] ?? null,
             'before' => $response['before'] ?? null,
             'after' => $response['after'] ?? null,
+            'flag_only' => (bool) ($response['flag_only'] ?? false),
         ];
     }
 

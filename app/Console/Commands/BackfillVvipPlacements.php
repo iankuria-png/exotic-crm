@@ -53,7 +53,7 @@ class BackfillVvipPlacements extends Command
             }
 
             try {
-                $row = $backfill->place($client, $deal, true);
+                $row = $backfill->place($client, $deal, true, $this->flagOnly());
             } catch (Throwable $e) {
                 $row = ['market' => $client->platform?->name ?? $client->platform_id, 'client_id' => $client->id, 'wp_post_id' => $client->wp_post_id, 'name' => $client->name, 'action' => 'failed', 'reason' => $e->getMessage()];
             }
@@ -63,6 +63,17 @@ class BackfillVvipPlacements extends Command
         }
 
         $pending = array_values(array_filter($plan, fn ($item) => str_starts_with((string) $item['row']['action'], 'would_')));
+
+        if ($this->flagOnly()) {
+            // A market still on plugin 1.3.19 ignores flag_only and would
+            // create campaign posts. Only rows whose dry run confirmed
+            // flag-only handling may be applied.
+            $outdated = array_filter($pending, fn ($item) => empty($item['row']['flag_only']));
+            foreach ($outdated as $item) {
+                $this->warn(sprintf('  [%s] WP #%d skipped: market needs exotic-crm-sync 1.3.20 for flag-only sync.', $item['row']['market'] ?? '-', (int) ($item['row']['wp_post_id'] ?? 0)));
+            }
+            $pending = array_values(array_filter($pending, fn ($item) => ! empty($item['row']['flag_only'])));
+        }
         $this->summary(array_column($plan, 'row'));
 
         if (! $apply) {
@@ -88,7 +99,7 @@ class BackfillVvipPlacements extends Command
         $results = [];
         foreach ($pending as $item) {
             try {
-                $row = $backfill->place($item['client'], $item['deal'], false);
+                $row = $backfill->place($item['client'], $item['deal'], false, $this->flagOnly());
                 $row['verified'] = (bool) ($row['after']['is_vvip'] ?? false);
             } catch (Throwable $e) {
                 $row = array_merge($item['row'], ['action' => 'failed', 'reason' => $e->getMessage(), 'verified' => false]);
@@ -108,6 +119,14 @@ class BackfillVvipPlacements extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Set only the VVIP plan flag; never create or re-enable campaign posts.
+     */
+    protected function flagOnly(): bool
+    {
+        return false;
     }
 
     private function revert(VvipPlacementBackfillService $backfill, string $path, bool $apply): int
