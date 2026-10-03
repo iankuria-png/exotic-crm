@@ -158,6 +158,24 @@ class OfferService
         }, 3);
     }
 
+    /** @var array<int, bool> Card previews switched on, per market, for this request. */
+    private array $teasersOn = [];
+
+    public function teasersEnabled(int $platformId): bool
+    {
+        if (! array_key_exists($platformId, $this->teasersOn)) {
+            $setting = ContentMonetizationSetting::where('platform_id', $platformId)->first();
+            $this->teasersOn[$platformId] = $setting ? $this->settings->teaserPolicy($setting)['enabled'] : false;
+        }
+
+        return $this->teasersOn[$platformId];
+    }
+
+    public function presentAsset(PremiumContentAsset $a): array
+    {
+        return ['public_id' => $a->public_id, 'media_type' => $a->media_type, 'preview_url' => $a->preview_url, 'teaser_url' => $a->media_type === 'video' && $a->teaser_url && $this->teasersEnabled((int) $a->platform_id) ? $a->teaser_url : null, 'duration_seconds' => $a->duration_seconds];
+    }
+
     public function present(PremiumContentOffer $offer): array
     {
         $multi = $offer->isMultiCreator();
@@ -167,6 +185,6 @@ class OfferService
             'creator' => $multi ? null : $offer->client?->name, 'wp_post_id' => $multi ? null : $offer->client?->wp_post_id,
             'origin' => $offer->origin, 'bundle_scope' => $offer->bundle_scope, 'owner_opted_out_at' => $offer->owner_opted_out_at?->toIso8601String(), 'published_at' => $offer->published_at?->toIso8601String(),
             'creator_count' => $multi ? $creators->count() : 1, 'member_wp_post_ids' => $multi ? $creators->pluck('wp_post_id')->map(fn ($id) => (int) $id)->values()->all() : null,
-            'assets' => $offer->assets->map(fn ($a) => ['public_id' => $a->public_id, 'media_type' => $a->media_type, 'preview_url' => $a->preview_url, 'duration_seconds' => $a->duration_seconds])->all()];
+            'assets' => $offer->assets->map(fn ($a) => $this->presentAsset($a))->all()];
     }
 }

@@ -8,7 +8,7 @@ class PremiumContentAsset extends Model
 {
     protected $guarded = [];
 
-    protected $casts = [];
+    protected $casts = ['teaser_generated_at' => 'datetime'];
 
     public function client()
     {

@@ -38,6 +38,11 @@ class MonetizationSettingsService
 
     public const FREE_PASS_DEFAULTS = ['new_subscriptions_enabled' => false, 'duration_key' => '1_month', 'effective_from' => null];
 
+    /** Card previews: a blurred looping clip per private video. Strengths match the WordPress encoder. */
+    public const TEASER_STRENGTHS = ['colours', 'shapes', 'outlines'];
+
+    public const TEASER_DEFAULTS = ['enabled' => true, 'strength' => 'shapes'];
+
     /** The saved expiry rule merged over neutral defaults, so older rows load unchanged. */
     public function expiryPolicy(ContentMonetizationSetting $s): array
     {
@@ -53,6 +58,17 @@ class MonetizationSettingsService
     public function freePassPolicy(ContentMonetizationSetting $s): array
     {
         return array_replace(self::FREE_PASS_DEFAULTS, $s->free_pass_policy_json ?? []);
+    }
+
+    public function teaserPolicy(ContentMonetizationSetting $s): array
+    {
+        $policy = array_replace(self::TEASER_DEFAULTS, array_intersect_key($s->teaser_policy_json ?? [], self::TEASER_DEFAULTS));
+        if (! in_array($policy['strength'], self::TEASER_STRENGTHS, true)) {
+            $policy['strength'] = self::TEASER_DEFAULTS['strength'];
+        }
+        $policy['enabled'] = (bool) $policy['enabled'];
+
+        return $policy;
     }
 
     /** Validate an expiry media/count/duration/price rule against the market's offer policy. */
@@ -155,6 +171,7 @@ class MonetizationSettingsService
             'checkout_kill_switch' => $system->checkout_kill_switch || $s->checkout_kill_switch,
             'offer_policy' => $s->offer_policy_json, 'surface_policy' => $s->surface_policy_json,
             'checkout_policy' => $s->checkout_policy_json, 'delivery_policy' => $s->delivery_policy_json,
+            'teaser_policy' => $this->teaserPolicy($s),
             'prices' => $s->prices()->where('is_active', true)->orderBy('sort_order')->get()->toArray(),
         ];
     }
@@ -194,6 +211,8 @@ class MonetizationSettingsService
             'expiry_video_policy' => 'sometimes|array', 'free_pass_policy' => 'sometimes|array',
             'free_pass_policy.new_subscriptions_enabled' => 'required_with:free_pass_policy|boolean',
             'free_pass_policy.duration_key' => ['required_with:free_pass_policy', Rule::in(['2_weeks', '1_month'])],
+            'teaser_policy' => 'sometimes|array', 'teaser_policy.enabled' => 'required_with:teaser_policy|boolean',
+            'teaser_policy.strength' => ['required_with:teaser_policy', Rule::in(self::TEASER_STRENGTHS)],
         ])->validate();
         if (isset($data['expiry_video_policy'])) {
             $data['expiry_video_policy'] = $this->validateExpiryPolicy($data['expiry_video_policy'], $data['offer_policy']);
@@ -259,6 +278,9 @@ class MonetizationSettingsService
                 $enabled = (bool) $data['free_pass_policy']['new_subscriptions_enabled'];
                 // Only subscriptions activated after the policy is switched on qualify.
                 $s->free_pass_policy_json = ['new_subscriptions_enabled' => $enabled, 'duration_key' => $data['free_pass_policy']['duration_key'], 'effective_from' => $enabled ? ($previous['new_subscriptions_enabled'] && $previous['effective_from'] ? $previous['effective_from'] : now()->toIso8601String()) : null];
+            }
+            if (isset($data['teaser_policy'])) {
+                $s->teaser_policy_json = ['enabled' => (bool) $data['teaser_policy']['enabled'], 'strength' => $data['teaser_policy']['strength']];
             }
             $s->config_revision++;
             $s->save();

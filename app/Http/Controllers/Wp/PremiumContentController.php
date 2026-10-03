@@ -119,8 +119,10 @@ class PremiumContentController extends Controller
         $facts = app(ListingEligibility::class)->facts($client);
         abort_unless($facts['listing_active'] && ! $facts['held'] && $this->passes->current($client), 403, 'An active listing and pass are required.');
         abort_if(app(KycSettingsService::class)->privateContentUploadDecision($client)['decision'] === 'block_with_verification_cta', 403, 'Verify your account before uploading private content.');
-        $data = $r->validate(['public_id' => 'required|uuid', 'wp_attachment_id' => 'required|integer|min:1', 'media_type' => 'required|in:photo,video', 'preview_url' => 'required|url|max:2048', 'content_fingerprint' => 'required|regex:/^[a-f0-9]{64}$/', 'duration_seconds' => 'nullable|integer|min:0|max:1800']);
+        $data = $r->validate(['public_id' => 'required|uuid', 'wp_attachment_id' => 'required|integer|min:1', 'media_type' => 'required|in:photo,video', 'preview_url' => 'required|url|max:2048', 'content_fingerprint' => 'required|regex:/^[a-f0-9]{64}$/', 'duration_seconds' => 'nullable|integer|min:0|max:1800', 'teaser_url' => 'nullable|url|max:2048', 'teaser_strength' => ['nullable', \Illuminate\Validation\Rule::in(MonetizationSettingsService::TEASER_STRENGTHS)]]);
         abort_unless(data_get($s->offer_policy_json, $data['media_type'] === 'photo' ? 'photos_enabled' : 'videos_enabled'), 422);
+        $hasTeaser = $data['media_type'] === 'video' && ! empty($data['teaser_url']);
+        $data = array_merge($data, ['teaser_url' => $hasTeaser ? $data['teaser_url'] : null, 'teaser_strength' => $hasTeaser ? ($data['teaser_strength'] ?? null) : null, 'teaser_generated_at' => $hasTeaser ? now() : null]);
         $asset = PremiumContentAsset::firstOrCreate(['platform_id' => $client->platform_id, 'wp_attachment_id' => $data['wp_attachment_id']], $data + ['client_id' => $client->id, 'wp_post_id' => $client->wp_post_id]);
         abort_unless($asset->client_id === $client->id && $asset->content_fingerprint === $data['content_fingerprint'], 409);
 
@@ -147,8 +149,11 @@ class PremiumContentController extends Controller
     {
         $s = $this->setting($r);
         $surface = $r->input('surface', 'profile');
-        if (! data_get($s->surface_policy_json, ['videos' => 'videos_private_filter', 'collections' => 'home_private_content'][$surface] ?? 'profile_section')) {
-            return response()->json(['offers' => []]);
+        if (! data_get($s->surface_policy_json, ['videos' => 'videos_private_filter', 'collections' => 'home_private_content', 'profiles' => 'home_private_content'][$surface] ?? 'profile_section')) {
+            return response()->json(['offers' => [], 'profiles' => []]);
+        }
+        if ($surface === 'profiles') {
+            return response()->json($this->profilePreviews($r, $s) + ['offers' => []]);
         }
         $query = PremiumContentOffer::where('platform_id', $s->platform_id)->where('status', 'live')->with(['assets', 'client']);
         if ($surface === 'collections') {
@@ -175,6 +180,37 @@ class PremiumContentController extends Controller
         }
 
         return response()->json(['enabled' => true, 'total' => $total, 'page' => $page, 'offers' => $rows]);
+    }
+
+    /**
+     * Homepage Private content cards in one request: per profile, what is for sale, the lowest
+     * price and one preview (her newest video with a card teaser, else any video, else a photo).
+     */
+    private function profilePreviews(Request $r, $s): array
+    {
+        $ids = collect((array) $r->input('wp_post_ids'))->map(fn ($id) => (int) $id)->filter()->unique()->take(60)->values();
+        $clients = $ids->isEmpty() ? collect() : Client::where('platform_id', $s->platform_id)->whereIn('wp_post_id', $ids)->pluck('wp_post_id', 'id');
+        $groups = [];
+        if ($clients->isNotEmpty()) {
+            foreach (PremiumContentOffer::where('platform_id', $s->platform_id)->where('status', 'live')->whereIn('client_id', $clients->keys())->with(['assets', 'client'])->orderByDesc('id')->get() as $offer) {
+                if ($this->offers->available($offer, $s, $r->boolean('test_device'))) {
+                    $groups[(int) $clients[$offer->client_id]][] = $offer;
+                }
+            }
+        }
+        $profiles = [];
+        foreach ($groups as $wpPostId => $list) {
+            $list = collect($list);
+            $singles = $list->filter(fn ($o) => $o->kind !== 'bundle');
+            $videos = $singles->filter(fn ($o) => $o->assets->first()?->media_type === 'video')->count();
+            $assets = $list->flatMap(fn ($o) => $o->assets)->unique('id')->values();
+            $preview = $assets->first(fn ($a) => $a->media_type === 'video' && $a->teaser_url) ?? $assets->first(fn ($a) => $a->media_type === 'video') ?? $assets->first();
+            $cheapest = $list->sortBy(fn ($o) => (float) $o->amount)->first();
+            $profiles[] = ['wp_post_id' => $wpPostId, 'photos' => $singles->count() - $videos, 'videos' => $videos, 'bundles' => $list->count() - $singles->count(), 'item_count' => $assets->count(),
+                'from_amount' => $cheapest->amount, 'currency' => $cheapest->currency, 'preview' => $preview ? $this->offers->presentAsset($preview) : null];
+        }
+
+        return ['enabled' => true, 'profiles' => $profiles];
     }
 
     public function intent(Request $r)

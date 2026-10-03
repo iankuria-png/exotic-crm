@@ -217,7 +217,8 @@ class ExpiryAutomationService
             }
             $asset = PremiumContentAsset::firstOrCreate(['platform_id' => $client->platform_id, 'wp_attachment_id' => $attachment], [
                 'public_id' => $converted['public_id'], 'client_id' => $client->id, 'wp_post_id' => $client->wp_post_id, 'media_type' => $type,
-                'preview_url' => $converted['preview_url'], 'duration_seconds' => $duration, 'content_fingerprint' => $converted['content_fingerprint'], 'origin' => PremiumContentOffer::ORIGIN_EXPIRY,
+                'preview_url' => $converted['preview_url'], 'duration_seconds' => $duration,
+                'teaser_url' => $type === 'video' ? ($converted['teaser_url'] ?? null) : null, 'teaser_strength' => $type === 'video' && ! empty($converted['teaser_url']) ? ($converted['teaser_strength'] ?? null) : null, 'teaser_generated_at' => $type === 'video' && ! empty($converted['teaser_url']) ? now() : null, 'content_fingerprint' => $converted['content_fingerprint'], 'origin' => PremiumContentOffer::ORIGIN_EXPIRY,
             ]);
             if ($asset->client_id !== $client->id) {
                 return ['offer' => null, 'reason' => 'ownership_mismatch'];

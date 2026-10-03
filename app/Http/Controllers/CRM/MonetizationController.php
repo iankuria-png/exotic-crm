@@ -45,8 +45,8 @@ class MonetizationController extends Controller
         $automation = null;
         if ($s) {
             $expiry = app(\App\Services\Monetization\ExpiryAutomationService::class);
-            $automation = ['expiry' => $this->settings->expiryPolicy($s), 'free_pass' => $this->settings->freePassPolicy($s),
-                'estimates' => ['expired_profiles' => $expiry->cohort($s->platform)->count(), 'active_subscriptions' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptions($s->platform)->count(), 'active_subscriptions_remaining' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptionsRemaining($s->platform)->count()],
+            $automation = ['expiry' => $this->settings->expiryPolicy($s), 'free_pass' => $this->settings->freePassPolicy($s), 'teaser' => $this->settings->teaserPolicy($s),
+                'estimates' => ['expired_profiles' => $expiry->cohort($s->platform)->count(), 'active_subscriptions' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptions($s->platform)->count(), 'active_subscriptions_remaining' => app(\App\Services\Monetization\ComplimentaryPassService::class)->activeSubscriptionsRemaining($s->platform)->count()] + app(\App\Services\Monetization\TeaserService::class)->estimates($s->platform),
                 'runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $s->platform_id)->latest('id')->limit(8)->get()->map(fn ($run) => $expiry->presentRun($run))->values()];
         }
 
@@ -412,7 +412,15 @@ class MonetizationController extends Controller
         $passes = app(\App\Services\Monetization\ComplimentaryPassService::class);
 
         return response()->json(['runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $platform->id)->latest('id')->limit(8)->get()->map(fn ($run) => $service->presentRun($run))->values(),
-            'estimates' => ['active_subscriptions' => $passes->activeSubscriptions($platform)->count(), 'active_subscriptions_remaining' => $passes->activeSubscriptionsRemaining($platform)->count()]]);
+            'estimates' => ['active_subscriptions' => $passes->activeSubscriptions($platform)->count(), 'active_subscriptions_remaining' => $passes->activeSubscriptionsRemaining($platform)->count()] + app(\App\Services\Monetization\TeaserService::class)->estimates($platform)]);
+    }
+
+    public function startVideoPreviews(Request $r, Platform $platform)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $run = app(\App\Services\Monetization\TeaserService::class)->startBackfill($platform, $r->user()->id);
+
+        return response()->json(['run_id' => $run->public_id, 'status' => $run->status, 'estimated_videos' => $run->estimated_count, 'run' => app(\App\Services\Monetization\ExpiryAutomationService::class)->presentRun($run)]);
     }
 
     /** Retry only failed (or abandoned) items of one run; succeeded items are never repeated. */
@@ -428,7 +436,7 @@ class MonetizationController extends Controller
                 \App\Services\Monetization\ExpiryAutomationService::tally($model->id, $previous, 'queued');
             }
         });
-        $ids->each(fn ($id) => \App\Jobs\ProcessMonetizationAutomationItem::dispatch($id));
+        $model->kind === 'teaser_backfill' ? \App\Services\Monetization\TeaserService::dispatchSpaced($ids) : $ids->each(fn ($id) => \App\Jobs\ProcessMonetizationAutomationItem::dispatch($id));
 
         return response()->json(['retried' => $ids->count(), 'run' => app(\App\Services\Monetization\ExpiryAutomationService::class)->presentRun($model->fresh())]);
     }
