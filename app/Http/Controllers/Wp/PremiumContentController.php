@@ -207,6 +207,7 @@ class PremiumContentController extends Controller
             $preview = $assets->first(fn ($a) => $a->media_type === 'video' && $a->teaser_url) ?? $assets->first(fn ($a) => $a->media_type === 'video') ?? $assets->first();
             $cheapest = $list->sortBy(fn ($o) => (float) $o->amount)->first();
             $profiles[] = ['wp_post_id' => $wpPostId, 'photos' => $singles->count() - $videos, 'videos' => $videos, 'bundles' => $list->count() - $singles->count(), 'item_count' => $assets->count(),
+                'photo_items' => $assets->where('media_type', '!=', 'video')->count(), 'video_items' => $assets->where('media_type', 'video')->count(),
                 'from_amount' => $cheapest->amount, 'currency' => $cheapest->currency, 'preview' => $preview ? $this->offers->presentAsset($preview) : null];
         }
 

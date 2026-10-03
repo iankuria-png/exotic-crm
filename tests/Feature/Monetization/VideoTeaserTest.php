@@ -187,6 +187,7 @@ class VideoTeaserTest extends TestCase
 
         $this->assertCount(2, $profiles);
         $this->assertSame([2, 1, 0, 3], [$profiles[$beki->wp_post_id]['videos'], $profiles[$beki->wp_post_id]['photos'], $profiles[$beki->wp_post_id]['bundles'], $profiles[$beki->wp_post_id]['item_count']]);
+        $this->assertSame([1, 2], [$profiles[$beki->wp_post_id]['photo_items'], $profiles[$beki->wp_post_id]['video_items']]);
         // Her newest video with a teaser wins over a newer video without one.
         $this->assertSame('https://example.test/1-teaser.mp4', $profiles[$beki->wp_post_id]['preview']['teaser_url']);
         $this->assertSame(['photo', null], [$profiles[$wanjiru->wp_post_id]['preview']['media_type'], $profiles[$wanjiru->wp_post_id]['preview']['teaser_url']]);
