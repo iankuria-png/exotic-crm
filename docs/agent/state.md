@@ -1,6 +1,6 @@
 # CRM current state
 
-- Wallet rebates (4 Oct): [task](tasks/wallet-rebates.md) — r2 implemented: market revisions/simulator/projection/ledger/performance, exactly-once post-settlement grants/retry/reversal and compiled build. Financial, InnoDB and browser checks pass. New programs Off, Local Kenya Sandbox only. Shipping to origin/main; cPanel pull/migration + separate WP overlay upload and live KES 500 canary remain.
+- Wallet rebates (4 Oct): [task](tasks/wallet-rebates.md) — r2 implemented: market revisions/simulator/projection/ledger/performance, exactly-once post-settlement grants/retry/reversal and compiled build. Financial, InnoDB and browser checks pass. New programs Off, Local Kenya Sandbox only. CRM release `51ac400e` pushed and remote SHA verified; WP `038758431` locally committed with verified overlay. CPanel pull/migration, WP upload and live KES 500 canary remain.
 
 - Database Observatory (2 Oct): base scanner and timed overrides pushed; latest follow-up simplifies setup with Save & test, specific MySQL access errors, and a persistent per-market Load gate toggle (including Critical/missing telemetry). Gate defaults On; additive migration required. Base scanner deployed per Ian; latest follow-up and first successful canary remain unverified in production. See [task](tasks/market-db-scanner.md).
 - Guided KYC (27 Sep): implemented locally with guided WP capture, AI policy and reviewer UI. 41 KYC tests / 236 assertions pass; build ready. Ian owns browser QA. AI Off; no push or deployment. See [task](tasks/kyc-guided-flow.md).
