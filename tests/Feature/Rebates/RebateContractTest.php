@@ -204,4 +204,29 @@ class RebateContractTest extends TestCase
             $this->assertSame($channel, $resolver->resolve($this->payment(['purpose' => 'subscription', 'source' => $source, 'payment_data' => $data])), $source);
         }
     }
+
+    public function test_sandbox_does_not_pin_the_live_launch_budget_before_first_real_credit(): void
+    {
+        $svc = app(RebateProgramService::class);
+        $s = $svc->forPlatform($this->p);
+        $d = $s->draft_json;
+        $d['rollout_mode'] = 'sandbox';
+        $d['test_client_ids'] = [$this->c->id];
+        $s = $svc->save($this->p, $d, $s->draft_revision, $this->admin->id);
+        $svc->publish($this->p, $s->draft_revision, 'QA sandbox budget', $this->admin->id);
+        $g = app(RebateGrantService::class);
+        $this->assertSame('simulated', $g->grantFor($this->payment(['provider_environment' => 'sandbox']))->status);
+        $d['rollout_mode'] = 'live';
+        $d['guard']['budget'] = 15;
+        $s = $svc->save($this->p, $d, $s->draft_revision, $this->admin->id);
+        $svc->publish($this->p, $s->draft_revision, 'Small live canary budget', $this->admin->id);
+        $this->assertDatabaseHas('rebate_budget_periods', ['budget_amount' => 15, 'issued_amount' => 0]);
+        $this->assertEquals(15, $g->grantFor($this->payment(['amount' => 500]))->amount);
+        $this->assertDatabaseHas('rebate_budget_periods', ['budget_amount' => 15, 'issued_amount' => 15]);
+        $d['guard']['budget'] = 150000;
+        $s = $svc->save($this->p, $d, $s->draft_revision, $this->admin->id);
+        $svc->publish($this->p, $s->draft_revision, 'Next month budget change', $this->admin->id);
+        $this->assertDatabaseHas('rebate_budget_periods', ['budget_amount' => 15, 'issued_amount' => 15]);
+        $this->assertSame('skipped', $g->grantFor($this->payment())->status);
+    }
 }

@@ -119,6 +119,11 @@ class RebateProgramService
             $snapshot = array_merge($d, ['currency' => $currency, 'kill_switch' => $s->kill_switch]);
             $this->revision($s, $snapshot, $before, 'publish', $reason, $actor);
             $s->update(['rollout_mode' => $d['rollout_mode'], 'starts_at' => $d['starts_at'], 'ends_at' => $d['ends_at'], 'test_client_ids' => $d['test_client_ids'], 'currency' => $currency, 'updated_by' => $actor]);
+            // Sandbox/zero decisions must not pin the live launch budget.
+            // Grants acquire this same program lock before the budget lock.
+            \App\Models\RebateBudgetPeriod::where('platform_id', $p->id)
+                ->where('period_key', now()->timezone($p->timezone ?: 'UTC')->format('Y-m'))
+                ->where('issued_amount', 0)->update(['budget_amount' => data_get($d, 'guard.budget')]);
 
             return $s->fresh();
         });
