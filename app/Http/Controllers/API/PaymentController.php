@@ -2520,6 +2520,8 @@ class PaymentController extends Controller
                         'billing_surface' => 'self_service_subscription',
                     ],
                     'payment_data' => [
+                        'initiator' => 'companion',
+                        'billing_surface' => 'self_service_subscription',
                         'product_price_id' => $pricing['product_price_id'] ?? null,
                         'duration_key' => $pricing['duration_key'],
                         'duration_days' => $pricing['duration_days'],
@@ -2718,6 +2720,8 @@ class PaymentController extends Controller
                     'billing_surface' => 'self_service_subscription',
                 ],
                 'payment_data' => [
+                        'initiator' => 'companion',
+                        'billing_surface' => 'self_service_subscription',
                     'product_price_id' => $pricing['product_price_id'] ?? null,
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],

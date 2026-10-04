@@ -12,6 +12,10 @@ class SelfServiceIncentiveService
      */
     public function resolveActiveIncentive(int $platformId, ?string $source = null): ?array
     {
+        if (app(\App\Services\Rebates\RebateProgramService::class)->replacesDiscount($platformId)) {
+            return null;
+        }
+
         $rule = BillingSubscriptionRule::query()
             ->where('market_id', $platformId)
             ->first();

@@ -4,9 +4,9 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Client;
+use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
-use App\Models\Platform;
 use App\Services\WalletCheckoutService;
 use App\Services\WalletPayloadService;
 use App\Services\WalletService;
@@ -21,8 +21,7 @@ class WalletController extends Controller
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly WalletPayloadService $walletPayloadService
-    ) {
-    }
+    ) {}
 
     public function balance(Request $request)
     {
@@ -36,6 +35,7 @@ class WalletController extends Controller
                 'wp_post_id' => (int) ($client->wp_post_id ?? 0),
                 'profile_url' => $client->wp_profile_url,
             ],
+            'rebates_summary' => $summary['rebates_summary'] ?? [],
             'balance' => $summary['balance'],
             'currency' => $summary['currency'],
             'balances' => $summary['balances'],
@@ -77,7 +77,7 @@ class WalletController extends Controller
         ]);
 
         $priceRow = null;
-        if (!empty($validated['product_price_id'])) {
+        if (! empty($validated['product_price_id'])) {
             $priceRow = ProductPrice::query()
                 ->with('product.platform')
                 ->where('id', (int) $validated['product_price_id'])
@@ -151,9 +151,11 @@ class WalletController extends Controller
                 'expires_at' => optional($checkout['deal']->expires_at)->toIso8601String(),
             ] : null,
             'wallet' => [
+                'rebates_summary' => $summary['rebates_summary'] ?? [],
                 'balance' => $summary['balance'],
                 'currency' => $summary['currency'],
                 'balances' => $summary['balances'],
+                'transactions' => $summary['transactions'],
                 'transaction' => $this->walletService->serializeTransaction($checkout['transaction']),
             ],
         ]);
@@ -174,9 +176,9 @@ class WalletController extends Controller
             ->with('platform')
             ->where('platform_id', (int) $platform->id);
 
-        if (!empty($validated['wp_user_id'])) {
+        if (! empty($validated['wp_user_id'])) {
             $query->where('wp_user_id', (int) $validated['wp_user_id']);
-        } elseif (!empty($validated['wp_post_id'])) {
+        } elseif (! empty($validated['wp_post_id'])) {
             $query->where('wp_post_id', (int) $validated['wp_post_id']);
         } else {
             throw ValidationException::withMessages([

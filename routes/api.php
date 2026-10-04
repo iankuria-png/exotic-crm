@@ -940,6 +940,16 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::put('/settings/billing/provider-profiles/{profile}', [SettingsController::class, 'updateProviderProfile']);
     Route::get('/settings/billing/routing-rules/{market}', [SettingsController::class, 'billingRoutingRules']);
     Route::put('/settings/billing/routing-rules/{market}', [SettingsController::class, 'storeBillingRoutingRules']);
+    Route::get('/settings/billing/rebates/{market}', [\App\Http\Controllers\CRM\RebateProgramController::class, 'show']);
+    Route::put('/settings/billing/rebates/{market}', [\App\Http\Controllers\CRM\RebateProgramController::class, 'update']);
+    Route::post('/settings/billing/rebates/{market}/publish', [\App\Http\Controllers\CRM\RebateProgramController::class, 'publish']);
+    Route::post('/settings/billing/rebates/{market}/pause', [\App\Http\Controllers\CRM\RebateProgramController::class, 'pause']);
+    Route::post('/settings/billing/rebates/{market}/simulate', [\App\Http\Controllers\CRM\RebateProgramController::class, 'simulate']);
+    Route::post('/settings/billing/rebates/{market}/projection', [\App\Http\Controllers\CRM\RebateProgramController::class, 'projection']);
+    Route::get('/settings/billing/rebates/{market}/performance', [\App\Http\Controllers\CRM\RebateProgramController::class, 'performance']);
+    Route::get('/settings/billing/rebates/{market}/ledger', [\App\Http\Controllers\CRM\RebateProgramController::class, 'ledger']);
+    Route::post('/rebates/{rebate}/reverse', [\App\Http\Controllers\CRM\RebateProgramController::class, 'reverse']);
+
     Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
     Route::put('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'storeBillingWalletRules']);
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);

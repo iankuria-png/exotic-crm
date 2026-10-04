@@ -175,6 +175,7 @@ class WalletCheckoutService
                     'wallet_checkout' => true,
                 ],
                 'payment_data' => [
+                    'initiator' => 'companion',
                     'product_price_id' => $pricing['product_price_id'] ?? null,
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],
@@ -246,6 +247,8 @@ class WalletCheckoutService
                 'emit_profile_activated_timeline' => false,
                 'emit_deal_activated_timeline' => true,
             ]);
+
+            app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
 
             return $this->hydrateResult(array_merge($result, [
                 'deal' => $deal,
@@ -368,6 +371,7 @@ class WalletCheckoutService
                     'wallet_auto_renew' => true,
                 ],
                 'payment_data' => [
+                    'initiator' => 'companion',
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],
                     'duration_label' => $pricing['duration_label'],
@@ -456,6 +460,10 @@ class WalletCheckoutService
                 'replayed' => false,
             ];
         }, 3);
+
+        if ($result['payment']) {
+            app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($result['payment']);
+        }
 
         $client = $deal->client;
         if ($client) {

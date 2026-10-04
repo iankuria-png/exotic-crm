@@ -155,6 +155,7 @@ class ManualPaymentSubmissionService
                         'billing_surface' => 'manual_confirmation',
                     ],
                     'payment_data' => [
+                        'initiator' => 'companion',
                         'product_price_id' => $pricing['product_price_id'] ?? null,
                         'duration_key' => (string) ($pricing['duration_key'] ?? 'monthly'),
                         'duration_days' => (int) ($pricing['duration_days'] ?? 30),
@@ -288,6 +289,10 @@ class ManualPaymentSubmissionService
                 ? trim((string) $reason) ?: 'Payment could not be verified.'
                 : null,
         ])->save();
+
+        if ($normalizedDecision === 'approved' && $submission->payment) {
+            app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($submission->payment);
+        }
 
         return $submission->fresh(['payment', 'client', 'platform', 'product', 'reviewer']);
     }

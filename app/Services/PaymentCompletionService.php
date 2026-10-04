@@ -58,6 +58,8 @@ class PaymentCompletionService
                 'payment_data' => $this->sandboxMetadata($payment, 'completed'),
             ]));
 
+            app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
+
             return [
                 'payment' => $payment,
                 'credited' => false,
@@ -69,6 +71,7 @@ class PaymentCompletionService
         }
 
         if ($payment->wallet_transaction_id) {
+            app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
             if ($payment->client) {
                 $this->walletSyncService->syncClientBalance($payment->client);
             }
@@ -138,6 +141,8 @@ class PaymentCompletionService
                 ]
             ),
         ]));
+
+        app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
 
         $payment->refresh();
         $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
@@ -213,6 +218,8 @@ class PaymentCompletionService
                     'transition' => 'subscription_sandbox_succeeded',
                 ]));
 
+                app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
+
                 return [
                     'payment' => $payment->fresh(['platform', 'client', 'deal', 'product']),
                     'client' => $client,
@@ -280,6 +287,8 @@ class PaymentCompletionService
                     'provisioning_status' => 'completed',
                     'transition' => 'subscription_provisioned',
                 ]));
+
+                app(\App\Services\Rebates\RebateGrantService::class)->afterSettlement($payment);
 
                 if ($deal) {
                     $dealId = (int) $deal->id;

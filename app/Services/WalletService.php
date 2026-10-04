@@ -29,6 +29,7 @@ class WalletService
         $primaryBalance = collect($balances)->firstWhere('currency', $currencyCode)['balance'] ?? '0.00';
 
         return [
+            'rebates_summary' => \Illuminate\Support\Facades\Schema::hasTable('wallet_rebates') ? app(\App\Services\Rebates\RebateReportService::class)->summary($freshClient) : [],
             'balance' => $primaryBalance,
             'currency' => $currencyCode,
             'balances' => $balances,

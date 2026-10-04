@@ -1,0 +1,290 @@
+[
+  {
+    "name": "first_topup",
+    "overrides": {},
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 600,
+    "reason": null
+  },
+  {
+    "name": "returning_topup",
+    "overrides": {},
+    "input": {
+      "amount": 2000,
+      "channel": "topup"
+    },
+    "total": 100,
+    "reason": null
+  },
+  {
+    "name": "below_tier",
+    "overrides": {},
+    "input": {
+      "amount": 499,
+      "channel": "topup"
+    },
+    "total": 0,
+    "reason": "below_tier"
+  },
+  {
+    "name": "whole_floor",
+    "overrides": {},
+    "input": {
+      "amount": 999,
+      "channel": "topup"
+    },
+    "total": 29,
+    "reason": null
+  },
+  {
+    "name": "payment_cap",
+    "overrides": {},
+    "input": {
+      "amount": 50000,
+      "channel": "topup"
+    },
+    "total": 1000,
+    "reason": null
+  },
+  {
+    "name": "bonus_after_cap",
+    "overrides": {},
+    "input": {
+      "amount": 50000,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 1200,
+    "reason": null
+  },
+  {
+    "name": "monthly_clip",
+    "overrides": {},
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "first_topup": true,
+      "earned_this_month": 2900
+    },
+    "total": 100,
+    "reason": null
+  },
+  {
+    "name": "budget_clip",
+    "overrides": {},
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "budget_remaining": 37
+    },
+    "total": 37,
+    "reason": null
+  },
+  {
+    "name": "budget_empty",
+    "overrides": {},
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "budget_remaining": 0
+    },
+    "total": 0,
+    "reason": "budget"
+  },
+  {
+    "name": "wallet",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "wallet"
+    },
+    "total": 300,
+    "reason": null
+  },
+  {
+    "name": "self_checkout",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "self_checkout"
+    },
+    "total": 300,
+    "reason": null
+  },
+  {
+    "name": "staff_link",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "staff_link"
+    },
+    "total": 120,
+    "reason": null
+  },
+  {
+    "name": "sales",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "sales_assisted"
+    },
+    "total": 120,
+    "reason": null
+  },
+  {
+    "name": "proof_off",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "manual_submission"
+    },
+    "total": 0,
+    "reason": "channel_off"
+  },
+  {
+    "name": "proof_on",
+    "overrides": {
+      "self.channels.manual_submission.on": true
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "manual_submission"
+    },
+    "total": 300,
+    "reason": null
+  },
+  {
+    "name": "link_off",
+    "overrides": {
+      "self.channels.staff_link.on": false
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "staff_link"
+    },
+    "total": 0,
+    "reason": "channel_off"
+  },
+  {
+    "name": "custom_link_rate",
+    "overrides": {
+      "self.channels.staff_link.pct": 7
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "staff_link"
+    },
+    "total": 420,
+    "reason": null
+  },
+  {
+    "name": "auto_renew",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "auto_renew"
+    },
+    "total": 420,
+    "reason": null
+  },
+  {
+    "name": "no_stack",
+    "overrides": {
+      "guard.stack": false
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "wallet"
+    },
+    "total": 0,
+    "reason": "stacking_off"
+  },
+  {
+    "name": "no_stack_mobile",
+    "overrides": {
+      "guard.stack": false
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "self_checkout"
+    },
+    "total": 300,
+    "reason": null
+  },
+  {
+    "name": "unknown_channel",
+    "overrides": {},
+    "input": {
+      "amount": 6000,
+      "channel": "other"
+    },
+    "total": 0,
+    "reason": "channel_off"
+  },
+  {
+    "name": "first_below_min",
+    "overrides": {},
+    "input": {
+      "amount": 500,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 15,
+    "reason": null
+  },
+  {
+    "name": "first_off",
+    "overrides": {
+      "first.on": false
+    },
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 400,
+    "reason": null
+  },
+  {
+    "name": "topup_off",
+    "overrides": {
+      "topup.on": false
+    },
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 0,
+    "reason": "channel_off"
+  },
+  {
+    "name": "renew_off",
+    "overrides": {
+      "renew.on": false
+    },
+    "input": {
+      "amount": 6000,
+      "channel": "auto_renew"
+    },
+    "total": 300,
+    "reason": null
+  },
+  {
+    "name": "zero_cap",
+    "overrides": {
+      "topup.cap": 0
+    },
+    "input": {
+      "amount": 5000,
+      "channel": "topup",
+      "first_topup": true
+    },
+    "total": 200,
+    "reason": null
+  }
+]

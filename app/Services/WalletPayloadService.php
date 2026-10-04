@@ -96,6 +96,7 @@ class WalletPayloadService
             'business_name' => data_get($system, 'billing_branding.' . $context['environment'] . '.business_name'),
             'description' => data_get($system, 'billing_branding.' . $context['environment'] . '.description'),
             'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
+            'rebates' => app(\App\Services\Rebates\RebateProgramService::class)->runtime($platform, $context['environment'] ?? 'production'),
             'self_service_incentive' => $this->selfServiceIncentiveService->resolveActiveIncentive((int) $platform->id),
         ];
     }
@@ -124,6 +125,7 @@ class WalletPayloadService
             'wallet_last_synced_at' => $syncedAt,
             'last_topup' => $summary['last_topup'] ?? null,
             'transactions' => $summary['transactions'] ?? [],
+            'rebates_summary' => $summary['rebates_summary'] ?? [],
         ];
     }
 }

@@ -117,6 +117,9 @@ class PaymentLinkService
             return ['success' => false, 'skip_reason' => 'market_no_psp'];
         }
 
+        if ($payment->status !== 'completed') {
+            $payment->forceFill(['payment_data' => array_merge($payment->payment_data ?? [], ['initiator' => 'staff_link'])])->save();
+        }
         $token = $this->rotateProxyToken($payment, array_merge($resolvedProvider['config'], [
             'key' => $resolvedProvider['key'],
         ]));
@@ -206,6 +209,9 @@ class PaymentLinkService
 
     public function sendLink(Payment $payment, array $options = []): array
     {
+        if ($payment->status !== 'completed') {
+            $payment->forceFill(['payment_data' => array_merge($payment->payment_data ?? [], ['initiator' => 'staff_link'])])->save();
+        }
         $payment->loadMissing(['platform', 'product', 'client']);
         $platform = $payment->platform;
 

@@ -125,6 +125,7 @@ class BillingGatewayService
                 'billing_surface' => 'wallet_topup',
             ],
             'payment_data' => [
+                'initiator' => 'companion',
                 'idempotency_key' => $idempotencyKey,
                 'requested_amount' => number_format($amount, 2, '.', ''),
                 'provider' => $provider,
