@@ -15,7 +15,7 @@ const STATUS_VIEWS = [
     ['', 'Everything'],
 ];
 
-const BEHAVIORS = ['backdoor', 'injected_loader', 'redirect', 'fake_update', 'overlay', 'obfuscation', 'credential_theft', 'known_campaign', 'reinfection', 'persistence', 'stored_code', 'gtm_unbaselined'];
+const BEHAVIORS = ['backdoor', 'injected_loader', 'redirect', 'fake_update', 'overlay', 'obfuscation', 'credential_theft', 'known_campaign', 'reinfection', 'cross_market_campaign', 'third_party_execution', 'business_review', 'persistence', 'stored_code', 'gtm_unbaselined'];
 
 function FindingActions({ data, canOperate, canConfigure, onDone }) {
     const toast = useToast();
@@ -318,6 +318,7 @@ export default function FindingsTab({ initialFilters, canOperate, canConfigure, 
                 <input aria-label="Search findings" className="crm-input w-44 py-1.5" placeholder="Search title or rule" value={filters.q || ''} onChange={(e) => set({ q: e.target.value })} />
                 {filters.run_id ? <button type="button" className="rounded-md bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800" onClick={() => set({ run_id: '' })}>Run {filters.run_id} ✕</button> : null}
                 {filters.kind ? <button type="button" className="rounded-md bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800" onClick={() => set({ kind: '' })}>{humanize(filters.kind)} rules ✕</button> : null}
+                {filters.identity ? <button type="button" className="max-w-xs truncate rounded-md bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800" aria-label={`Remove identity filter ${filters.identity}`} onClick={() => set({ identity: '', definition_hash: '' })}>{filters.identity}{filters.definition_hash ? ' · matching privileges' : ''} ✕</button> : null}
                 {filters.rule_key ? <button type="button" className="crm-mono rounded-md bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800" onClick={() => set({ rule_key: '' })}>{filters.rule_key} ✕</button> : null}
                 <div className="ml-auto flex gap-2">
                     <select aria-label="Group by" className="crm-select py-1.5 text-sm" value={filters.group_by || ''} onChange={(e) => set({ group_by: e.target.value })}>

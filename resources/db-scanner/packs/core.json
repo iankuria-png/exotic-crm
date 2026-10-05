@@ -1,8 +1,8 @@
 {
     "pack": "core",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "reviewed_by": "Ian K",
-    "reviewed_at": "2026-10-01",
+    "reviewed_at": "2026-10-05",
     "license": "Independently authored; thresholds follow wp doctor defaults.",
     "rules": [
         {
@@ -24,7 +24,8 @@
             "thresholds": {},
             "lists": [
                 "allow.admin_email_domains",
-                "lexicon.fake_admin_domains"
+                "lexicon.fake_admin_domains",
+                "allow.admin_emails"
             ],
             "why": "Attackers create administrators with support-style or look-alike addresses (Zimbabwe: support_admin@wordpress.com).",
             "remediation": "Confirm who owns the account. If nobody does, remove it, then check for the mechanism that created it (triggers, cron, snippets).",
@@ -135,8 +136,8 @@
         {
             "key": "access.application_passwords",
             "category": "access",
-            "kind": "drift",
-            "title": "Administrator application passwords",
+            "kind": "structured",
+            "title": "Application passwords on all accounts",
             "matcher": "application_passwords",
             "surfaces": [
                 "usermeta.app_passwords"
@@ -149,8 +150,10 @@
                 "deep"
             ],
             "thresholds": {},
-            "lists": [],
-            "why": "Application passwords allow API access that bypasses the login form and 2FA. Only presence and byte length are read — never the value.",
+            "lists": [
+                "allow.crm_ips"
+            ],
+            "why": "Checks metadata for every account, retaining no hashes. EWMS / Exotic CRM / Exotic-CRM Sync family keys require all recorded IPs to be trusted CRM hosts; deceptive names remain suspicious.",
             "remediation": "Revoke application passwords that nobody can account for.",
             "references": [],
             "allowlistable": true,
@@ -198,7 +201,7 @@
             ],
             "thresholds": {},
             "lists": [],
-            "why": "Roles other than administrator that can edit theme or plugin code, install plugins, manage users or options, or that grant the literal \"administrator\" capability are admin-equivalent for anyone holding them.",
+            "why": "Roles other than administrator that can edit theme or plugin code, install plugins, manage users or options, or that grant the literal \"administrator\" capability are admin-equivalent for anyone holding them. Matching definitions are grouped across markets in Fleet triage.",
             "remediation": "Remove code-editing and user-management capabilities from staff roles (Advanced Access Manager or the role editor) unless there is a documented need.",
             "references": [],
             "allowlistable": true,
@@ -343,7 +346,7 @@
             "surfaces": [
                 "options.core"
             ],
-            "severity": "critical",
+            "severity": "warn",
             "confidence": null,
             "profiles": [
                 "quick",
@@ -352,7 +355,9 @@
             ],
             "thresholds": {},
             "lists": [
-                "allow.plugins"
+                "allow.plugins",
+                "reference.public_plugins",
+                "ioc.plugins"
             ],
             "why": "An active plugin nobody installed is how crawl-page-optimizer appeared on Zimbabwe.",
             "remediation": "Confirm who installed it. If nobody did, deactivate it, remove its files and check for other persistence.",
@@ -810,7 +815,7 @@
             "lists": [
                 "allow.outbound_domains"
             ],
-            "why": "Yoast redirects that send our paths to other domains leak traffic and rankings.",
+            "why": "Yoast redirects that send our paths to other domains leak traffic and rankings. Partner link swaps under partners/ are informational; other external redirects remain critical.",
             "remediation": "Remove the redirect unless it is an intended partner link.",
             "references": [],
             "allowlistable": true,
@@ -932,7 +937,7 @@
             "thresholds": {},
             "lists": [],
             "why": "blog_public = 0 tells search engines not to index the market.",
-            "remediation": "Untick Settings → Reading → Discourage search engines.",
+            "remediation": "Untick Settings \u2192 Reading \u2192 Discourage search engines.",
             "references": [],
             "allowlistable": true,
             "enabled": true
@@ -1224,6 +1229,214 @@
             "lists": [],
             "why": "Failed or stale pending actions indicate background processing problems.",
             "remediation": "Investigate the failing hook; purge old failed actions.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "persistence.invisible_plugins",
+            "category": "persistence",
+            "kind": "structured",
+            "title": "Active plugin entry with no readable plugin, confirm on disk",
+            "matcher": "invisible_plugins",
+            "surfaces": [
+                "options.core"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Signals supported by the October market database review.",
+            "remediation": "Confirm files on disk. Open wp-admin \u2192 Plugins to clear a dangling entry; if a hidden folder exists, inspect and remove it through the incident workflow. Database inventory cannot prove files exist.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.activity_behaviour",
+            "category": "access",
+            "kind": "structured",
+            "title": "Activity Log compromise behaviour",
+            "matcher": "activity_behaviour",
+            "surfaces": [
+                "activity.behaviour"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "allow.admin_email_domains",
+                "allow.it_emails",
+                "allow.install_names",
+                "allow.staff_ips",
+                "ioc.ips",
+                "ioc.plugins"
+            ],
+            "why": "Correlates privileged actions, same-IP failures and reviewed campaign evidence. New IP alone is review-only. Approved staff installs and confirmed network addresses are informational; IOC evidence takes precedence.",
+            "remediation": "Review ownership and evidence before making any site changes.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.md5_admin_passwords",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Privileged accounts use legacy MD5 passwords",
+            "matcher": "md5_admin_passwords",
+            "surfaces": [
+                "users.privileged"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Signals supported by the October market database review. One finding per market contains the count and bounded account list.",
+            "remediation": "Review ownership and evidence before making any site changes.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.stored_integration_secrets",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Stored integration secrets",
+            "matcher": "autoloaded_secret_options",
+            "surfaces": [
+                "options.values"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "quick",
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [],
+            "why": "Known secret-bearing options expose integrations if dumps are shared. Values are never read.",
+            "remediation": "Rotate vendor credentials if a database dump was exposed.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "content.banner_exchange_links",
+            "category": "content",
+            "kind": "signature",
+            "title": "Banner exchange links or executable embeds",
+            "matcher": "banner_exchange",
+            "surfaces": [
+                "posts.content"
+            ],
+            "severity": "warn",
+            "confidence": "needs_review",
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "lexicon.banner_exchange_domains"
+            ],
+            "why": "Executable script or iframe on a published page is critical; plain links are informational business review.",
+            "remediation": "Confirm the exchange is an approved commercial relationship before removing it.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.registration_spam",
+            "category": "access",
+            "kind": "structured",
+            "title": "Registration spam across all accounts",
+            "matcher": "registration_spam",
+            "surfaces": [
+                "users.registration_health",
+                "activity.behaviour",
+                "options.core"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_accounts": 20
+            },
+            "lists": [
+                "ioc.ips"
+            ],
+            "why": "Registration spam across all accounts. Counts and bounded metadata only; no message bodies or scam usernames stored.",
+            "remediation": "Review the evidence and follow the market incident or operational repair workflow.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.account_campaign",
+            "category": "access",
+            "kind": "structured",
+            "title": "Campaign and rotating-IP account logins",
+            "matcher": "account_campaign",
+            "surfaces": [
+                "activity.behaviour"
+            ],
+            "severity": "critical",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "ioc.ips",
+                "allow.admin_email_domains"
+            ],
+            "why": "Campaign and rotating-IP account logins. Counts and bounded metadata only; no message bodies or scam usernames stored.",
+            "remediation": "Review the evidence and follow the market incident or operational repair workflow.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "hygiene.email_delivery_health",
+            "category": "hygiene",
+            "kind": "structured",
+            "title": "Email delivery failure rate",
+            "matcher": "email_delivery_health",
+            "surfaces": [
+                "activity.behaviour"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {
+                "min_messages": 20,
+                "failure_rate": 0.25
+            },
+            "lists": [],
+            "why": "Reports elevated failure rate over the latest 30-day activity window, or SMTP authentication errors even with a small sample. Includes failed/sent/authentication counts and sample size; no email bodies are stored.",
+            "remediation": "Review the evidence and follow the market incident or operational repair workflow.",
             "references": [],
             "allowlistable": true,
             "enabled": true

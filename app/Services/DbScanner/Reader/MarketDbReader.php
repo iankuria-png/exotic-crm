@@ -12,8 +12,8 @@ use Throwable;
  *   reconnect, no persistent connection, no emulated multi-statements.
  * - The session is put in READ ONLY with an engine-specific statement timeout
  *   and both are read back before the first data statement; any doubt fails
- *   closed. This is defence in depth: production also requires SELECT-only
- *   credentials, verified by preflight.
+ *   closed. Preflight enforces SELECT-only credentials by default, or the
+ *   explicitly selected site-login policy limited to this market schema.
  * - Only CompiledQuery objects from QueryCompiler are executed.
  * - Losing the connection kills the reader. A retry must construct a new
  *   reader, which re-runs and re-verifies session setup.

@@ -58,7 +58,7 @@ class SweepFinalizer
             return $status;
         }
 
-        $hits = array_merge($this->accumulatorHits($run, $state, $rules), $this->correlationHits($run, $rules, $sweep));
+        $hits = array_merge($this->accumulatorHits($run, $state, $rules), $this->correlationHits($run, $rules, $sweep), (new \App\Services\DbScanner\FleetCampaignCorrelator)->hits((int) $run->platform_id, $rules));
 
         if ($hits !== []) {
             DB::transaction(function () use ($run, $token, $hits, $rules) {

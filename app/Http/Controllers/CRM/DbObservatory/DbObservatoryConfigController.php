@@ -393,17 +393,18 @@ class DbObservatoryConfigController extends Controller
         $this->ensureConfigure($request);
         $connections = DbScanConnection::query()->get()->keyBy('platform_id');
 
-        $data = Platform::query()->orderBy('name')->get(['id', 'name', 'domain', 'db_host', 'db_name', 'db_prefix'])->map(function (Platform $p) use ($connections) {
+        $data = Platform::query()->orderBy('name')->get(['id', 'name', 'domain', 'db_host', 'db_name', 'db_prefix', 'db_user'])->map(function (Platform $p) use ($connections) {
             $c = $connections->get($p->id);
 
             return [
                 'platform_id' => $p->id,
                 'market' => $p->name,
                 'domain' => $p->domain,
-                'suggested' => ['host' => $p->db_host, 'database' => $p->db_name, 'prefix' => $p->db_prefix ?: 'wp_'],
+                'suggested' => ['host' => $p->db_host, 'database' => $p->db_name, 'prefix' => $p->db_prefix ?: 'wp_', 'site_login_available' => (bool) $p->db_user],
                 'connection' => $c ? [
                     'id' => $c->id,
                     'driver' => $c->driver,
+                    'credential_source' => $c->credential_source ?: 'dedicated',
                     'host' => $c->host,
                     'port' => $c->port,
                     'socket' => $c->socket,
@@ -433,17 +434,27 @@ class DbObservatoryConfigController extends Controller
     public function updateConnection(Request $request, int $platform): JsonResponse
     {
         $this->ensureConfigure($request);
-        Platform::query()->findOrFail($platform);
+        $market = Platform::query()->findOrFail($platform);
         $existing = DbScanConnection::query()->where('platform_id', $platform)->first();
 
+        $source = $request->input('credential_source', $existing?->credential_source ?: 'dedicated');
+        if ($source === 'site_login') {
+            $request->merge([
+                'host' => $market->db_host, 'database' => $market->db_name,
+                'prefix' => $market->db_prefix ?: 'wp_', 'socket' => null, 'port' => 3306,
+                'username' => null, 'password' => null, 'host_group' => null,
+            ]);
+        }
         $data = $request->validate([
+            'credential_source' => ['sometimes', Rule::in(['dedicated', 'site_login'])],
+            'site_login_acknowledged' => $source === 'site_login' ? ['required', 'accepted'] : ['exclude'],
             'host' => ['nullable', 'string', 'max:191', 'regex:/^[A-Za-z0-9.\-:\[\]]+$/'],
             'port' => ['nullable', 'integer', 'min:1', 'max:65535'],
             'socket' => ['nullable', 'string', 'max:255', 'regex:/^\/[A-Za-z0-9._\/\- ]+$/'],
             'database' => ['required', 'string', 'max:64', 'regex:/^[A-Za-z0-9_\-$]+$/'],
             'prefix' => ['required', 'string', 'max:40', 'regex:/^[A-Za-z0-9_]+$/'],
-            'username' => [$existing ? 'nullable' : 'required', 'string', 'max:80'],
-            'password' => [$existing ? 'nullable' : 'required', 'string', 'max:200'],
+            'username' => [($existing && $existing->credential_source !== 'site_login') || $source === 'site_login' ? 'nullable' : 'required', 'string', 'max:80'],
+            'password' => [($existing && $existing->credential_source !== 'site_login') || $source === 'site_login' ? 'nullable' : 'required', 'string', 'max:200'],
             'tls_mode' => ['required', Rule::in(['none', 'verify'])],
             'tls_ca' => ['nullable', 'string', 'max:20000'],
             'host_group' => ['nullable', 'string', 'max:120'],
@@ -451,6 +462,10 @@ class DbObservatoryConfigController extends Controller
             'load_gate_enabled' => ['sometimes', 'boolean'],
             'revision' => ['nullable', 'integer'],
         ]);
+        $data['credential_source'] = $source;
+        if ($source === 'site_login' && (! $market->db_user || ! $market->db_pass)) {
+            throw ValidationException::withMessages(['credential_source' => 'Add this market’s site database login in its Market Profile first.']);
+        }
         if (empty($data['host']) && empty($data['socket'])) {
             throw ValidationException::withMessages(['host' => 'Provide a host or a local socket.']);
         }
@@ -464,10 +479,10 @@ class DbObservatoryConfigController extends Controller
             if ($model && isset($data['revision']) && (int) $data['revision'] !== (int) $model->revision) {
                 abort(409, 'This connection was changed by someone else; reload and try again.');
             }
-            $before = $model?->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'config_version']);
+            $before = $model?->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'credential_source', 'config_version']);
 
             $model ??= new DbScanConnection(['platform_id' => $platform, 'driver' => 'mysql', 'config_version' => 0, 'revision' => 0, 'preflight_status' => 'never']);
-            $credentialFields = ['host', 'port', 'socket', 'database', 'prefix', 'tls_mode'];
+            $credentialFields = ['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'credential_source'];
             $changed = false;
             foreach ($credentialFields as $field) {
                 $value = $data[$field] ?? ($field === 'port' ? 3306 : null);
@@ -475,6 +490,10 @@ class DbObservatoryConfigController extends Controller
                     $changed = true;
                 }
                 $model->{$field} = $value;
+            }
+            if ($data['credential_source'] === 'site_login') {
+                $model->username = '';
+                $model->password = null;
             }
             if (! empty($data['username'])) {
                 $changed = $changed || $model->username !== $data['username'];
@@ -502,18 +521,20 @@ class DbObservatoryConfigController extends Controller
                 $model->config_version = (int) $model->config_version + 1;
                 $model->preflight_status = 'never';
                 $model->preflight_config_version = null;
+                $model->preflight_credential_fingerprint = null;
             }
             $model->revision = (int) $model->revision + 1;
             $model->updated_by = $request->user()->id;
             $model->save();
 
-            $this->audit->record((int) $request->user()->id, 'connection', $model->id, $changed ? 'rotate' : 'update', $before, $model->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'config_version']) + ['credentials_changed' => $changed], $platform);
+            $this->audit->record((int) $request->user()->id, 'connection', $model->id, $changed ? 'rotate' : 'update', $before, $model->only(['host', 'port', 'socket', 'database', 'prefix', 'tls_mode', 'host_group', 'enabled', 'load_gate_enabled', 'credential_source', 'config_version']) + ['credentials_changed' => $changed], $platform);
 
             return $model;
         });
 
         return response()->json([
             'platform_id' => $platform,
+            'credential_source' => $model->credential_source,
             'config_version' => $model->config_version,
             'preflight_status' => $model->preflightValid() ? 'passed' : $model->preflight_status,
             'host_group' => $model->host_group,

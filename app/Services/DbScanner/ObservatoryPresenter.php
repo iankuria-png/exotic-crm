@@ -45,6 +45,7 @@ class ObservatoryPresenter
             'active_seconds' => round((float) $run->active_seconds, 1),
             'budget_seconds' => (int) $run->budget_seconds,
             'progress' => $progress,
+            'provenance' => ['code' => array_values($metrics['code_versions'] ?? []), 'pack_hash' => $metrics['pack_hash'] ?? null, 'config_hash' => $metrics['config_hash'] ?? null],
             'metrics' => $metrics,
             'findings_new' => (int) ($run->metrics['findings_new'] ?? 0),
             'test_samples' => $run->mode === 'test' ? (array) ($run->test_samples ?? []) : null,
@@ -127,6 +128,19 @@ class ObservatoryPresenter
     public function finding(DbScanFinding $finding, array $names = []): array
     {
         $evidence = (array) $finding->evidence;
+        if ($finding->behavior === 'cross_market_campaign') {
+            $details = (array) ($evidence['details'] ?? []);
+            $ids = array_values(array_intersect((array) ($details['platform_ids'] ?? []), array_keys($names)));
+            $restricted = count($ids) < count($details['platform_ids'] ?? []);
+            $details['platform_ids'] = $ids;
+            $details['markets'] = count($ids);
+            $details['linked_finding_ids'] = DbScanFinding::query()->whereIn('id', (array) ($details['linked_finding_ids'] ?? []))->whereIn('platform_id', $ids)->pluck('id')->all();
+            if ($restricted) {
+                $details['within_ten_minutes'] = null;
+                $details['scope_restricted'] = true;
+            }
+            $evidence['details'] = $details;
+        }
 
         return [
             'id' => $finding->id,

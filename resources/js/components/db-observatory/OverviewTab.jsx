@@ -79,10 +79,10 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                 />
                 <MetricCard
                     label="Coverage 24h"
-                    value={`${coverage.markets_covered_24h}/${coverage.markets_eligible}`}
-                    hint={coverage.unreachable?.length ? `${coverage.unreachable.length} unreachable` : `${coverage.markets_configured} markets configured`}
-                    subHint="Markets with a finished sweep in the last 24 hours"
-                    tone={coverage.markets_eligible && coverage.markets_covered_24h < coverage.markets_eligible ? 'warning' : 'accent'}
+                    value={`${coverage.markets_complete_24h}/${coverage.markets_total}`}
+                    hint={`${coverage.markets_complete_7d} complete in 7d · ${coverage.markets_unconnected} unconnected`}
+                    subHint={`${coverage.markets_gapped_24h} with gaps in 24h · Standard/Deep, full inventory`}
+                    tone={coverage.markets_total && coverage.markets_complete_24h < coverage.markets_total ? 'warning' : 'accent'}
                 />
                 <MetricCard label="Drift events 24h" value={d.counts.drift_24h} hint="Admins, plugins, theme, settings" tone="slate" onClick={() => onOpenFindings({ status: 'active', kind: 'drift' })} />
                 <MetricCard
@@ -121,6 +121,15 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                 </div>
             </section>
 
+            <div className="grid gap-4 lg:grid-cols-2">
+                <Panel title="Fleet triage" subtitle="Matching findings grouped across markets; roles also match their privileged capability definitions.">
+                    {!d.fleet?.groups?.length ? <Empty title="No fleet findings yet">Scanned markets will appear here.</Empty> : <div className="divide-y divide-slate-100">{d.fleet.groups.slice(0, 8).map((g) => <button type="button" key={g.key} onClick={() => onOpenFindings({ rule_key: g.rule_key, identity: g.identity, definition_hash: g.definition_hash || undefined, status: 'active' })} className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-900">{g.identity}</span><span className="block text-xs text-slate-500">{g.rule_key} · {g.market_names.join(', ')}</span></span><span className="shrink-0 text-xs text-slate-600">{g.findings} findings · {g.markets} markets{g.critical ? ` · ${g.critical} critical` : ''}</span></button>)}</div>}
+                    {d.fleet?.sampled ? <p className="px-4 py-2 text-xs text-amber-800">Summary limited to the 10,000 most recent open findings.</p> : null}
+                </Panel>
+                <Panel title="Shared indicators" subtitle="IPs, usernames, key names and plugins seen in findings on several markets. Shared presence alone does not establish an attack.">
+                    {!d.fleet?.correlations?.length ? <Empty title="No shared indicators yet">Connect and scan more markets to compare evidence.</Empty> : <ul className="divide-y divide-slate-100">{d.fleet.correlations.slice(0, 8).map((c) => <li key={`${c.type}:${c.value}`} className="px-4 py-3"><div className="flex flex-wrap justify-between gap-2"><span className="crm-mono break-all text-sm font-semibold text-slate-900">{c.value}</span><span className="text-xs text-slate-600">{c.markets} markets{c.same_day_markets >= 2 ? ` · ${c.same_day_markets} on one day` : ''}</span></div><p className="mt-1 text-xs text-slate-500">{c.type.replaceAll('_', ' ')} · {c.market_names.join(', ')}</p></li>)}</ul>}
+                </Panel>
+            </div>
             <div className="grid gap-4 xl:grid-cols-[1.55fr_1fr]">
                 <Panel title="Posture by market" subtitle="Open findings by category. Each cell opens the filtered findings." bodyClass="overflow-x-auto p-3">
                     {posture.length === 0 ? (

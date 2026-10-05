@@ -3,9 +3,8 @@
 namespace App\Services\DbScanner\Reader;
 
 /**
- * Everything the reader needs to open one market session. Built only by
- * ScannerCredentialResolver from a provisioned db_scan_connections row, never
- * from the platform's own (writable) payment/sync credentials.
+ * Everything needed for one verified read-only market session. The resolver
+ * selects dedicated credentials or the explicitly opted-in site login.
  */
 final class ReaderTarget
 {

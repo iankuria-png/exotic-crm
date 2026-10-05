@@ -19,6 +19,7 @@ class InventoryMatchers
         'admin_email_drift', 'upload_path_changed', 'yoast_crawl_baseline', 'permalink_drift', 'external_redirects',
         'autoload_size', 'mass_created_posts', 'orphan_authors', 'expired_transients', 'revision_bloat',
         'slug_aliases', 'orphaned_meta', 'action_scheduler_backlog', 'unexpected_tables', 'table_integrity',
+        'invisible_plugins', 'activity_behaviour', 'md5_admin_passwords', 'registration_spam', 'account_campaign', 'email_delivery_health',
         'table_growth', 'role_privilege_risk', 'lookalike_email_domains', 'login_attack_pressure',
     ];
 
@@ -47,6 +48,10 @@ class InventoryMatchers
         $site = $rules->siteHost();
 
         foreach ($c['administrators']['data']['admins'] ?? [] as $admin) {
+            $approved = array_map(fn ($email) => \App\Services\DbScanner\Engine\InventoryCollector::hmac(strtolower($email)), $rules->list('allow.admin_emails', $key));
+            if (in_array($admin['email_token'] ?? '', $approved, true)) {
+                continue;
+            }
             $domain = strtolower((string) $admin['email_domain']);
             $siteLike = $site !== '' && in_array($domain, ['www.'.$site, 'mail.'.$site], true);
             $isFake = $domain === '' || HostContext::matches($domain, $fake) || $siteLike;
@@ -144,17 +149,185 @@ class InventoryMatchers
 
     private function applicationPasswords(string $key, RuleSet $rules, array $c, array $p): array
     {
-        $now = $c['administrators']['data']['app_passwords'] ?? [];
-        $before = ($p['administrators']['complete'] ?? false) ? ($p['administrators']['data']['app_passwords'] ?? []) : null;
         $hits = [];
-        foreach ($now as $userId => $length) {
-            $changed = $before === null ? null : (! isset($before[$userId]) ? 'added' : ((int) $before[$userId] !== (int) $length ? 'changed' : null));
-            $hits[] = $this->hit($key, $changed ? 'Administrator application-password metadata '.$changed.' since the previous snapshot' : 'Administrator has application passwords (API access that bypasses login)', 'usermeta', 'app_passwords:'.$userId, [
-                'user_id' => (int) $userId, 'metadata_bytes' => (int) $length, 'change' => $changed ?? 'baseline',
-            ], ['app_password_metadata'], 'usermeta.app_passwords', (int) $userId, $changed ? 'strong' : 'needs_review');
+
+        $trustedIps = $rules->list('allow.crm_ips', $key);
+        foreach ($c['app_passwords']['data'] ?? [] as $entry) {
+            $name = (string) $entry['name'];
+            $ips = array_filter([$entry['created_ip'] ?? null, $entry['last_ip'] ?? null]);
+            $external = array_values(array_diff($ips, $trustedIps));
+            $deceptive = (bool) preg_match('/system.?key|do.?not.?delete|injector|bootstrap|xr-auto/i', $name);
+            // A CRM name family still requires every recorded IP to be trusted; deceptive names never bypass.
+            if (preg_match('/^(?:EWMS|Exotic[ -]CRM(?: Sync)?)$/i', $name) && ! $deceptive && $external === [] && $ips !== []) {
+                continue;
+            }
+            $risk = ! $entry['privileged'] || $deceptive || $external !== [];
+            $hits[] = $this->hit($key, $risk ? 'Suspicious application password on a WordPress account' : 'Application password needs ownership review', 'usermeta', 'app_password:'.$entry['user_id'].':'.$name, $entry,
+                array_values(array_filter([! $entry['privileged'] ? 'non_staff_key' : null, $deceptive ? 'deceptive_key_name' : null, $external !== [] ? 'outside_crm_hosts' : null])),
+                'usermeta.app_passwords', $entry['user_id'], $risk ? 'strong' : 'needs_review', $risk ? 'critical' : 'warn', $entry['row_id']);
         }
 
         return $hits;
+    }
+
+    private function md5AdminPasswords(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $users = array_values(array_map(fn ($a) => ['user_id' => $a['id'], 'login' => $a['login']], array_filter($c['administrators']['data']['admins'] ?? [], fn ($a) => $a['md5_password'] ?? false)));
+
+        return $users === [] ? [] : [$this->hit($key, 'Privileged accounts use legacy unsalted MD5 passwords', 'users', 'md5:market', ['count' => count($users), 'accounts' => array_slice($users, 0, 100), 'list_complete' => count($users) <= 100, 'scheme' => 'legacy_md5'], ['weak_password_scheme'], 'users.privileged', null, 'strong', 'warn')];
+    }
+
+    private function invisiblePlugins(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $o = $c['core_options']['data'] ?? [];
+        $hits = [];
+        foreach ($o['active_plugins'] ?? [] as $plugin) {
+            $slug = explode('/', $plugin)[0];
+            $missing = ($o['plugin_inventory_present'] ?? false) && ! in_array($plugin, $o['plugin_checked'] ?? [], true);
+            $versionless = in_array($plugin, $o['versionless_plugins'] ?? [], true) || in_array($slug, $o['versionless_plugins'] ?? [], true);
+            if (! $missing && ! $versionless) {
+                continue;
+            }
+            $hits[] = $this->hit($key, 'Active plugin entry with no readable plugin, confirm on disk', 'options', 'invisible:'.$plugin,
+                ['plugin' => $plugin, 'missing_from_update_inventory' => $missing, 'host_agent_version_null' => $versionless],
+                array_values(array_filter([$missing ? 'missing_update_inventory' : null, $versionless ? 'versionless_plugin' : null])), 'options.core', null, $versionless ? 'strong' : 'needs_review', $versionless ? 'critical' : 'warn');
+        }
+
+        return $hits;
+    }
+
+    private function activityBehaviour(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $hits = [];
+        $data = $c['activity.behaviour']['data'] ?? [];
+        $approvedActors = array_map(fn ($e) => \App\Services\DbScanner\Engine\InventoryCollector::hmac(strtolower($e)), $rules->list('allow.it_emails', $key));
+        $actions = [];
+        foreach ($data['events'] ?? [] as $event) {
+            $staff = HostContext::matches((string) ($event['email_domain'] ?? ''), $rules->list('allow.admin_email_domains', $key)) || in_array($event['email_token'] ?? '', $approvedActors, true);
+            $approved = $staff && $this->approvedInstall((string) ($event['name'] ?? ''), $rules->list('allow.install_names', $key));
+            if ($event['kind'] === 'web_install' && ! $approved && ($event['seconds_after_login'] ?? null) !== null) {
+                $actions[$event['user_id'].'|'.$event['ip'].'|'.(strtotime($event['at_utc']) - (int) $event['seconds_after_login'])] = true;
+            }
+        }
+        foreach ($data['events'] ?? [] as $event) {
+            $install = $event['kind'] === 'web_install';
+            $ip = (string) ($event['ip'] ?? '');
+            $ioc = NetworkIndicators::matches($ip, $rules->list('ioc.ips', $key));
+            $staffIp = NetworkIndicators::matches($ip, $rules->list('allow.staff_ips', $key)) && ! $ioc;
+            $staff = HostContext::matches((string) ($event['email_domain'] ?? ''), $rules->list('allow.admin_email_domains', $key)) || in_array($event['email_token'] ?? '', $approvedActors, true);
+            $campaignPlugin = $install && $this->approvedInstall((string) ($event['name'] ?? ''), $rules->list('ioc.plugins', $key));
+            $approved = ! $campaignPlugin && $install && $staff && $this->approvedInstall((string) ($event['name'] ?? ''), $rules->list('allow.install_names', $key)) && ! $ioc;
+            $sequence = $install && ($event['seconds_after_login'] ?? null) !== null && ($event['new_ip'] ?? false);
+            $followedByAction = isset($actions[$event['user_id'].'|'.$ip.'|'.strtotime($event['at_utc'])]);
+            $rapidFailure = ($event['seconds_after_failure'] ?? null) !== null && $event['seconds_after_failure'] <= 10;
+            $strong = ! $approved && ($install ? ($campaignPlugin || $ioc || ($sequence && ! $staffIp)) : ($ioc || (! $staffIp && ($followedByAction || ((int) ($event['failed_same_ip'] ?? 0) >= 20) || $rapidFailure))));
+            $title = $install
+                ? ($approved ? 'Approved staff plugin change' : ($sequence ? 'Web plugin/theme change within minutes of a new-IP login' : 'Plugin, theme or ZIP change from a web session'))
+                : ($strong ? 'Untrusted privileged login with attack or takeover evidence' : ($staffIp ? 'Staff login from a confirmed network address' : 'Privileged login from an IP absent from available history'));
+            if ($event['actor_account_missing'] ?? false) {
+                $title .= ' — actor account no longer exists';
+            }
+            $event += ['approved_install' => $approved, 'confirmed_staff_ip' => $staffIp, 'campaign_ip' => $ioc, 'followed_by_privileged_action' => $followedByAction];
+            $hits[] = $this->hit($key, $title, 'aryo_activity_log', 'activity:'.$event['row_id'], $event,
+                [$event['kind'], $approved ? 'approved_staff_install' : ($strong ? 'takeover_sequence' : 'ownership_review')], 'activity.behaviour', $event['user_id'], $strong ? 'strong' : 'needs_review', $strong ? 'critical' : (($approved || $staffIp) ? 'info' : 'warn'), $event['row_id']);
+        }
+        $days = [];
+        foreach ($data['bursts'] ?? [] as $burst) {
+            $day = isset($burst['day_bucket']) ? gmdate('Y-m-d', (int) $burst['day_bucket'] * 86400) : substr($burst['at_utc'] ?? '', 0, 10);
+            $days[$day]['attempts'] = ($days[$day]['attempts'] ?? 0) + (int) $burst['n'];
+            $days[$day]['ips'][] = ['ip' => $burst['ip'], 'attempts' => (int) $burst['n']];
+        }
+        foreach ($days as $day => $stats) {
+            usort($stats['ips'], fn ($a, $b) => $b['attempts'] <=> $a['attempts']);
+            $hits[] = $this->hit($key, 'Daily failed-login pressure across high-volume IPs', 'aryo_activity_log', 'burst:day:'.$day,
+                ['at_utc' => $day.'T00:00:00Z', 'attempts' => $stats['attempts'], 'ip_count' => count($stats['ips']), 'top_ips' => array_slice($stats['ips'], 0, 10)], ['ip_login_burst', 'daily_aggregate'], 'activity.behaviour', null, 'strong', 'warn');
+        }
+
+        return $hits;
+    }
+
+    private function approvedInstall(string $name, array $approved): bool
+    {
+        $normalize = fn ($n) => strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '-', html_entity_decode($n)), '-'));
+        $name = $normalize(preg_replace('/(?:[-_.]v?\d+(?:[._-]\d+)*)?\.zip$/i', '', $name));
+        foreach ($approved as $entry) {
+            if ($name === $normalize($entry)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function registrationSpam(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $s = $c['users.registration_health']['data'] ?? [];
+        $bursts = $c['activity.behaviour']['data']['registrations'] ?? [];
+        $count = (int) ($s['suspicious'] ?? 0);
+        $total = (int) ($s['total'] ?? 0);
+        if ($count < $rules->threshold($key, 'min_accounts', 20) && $bursts === []) {
+            return [];
+        }
+        usort($bursts, fn ($a, $b) => (int) $b['n'] <=> (int) $a['n']);
+        $ioc = array_filter($bursts, fn ($b) => NetworkIndicators::matches((string) $b['ip'], $rules->list('ioc.ips', $key)));
+
+        return [$this->hit($key, 'Registration spam or concentrated account creation', 'users', 'registration:market', [
+            'suspicious_accounts' => $count, 'total_accounts' => $total, 'percentage' => $total > 0 ? round(100 * $count / $total, 2) : 0,
+            'users_can_register' => $c['core_options']['data']['users_can_register'] ?? null,
+            'top_registration_ips' => array_slice($bursts, 0, 10), 'ioc_registration_count' => array_sum(array_column($ioc, 'n')), 'registration_window' => '30 days ending at latest available activity',
+        ], ['all_account_counts', 'registration_spam'], 'users.registration_health', null, 'strong', ($count >= 1000 || $ioc !== []) ? 'critical' : 'warn')];
+    }
+
+    private function accountCampaign(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $accounts = [];
+        $data = $c['activity.behaviour']['data'] ?? [];
+        foreach (['login_windows', 'success_ips', 'control_ips'] as $type) {
+            foreach ($data[$type] ?? [] as $r) {
+                $staff = HostContext::matches((string) ($r['email_domain'] ?? ''), $rules->list('allow.admin_email_domains', $key));
+                $ioc = NetworkIndicators::matches((string) ($r['ip'] ?? ''), $rules->list('ioc.ips', $key));
+                $rotating = $type === 'login_windows' && ! $staff && (int) $r['n'] >= 10 && (int) $r['ips'] >= 5 && ((int) $r['last_time'] - (int) $r['first_time']) / max(1, (int) $r['n'] - 1) <= 30;
+                $control = $type === 'control_ips';
+                if (! $ioc && ! $rotating && ! $control) {
+                    continue;
+                }
+                $id = (int) $r['user_id'];
+                $accounts[$id] ??= ['user_id' => $id, 'login' => $r['login'] ?? null, 'at_utc' => $r['at_utc'], 'ioc_successes' => 0, 'ips' => [], 'rotating_windows' => 0, 'control_failures' => 0];
+                $a = &$accounts[$id];
+                $a['at_utc'] = min($a['at_utc'], $r['at_utc']);
+                if ($ioc && $type === 'success_ips') {
+                    $a['ioc_successes'] += (int) $r['n'];
+                    $a['ips'][$r['ip']] = true;
+                }
+                $a['rotating_windows'] += $rotating ? 1 : 0;
+                $a['control_failures'] += $control ? (int) $r['failures'] : 0;
+                if ($control && isset($r['ip'])) {
+                    $a['ips'][$r['ip']] = true;
+                }
+                unset($a);
+            }
+        }
+        $hits = [];
+        foreach ($accounts as $id => $a) {
+            $a['ips'] = array_slice(array_keys($a['ips']), 0, 30);
+            $hits[] = $this->hit($key, 'Account logins match campaign or rapid rotating-IP behaviour', 'aryo_activity_log', 'campaign:account:'.$id, $a,
+                array_values(array_filter([$a['ioc_successes'] ? 'campaign_ip_success' : null, $a['rotating_windows'] ? 'rotating_ip_login_burst' : null, $a['control_failures'] ? 'success_then_other_user_failures' : null])), 'activity.behaviour', $id, 'strong', 'critical');
+        }
+
+        return $hits;
+    }
+
+    private function emailDeliveryHealth(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $s = $c['activity.behaviour']['data']['email_health'] ?? [];
+        $failed = (int) ($s['failed'] ?? 0);
+        $total = $failed + (int) ($s['sent'] ?? 0);
+        $highRate = $total >= $rules->threshold($key, 'min_messages', 20) && $failed / max(1, $total) >= $rules->threshold($key, 'failure_rate', 0.25);
+        if (! $highRate && (int) ($s['smtp_auth'] ?? 0) === 0) {
+            return [];
+        }
+
+        return [$this->hit($key, $highRate ? 'Email delivery failure rate is high' : 'SMTP authentication failures are recorded', 'aryo_activity_log', 'email:health', $s + ['high_failure_rate' => $highRate, 'low_sample_volume' => $total < $rules->threshold($key, 'min_messages', 20), 'failure_rate' => round($failed / max(1, $total), 4), 'window' => '30 days ending at latest available activity'], ['email_health', (int) ($s['smtp_auth'] ?? 0) > 0 ? 'smtp_authentication_failures' : 'delivery_failures'], 'activity.behaviour', null, 'strong', 'warn')];
     }
 
     private function openRegistration(string $key, RuleSet $rules, array $c, array $p): array
@@ -193,7 +366,12 @@ class InventoryMatchers
                 'role' => $role['role'],
                 'members' => $role['members'],
                 'privileged_caps' => $role['privileged_caps'],
-            ], array_map(fn ($cap) => 'cap:'.$cap, $role['privileged_caps']), 'users.privileged', null, 'needs_review', $code !== [] && $role['members'] > 0 ? 'critical' : null);
+                'definition_hash' => hash('sha256', implode('|', (function ($caps) {
+                    sort($caps);
+
+                    return $caps;
+                })($role['privileged_caps']))),
+            ], array_map(fn ($cap) => 'cap:'.$cap, $role['privileged_caps']), 'users.privileged', null, 'needs_review', 'warn');
         }
 
         return $hits;
@@ -211,7 +389,11 @@ class InventoryMatchers
         $hits = [];
         foreach ($c['email_domains']['data'] ?? [] as $row) {
             $domain = strtolower((string) $row['domain']);
-            if ($domain === '' || (int) $row['accounts'] < $min || $domain === $site) {
+            $accounts = (int) $row['accounts'];
+            if ($domain === 'www.'.$site) {
+                $accounts -= (int) ($row['onboard_accounts'] ?? 0);
+            }
+            if ($domain === '' || $accounts < $min || $domain === $site) {
                 continue;
             }
             $reason = null;
@@ -224,7 +406,7 @@ class InventoryMatchers
             }
             if ($reason) {
                 $hits[] = $this->hit($key, 'Accounts use an email domain the network may not control', 'users', 'email_domain:'.$domain, [
-                    'domain' => $domain, 'accounts' => (int) $row['accounts'], 'site' => $site, 'reason' => $reason,
+                    'domain' => $domain, 'accounts' => $accounts, 'site' => $site, 'reason' => $reason,
                 ], [$reason], 'users.email_domains', null, 'needs_review');
             }
         }
@@ -294,7 +476,9 @@ class InventoryMatchers
             if ($this->listed($dir, $allow) || $this->listed($path, $allow)) {
                 continue;
             }
-            $hits[] = $this->hit($key, 'Active plugin not on the approved plugin list', 'options', 'plugin:'.$path, ['plugin' => $path], ['not_allowlisted'], 'options.core', null, 'needs_review');
+            $public = in_array($dir, $rules->list('reference.public_plugins', $key), true);
+            $ioc = in_array($dir, $rules->list('ioc.plugins', $key), true);
+            $hits[] = $this->hit($key, $public ? 'Public repository plugin needs ownership review' : 'Active plugin not on the approved plugin list', 'options', 'plugin:'.$path, ['plugin' => $path, 'repository_reviewed' => $public], [$ioc ? 'campaign_plugin' : 'not_allowlisted'], 'options.core', null, $ioc ? 'strong' : 'needs_review', $ioc ? 'critical' : 'warn');
         }
 
         return $hits;
@@ -507,7 +691,8 @@ class InventoryMatchers
             if (HostContext::matches($r['host'], $network)) {
                 continue;
             }
-            $hits[] = $this->hit($key, 'Yoast redirect sends a site path to an external domain', 'options', 'redirect:'.$r['origin'], $r, ['external_redirect', 'host:'.$r['host']], 'options.core', null, 'strong');
+            $partner = (bool) preg_match('~^/?partners(?:/|$)~i', (string) $r['origin']);
+            $hits[] = $this->hit($key, $partner ? 'Partner link-swap redirect needs business review' : 'Yoast redirect sends a site path to an external domain', 'options', 'redirect:'.$r['origin'], $r, [$partner ? 'partner_link_swap' : 'external_redirect', 'host:'.$r['host']], 'options.core', null, $partner ? 'needs_review' : 'strong', $partner ? 'info' : null);
             if (count($hits) >= 100) {
                 break;
             }

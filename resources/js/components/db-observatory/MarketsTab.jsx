@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
+import { connectionTlsDefault, generateReaderPassword, readerCommand, readerSetup } from './connectionSetup';
 import { useToast } from '../ToastProvider';
 import {
     apiError, Drawer, Empty, ErrorState, fmtAgo, fmtBytes, fmtDateTime, humanize, InertCode, Loading, Panel, Status,
@@ -16,6 +17,7 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
     const [result, setResult] = useState(null);
     const [dirty, setDirty] = useState(false);
     const [phase, setPhase] = useState(null);
+    const [setupCommand, setSetupCommand] = useState('');
 
     useEffect(() => {
         if (!row || dirty) return;
@@ -23,8 +25,9 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
             host: c?.host ?? row.suggested.host ?? 'localhost', port: c?.port ?? 3306,
             socket: c?.socket ?? '', database: c?.database ?? row.suggested.database ?? '',
             prefix: c?.prefix ?? row.suggested.prefix ?? 'wp_', username: '', password: '',
-            tls_mode: c?.tls_mode ?? 'none', tls_ca: '', host_group: c?.host_group ?? '',
+            tls_mode: c?.tls_mode ?? connectionTlsDefault(row.suggested.host), tls_ca: '', host_group: c?.host_group ?? '',
             enabled: c?.enabled ?? true, load_gate_enabled: c?.load_gate_enabled ?? true,
+            credential_source: c?.credential_source ?? 'dedicated', site_login_acknowledged: false,
             revision: c?.revision ?? null,
         });
     }, [row?.platform_id, c?.revision, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -61,7 +64,7 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
 
     if (connections.isError) return <ErrorState error={connections.error} onRetry={connections.refetch} />;
     if (connections.isLoading || !form) return <Loading rows={3} />;
-    const change = (key, value) => { setForm({ ...form, [key]: value }); setDirty(true); setResult(null); };
+    const change = (key, value) => { if (['database', 'username', 'password'].includes(key)) setSetupCommand(''); setForm({ ...form, [key]: value }); setDirty(true); setResult(null); };
     const field = (key, label, props = {}) => (
         <label className="block text-xs font-semibold text-slate-600">{label}
             <input className="crm-input mt-1" value={form[key] ?? ''} disabled={save.isPending} onChange={(e) => change(key, e.target.value)} {...props} />
@@ -69,6 +72,7 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
     );
     const shown = result || (!dirty && c?.preflight_error ? { status: 'failed', code: c.preflight_error_code, message: c.preflight_error } : null);
     const ready = !dirty && !save.isPending && (result?.status === 'passed' || (!result && c?.preflight_status === 'passed'));
+    const isSiteLogin = form.credential_source === 'site_login';
     const gateChanged = form.load_gate_enabled !== (c?.load_gate_enabled ?? true);
 
     return (
@@ -78,15 +82,33 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
                 <span className={`rounded-md px-2 py-1 ${ready ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100'}`}>2 · {ready ? 'Connection verified' : 'Save & test'}</span>
                 <span className="rounded-md bg-slate-100 px-2 py-1">3 · Run first scan</span>
             </div>
-            <details className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                <summary className="cursor-pointer font-semibold text-slate-700">First-time cPanel setup</summary>
-                <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-slate-600">
-                    <li>Create a separate database user in cPanel → Manage My Databases.</li>
-                    <li>Under Add User To Database, assign it to <strong>{form.database || 'this market’s database'}</strong>. Select only SELECT and save.</li>
-                    <li>Enter the full username including its cPanel prefix, and the password below.</li>
-                </ol>
-                <p className="mt-2 text-xs text-slate-500">Creating the user alone does not give it access to a database. The scanner checks read-only access before scanning.</p>
-            </details>
+            <fieldset className="space-y-2">
+                <legend className="mb-2 text-sm font-semibold text-slate-900">Credential source</legend>
+                {[
+                    ['dedicated', 'Dedicated reader', 'Recommended · a separate database user with SELECT access only.'],
+                    ['site_login', 'Use this market’s site login', 'Reuse the Market Profile login. Read-only is enforced for each scanner session.'],
+                ].map(([value, title, description]) => <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${form.credential_source === value ? 'border-teal-400 bg-teal-50/50' : 'border-slate-200'}`}>
+                    <input className="mt-1" type="radio" name="credential_source" value={value} checked={form.credential_source === value} disabled={save.isPending || (value === 'site_login' && !row.suggested.site_login_available)} onChange={() => { change('credential_source', value); setSetupCommand(''); }} />
+                    <span><span className="block text-sm font-semibold text-slate-900">{title}</span><span className="mt-1 block text-xs leading-5 text-slate-600">{description}</span></span>
+                </label>)}
+            </fieldset>
+            {isSiteLogin ? <section className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-semibold text-amber-950">Site login: read-only enforced by session</p>
+                <p className="text-xs leading-5 text-amber-900">This login can change the site database outside the scanner. The scanner verifies a read-only session and uses one connection at a time. Changing the Market Profile login requires a fresh test.</p>
+                <p className="text-xs text-slate-700">{row.suggested.host} · {row.suggested.database} · {row.suggested.prefix}</p>
+                <label className="flex items-start gap-2 text-sm text-amber-950"><input className="mt-1" type="checkbox" checked={form.site_login_acknowledged} disabled={save.isPending} onChange={(e) => change('site_login_acknowledged', e.target.checked)} />I understand this reuses a writable site login and accept it for this market.</label>
+            </section> : <section className="space-y-3 rounded-lg border border-slate-200 p-3">
+                <div><h4 className="text-sm font-semibold text-slate-900">Create a reader in cPanel</h4><p className="mt-1 text-xs leading-5 text-slate-600">Generate a new login, then run both commands in this market’s cPanel Terminal. Credentials stay in this form until you save.</p></div>
+                <button type="button" className="crm-btn-secondary" disabled={save.isPending || !readerSetup(form.database)} onClick={() => {
+                    const setup = readerSetup(form.database);
+                    const password = generateReaderPassword();
+                    setForm({ ...form, username: setup.username, password }); setDirty(true); setResult(null);
+                    setSetupCommand(readerCommand(form.database, setup.username, password));
+                }}>Generate reader setup</button>
+                {setupCommand ? <div className="space-y-2"><p className="text-xs text-slate-600">Run on the market’s database server as cPanel account <strong>{readerSetup(form.database)?.account}</strong>. Check each response reports status 1 before saving.</p><pre className="crm-mono max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">{setupCommand}</pre><button type="button" className="crm-btn-secondary" onClick={async () => { try { await navigator.clipboard.writeText(setupCommand); toast.success('Reader commands copied.'); } catch { toast.error('Select the commands and copy them manually.'); } }}>Copy commands</button><p className="text-xs text-slate-500">If this reader already exists, create a different named reader in cPanel and enter it below.</p></div> : null}
+                {!readerSetup(form.database) ? <p className="text-xs text-slate-500">Enter a cPanel database name such as account_wp123 to generate commands, or enter an existing reader below.</p> : null}
+            </section>}
+            {!isSiteLogin ? <>
             <div className="grid gap-3 sm:grid-cols-2">
                 {field('host', 'Database host', { placeholder: 'localhost or db.example.com' })}
                 {field('database', 'Database name')}
@@ -95,7 +117,8 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
                 {field('username', c?.username_configured ? 'Username · saved' : 'Full database username', { autoComplete: 'off', placeholder: c?.username_configured ? 'Leave empty to keep saved username' : 'e.g. exotickenya_crm_scanner_kenya' })}
                 {field('password', c?.password_configured ? 'Password · saved' : 'Database password', { type: 'password', autoComplete: 'new-password', placeholder: c?.password_configured ? 'Leave empty to keep saved password' : 'Password for the database user' })}
             </div>
-            <p className="text-xs text-slate-500">Saved credentials are encrypted and never displayed. Enter replacements only when changing them. “localhost” means the database server on the CRM host.</p>
+            <p className="text-xs text-slate-500">Saved credentials are encrypted and never displayed. Enter replacements only when changing them. “localhost” means the database server on the CRM host. For markets on another cPanel server, enter its database hostname and authorize the CRM host in cPanel Remote Database Access.</p>
+            </> : null}
             <label className="block text-xs font-semibold text-slate-600">Connection security
                 <select className="crm-select mt-1 w-full" value={form.tls_mode} disabled={save.isPending} onChange={(e) => change('tls_mode', e.target.value)}>
                     <option value="none">Local connection (no TLS)</option>
@@ -105,13 +128,13 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
             {form.tls_mode === 'verify' ? <label className="block text-xs font-semibold text-slate-600">CA certificate (PEM, optional; leave blank to keep saved)
                 <textarea className="crm-input crm-mono mt-1 min-h-[5rem] text-xs" value={form.tls_ca} disabled={save.isPending} onChange={(e) => change('tls_ca', e.target.value)} />
             </label> : null}
-            <details className="text-sm text-slate-600">
+            {!isSiteLogin ? <details className="text-sm text-slate-600">
                 <summary className="cursor-pointer font-semibold">Advanced connection settings</summary>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {field('socket', 'Unix socket (optional)', { placeholder: 'Leave empty to use the server default' })}
                     {field('host_group', 'Shared database host group', { placeholder: 'Automatic from host' })}
                 </div>
-            </details>
+            </details> : null}
             <section className={`rounded-lg border px-4 py-3 ${form.load_gate_enabled ? 'border-slate-200' : 'border-amber-300 bg-amber-50'}`}>
                 <div className="flex items-center justify-between gap-4">
                     <div><h4 className="text-sm font-semibold text-slate-900">Load gate</h4><p className="mt-1 text-xs text-slate-600">{form.load_gate_enabled ? 'Pause this market when platform load is high.' : 'Ignore platform load for this market’s checks and scans.'}</p></div>
@@ -123,8 +146,8 @@ function ConnectionForm({ platformId, onSaved, onScan }) {
             </section>
             <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={form.enabled} disabled={save.isPending} onChange={(e) => change('enabled', e.target.checked)} />Enable this market for scans after its connection passes</label>
             <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="crm-btn-primary" disabled={save.isPending} onClick={() => { setResult(null); save.mutate(true); }}>{phase === 'testing' ? 'Testing connection…' : phase === 'saving' ? 'Saving…' : 'Save & test connection'}</button>
-                <button type="button" className="crm-btn-secondary" disabled={save.isPending} onClick={() => save.mutate(false)}>Save settings</button>
+                <button type="button" className="crm-btn-primary" disabled={save.isPending || (isSiteLogin && !form.site_login_acknowledged)} onClick={() => { setResult(null); save.mutate(true); }}>{phase === 'testing' ? 'Testing connection…' : phase === 'saving' ? 'Saving…' : 'Save & test connection'}</button>
+                <button type="button" className="crm-btn-secondary" disabled={save.isPending || (isSiteLogin && !form.site_login_acknowledged)} onClick={() => save.mutate(false)}>Save settings</button>
                 {dirty ? <span className="text-xs text-amber-800">Unsaved changes</span> : c?.preflight_at ? <span className="text-xs text-slate-500">Last checked {fmtAgo(c.preflight_at)}</span> : null}
             </div>
             {shown ? <div role="status" className={`rounded-lg border px-3 py-3 text-sm ${shown.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
@@ -221,11 +244,16 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
     const [open, setOpen] = useState(null);
     const [view, setView] = useState('inventory');
     const [filter, setFilter] = useState('');
+    const [connectionFilter, setConnectionFilter] = useState('');
 
     if (query.isLoading) return <Loading rows={6} />;
     if (query.isError) return <ErrorState error={query.error} onRetry={query.refetch} />;
 
-    const rows = (query.data.data || []).filter((m) => !filter || m.market.toLowerCase().includes(filter.toLowerCase()));
+    const rows = (query.data.data || []).filter((m) => {
+        const matches = !filter || `${m.market} ${m.domain}`.toLowerCase().includes(filter.toLowerCase());
+        const verified = m.connection.configured && m.connection.preflight_status === 'passed';
+        return matches && (!connectionFilter || (connectionFilter === 'setup' ? !verified : verified));
+    });
     const selected = (query.data.data || []).find((m) => m.platform_id === open);
 
     return (
@@ -233,7 +261,7 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
             <Panel
                 title="Markets"
                 subtitle="Connection, coverage freshness and open findings per market. A stale or incomplete sweep is never shown as healthy."
-                action={<input aria-label="Filter markets" className="crm-input w-48 py-1.5" placeholder="Filter markets" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+                action={<div className="flex flex-wrap gap-2"><input aria-label="Filter markets" className="crm-input w-48 py-1.5" placeholder="Market or domain" value={filter} onChange={(e) => setFilter(e.target.value)} /><select aria-label="Connection status" className="crm-select py-1.5 text-sm" value={connectionFilter} onChange={(e) => setConnectionFilter(e.target.value)}><option value="">All connections</option><option value="setup">Needs setup or test</option><option value="verified">Verified</option></select></div>}
                 bodyClass="overflow-x-auto"
             >
                 {rows.length === 0 ? <Empty title="No markets in your scope" /> : (
@@ -259,6 +287,7 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                                         <td className="px-2 py-2.5">
                                             {m.connection.configured ? (
                                                 <div className="flex flex-wrap items-center gap-1">
+                                                    <span className="block w-full text-xs text-slate-600">{m.connection.credential_source === 'site_login' ? 'Site login: read-only enforced by session' : 'Dedicated reader'}</span>
                                                     <Status value={m.connection.preflight_status} label={m.connection.preflight_status === 'passed' ? 'Connection verified' : `Connection ${m.connection.preflight_status === 'never' ? 'not tested' : m.connection.preflight_status}`} />
                                                     {m.connection.load_gate_enabled === false ? <span className="mt-1 block text-xs font-semibold text-amber-800">Load gate off</span> : null}
                                                     {!m.connection.enabled ? <Status value="stopped" label="disabled" /> : null}

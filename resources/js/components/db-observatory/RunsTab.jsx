@@ -253,6 +253,8 @@ export function RunDetail({ runId, canOperate, onBack, onOpenFindings }) {
                         <span className="capitalize">{run.profile}</span>
                         {run.mode !== 'scan' ? <span className="rounded bg-violet-50 px-1.5 text-violet-700">{run.mode}</span> : null}
                         <span>pass {run.pass_id}</span>
+                        {run.provenance?.code?.map((c) => <span key={c.source_hash} className="crm-mono text-xs" title={`Source ${c.source_hash}`}>Code {c.commit.slice(0, 8)}</span>)}
+                        {run.provenance?.pack_hash ? <span className="crm-mono text-xs" title={run.provenance.pack_hash}>Pack {run.provenance.pack_hash.slice(0, 12)}</span> : null}
                         {run.db_engine ? <span className="crm-mono text-xs">{run.db_engine}</span> : null}
                         {run.error_code ? <span className="text-rose-700">{humanize(run.error_code)}</span> : null}
                     </p>

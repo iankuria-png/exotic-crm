@@ -26,6 +26,22 @@ class DbScanConnection extends Model
 
     protected $hidden = ['username', 'password', 'tls_ca'];
 
+    public function executionHostGroup(): string
+    {
+        return $this->credential_source === 'site_login'
+            ? \App\Services\DbScanner\Reader\ScannerCredentialResolver::normalizeHostGroup(null, $this->platform()->firstOrFail()->db_host, $this->socket)
+            : (string) $this->host_group;
+    }
+
+    public function credentialFingerprint(): string
+    {
+        $platform = $this->platform()->firstOrFail();
+
+        return hash_hmac('sha256', json_encode([
+            $platform->getConnectionConfig(), $platform->domain,
+        ]), (string) config('app.key'));
+    }
+
     public function platform()
     {
         return $this->belongsTo(Platform::class);
@@ -35,6 +51,8 @@ class DbScanConnection extends Model
     public function preflightValid(): bool
     {
         return $this->preflight_status === 'passed'
-            && (int) $this->preflight_config_version === (int) $this->config_version;
+            && (int) $this->preflight_config_version === (int) $this->config_version
+            && ($this->credential_source !== 'site_login'
+                || hash_equals((string) $this->preflight_credential_fingerprint, $this->credentialFingerprint()));
     }
 }

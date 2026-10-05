@@ -63,7 +63,7 @@ class DbScannerEngineTest extends TestCase
         $this->assertNotNull($webshell);
         $this->assertSame('strong', $webshell->confidence);
         $this->assertSame('malware', $webshell->pack);
-        $this->assertSame('1.0.0', $webshell->pack_version);
+        $this->assertSame('1.1.0', $webshell->pack_version);
         $this->assertSame('critical', $webshell->severity);
 
         $this->assertTrue($by('malware.remote_loader')->contains(fn ($f) => $f->subject['row_id'] === $ids['external_script'] && $f->confidence === 'strong'));

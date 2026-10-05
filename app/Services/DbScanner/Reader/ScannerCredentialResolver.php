@@ -6,11 +6,9 @@ use App\Models\DbScanConnection;
 use App\Services\DbScanner\ScannerSettings;
 
 /**
- * Builds reader targets from provisioned scanner connections only.
- *
- * There is deliberately no fallback to `platforms.db_user/db_pass`: those are
- * the writable credentials payments and sync rely on, and the scanner must
- * never run on them.
+ * Dedicated credentials are the default; there is no automatic fallback.
+ * Administrators may explicitly opt into site-login credentials. Both modes
+ * use the same verified read-only session and closed SELECT/SHOW compiler.
  */
 class ScannerCredentialResolver
 {
@@ -19,20 +17,22 @@ class ScannerCredentialResolver
     public function forConnection(DbScanConnection $connection): ReaderTarget
     {
         $driver = $connection->driver === 'sqlite' ? 'sqlite' : 'mysql';
+        $site = $connection->credential_source === 'site_login'
+            ? $connection->platform()->firstOrFail()->getConnectionConfig() : null;
 
         return new ReaderTarget(
             platformId: (int) $connection->platform_id,
             driver: $driver,
-            host: $connection->host,
+            host: $site['host'] ?? $connection->host,
             port: (int) ($connection->port ?: 3306),
             socket: $connection->socket ?: null,
-            database: (string) $connection->database,
-            username: (string) ($connection->username ?? ''),
-            password: (string) ($connection->password ?? ''),
-            prefix: (string) ($connection->prefix ?: 'wp_'),
+            database: (string) ($site['database'] ?? $connection->database),
+            username: (string) ($site['username'] ?? $connection->username ?? ''),
+            password: (string) ($site['password'] ?? $connection->password ?? ''),
+            prefix: (string) ($site !== null ? ($site['prefix'] ?: 'wp_') : ($connection->prefix ?: 'wp_')),
             tlsMode: (string) ($connection->tls_mode ?: 'none'),
             tlsCa: $connection->tls_ca ?: null,
-            hostGroup: (string) $connection->host_group,
+            hostGroup: $connection->executionHostGroup(),
             configVersion: (int) $connection->config_version,
             statementTimeoutSeconds: $this->settings->statementTimeout(),
             connectTimeoutSeconds: (int) config('db_scanner.envelope.connect_timeout_seconds', 5),

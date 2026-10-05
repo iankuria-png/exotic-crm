@@ -21,10 +21,11 @@ use Illuminate\Support\Str;
  * credential gets approved), but never during the emergency stop, and still
  * under fresh ops/market health and the same host/market leases as scans.
  * It reads identity, grants, server/session settings and schema names —
- * never application row values — and creates no findings.
+ * plus the two site identity options, and creates no findings.
  *
  * Proof is valid only for the exact connection config version it tested;
- * rotating credentials invalidates it.
+ * rotating credentials invalidates it. Site-login proofs additionally bind
+ * the current Market Profile credentials and domain through a keyed fingerprint.
  */
 class Preflight
 {
@@ -74,16 +75,17 @@ class Preflight
                 'pass_id' => $pass->id, 'platform_id' => $connection->platform_id, 'mode' => 'preflight', 'profile' => 'quick',
                 'status' => 'running', 'generation' => 1, 'owner_token' => $token, 'started_at' => now(), 'heartbeat_at' => now(),
                 'connection_config_version' => $connection->config_version, 'budget_seconds' => 30,
-                'deadline_at' => now()->addMinutes(5), 'metrics' => [],
+                'deadline_at' => now()->addMinutes(5), 'metrics' => ['code_versions' => [\App\Services\DbScanner\ScannerProvenance::code()]],
             ]);
             $this->admission->claimMarket((int) $connection->platform_id, (int) $run->id);
-            if (! $this->admission->acquireSlots($run, $token, (string) $connection->host_group)) {
+            if (! $this->admission->acquireSlots($run, $token, $connection->executionHostGroup())) {
                 throw new HostBusyException;
             }
 
             return $run;
         });
 
+        $fingerprint = $connection->credential_source === 'site_login' ? $connection->credentialFingerprint() : null;
         $reader = new MarketDbReader($this->credentials->forConnection($connection));
         $capabilities = [];
         $code = null;
@@ -106,7 +108,7 @@ class Preflight
 
             $database = (string) $reader->fetchScalar($reader->compiler()->databaseName(), 'db');
             $grants = array_map(fn ($row) => (string) array_values($row)[0], $reader->select($reader->compiler()->grants()));
-            [$grantsOk, $grantProblem] = $this->evaluateGrants($grants, $database, $reader->compiler()->dialect());
+            [$grantsOk, $grantProblem] = $this->evaluateGrants($grants, $database, $reader->compiler()->dialect(), $connection->credential_source ?: 'dedicated');
             $capabilities['grants_ok'] = $grantsOk;
             $capabilities['grant_summary'] = array_map(fn ($g) => mb_substr(preg_replace('/IDENTIFIED BY .*/i', 'IDENTIFIED BY [redacted]', $g) ?? $g, 0, 200), array_slice($grants, 0, 10));
 
@@ -115,9 +117,27 @@ class Preflight
             $capabilities['trigger_visibility_exhaustive'] = $reader->compiler()->dialect() === 'sqlite';
             $capabilities['routine_visibility_exhaustive'] = false;
 
+            $capabilities['credential_source'] = $connection->credential_source ?: 'dedicated';
+            $capabilities['max_scanner_connections'] = 1;
+            $identityProblem = null;
+            if ($grantsOk && $schema->unsupportedReason() === null) {
+                $identity = $reader->select($reader->compiler()->namedRows($schema->table('options'), 'option_id', 'option_name', 'option_value', ['siteurl', 'home'], 2048));
+                $expected = \App\Services\DbScanner\Malware\HostContext::hostOf(str_contains((string) $platform->domain, '://') ? (string) $platform->domain : 'https://'.$platform->domain);
+                $hosts = [];
+                foreach ($identity as $row) {
+                    $hosts[$row['name']] = \App\Services\DbScanner\Malware\HostContext::hostOf((string) $row['v']);
+                }
+                $capabilities['site_identity'] = ['expected' => $expected, 'observed' => $hosts];
+                if ($expected === '' || count($hosts) !== 2 || array_filter($hosts, fn ($host) => $host !== $expected)) {
+                    $identityProblem = 'Rejected: siteurl/home do not match this market’s domain. Check that you selected the correct market database.';
+                }
+            }
             if (! $grantsOk) {
                 $code = 'grants_not_select_only';
-                $message = 'Rejected: '.$grantProblem.' The scanner requires a dedicated account with SELECT on this schema only.';
+                $message = 'Rejected: '.$grantProblem.' Use privileges limited to this market schema and the selected credential policy.';
+            } elseif ($identityProblem !== null) {
+                $code = 'site_identity_mismatch';
+                $message = $identityProblem;
             } elseif ($schema->unsupportedReason() === 'missing_core_tables') {
                 $code = 'prefix_mismatch';
                 $message = 'Rejected: core WordPress tables were not found for prefix '.$schema->prefix.'.'.($schema->prefixes ? ' Found prefixes: '.implode(', ', array_slice($schema->prefixes, 0, 5)).'.' : '');
@@ -137,12 +157,13 @@ class Preflight
         }
 
         $passed = $code === null;
-        DB::transaction(function () use ($connection, $run, $passed, $code, $capabilities, $actorId, $message, $metrics) {
+        DB::transaction(function () use ($connection, $run, $passed, $code, $capabilities, $actorId, $message, $metrics, $fingerprint) {
             $before = ['preflight_status' => $connection->preflight_status, 'preflight_config_version' => $connection->preflight_config_version];
             DbScanConnection::query()->whereKey($connection->id)->update([
                 'preflight_status' => $passed ? 'passed' : 'failed',
                 'preflight_at' => now(),
                 'preflight_config_version' => $passed ? $connection->config_version : null,
+                'preflight_credential_fingerprint' => $passed ? $fingerprint : null,
                 'preflight_error_code' => $code,
                 'preflight_error' => $passed ? null : mb_substr($message, 0, 300),
                 'capabilities' => json_encode($capabilities),
@@ -150,7 +171,7 @@ class Preflight
             ]);
 
             $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
-            $locked->forceFill(['metrics' => $metrics, 'db_engine' => $capabilities['engine'] ?? null])->save();
+            $locked->forceFill(['metrics' => array_merge((array) $locked->metrics, $metrics), 'db_engine' => $capabilities['engine'] ?? null])->save();
             $this->log->log($locked, $passed ? 'info' : 'warn', $message, ['code' => $code]);
             $this->terminator->terminateLocked($locked, $passed ? 'completed' : 'failed', $code);
 
@@ -170,7 +191,7 @@ class Preflight
      * @param  array<int, string>  $grants
      * @return array{0: bool, 1: ?string}
      */
-    public function evaluateGrants(array $grants, string $database, string $dialect): array
+    public function evaluateGrants(array $grants, string $database, string $dialect, string $source = 'dedicated'): array
     {
         if ($dialect === 'sqlite') {
             return [true, null];
@@ -192,7 +213,7 @@ class Preflight
             $on = trim(substr($g, strpos($g, ' ON ') + 4));
             $on = trim(explode(' TO ', $on)[0]);
 
-            foreach (self::FORBIDDEN_PRIVILEGES as $forbidden) {
+            foreach ($source === 'site_login' ? [] : self::FORBIDDEN_PRIVILEGES as $forbidden) {
                 if (preg_match('/(^|,\s*)'.preg_quote($forbidden, '/').'(\s*\(|\s*,|$)/', $privileges)) {
                     return [false, 'The account has '.$forbidden.' privileges.'];
                 }
@@ -211,11 +232,14 @@ class Preflight
             if (strcasecmp(str_replace('\\_', '_', $schema), $database) !== 0) {
                 return [false, 'The account has privileges on another schema ('.$schema.').'];
             }
-            $remaining = array_diff(array_map('trim', explode(',', preg_replace('/\([^)]*\)/', '', $privileges) ?? $privileges)), ['SELECT', 'SHOW VIEW']);
+            $allowed = $source === 'site_login'
+                ? ['SELECT', 'SHOW VIEW', 'ALL PRIVILEGES', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'INDEX', 'REFERENCES', 'CREATE TEMPORARY TABLES', 'LOCK TABLES', 'EXECUTE', 'CREATE ROUTINE', 'ALTER ROUTINE', 'CREATE VIEW', 'TRIGGER', 'EVENT', 'DELETE HISTORY']
+                : ['SELECT', 'SHOW VIEW'];
+            $remaining = array_diff(array_map('trim', explode(',', preg_replace('/\([^)]*\)/', '', $privileges) ?? $privileges)), $allowed);
             if ($remaining !== []) {
                 return [false, 'Unexpected privileges: '.implode(', ', $remaining).'.'];
             }
-            if (str_contains($privileges, 'SELECT')) {
+            if (str_contains($privileges, 'SELECT') || ($source === 'site_login' && $privileges === 'ALL PRIVILEGES')) {
                 $hasSchemaSelect = true;
             }
         }

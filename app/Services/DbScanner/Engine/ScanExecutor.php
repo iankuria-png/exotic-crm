@@ -127,7 +127,7 @@ class ScanExecutor
             }
 
             $generation = (int) $locked->generation + 1;
-            if (! $this->admission->acquireSlots($locked, $token, (string) $connection->host_group)) {
+            if (! $this->admission->acquireSlots($locked, $token, $connection->executionHostGroup())) {
                 $backoff = config('db_scanner.envelope.contention_backoff_seconds', [15, 60]);
                 $next = now()->addSeconds(random_int((int) $backoff[0], (int) $backoff[1]));
                 $locked->forceFill(['status' => 'waiting_lock', 'generation' => $generation, 'next_attempt_at' => $next])->save();
@@ -136,7 +136,13 @@ class ScanExecutor
                 return 'contention';
             }
 
+            $metrics = (array) ($locked->metrics ?? []);
+            $code = \App\Services\DbScanner\ScannerProvenance::code();
+            $versions = $metrics['code_versions'] ?? [];
+            $versions[$code['source_hash']] = $code;
+            $metrics['code_versions'] = $versions;
             $locked->forceFill([
+                'metrics' => $metrics,
                 'status' => 'running',
                 'generation' => $generation,
                 'owner_token' => $token,

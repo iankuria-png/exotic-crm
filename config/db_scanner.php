@@ -31,6 +31,7 @@ return [
         'chunk_rows' => ['min' => 100, 'max' => 1000, 'default' => 1000],
         'chunk_bytes' => 4 * 1024 * 1024,
         'value_bytes' => 64 * 1024,
+        'published_value_bytes' => 1024 * 1024,
         'connect_timeout_seconds' => 5,
         'slice_seconds' => 45,
         'lease_seconds' => 90,

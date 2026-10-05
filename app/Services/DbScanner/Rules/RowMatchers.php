@@ -20,7 +20,7 @@ class RowMatchers
 {
     public const IDS = [
         'webshell', 'remote_loader', 'redirect_overlay', 'obfuscated_payload', 'credential_capture', 'known_ioc',
-        'script_injection', 'unexpected_script', 'spam_lexicon', 'hidden_text', 'seo_meta_injection', 'shortener_links',
+        'banner_exchange', 'script_injection', 'unexpected_script', 'spam_lexicon', 'hidden_text', 'seo_meta_injection', 'shortener_links',
         'comment_links', 'outbound_domains', 'malformed_links', 'retired_parameters', 'ioc_option_names',
         'lookalike_options', 'encoded_payloads', 'serialized_objects', 'code_snippet_stores',
         // Tallied by SurfaceScanner from excluded secret names; no value matcher.
@@ -50,6 +50,7 @@ class RowMatchers
             'obfuscated_payload' => $this->obfuscatedPayload($ruleKey, $rules, $ctx, $a),
             'credential_capture' => $this->credentialCapture($ruleKey, $rules, $ctx, $a),
             'known_ioc' => $this->knownIoc($ruleKey, $rules, $ctx, $a),
+            'banner_exchange' => $this->bannerExchange($ruleKey, $rules, $ctx, $a),
             'script_injection' => $this->scriptInjection($ruleKey, $rules, $ctx, $a),
             'unexpected_script' => $this->unexpectedScript($ruleKey, $rules, $ctx, $a),
             'spam_lexicon' => $this->spamLexicon($ruleKey, $rules, $ctx, $a),
@@ -192,6 +193,9 @@ class RowMatchers
     {
         if ($knownWidget) {
             return $this->hit($key, $rules, $ctx, 'Known third-party widget script from a shared host', $text, $offset, array_merge($signals, ['known_widget']), $chain, 'needs_review', 'third_party_widget', 'warn', extra: ['remote_host' => $host]);
+        }
+        if (in_array($ctx->label('public_exposure'), ['not_public', 'unplaced_or_unknown_widget'], true)) {
+            return $this->hit($key, $rules, $ctx, $title.' (public exposure not established)', $text, $offset, array_merge($signals, ['exposure:'.$ctx->label('public_exposure')]), $chain, 'needs_review', 'stored_loader', 'warn', extra: ['remote_host' => $host]);
         }
         if ($chain === [] && $this->isDormantStore($ctx)) {
             return $this->hit($key, $rules, $ctx, $title.' (stored in a plugin option; runs only if that plugin outputs it)', $text, $offset, array_merge($signals, ['plugin_option']), $chain, 'needs_review', 'stored_loader', 'warn', extra: ['remote_host' => $host]);
@@ -389,6 +393,33 @@ class RowMatchers
     // Content integrity
     // ------------------------------------------------------------------
 
+    private function bannerExchange(string $key, RuleSet $rules, RowContext $ctx, ContentAnalysis $a): ?Hit
+    {
+        if ($ctx->surface !== 'posts.content' || $ctx->label('post_status') !== 'publish') {
+            return null;
+        }
+        $domains = $rules->list('lexicon.banner_exchange_domains', $key);
+        foreach (array_merge($a->scripts(), $a->iframes()) as $embed) {
+            foreach ($domains as $host) {
+                $direct = HostContext::matches($embed['host'], [$host]);
+                // document.write embeds can keep the remote URL inside an inline script.
+                $inline = isset($embed['body']) && preg_match('~(?:https?:)?//(?:www\\?\.)?'.preg_quote($host, '~').'(?=[/\\\\:\s"\'<>]|$)~i', $embed['body']);
+                if ($direct || $inline) {
+                    return $this->hit($key, $rules, $ctx, 'Published page executes a third-party banner exchange', $embed['text'], $embed['offset'], ['banner_exchange', 'executable_embed', 'host:'.$host], $embed['chain'], 'strong', 'third_party_execution', 'critical', ['remote_host' => $host]);
+                }
+            }
+        }
+        foreach ($a->linkHosts() as $host) {
+            if (in_array($host, $domains, true)) {
+                $offset = stripos($a->text, $host);
+
+                return $this->hit($key, $rules, $ctx, 'Published page links to a banner/traffic exchange', $a->text, $offset === false ? null : $offset, ['banner_exchange', 'link_only', 'host:'.$host], [], 'needs_review', 'business_review', 'info', ['remote_host' => $host]);
+            }
+        }
+
+        return null;
+    }
+
     private function scriptInjection(string $key, RuleSet $rules, RowContext $ctx, ContentAnalysis $a): ?Hit
     {
         if (! $this->isPublicContent($ctx)) {
@@ -475,17 +506,37 @@ class RowMatchers
         if (! $this->isPublicContent($ctx)) {
             return null;
         }
-        $pattern = '/<([a-z][a-z0-9]*+)\b[^>]*style\s*=\s*["\'][^"\']*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(\.0+)?\s*[;"\']|text-indent\s*:\s*-\d{3,}|font-size\s*:\s*0(px)?\s*[;"\']|(left|top)\s*:\s*-\d{3,}px)[^"\']*["\'][^>]*>(?:(?!<\/\1>).){0,2000}?<a\s[^>]*href/is';
-        if (@preg_match($pattern, $a->text, $m, PREG_OFFSET_CAPTURE)) {
+        $pattern = '/<([a-z][a-z0-9]*+)\b[^>]*style\s*=\s*["\'][^"\']*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(\.0+)?\s*[;"\']|text-indent\s*:\s*-\d{3,}|font-size\s*:\s*0(px)?\s*[;"\']|(?<![-\w])color\s*:\s*(#fff(?:fff)?|white|transparent|rgba\([^)]*,\s*0\))\s*[;"\']|(left|top)\s*:\s*-\d{3,}px)[^"\']*["\'][^>]*>(?:(?!<\/\1>).){0,2000}?<a\s[^>]*href/is';
+        $anchor = '/<a\b(?=[^>]*\bhref\s*=)[^>]*style\s*=\s*["\'][^"\']*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*[;"\']|font-size\s*:\s*0(?:px)?\s*[;"\']|(?<![-\w])color\s*:\s*(?:#fff(?:fff)?|white|transparent)|(?:left|top)\s*:\s*-\d{3,}px)[^"\']*["\'][^>]*>/is';
+        $candidates = [];
+        foreach ([$pattern, $anchor] as $expression) {
+            if (@preg_match_all($expression, $a->text, $found, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                $candidates = array_merge($candidates, array_slice($found, 0, 100));
+            }
+        }
+        $review = null;
+        foreach ($candidates as $m) {
             // Accessibility helpers (screen-reader text) hide labels, not links.
             if (preg_match('/class\s*=\s*["\'][^"\']*(screen-reader-text|sr-only|visually-hidden)/i', $m[0][0])) {
-                return null;
+                continue;
             }
 
-            return $this->hit($key, $rules, $ctx, 'Links hidden with CSS', $a->text, $m[0][1], ['hidden_style', 'link'], [], 'needs_review', null);
+            $exposure = $ctx->label('public_exposure') ?? (($ctx->label('post_status') === 'publish') ? 'published' : 'unknown');
+            $public = $exposure === 'published' || str_starts_with($exposure, 'rendered_widget:');
+            $concealed = (bool) preg_match('/display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?[;"\']|font-size\s*:\s*0(?:px)?[;"\']|(?:left|top|text-indent)\s*:\s*-\d{3,}|(?<![-\w])color\s*:\s*(?:transparent|rgba\([^)]*,\s*0\))/i', $m[0][0]);
+            $sameColour = preg_match('/(?<![-\w])color\s*:\s*(#fff(?:fff)?|white)\s*[;"\']/i', $m[0][0])
+                && preg_match('/background(?:-color)?\s*:\s*(#fff(?:fff)?|white)\s*[;"\']/i', $m[0][0]);
+            // A white link on the network's dark themes is not proof of concealment.
+            $strong = $public && ($concealed || $sameColour);
+
+            $hit = $this->hit($key, $rules, $ctx, 'Links hidden with CSS', $a->text, $m[0][1], ['hidden_style', 'link', 'exposure:'.$exposure], [], $strong ? 'strong' : 'needs_review', null, $strong ? 'critical' : 'warn', ['exposure' => $exposure, 'details' => ['exposure' => $exposure, 'concealment_confirmed' => (bool) ($concealed || $sameColour)]]);
+            if ($strong) {
+                return $hit;
+            }
+            $review ??= $hit;
         }
 
-        return null;
+        return $review;
     }
 
     private function seoMetaInjection(string $key, RuleSet $rules, RowContext $ctx, ContentAnalysis $a): ?Hit
@@ -496,8 +547,12 @@ class RowMatchers
         }
         $text = $a->text;
 
-        if (preg_match('#https?://|<a\s#i', $text, $m, PREG_OFFSET_CAPTURE)) {
-            return $this->hit($key, $rules, $ctx, 'Link inside an SEO title or description', $text, $m[0][1], ['seo_link'], [], 'needs_review', null);
+        foreach ($a->linkHosts() as $host) {
+            if (! $a->hosts->isNetwork($host)) {
+                $offset = stripos($text, $host);
+
+                return $this->hit($key, $rules, $ctx, 'External link inside an SEO title or description', $text, $offset === false ? null : $offset, ['seo_link', 'host:'.$host], [], 'needs_review', null);
+            }
         }
         foreach (['lexicon.pharma', 'lexicon.casino', 'lexicon.loans', 'lexicon.cn_escort_spam', 'lexicon.japanese_keyword'] as $listKey) {
             foreach ($rules->list($listKey, $key) as $term) {

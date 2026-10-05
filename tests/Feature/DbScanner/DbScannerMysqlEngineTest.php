@@ -146,7 +146,8 @@ class DbScannerMysqlEngineTest extends TestCase
         $this->assertContains('malware.db_webshell', $rules);
         $this->assertContains('malware.redirect_or_overlay', $rules);
         $this->assertTrue(DbScanFinding::query()->where('rule_key', 'malware.remote_loader')->get()->contains(fn ($f) => str_contains(json_encode($f->evidence), 'after-long.test')));
-        $this->assertFalse(DbScanFinding::query()->get()->contains(fn ($f) => str_contains(json_encode($f->evidence), 'beyond-cap.test') || str_contains(json_encode($f->evidence), 'never-read.test')));
+        $this->assertTrue(DbScanFinding::query()->get()->contains(fn ($f) => str_contains(json_encode($f->evidence), 'beyond-cap.test')));
+        $this->assertFalse(DbScanFinding::query()->get()->contains(fn ($f) => str_contains(json_encode($f->evidence), 'never-read.test')));
     }
 
     public function test_preflight_rejects_a_writable_account(): void
@@ -162,5 +163,45 @@ class DbScannerMysqlEngineTest extends TestCase
         $this->assertSame('failed', $result['status']);
         $this->assertSame('grants_not_select_only', $result['code']);
         $this->assertFalse($connection->fresh()->preflightValid());
+    }
+
+    public function test_identity_mismatch_is_rejected_and_www_identity_is_equivalent(): void
+    {
+        $platform = $this->marketPlatform('Wrong site', 'other-market.test');
+        $c = DbScanConnection::query()->create([
+            'platform_id' => $platform->id, 'driver' => 'mysql', 'host' => 'localhost', 'socket' => getenv('DB_SCANNER_IT_SOCKET'),
+            'database' => $this->schema, 'username' => $this->reader, 'password' => $this->readerPassword,
+            'prefix' => 'wp_', 'host_group' => 'local', 'config_version' => 1, 'enabled' => true, 'preflight_status' => 'never',
+        ]);
+        $this->assertSame('site_identity_mismatch', app(Preflight::class)->run($c, null)['code']);
+        $platform->forceFill(['domain' => 'www.mysql-market.test'])->save();
+        $this->assertSame('passed', app(Preflight::class)->run($c->fresh(), null)['status']);
+    }
+
+    public function test_schema_writable_site_login_still_uses_a_verified_read_only_session(): void
+    {
+        $siteUser = 'dbo_site_'.bin2hex(random_bytes(5));
+        $sitePassword = bin2hex(random_bytes(24));
+        $this->root->exec("CREATE USER '".$siteUser."'@'localhost' IDENTIFIED BY '".$sitePassword."'");
+        try {
+            $this->root->exec('GRANT ALL PRIVILEGES ON `'.$this->schema."`.* TO '".$siteUser."'@'localhost'");
+            $platform = $this->marketPlatform('Site login', 'mysql-market.test');
+            $platform->forceFill(['db_host' => 'localhost', 'db_name' => $this->schema, 'db_user' => $siteUser, 'db_pass' => $sitePassword, 'db_prefix' => 'wp_'])->save();
+            $c = DbScanConnection::query()->create([
+                'platform_id' => $platform->id, 'driver' => 'mysql', 'credential_source' => 'site_login', 'host' => 'localhost', 'socket' => getenv('DB_SCANNER_IT_SOCKET'),
+                'database' => $this->schema, 'username' => '', 'prefix' => 'wp_', 'host_group' => 'local', 'config_version' => 1, 'enabled' => true, 'preflight_status' => 'never',
+            ]);
+            $result = app(Preflight::class)->run($c, null);
+            $this->assertSame('passed', $result['status']);
+            $this->assertTrue($result['capabilities']['read_only_verified']);
+            $this->assertSame(1, $result['capabilities']['max_scanner_connections']);
+            $this->assertTrue($c->fresh()->preflightValid());
+            $reader = new MarketDbReader(app(\App\Services\DbScanner\Reader\ScannerCredentialResolver::class)->forConnection($c));
+            $reader->open();
+            $this->assertSame('1', (string) $reader->fetchScalar($reader->compiler()->readOnlyState('transaction_read_only'), 'ro'));
+            $reader->close();
+        } finally {
+            $this->root->exec("DROP USER IF EXISTS '".$siteUser."'@'localhost'");
+        }
     }
 }

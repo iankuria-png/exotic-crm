@@ -56,6 +56,17 @@ class DbObservatoryController extends Controller
             ->pluck('platform_id')
             ->all();
 
+        $inventoryIds = array_keys($names);
+        $fullCoverage = fn ($days) => DbScanSweep::query()->whereIn('platform_id', $inventoryIds ?: [0])
+            ->where('status', 'complete')->whereIn('profile', ['standard', 'deep'])
+            ->where('finished_at', '>=', now()->subDays($days))->distinct()->pluck('platform_id')->all();
+        $gapped = DbScanSweep::query()->whereIn('platform_id', $inventoryIds ?: [0])
+            ->where('status', 'complete_with_gaps')->whereIn('profile', ['standard', 'deep'])
+            ->where('finished_at', '>=', now()->subDay())->distinct()->pluck('platform_id')->count();
+        $fleetRows = $open()->orderByDesc('last_seen_at')->limit(10001)->get(['id', 'platform_id', 'rule_key', 'title', 'severity', 'subject', 'evidence']);
+        $fleet = (new \App\Services\DbScanner\FleetTriage)->summarize($fleetRows->take(10000), $names);
+        $fleet['sampled'] = $fleetRows->count() > 10000;
+        $fleet['findings_considered'] = min(10000, $fleetRows->count());
         $unreachable = DbScanMarketRun::query()
             ->whereIn('platform_id', $eligible ?: [0])
             ->where('status', 'unreachable')
@@ -116,7 +127,13 @@ class DbObservatoryController extends Controller
                 'strong' => $open()->where('category', 'malware')->where('confidence', 'strong')->count(),
                 'needs_review' => $open()->where('category', 'malware')->where('confidence', 'needs_review')->count(),
             ],
+            'fleet' => $fleet,
             'coverage' => [
+                'markets_total' => count($inventoryIds),
+                'markets_complete_24h' => count($fullCoverage(1)),
+                'markets_complete_7d' => count($fullCoverage(7)),
+                'markets_gapped_24h' => $gapped,
+                'markets_unconnected' => count(array_diff($inventoryIds, $connections->pluck('platform_id')->all())),
                 'markets_eligible' => count($eligible),
                 'markets_covered_24h' => count($coveredRecently),
                 'markets_configured' => $connections->count(),
@@ -159,6 +176,7 @@ class DbObservatoryController extends Controller
                 'health_checked_at' => $p->health_checked_at?->toIso8601String(),
                 'connection' => $c ? array_filter([
                     'configured' => true,
+                    'credential_source' => $c->credential_source ?: 'dedicated',
                     'enabled' => (bool) $c->enabled,
                     'load_gate_enabled' => $c->load_gate_enabled !== false,
                     'preflight_status' => $c->preflightValid() ? 'passed' : ($c->preflight_status === 'passed' ? 'stale' : $c->preflight_status),

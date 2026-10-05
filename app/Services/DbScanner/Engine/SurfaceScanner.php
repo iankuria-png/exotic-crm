@@ -22,7 +22,8 @@ use App\Services\DbScanner\Surfaces\Surface;
  *    with the surface's reviewed predicates — never values;
  * 3. drop secret-named cells whole before any value is selected;
  * 4. fetch remaining values in sub-batches whose projected bytes fit the
- *    4 MiB chunk budget, each value sliced to 64 KiB by bytes;
+ *    4 MiB chunk budget: ordinary cells up to 64 KiB, published content
+ *    up to 1 MiB by bytes. Longer values retain explicit truncation coverage;
  * 5. run every active row rule over each value (or each string leaf of a
  *    serialized/JSON value), one value in memory at a time.
  *
@@ -88,6 +89,13 @@ class SurfaceScanner
         foreach ($enumerated as $row) {
             if ($surface->secretLabel && $this->secrets->isProtected((string) ($row[$surface->secretLabel] ?? ''))) {
                 $result->excluded++;
+                $name = (string) ($row[$surface->secretLabel] ?? '');
+                if ($surface->key === 'options.values' && $rules->active('hygiene.stored_integration_secrets') && preg_match('/^(backwpup_jobs|updraft_dropbox|updraft_s3|updraft_googledrive)$/', $name)) {
+                    $result->ruleMatches['hygiene.stored_integration_secrets'] = ($result->ruleMatches['hygiene.stored_integration_secrets'] ?? 0) + 1;
+                    $result->hits[] = new \App\Services\DbScanner\Rules\Hit('hygiene.stored_integration_secrets', 'Secret-bearing third-party settings stored in the database',
+                        ['surface' => $surface->key, 'table' => $table, 'row_id' => (int) $row['__k'], 'field' => 'option_value', 'label' => $name, 'object_type' => 'option'],
+                        ['details' => ['option_name' => $name, 'bytes' => (int) ($row['__len_option_value'] ?? 0), 'values_read' => false], 'signals' => ['secret_bearing_option_present']], null, null, 'warn');
+                }
                 // Name and byte length only: bulk autoloaded secrets (per-user
                 // login tokens and the like) load into every request.
                 if ($surface->key === 'options.values' && $rules->active('hygiene.autoloaded_secret_options')
@@ -102,6 +110,9 @@ class SurfaceScanner
 
                 continue;
             }
+            $row['__value_cap'] = $surface->key === 'posts.content' && ($row['post_status'] ?? '') === 'publish'
+                ? min((int) config('db_scanner.envelope.published_value_bytes', 1048576), intdiv($chunkBytes - self::ROW_OVERHEAD, max(1, count($values))))
+                : $valueCap;
             $rows[] = $row;
         }
         $result->candidates = count($rows);
@@ -113,9 +124,9 @@ class SurfaceScanner
         foreach ($rows as $row) {
             $projected = self::ROW_OVERHEAD;
             foreach ($values as $column) {
-                $projected += min($valueCap, (int) ($row['__len_'.$column] ?? 0));
+                $projected += min($row['__value_cap'], (int) ($row['__len_'.$column] ?? 0));
             }
-            if ($current !== [] && ($currentBytes + $projected > $chunkBytes || count($current) >= 500)) {
+            if ($current !== [] && ($currentBytes + $projected > $chunkBytes || count($current) >= 500 || $current[0]['__value_cap'] !== $row['__value_cap'])) {
                 $batches[] = $current;
                 $current = [];
                 $currentBytes = 0;
@@ -130,12 +141,15 @@ class SurfaceScanner
         $decoder = new BoundedDecoder;
         $matcherStarted = hrtime(true);
 
+        $renderedWidgets = $this->renderedWidgets($reader, $schema);
         foreach ($batches as $batch) {
+            $batchCap = $batch[0]['__value_cap'];
+            $decoder = new BoundedDecoder(['max_input_bytes' => $batchCap, 'max_output_bytes' => max(262144, min(2097152, $batchCap * 2))]);
             $byKey = [];
             foreach ($batch as $row) {
                 $byKey[(int) $row['__k']] = $row;
             }
-            $fetched = $reader->select($c->fetchValues($table, $surface->pk, $values, array_keys($byKey), $valueCap));
+            $fetched = $reader->select($c->fetchValues($table, $surface->pk, $values, array_keys($byKey), $batchCap));
 
             foreach ($fetched as $valueRow) {
                 $key = (int) $valueRow['__k'];
@@ -153,7 +167,7 @@ class SurfaceScanner
                         continue;
                     }
                     $length = (int) ($meta['__len_'.$column] ?? strlen($raw));
-                    $fullyRead = $length <= $valueCap;
+                    $fullyRead = $length <= $batchCap;
                     if (! $fullyRead) {
                         $result->truncated++;
                     }
@@ -162,12 +176,13 @@ class SurfaceScanner
                     unset($valueRow[$column], $raw);
 
                     foreach ($this->leaves($text, $column) as [$field, $leaf, $view]) {
+                        $leafLabels = $labelValues + ['public_exposure' => $this->exposure($surface, $labelValues, $field, $renderedWidgets)];
                         $ctx = new RowContext(
                             surface: $surface->key,
                             table: $table,
                             rowId: $key,
                             field: $field,
-                            labels: $labelValues,
+                            labels: $leafLabels,
                             objectType: $surface->objectType,
                             objectId: $this->objectId($surface, $key, $labelValues),
                             fullyRead: $fullyRead,
@@ -216,6 +231,50 @@ class SurfaceScanner
         return $result;
     }
 
+    /** Known EscortWP render calls; unknown themes/placements remain review items. */
+    private function renderedWidgets(MarketDbReader $reader, SchemaInfo $schema): array
+    {
+        $rows = $reader->select($reader->compiler()->namedRows($schema->table('options'), 'option_id', 'option_name', 'option_value', ['template', 'stylesheet', 'sidebars_widgets'], 65536));
+        $o = array_column($rows, 'v', 'name');
+        if (! in_array($o['template'] ?? '', ['escortwp', 'escortwp-child'], true) && ! in_array($o['stylesheet'] ?? '', ['escortwp', 'escortwp-child'], true)) {
+            return [];
+        }
+        $map = (new SerializedParser)->parse($o['sidebars_widgets'] ?? '');
+        $widgets = [];
+        foreach (['widget-sidebar-left', 'widget-sidebar-right', 'widget-right-ads', 'widget-footer', 'footer-home-only', 'header-language-switcher'] as $sidebar) {
+            foreach ((array) ($map[$sidebar] ?? []) as $widget) {
+                if (is_string($widget)) {
+                    $widgets[$widget] = $sidebar;
+                }
+            }
+        }
+        // The parent renders Left Ads; the child currently disables this call.
+        if (($o['stylesheet'] ?? '') === 'escortwp') {
+            foreach ((array) ($map['widget-left-ads'] ?? []) as $widget) {
+                if (is_string($widget)) {
+                    $widgets[$widget] = 'widget-left-ads';
+                }
+            }
+        }
+
+        return $widgets;
+    }
+
+    private function exposure(Surface $surface, array $labels, string $field, array $widgets): string
+    {
+        if ($surface->key === 'posts.content') {
+            return ($labels['post_status'] ?? '') === 'publish' ? 'published' : 'not_public';
+        }
+        $name = (string) ($labels['option_name'] ?? '');
+        if (preg_match('/^widget_(.+)$/', $name, $m) && preg_match('/^[^\[]+\[(\d+)\]/', $field, $n)) {
+            $id = $m[1].'-'.$n[1];
+
+            return isset($widgets[$id]) ? 'rendered_widget:'.$widgets[$id] : 'unplaced_or_unknown_widget';
+        }
+
+        return 'unknown';
+    }
+
     /**
      * Re-read one row/field and re-run one rule (resolution point recheck).
      *
@@ -241,12 +300,15 @@ class SurfaceScanner
             return ['hit' => false, 'fully_read' => false, 'missing' => false];
         }
         $length = (int) ($meta['__len_'.$column] ?? 0);
+        if ($surface->key === 'posts.content' && ($meta['post_status'] ?? '') === 'publish') {
+            $valueCap = (int) config('db_scanner.envelope.published_value_bytes', 1048576);
+        }
         $row = $reader->select($c->fetchValues($table, $surface->pk, [$column], [$rowId], $valueCap))[0] ?? null;
         $raw = is_string($row[$column] ?? null) ? $row[$column] : '';
         $text = mb_check_encoding($raw, 'UTF-8') ? $raw : mb_scrub($raw, 'UTF-8');
         $labelValues = array_intersect_key($meta, array_flip($labels));
         $matcher = (string) ($rules->rule($ruleKey)['matcher'] ?? '');
-        $decoder = new BoundedDecoder;
+        $decoder = new BoundedDecoder(['max_input_bytes' => $valueCap, 'max_output_bytes' => max(262144, min(2097152, $valueCap * 2))]);
         $acc = new \App\Services\DbScanner\Rules\Accumulator;
 
         $wholeMatcher = in_array($matcher, self::WHOLE_VALUE_MATCHERS, true);
@@ -254,7 +316,8 @@ class SurfaceScanner
             if ($leafField !== $field || ($view === 'whole' && ! $wholeMatcher) || ($view === 'leaf' && $wholeMatcher)) {
                 continue;
             }
-            $ctx = new RowContext($surface->key, $table, $rowId, $leafField, $labelValues, $surface->objectType, $this->objectId($surface, $rowId, $labelValues), $length <= $valueCap, $length, hash('sha256', $leaf));
+            $exposureLabels = $labelValues + ['public_exposure' => $this->exposure($surface, $labelValues, $leafField, $this->renderedWidgets($reader, $schema))];
+            $ctx = new RowContext($surface->key, $table, $rowId, $leafField, $exposureLabels, $surface->objectType, $this->objectId($surface, $rowId, $labelValues), $length <= $valueCap, $length, hash('sha256', $leaf));
             if ($this->matchers->run($matcher, $ruleKey, $rules, $ctx, new ContentAnalysis($leaf, $decoder, $hosts), $acc)) {
                 return ['hit' => true, 'fully_read' => $length <= $valueCap, 'missing' => false];
             }

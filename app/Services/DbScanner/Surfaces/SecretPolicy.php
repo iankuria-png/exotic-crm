@@ -12,7 +12,7 @@ namespace App\Services\DbScanner\Surfaces;
  */
 class SecretPolicy
 {
-    public const VERSION = '2026-10-01.2';
+    public const VERSION = '2026-10-05.1';
 
     private const PATTERN = '/((^|[^a-z])pass([^a-z]|$)|password|passwd|passphrase|secret|token|api[_-]?key|apikey|private[_-]?key|auth[_-]?key|salt|smtp|credential|license[_-]?key|nonce_key|logged_in_key|secure_auth|client[_-]?secret|access[_-]?key|signing|webhook[_-]?key|shared[_-]?key|consumer[_-]?(key|secret)|session_tokens|application_passwords|nsl_persistent|id_token|refresh_token)/i';
 

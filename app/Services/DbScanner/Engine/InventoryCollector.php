@@ -22,6 +22,7 @@ class InventoryCollector
         'siteurl', 'home', 'blog_public', 'admin_email', 'users_can_register', 'default_role', 'upload_path',
         'upload_url_path', 'permalink_structure', 'template', 'stylesheet', 'db_version', 'active_plugins', 'cron',
         'wpseo', 'taxonomy_profile_url', 'wpseo-premium-redirects-base',
+        'sidebars_widgets', '_site_transient_update_plugins', '__mnx_versions', 'gmt_offset', 'timezone_string',
     ];
 
     /**
@@ -87,11 +88,6 @@ class InventoryCollector
                     default => 'query_failed',
                 }];
             }
-        }
-
-        // Application-password metadata is read with the privileged accounts.
-        if (isset($coverage['usermeta.app_passwords'])) {
-            $coverage['usermeta.app_passwords'] = $coverage['users.privileged'] ?? ['status' => 'incomplete', 'reason' => 'not_reached'];
         }
 
         return ['components' => $components, 'coverage' => $coverage];
@@ -202,7 +198,19 @@ class InventoryCollector
                 return [$this->administrators($reader, $schema), $complete];
 
             case 'usermeta.app_passwords':
-                return [null, $complete]; // read together with administrators; see administrators()
+                $data = $this->applicationPasswords($reader, $schema);
+
+                return [$data, $data['complete'] ? $complete : ['status' => 'incomplete', 'reason' => 'metadata_truncated']];
+
+            case 'users.registration_health':
+                $row = $reader->select($c->registrationSpamSummary($schema->table('users')))[0] ?? [];
+
+                return [['complete' => true, 'data' => ['total' => (int) ($row['total'] ?? 0), 'suspicious' => (int) ($row['suspicious'] ?? 0)]], $complete];
+
+            case 'activity.behaviour':
+                $data = (new ActivityCollector($this->sanitizer))->collect($reader, $schema, $this->administrators($reader, $schema), $this->coreOptions($reader, $schema));
+
+                return [$data, $data['complete'] ? $complete : ['status' => 'incomplete', 'reason' => 'event_limit']];
 
             case 'options.autoload':
                 $summary = $reader->select($c->autoloadSummary($schema->table('options')))[0] ?? [];
@@ -254,10 +262,18 @@ class InventoryCollector
             case 'users.email_domains':
                 $rows = $reader->select($c->emailDomainCounts($schema->table('users')));
 
-                return [['complete' => true, 'data' => array_map(fn ($r) => ['domain' => mb_substr((string) $r['d'], 0, 120), 'accounts' => (int) $r['n']], $rows)], $complete];
+                return [['complete' => true, 'data' => array_map(fn ($r) => ['domain' => mb_substr((string) $r['d'], 0, 120), 'accounts' => (int) $r['n'], 'onboard_accounts' => (int) ($r['onboard'] ?? 0)], $rows)], $complete];
 
             case 'activity.failed_logins':
-                $rows = $reader->select($c->failedLoginSummary($schema->table('aryo_activity_log'), now()->subDays(7)->timestamp));
+                $core = $this->coreOptions($reader, $schema)['data'];
+                $offset = (int) round((float) ($core['gmt_offset'] ?? 0) * 3600);
+                try {
+                    if (! empty($core['timezone_string'])) {
+                        $offset = (new \DateTimeZone($core['timezone_string']))->getOffset(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+                    }
+                } catch (\Throwable) {
+                }
+                $rows = $reader->select($c->failedLoginSummary($schema->table('aryo_activity_log'), now()->subDays(7)->timestamp + $offset));
                 $total = array_sum(array_map(fn ($r) => (int) $r['n'], $rows));
 
                 return [['complete' => true, 'data' => [
@@ -313,6 +329,19 @@ class InventoryCollector
         $plugins = $this->parseSerialized($raw['active_plugins'] ?? null);
         $data['active_plugins'] = is_array($plugins) ? array_values(array_map(fn ($p) => mb_substr((string) $p, 0, 200), array_filter($plugins, 'is_scalar'))) : [];
 
+        foreach (['gmt_offset', 'timezone_string'] as $name) {
+            $data[$name] = $raw[$name] ?? null;
+        }
+        $sidebars = $this->parseSerialized($raw['sidebars_widgets'] ?? null);
+        $data['sidebars_widgets'] = is_array($sidebars) ? $sidebars : [];
+        $update = $this->parseSerialized($raw['_site_transient_update_plugins'] ?? null);
+        $data['plugin_inventory_present'] = is_array($update) && isset($update['checked']) && is_array($update['checked']);
+        $data['plugin_checked'] = $data['plugin_inventory_present'] ? array_keys($update['checked']) : [];
+        $versions = json_decode($raw['__mnx_versions'] ?? '', true);
+        if (! is_array($versions)) {
+            $versions = $this->parseSerialized($raw['__mnx_versions'] ?? null);
+        }
+        $data['versionless_plugins'] = $this->versionlessPlugins(is_array($versions) ? $versions : []);
         $data['cron'] = $this->cronSummary($raw['cron'] ?? null);
 
         $wpseo = $this->parseSerialized($raw['wpseo'] ?? null);
@@ -340,6 +369,67 @@ class InventoryCollector
         $data['redirects'] = $external;
 
         return ['complete' => $truncated === [], 'truncated' => $truncated, 'data' => $data];
+    }
+
+    /** Whitelisted metadata only; secret hashes never enter components/evidence. */
+    private function applicationPasswords(MarketDbReader $reader, SchemaInfo $schema): array
+    {
+        $items = [];
+        $after = 0;
+        $complete = true;
+        $admins = $this->administrators($reader, $schema);
+        $privileged = array_column($admins['data']['admins'] ?? [], 'id');
+        do {
+            $page = $reader->select($reader->compiler()->applicationPasswordMetadata($schema->table('usermeta'), $after));
+            foreach ($page as $row) {
+                $after = (int) $row['__k'];
+                $parsed = (int) $row['len'] <= self::VALUE_CAP ? $this->parseSerialized((string) $row['v']) : null;
+                unset($row['v']);
+                if (! is_array($parsed)) {
+                    $complete = false;
+
+                    continue;
+                }
+                foreach ($parsed as $entry) {
+                    if (! is_array($entry)) {
+                        $complete = false;
+
+                        continue;
+                    }
+                    $metadata = array_intersect_key($entry, array_flip(['name', 'created', 'last_used', 'last_ip', 'created_ip']));
+                    $items[] = [
+                        'row_id' => $after, 'user_id' => (int) $row['user_id'],
+                        'privileged' => in_array((int) $row['user_id'], $privileged),
+                        'name' => $this->sanitizer->clean(mb_substr((string) ($metadata['name'] ?? ''), 0, 120)),
+                        'created' => (int) ($metadata['created'] ?? 0), 'last_used' => (int) ($metadata['last_used'] ?? 0),
+                        'last_ip' => filter_var($metadata['last_ip'] ?? '', FILTER_VALIDATE_IP) ?: null,
+                        'created_ip' => filter_var($metadata['created_ip'] ?? '', FILTER_VALIDATE_IP) ?: null,
+                    ];
+                    if (count($items) >= 10000) {
+                        return ['complete' => false, 'data' => $items];
+                    }
+                }
+                unset($entry, $parsed);
+            }
+        } while (count($page) === 50);
+
+        return ['complete' => $complete && $admins['complete'], 'data' => $items];
+    }
+
+    private function versionlessPlugins(array $node): array
+    {
+        $out = [];
+        foreach ($node as $key => $value) {
+            if (is_array($value)) {
+                if (array_key_exists('version', $value) && $value['version'] === null) {
+                    $slug = (string) ($value['file'] ?? $value['slug'] ?? $value['name'] ?? $key);
+                    $out[] = mb_substr($slug, 0, 200);
+                }
+                $out = array_merge($out, $this->versionlessPlugins($value));
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     private function cronSummary(?string $value): array
@@ -464,6 +554,7 @@ class InventoryCollector
             }
         }
 
+        $md5Ids = $schema->hasColumn('users', 'user_pass') ? array_column($reader->select($c->md5PasswordUsers($schema->table('users'))), 'id') : [];
         $admins = [];
         foreach ($adminIds as $id) {
             $u = $users[$id] ?? null;
@@ -478,6 +569,8 @@ class InventoryCollector
                 'id' => $id,
                 'exists' => $u !== null,
                 'login' => mb_substr((string) ($u['user_login'] ?? ''), 0, 60),
+                'email_token' => self::hmac($email),
+                'md5_password' => in_array($id, $md5Ids),
                 'email_masked' => EvidenceSanitizer::maskEmail($email),
                 'email_domain' => substr(strrchr($email, '@') ?: '', 1),
                 'registered' => $registered,

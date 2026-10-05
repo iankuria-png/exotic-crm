@@ -253,7 +253,7 @@ class QueryCompiler
         if ($keys === [] || count($keys) > 1000) {
             throw new ReaderException(ReaderException::REJECTED_TEMPLATE);
         }
-        $maxBytes = max(1, min(65536, $maxBytes));
+        $maxBytes = max(1, min(1048576, $maxBytes));
 
         $select = [$this->q($pk).' AS __k'];
         foreach ($valueColumns as $column) {
@@ -331,8 +331,8 @@ class QueryCompiler
         return $this->make(
             'email_domain_counts',
             $this->dialect === 'sqlite'
-                ? "SELECT LOWER(SUBSTR(user_email, INSTR(user_email, '@') + 1)) AS d, COUNT(*) AS n FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
-                : "SELECT LOWER(SUBSTRING_INDEX(user_email, '@', -1)) AS d, COUNT(*) AS n FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
+                ? "SELECT LOWER(SUBSTR(user_email, INSTR(user_email, '@') + 1)) AS d, COUNT(*) AS n, SUM(CASE WHEN user_email LIKE 'onboard+%@%' THEN 1 ELSE 0 END) AS onboard FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
+                : "SELECT LOWER(SUBSTRING_INDEX(user_email, '@', -1)) AS d, COUNT(*) AS n, SUM(CASE WHEN user_email LIKE 'onboard+%@%' THEN 1 ELSE 0 END) AS onboard FROM ".$this->q($users)." WHERE user_email LIKE '%@%' GROUP BY d ORDER BY n DESC LIMIT 200"
         );
     }
 
@@ -368,6 +368,117 @@ class QueryCompiler
             'SELECT ID AS id, user_login, user_email, user_registered, display_name FROM '.$this->q($users).' WHERE ID IN ('.$this->placeholders($ids).')',
             $ids
         );
+    }
+
+    /** Hash format is computed inside MySQL; password values never leave the DB. */
+    public function md5PasswordUsers(string $users): CompiledQuery
+    {
+        $this->assertColumns($users, ['ID', 'user_pass']);
+        $format = $this->dialect === 'sqlite'
+            ? "LENGTH(user_pass) = 32 AND user_pass NOT GLOB '*[^0-9a-fA-F]*'"
+            : "user_pass REGEXP '^[0-9a-fA-F]{32}$'";
+
+        return $this->make('md5_password_users', 'SELECT ID AS id FROM '.$this->q($users).' WHERE '.$format.' ORDER BY ID LIMIT 10000');
+    }
+
+    /** Bounded, dedicated metadata extraction; caller discards all password/hash fields. */
+    public function applicationPasswordMetadata(string $usermeta, int $after): CompiledQuery
+    {
+        $this->assertColumns($usermeta, ['umeta_id', 'user_id', 'meta_key', 'meta_value']);
+
+        return $this->make('application_password_metadata', 'SELECT umeta_id AS __k, user_id, '.$this->octetLength('meta_value').' AS len, '.$this->byteSlice('meta_value', 65536).' AS v FROM '.$this->q($usermeta)." WHERE meta_key = '_application_passwords' AND umeta_id > ? ORDER BY umeta_id LIMIT 50", [$after]);
+    }
+
+    /** Interesting web events; never request bodies or arbitrary log payloads. */
+    public function activityEvents(string $table, int $after): CompiledQuery
+    {
+        $this->assertColumns($table, ['histid', 'hist_time', 'hist_ip', 'user_id', 'object_type', 'object_name', 'action', 'request_source']);
+
+        return $this->make('activity_events', 'SELECT histid AS id, hist_time, hist_ip, user_id, object_type, '.$this->byteSlice('object_name', 200).' AS object_name, action, request_source FROM '.$this->q($table)." WHERE histid > ? AND ((object_type IN ('Plugins','Themes') AND action IN ('uploaded','installed','activated')) OR (object_type = 'Attachments' AND action = 'uploaded' AND object_name LIKE '%.zip') OR action = 'logged_in') ORDER BY histid LIMIT 500", [$after]);
+    }
+
+    /** Hourly aggregates include historic storms, so old compromise evidence survives. */
+    public function activityBursts(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'action', 'object_name']);
+        $hour = $this->dialect === 'sqlite' ? 'CAST(hist_time / 3600 AS INTEGER)' : 'FLOOR(hist_time / 3600)';
+
+        return $this->make('activity_bursts', 'SELECT hist_ip AS ip, '.$hour.' AS hour_bucket, COUNT(*) AS n FROM '.$this->q($table)." WHERE action = 'failed_login' GROUP BY hist_ip, hour_bucket HAVING COUNT(*) >= 100 ORDER BY n DESC LIMIT 100");
+    }
+
+    public function activityFailuresBefore(string $table, string $username, int $timestamp): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'object_name', 'action', 'hist_ip']);
+
+        return $this->make('activity_failures_before', 'SELECT COUNT(*) AS n FROM '.$this->q($table)." WHERE action = 'failed_login' AND LOWER(object_name) = ? AND hist_time >= ? AND hist_time <= ?", [strtolower($username), $timestamp - 86400, $timestamp]);
+    }
+
+    public function activityFailureContext(string $table, string $username, string $ip, int $timestamp): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'object_name', 'action', 'hist_ip']);
+
+        return $this->make('activity_failure_context', 'SELECT COUNT(*) AS n, SUM(CASE WHEN hist_ip = ? THEN 1 ELSE 0 END) AS same_ip, MAX(hist_time) AS last_failure FROM '.$this->q($table)." WHERE action = 'failed_login' AND LOWER(object_name) = ? AND hist_time >= ? AND hist_time <= ?", [$ip, strtolower($username), $timestamp - 86400, $timestamp]);
+    }
+
+    /** Counts only: scam account names never cross the reader boundary. */
+    public function registrationSpamSummary(string $users): CompiledQuery
+    {
+        $this->assertColumns($users, ['user_login']);
+        $pattern = $this->dialect === 'sqlite'
+            ? "(LOWER(user_login) LIKE 'www.%' OR LOWER(user_login) LIKE 'www-%' OR LOWER(user_login) LIKE '%coinbase%' OR LOWER(user_login) LIKE '%bitcoin%' OR LOWER(user_login) LIKE '%crypto%' OR LOWER(user_login) LIKE '%usd %' OR LOWER(user_login) LIKE '%-usd-%')"
+            : "LOWER(user_login) REGEXP '^www[-.]|coinbase|usd[ -]?[0-9]|crypto|bitcoin'";
+
+        return $this->make('registration_spam_summary', 'SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN '.$pattern.' THEN 1 ELSE 0 END), 0) AS suspicious FROM '.$this->q($users));
+    }
+
+    /** One day's pressure per IP, normalized with the site's offset. */
+    public function activityDailyBursts(string $table, int $offset): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'action']);
+        $day = $this->dialect === 'sqlite' ? 'CAST((hist_time - ?) / 86400 AS INTEGER)' : 'FLOOR((hist_time - ?) / 86400)';
+
+        return $this->make('activity_daily_bursts', 'SELECT hist_ip AS ip, '.$day.' AS day_bucket, COUNT(*) AS n FROM '.$this->q($table)." WHERE action = 'failed_login' GROUP BY ip, day_bucket HAVING COUNT(*) >= 100 ORDER BY n DESC LIMIT 1001", [$offset]);
+    }
+
+    /** Successful accounts, not only privileged accounts; bounded hourly aggregate. */
+    public function activityLoginWindows(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'action', 'user_id']);
+        $hour = $this->dialect === 'sqlite' ? 'CAST(hist_time / 3600 AS INTEGER)' : 'FLOOR(hist_time / 3600)';
+
+        return $this->make('activity_login_windows', 'SELECT user_id, '.$hour.' AS hour_bucket, COUNT(*) AS n, COUNT(DISTINCT hist_ip) AS ips, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM '.$this->q($table)." WHERE action = 'logged_in' AND user_id > 0 GROUP BY user_id, hour_bucket HAVING COUNT(*) >= 10 AND COUNT(DISTINCT hist_ip) >= 5 ORDER BY n DESC LIMIT 501");
+    }
+
+    public function activitySuccessIps(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'action', 'user_id']);
+
+        return $this->make('activity_success_ips', 'SELECT user_id, hist_ip AS ip, COUNT(*) AS n, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM '.$this->q($table)." WHERE action = 'logged_in' AND user_id > 0 GROUP BY user_id, hist_ip ORDER BY n DESC LIMIT 2001");
+    }
+
+    /** A success and failures on different names from that exact IP within a minute. */
+    public function activityControlIps(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'object_name', 'action', 'user_id', 'histid']);
+        $t = $this->q($table);
+
+        return $this->make('activity_control_ips', 'SELECT s.user_id, s.hist_ip AS ip, MIN(s.hist_time) AS first_time, COUNT(DISTINCT f.histid) AS failures, COUNT(DISTINCT f.object_name) AS targets FROM '.$t.' s JOIN '.$t." f ON f.hist_ip = s.hist_ip AND f.hist_time > s.hist_time AND f.hist_time <= s.hist_time + 60 AND f.action = 'failed_login' AND LOWER(f.object_name) <> LOWER(s.object_name) WHERE s.action = 'logged_in' AND s.user_id > 0 GROUP BY s.user_id, s.hist_ip HAVING COUNT(DISTINCT f.histid) >= 2 AND COUNT(DISTINCT f.object_name) >= 2 ORDER BY failures DESC LIMIT 501");
+    }
+
+    public function activityRegistrationBursts(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'action', 'object_type']);
+        $t = $this->q($table);
+
+        return $this->make('activity_registration_bursts', 'SELECT hist_ip AS ip, COUNT(*) AS n FROM '.$t." WHERE object_type = 'Users' AND action IN ('registered','created') AND hist_time >= (SELECT MAX(hist_time) FROM ".$t.') - 2592000 GROUP BY hist_ip HAVING COUNT(*) >= 20 ORDER BY n DESC LIMIT 501');
+    }
+
+    public function activityEmailHealth(string $table): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'object_type', 'object_name', 'action']);
+        $t = $this->q($table);
+
+        return $this->make('activity_email_health', "SELECT SUM(CASE WHEN action = 'failed' THEN 1 ELSE 0 END) AS failed, SUM(CASE WHEN action = 'sent' THEN 1 ELSE 0 END) AS sent, SUM(CASE WHEN action = 'failed' AND LOWER(object_name) LIKE '%could not authenticate%' THEN 1 ELSE 0 END) AS smtp_auth, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM ".$t." WHERE object_type = 'Emails' AND action IN ('failed','sent') AND hist_time >= (SELECT MAX(hist_time) FROM ".$t.') - 2592000');
     }
 
     public function lowerIdUsersRegisteredAfter(string $users, int $id, string $after): CompiledQuery
@@ -623,7 +734,7 @@ class QueryCompiler
      */
     private function byteSlice(string $expression, int $maxBytes): string
     {
-        $maxBytes = max(1, min(65536, $maxBytes));
+        $maxBytes = max(1, min(1048576, $maxBytes));
 
         return $this->dialect === 'sqlite'
             ? 'substr(CAST('.$expression.' AS BLOB), 1, '.$maxBytes.')'

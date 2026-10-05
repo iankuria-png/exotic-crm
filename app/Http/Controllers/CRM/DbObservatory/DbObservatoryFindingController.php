@@ -83,7 +83,7 @@ class DbObservatoryFindingController extends Controller
         $this->ensureView($request);
         $model = DbScanFinding::query()->findOrFail($finding);
         $this->abortUnlessInScope($request, (int) $model->platform_id);
-        $names = $this->marketNames([(int) $model->platform_id]);
+        $names = $this->marketNames($this->scopeIds($request));
         $rule = DbScanRule::query()->where('key', $model->rule_key)->first();
 
         $events = DbScanFindingEvent::query()->where('finding_id', $model->id)->latest('id')->limit(50)->get();
@@ -176,7 +176,7 @@ class DbObservatoryFindingController extends Controller
             $this->audit->record((int) $request->user()->id, 'finding', $locked->id, 'triage', $before, $locked->only(['status', 'snoozed_until', 'assigned_to', 'note']), (int) $locked->platform_id);
         });
 
-        return response()->json($this->presenter->finding($model->fresh(), $this->marketNames([(int) $model->platform_id])));
+        return response()->json($this->presenter->finding($model->fresh(), $this->marketNames($this->scopeIds($request))));
     }
 
     /**
@@ -316,7 +316,9 @@ class DbObservatoryFindingController extends Controller
             'category' => ['nullable', 'string', 'max:120'],
             'confidence' => ['nullable', 'string', 'max:60'],
             'behavior' => ['nullable', 'string', 'max:200'],
+            'definition_hash' => ['nullable', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/'],
             'rule_key' => ['nullable', 'string', 'max:100'],
+            'identity' => ['nullable', 'string', 'max:200'],
             'platform_id' => ['nullable', 'integer'],
             'q' => ['nullable', 'string', 'max:120'],
             'run_id' => ['nullable', 'integer'],
@@ -343,6 +345,14 @@ class DbObservatoryFindingController extends Controller
             ->when($request->filled('category'), fn ($q) => $q->whereIn('category', $list('category')))
             ->when($request->filled('confidence'), fn ($q) => $q->whereIn('confidence', $list('confidence')))
             ->when($request->filled('behavior'), fn ($q) => $q->whereIn('behavior', $list('behavior')))
+            ->when($request->filled('identity'), function ($q) use ($request) {
+                $q->where(function ($w) use ($request) {
+                    foreach (['evidence->details->plugin', 'evidence->details->name', 'evidence->details->login', 'evidence->details->role', 'evidence->details->option_name', 'subject->label', 'title'] as $field) {
+                        $w->orWhere($field, $request->input('identity'));
+                    }
+                });
+            })
+            ->when($request->filled('definition_hash'), fn ($q) => $q->where('evidence->details->definition_hash', $request->input('definition_hash')))
             ->when($request->filled('rule_key'), fn ($q) => $q->where('rule_key', $request->string('rule_key')))
             ->when($request->filled('kind'), fn ($q) => $q->whereIn('rule_key', DbScanRule::query()->where('kind', $request->string('kind'))->select('key')))
             ->when($request->filled('platform_id'), fn ($q) => $q->where('platform_id', $request->integer('platform_id')))

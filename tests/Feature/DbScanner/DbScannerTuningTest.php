@@ -90,6 +90,9 @@ class DbScannerTuningTest extends TestCase
         $form = $this->wpPost($pdo, '<form action="https://x.us1.list-manage.com/subscribe/post"></form><script type="text/javascript" src="//s3.amazonaws.com/downloads.mailchimp.com/js/mc-validate.js"></script>');
         $injected = $this->wpPost($pdo, '<script src="https://evil-cdn.test/i.js"></script>');
         $dormant = $this->wpOption($pdo, 'alexacertify_certify', '<script>var as=document.createElement("script");as.src="https://d31qbv1cthcecs.cloudfront.net/atrk.js";</script>');
+        $this->wpOption($pdo, 'template', 'escortwp');
+        $this->wpOption($pdo, 'stylesheet', 'escortwp-child');
+        $this->wpOption($pdo, 'sidebars_widgets', serialize(['widget-footer' => ['custom_html-2']]));
         $widget = $this->wpOption($pdo, 'widget_custom_html', serialize([2 => ['content' => '<script>var s=document.createElement("script");s.src="https://cdn-evil.test/w.js";</script>']]));
         $hotjar = $this->wpOption($pdo, 'hefo', serialize(['head' => "<script>(function(h,o,t,j,a,r){r=o.createElement('script');r.async=1;r.src=t+h._hjSettings.hjid+j;a.appendChild(r);})(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');</script>"]));
 
@@ -124,7 +127,7 @@ class DbScannerTuningTest extends TestCase
         $this->scan($pdo);
 
         $roles = DbScanFinding::query()->where('rule_key', 'access.role_grants_admin_capability')->get()->keyBy(fn ($f) => $f->evidence['details']['role']);
-        $this->assertSame('critical', $roles['seo_manager']->severity, 'A staff role that can edit theme code is admin-equivalent.');
+        $this->assertSame('warn', $roles['seo_manager']->severity, 'Shared admin-equivalent role definitions are reviewed together instead of repeated criticals.');
         $this->assertTrue($roles->has('customerservice'));
         $this->assertFalse(DbScanFinding::query()->where('rule_key', 'access.hidden_admin_capabilities')->exists(), 'Role-granted level_10 is not a stale-level anomaly.');
 

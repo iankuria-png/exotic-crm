@@ -1,5 +1,5 @@
 {
-    "version": "1.0.0",
+    "version": "1.2.0",
     "lists": [
         {
             "key": "allow.admin_email_domains",
@@ -90,7 +90,12 @@
                 "wordpress-seo-premium",
                 "wp-laravel-sso",
                 "wpseo-video",
-                "exotic-profile-chat"
+                "exotic-profile-chat",
+                "exotic-security-scanner",
+                "safe-draft-purger",
+                "exotic-admin-access.php",
+                "tanzania-sms-triggers",
+                "bulk-delete"
             ]
         },
         {
@@ -116,7 +121,6 @@
                 "wp_maybe_auto_update",
                 "wp_batch_split_terms",
                 "wp_update_comment_type_batch",
-                "wp_delete_temp_updater_backups",
                 "wpseo*",
                 "yoast*",
                 "action_scheduler*",
@@ -160,7 +164,13 @@
                 "mls_*",
                 "ppmwp_*",
                 "check_plugin_updates-*",
-                "puc_cron_check_updates*"
+                "puc_cron_check_updates*",
+                "mnx_*",
+                "wc_admin_*",
+                "woocommerce_*",
+                "jp_purge_transients_cron",
+                "escort_monitor_daily_event",
+                "tzsms_*"
             ]
         },
         {
@@ -193,7 +203,10 @@
             "key": "ioc.domains",
             "kind": "ioc",
             "description": "Vetted malicious domains (add with source and date)",
-            "entries": []
+            "entries": [
+                "aviator-game.com.gh",
+                "aviator-bet.co.ke"
+            ]
         },
         {
             "key": "lexicon.pharma",
@@ -233,10 +246,10 @@
             "kind": "lexicon",
             "description": "Chinese escort-spam terms",
             "entries": [
-                "外围",
-                "微信",
-                "上门",
-                "同步",
+                "\u5916\u56f4",
+                "\u5fae\u4fe1",
+                "\u4e0a\u95e8",
+                "\u540c\u6b65",
                 "wechat",
                 "weixin"
             ]
@@ -246,10 +259,10 @@
             "kind": "lexicon",
             "description": "Japanese keyword-hack terms",
             "entries": [
-                "スーパーコピー",
-                "激安",
-                "通販",
-                "ブランドコピー"
+                "\u30b9\u30fc\u30d1\u30fc\u30b3\u30d4\u30fc",
+                "\u6fc0\u5b89",
+                "\u901a\u8ca9",
+                "\u30d6\u30e9\u30f3\u30c9\u30b3\u30d4\u30fc"
             ]
         },
         {
@@ -346,7 +359,18 @@
                 "exotic-ads.com",
                 "exotic-online.com",
                 "exotic-africa.com",
-                "erotic-africa.com"
+                "erotic-africa.com",
+                "exoticniger.com",
+                "exotic-tz.net",
+                "exotictanzania.com",
+                "exotickenya.com",
+                "exoticuganda.com",
+                "exoticdrc.com",
+                "exoticbenin.com",
+                "exoticrwanda.com",
+                "exoticzambia.com",
+                "exoticghana.com",
+                "exoticnigeria.com"
             ]
         },
         {
@@ -442,7 +466,106 @@
                 "escort_live_urls",
                 "escorts_from_counts",
                 "litespeed_*",
-                "fsmpt_*"
+                "fsmpt_*",
+                "messages",
+                "message",
+                "forum_*",
+                "sms_logs"
+            ]
+        },
+        {
+            "key": "allow.admin_emails",
+            "kind": "allowlist",
+            "description": "Exact approved administrator addresses; domain-wide exceptions do not apply.",
+            "entries": [
+                "joolyan@gmail.com"
+            ]
+        },
+        {
+            "key": "allow.crm_ips",
+            "kind": "allowlist",
+            "description": "Exact CRM integration hosts.",
+            "entries": [
+                "65.98.29.11",
+                "198.38.92.95"
+            ]
+        },
+        {
+            "key": "lexicon.banner_exchange_domains",
+            "kind": "lexicon",
+            "description": "Exact reviewed traffic-exchange hosts; presence is an ownership review, not proof of malware.",
+            "entries": [
+                "nikkiexxxads.com"
+            ]
+        },
+        {
+            "key": "allow.staff_ips",
+            "kind": "allowlist",
+            "description": "Staff addresses confirmed by Ian, 6 October 2026. IOC evidence takes precedence.",
+            "entries": [
+                "41.139.154.203",
+                "129.222.187.0/24",
+                "129.222.147.0/24",
+                "197.248.120.233",
+                "98.97.169.0/24",
+                "102.204.12.198",
+                "212.83.148.205",
+                "51.158.254.156"
+            ]
+        },
+        {
+            "key": "allow.it_emails",
+            "kind": "allowlist",
+            "description": "Exact IT staff identity confirmed by Ian; only approved installs are downgraded.",
+            "entries": [
+                "dancun.owino@exotic-online.com"
+            ]
+        },
+        {
+            "key": "allow.install_names",
+            "kind": "allowlist",
+            "description": "Approved plugin install labels or slugs; matched exactly after normalization.",
+            "entries": [
+                "exotic-security-scanner",
+                "safe-draft-purger",
+                "exotic-admin-access.php",
+                "Bulk Delete",
+                "Exotic Security Scanner Endpoint"
+            ]
+        },
+        {
+            "key": "ioc.ips",
+            "kind": "ioc",
+            "description": "Campaign indicators from 15 market reviews, 5 October 2026; CIDRs are explicit.",
+            "entries": [
+                "91.92.240.119",
+                "91.92.240.0/22",
+                "212.18.127.0/24",
+                "5.188.86.234",
+                "31.58.229.0/24",
+                "191.96.125.0/24",
+                "142.111.152.0/24",
+                "155.2.215.0/24",
+                "45.8.19.0/24"
+            ]
+        },
+        {
+            "key": "ioc.plugins",
+            "kind": "ioc",
+            "description": "Confirmed campaign plugin drops, 5 October 2026.",
+            "entries": [
+                "wp-adhocracy-configure",
+                "contact-beaver-panel",
+                "wp-assemblage-unit",
+                "bridge-install-tools"
+            ]
+        },
+        {
+            "key": "reference.public_plugins",
+            "kind": "lexicon",
+            "description": "Reviewed WordPress.org slugs; presence does not approve ownership. Source: https://wordpress.org/plugins/easy-table-of-contents/, checked 6 October 2026.",
+            "entries": [
+                "easy-table-of-contents"
             ]
         }
     ]

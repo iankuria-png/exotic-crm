@@ -252,7 +252,7 @@ class DbScannerLifecycleTest extends TestCase
         $this->wpOption($pdo, 'siteurl', 'https://zim-market.test');
         $this->wpOption($pdo, 'active_plugins', serialize([]));
         $this->wpUser($pdo, 'ian', 'ian@exotic-online.com', '2024-01-01 00:00:00');
-        $huge = $this->wpPost($pdo, str_repeat('外', 40000).'<script src="https://tail-only.test/x.js"></script>');
+        $huge = $this->wpPost($pdo, str_repeat('外', 40000).'<script src="https://tail-only.test/x.js"></script>', ['post_status' => 'private']);
         $after = $this->wpPost($pdo, '<script src="https://after-huge.test/x.js"></script>');
         $platform = $this->marketPlatform();
         $this->connectFixture($platform, $this->fixturePath($pdo));

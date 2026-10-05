@@ -116,7 +116,7 @@ class PassController
                     'deadline_at' => now()->addHours((int) config('db_scanner.envelope.run_deadline_hours', 24)),
                     'budget_seconds' => $this->settings->budgetSeconds($mode === 'test' ? 'quick' : $profile),
                     'cursor' => $sweep?->cursors,
-                    'metrics' => [],
+                    'metrics' => ['pack_hash' => \App\Services\DbScanner\ScannerProvenance::packs($rules->rules()), 'config_hash' => $rules->hash()],
                 ]);
 
                 if ($sweep) {
@@ -151,6 +151,7 @@ class PassController
             }
 
             $connection = DbScanConnection::query()->where('platform_id', $locked->platform_id)->first();
+            $rules = $this->resolver->fromVersion(\App\Models\DbScanConfigVersion::query()->findOrFail($locked->config_version_id));
             $pass = DbScanPass::query()->create([
                 'trigger' => 'continuation',
                 'mode' => 'scan',
@@ -173,7 +174,7 @@ class PassController
                 'deadline_at' => now()->addHours((int) config('db_scanner.envelope.run_deadline_hours', 24)),
                 'budget_seconds' => $this->settings->budgetSeconds($locked->profile),
                 'cursor' => $locked->cursors,
-                'metrics' => [],
+                'metrics' => ['pack_hash' => \App\Services\DbScanner\ScannerProvenance::packs($rules->rules()), 'config_hash' => $rules->hash()],
             ]);
 
             $locked->forceFill(['last_served_at' => now()])->save();
