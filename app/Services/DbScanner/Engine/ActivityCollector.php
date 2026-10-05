@@ -12,7 +12,7 @@ class ActivityCollector
 {
     public function __construct(private readonly EvidenceSanitizer $sanitizer) {}
 
-    public function collect(MarketDbReader $reader, SchemaInfo $schema, array $admins, array $core): array
+    public function collect(MarketDbReader $reader, SchemaInfo $schema, array $admins, array $core, array $appPasswords = []): array
     {
         $table = $schema->table('aryo_activity_log');
         $c = $reader->compiler();
@@ -107,9 +107,14 @@ class ActivityCollector
         $windows = $reader->select($c->activityLoginWindows($table));
         $successes = $reader->select($c->activitySuccessIps($table));
         $controls = $reader->select($c->activityControlIps($table));
+        $targeted = $reader->select($c->targetedAccounts($table, $schema->table('users')));
+        $keyed = [];
+        foreach (array_chunk(array_unique(array_column($appPasswords['data'] ?? [], 'user_id')), 500) as $ids) {
+            $keyed = array_merge($keyed, $reader->select($c->keyedAccountLogins($table, $ids)));
+        }
         $registrations = $reader->select($c->activityRegistrationBursts($table));
         $email = $reader->select($c->activityEmailHealth($table))[0] ?? [];
-        $ids = array_values(array_unique(array_merge(array_column($events, 'user_id'), array_column($windows, 'user_id'), array_column($successes, 'user_id'), array_column($controls, 'user_id'))));
+        $ids = array_values(array_unique(array_merge(array_column($events, 'user_id'), array_column($windows, 'user_id'), array_column($successes, 'user_id'), array_column($controls, 'user_id'), array_column($targeted, 'user_id'), array_column($keyed, 'user_id'))));
         $users = [];
         foreach (array_chunk($ids, 500) as $chunk) {
             foreach ($reader->select($c->usersByIds($schema->table('users'), $chunk)) as $u) {
@@ -139,6 +144,7 @@ class ActivityCollector
         return ['complete' => $complete && ($admins['complete'] ?? false), 'data' => [
             'events' => $events, 'bursts' => array_slice($bursts, 0, 1000),
             'login_windows' => $decorate($windows, 500), 'success_ips' => $decorate($successes, 2000), 'control_ips' => $decorate($controls, 500),
+            'targeted_accounts' => $decorate($targeted, 500), 'keyed_account_logins' => $decorate($keyed, 500),
             'registrations' => array_slice($registrations, 0, 500),
             'email_health' => ['failed' => (int) ($email['failed'] ?? 0), 'sent' => (int) ($email['sent'] ?? 0), 'smtp_auth' => (int) ($email['smtp_auth'] ?? 0), 'window_start_utc' => $utc((int) ($email['first_time'] ?? 0)), 'window_end_utc' => $utc((int) ($email['last_time'] ?? 0))],
             'staff_history' => array_values($history), 'timezone' => $zone ?: $offset, 'events_read' => $read,

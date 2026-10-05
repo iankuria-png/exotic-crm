@@ -1,6 +1,6 @@
 {
     "pack": "core",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "reviewed_by": "Ian K",
     "reviewed_at": "2026-10-05",
     "license": "Independently authored; thresholds follow wp doctor defaults.",
@@ -937,7 +937,7 @@
             "thresholds": {},
             "lists": [],
             "why": "blog_public = 0 tells search engines not to index the market.",
-            "remediation": "Untick Settings \u2192 Reading \u2192 Discourage search engines.",
+            "remediation": "Untick Settings → Reading → Discourage search engines.",
             "references": [],
             "allowlistable": true,
             "enabled": true
@@ -1252,7 +1252,7 @@
             "thresholds": {},
             "lists": [],
             "why": "Signals supported by the October market database review.",
-            "remediation": "Confirm files on disk. Open wp-admin \u2192 Plugins to clear a dangling entry; if a hidden folder exists, inspect and remove it through the incident workflow. Database inventory cannot prove files exist.",
+            "remediation": "Confirm files on disk. Open wp-admin → Plugins to clear a dangling entry; if a hidden folder exists, inspect and remove it through the incident workflow. Database inventory cannot prove files exist.",
             "references": [],
             "allowlistable": true,
             "enabled": true
@@ -1396,7 +1396,8 @@
             "title": "Campaign and rotating-IP account logins",
             "matcher": "account_campaign",
             "surfaces": [
-                "activity.behaviour"
+                "activity.behaviour",
+                "usermeta.app_passwords"
             ],
             "severity": "critical",
             "confidence": null,
@@ -1409,7 +1410,7 @@
                 "ioc.ips",
                 "allow.admin_email_domains"
             ],
-            "why": "Campaign and rotating-IP account logins. Counts and bounded metadata only; no message bodies or scam usernames stored.",
+            "why": "Detects IOC successes, rapid rotating-IP bursts, control sequences, or many distinct login IPs on a non-staff account with a suspicious key over the available 30-day window. Keyed-account rotation does not require an IOC-pool match.",
             "remediation": "Review the evidence and follow the market incident or operational repair workflow.",
             "references": [],
             "allowlistable": true,
@@ -1437,6 +1438,59 @@
             "lists": [],
             "why": "Reports elevated failure rate over the latest 30-day activity window, or SMTP authentication errors even with a small sample. Includes failed/sent/authentication counts and sample size; no email bodies are stored.",
             "remediation": "Review the evidence and follow the market incident or operational repair workflow.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.targeted_accounts",
+            "category": "access",
+            "kind": "structured",
+            "title": "Accounts under campaign targeting",
+            "matcher": "targeted_accounts",
+            "surfaces": [
+                "activity.behaviour",
+                "users.privileged"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "ioc.ips",
+                "allow.admin_email_domains"
+            ],
+            "why": "Concentrated IOC-range failures against existing non-privileged accounts registered before the available 30-day window and with no successful login in it. Targeting is not compromise.",
+            "remediation": "Review the listed accounts before deciding whether to lock them; do not treat failed attempts as a successful takeover.",
+            "references": [],
+            "allowlistable": true,
+            "enabled": true
+        },
+        {
+            "key": "access.historical_privileged_logins",
+            "category": "access",
+            "kind": "structured",
+            "title": "Historical privileged-login alerts",
+            "matcher": "historical_privileged_logins",
+            "surfaces": [
+                "email.wordfence_logins"
+            ],
+            "severity": "warn",
+            "confidence": null,
+            "profiles": [
+                "standard",
+                "deep"
+            ],
+            "thresholds": {},
+            "lists": [
+                "ioc.ips",
+                "allow.staff_ips"
+            ],
+            "why": "Parses only bounded Wordfence Admin Login alerts into username, IP, reported location and UTC alert-send timestamps. Bodies, recipients, headers and attachments are never persisted. Stored alerts are historical claims, not independently verified logins.",
+            "remediation": "Confirm the historical IPs with IT. Deleted actors remain visible. Use filesystem diagnostics separately; these alerts cannot establish file integrity.",
             "references": [],
             "allowlistable": true,
             "enabled": true

@@ -16,7 +16,7 @@ class FleetCampaignCorrelator
             return [];
         }
         $findings = DbScanFinding::query()->whereIn('status', DbScanFinding::UNRESOLVED_STATUSES)
-            ->whereIn('rule_key', ['access.application_passwords', 'access.activity_behaviour', 'access.account_campaign'])
+            ->whereIn('rule_key', ['access.application_passwords', 'access.activity_behaviour', 'access.account_campaign', 'access.historical_privileged_logins'])
             ->latest('last_seen_at')->limit(4001)->get();
 
         return $this->correlate($findings->take(4000), $platformId, $rules, $findings->count() <= 4000);
@@ -30,6 +30,9 @@ class FleetCampaignCorrelator
             $indicators = [];
             if ($f->rule_key === 'access.application_passwords' && $f->severity === 'critical' && ! empty($d['name'])) {
                 $indicators[] = ['type' => 'application_password', 'value' => $d['name'], 'at' => isset($d['created']) && is_numeric($d['created']) ? gmdate('c', (int) $d['created']) : ($d['at_utc'] ?? null)];
+                if (filter_var($d['last_ip'] ?? '', FILTER_VALIDATE_IP)) {
+                    $indicators[] = ['type' => 'application_password_last_ip', 'value' => $d['last_ip'], 'at' => ! empty($d['last_used']) && is_numeric($d['last_used']) ? gmdate('c', (int) $d['last_used']) : null];
+                }
             }
             // Installs and failures alone cannot be described as successful logins.
             if (($d['kind'] ?? null) === 'new_ip_login' && ! ($d['confirmed_staff_ip'] ?? false) && ! empty($d['ip'])) {
@@ -38,6 +41,11 @@ class FleetCampaignCorrelator
             if ($f->rule_key === 'access.account_campaign') {
                 foreach ($d['ips'] ?? [] as $ip) {
                     $indicators[] = ['type' => 'successful_ip', 'value' => $ip, 'at' => $d['at_utc'] ?? null];
+                }
+            }
+            if ($f->rule_key === 'access.historical_privileged_logins') {
+                foreach ($d['samples'] ?? [] as $sample) {
+                    $indicators[] = ['type' => 'historical_login_alert_ip', 'value' => $sample['ip'], 'at' => $sample['first_alert_utc'] ?? null];
                 }
             }
             foreach ($indicators as $i) {

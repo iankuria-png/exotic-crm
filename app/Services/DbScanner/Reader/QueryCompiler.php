@@ -481,6 +481,54 @@ class QueryCompiler
         return $this->make('activity_email_health', "SELECT SUM(CASE WHEN action = 'failed' THEN 1 ELSE 0 END) AS failed, SUM(CASE WHEN action = 'sent' THEN 1 ELSE 0 END) AS sent, SUM(CASE WHEN action = 'failed' AND LOWER(object_name) LIKE '%could not authenticate%' THEN 1 ELSE 0 END) AS smtp_auth, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM ".$t." WHERE object_type = 'Emails' AND action IN ('failed','sent') AND hist_time >= (SELECT MAX(hist_time) FROM ".$t.') - 2592000');
     }
 
+    /** Long-window rotation for keyed accounts, independent of the IOC pool. */
+    public function keyedAccountLogins(string $table, array $ids): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'user_id', 'action']);
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        if ($ids === [] || count($ids) > 500) {
+            throw new ReaderException(ReaderException::REJECTED_TEMPLATE);
+        }
+        $t = $this->q($table);
+
+        return $this->make('keyed_account_logins', 'SELECT user_id, COUNT(*) AS n, COUNT(DISTINCT hist_ip) AS ips, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM '.$t." WHERE action = 'logged_in' AND user_id IN (".$this->placeholders($ids).') AND hist_time >= (SELECT MAX(hist_time) FROM '.$t.') - 2592000 GROUP BY user_id HAVING COUNT(*) >= 10 AND COUNT(DISTINCT hist_ip) >= 5 ORDER BY user_id', $ids);
+    }
+
+    /** Only existing accounts with concentrated failures are identified. */
+    public function targetedAccounts(string $table, string $users): CompiledQuery
+    {
+        $this->assertColumns($table, ['hist_time', 'hist_ip', 'user_id', 'action', 'object_name']);
+        $this->assertColumns($users, ['ID', 'user_login', 'user_registered']);
+        $t = $this->q($table);
+        $epoch = $this->dialect === 'sqlite' ? "CAST(strftime('%s', u.user_registered) AS INTEGER)" : 'UNIX_TIMESTAMP(u.user_registered)';
+
+        $login = $this->dialect === 'sqlite' ? 'LOWER(object_name)' : 'LOWER(CONVERT(object_name USING utf8mb4)) COLLATE utf8mb4_bin';
+        $userLogin = $this->dialect === 'sqlite' ? 'LOWER(u.user_login)' : 'LOWER(CONVERT(u.user_login USING utf8mb4)) COLLATE utf8mb4_bin';
+        // Aggregate before joining users; mixed import collations cannot break comparison.
+        $failures = '(SELECT '.$login.' AS login, hist_ip AS ip, COUNT(*) AS n, MIN(hist_time) AS first_time, MAX(hist_time) AS last_time FROM '.$t." WHERE action = 'failed_login' AND hist_time >= (SELECT MAX(hist_time) FROM ".$t.') - 2592000 GROUP BY login, hist_ip HAVING COUNT(*) >= 100)';
+
+        return $this->make('targeted_accounts', 'SELECT u.ID AS user_id, f.ip, f.n, f.first_time, f.last_time FROM '.$failures.' f JOIN '.$this->q($users).' u ON '.$userLogin.' = f.login WHERE '.$epoch.' < (SELECT MAX(hist_time) FROM '.$t.') - 2592000 AND NOT EXISTS (SELECT 1 FROM '.$t." s WHERE s.action = 'logged_in' AND s.user_id = u.ID AND s.hist_time >= (SELECT MAX(hist_time) FROM ".$t.') - 2592000) ORDER BY f.n DESC, u.ID, f.ip LIMIT 501');
+    }
+
+    /** Dedicated bounded alert extraction. No recipients, headers or attachments. */
+    public function wordfenceLoginAlerts(string $table, int $after): CompiledQuery
+    {
+        $this->assertColumns($table, ['id', 'subject', 'message', 'sent_date']);
+        $epoch = $this->dialect === 'sqlite' ? "CAST(strftime('%s', sent_date) AS INTEGER)" : 'UNIX_TIMESTAMP(sent_date)';
+
+        return $this->make('wordfence_login_alerts', 'SELECT id, '.$epoch.' AS sent_utc, '.$this->octetLength('message').' AS len, '.$this->byteSlice('message', 16384).' AS alert FROM '.$this->q($table)." WHERE id > ? AND subject LIKE '[Wordfence Alert]%Admin Login%' ORDER BY id LIMIT 100", [$after]);
+    }
+
+    public function usersByLogins(string $users, array $logins): CompiledQuery
+    {
+        $this->assertColumns($users, ['ID', 'user_login']);
+        if ($logins === [] || count($logins) > 500) {
+            throw new ReaderException(ReaderException::REJECTED_TEMPLATE);
+        }
+
+        return $this->make('users_by_logins', 'SELECT ID AS id, user_login FROM '.$this->q($users).' WHERE LOWER(user_login) IN ('.$this->placeholders($logins).')', array_map('strtolower', $logins));
+    }
+
     public function lowerIdUsersRegisteredAfter(string $users, int $id, string $after): CompiledQuery
     {
         $this->assertColumns($users, ['ID', 'user_registered']);

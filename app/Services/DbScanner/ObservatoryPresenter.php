@@ -26,6 +26,7 @@ class ObservatoryPresenter
 
         return [
             'id' => $run->id,
+            'coverage_scope' => ['scope' => 'database', 'filesystem_inspected' => false, 'live_responses_inspected' => false],
             'pass_id' => $run->pass_id,
             'sweep_id' => $run->sweep_id,
             'platform_id' => $run->platform_id,
@@ -144,6 +145,7 @@ class ObservatoryPresenter
 
         return [
             'id' => $finding->id,
+            'coverage_scope' => ['scope' => 'database', 'filesystem_inspected' => false, 'live_responses_inspected' => false],
             'platform_id' => $finding->platform_id,
             'market' => $names[$finding->platform_id] ?? null,
             'rule_key' => $finding->rule_key,

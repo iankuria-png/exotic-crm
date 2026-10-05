@@ -159,6 +159,7 @@ export function FindingDrawer({ findingId, onClose, canOperate, canConfigure }) 
         >
             {!findingId ? null : query.isError ? <ErrorState error={query.error} onRetry={query.refetch} /> : !f ? <Loading rows={5} /> : (
                 <div className="space-y-4 text-sm">
+                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">Database evidence only. Filesystem and live responses were not inspected. This finding cannot establish whether files are clean.</p>
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-3">
                         <div><dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rule</dt><dd className="crm-mono text-xs">{f.rule_key}</dd></div>
                         <div><dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Pack</dt><dd className="text-xs">{f.pack} v{f.pack_version} · <CopyId value={f.rule_version_hash} label="rule version" /></dd></div>

@@ -208,9 +208,17 @@ class InventoryCollector
                 return [['complete' => true, 'data' => ['total' => (int) ($row['total'] ?? 0), 'suspicious' => (int) ($row['suspicious'] ?? 0)]], $complete];
 
             case 'activity.behaviour':
-                $data = (new ActivityCollector($this->sanitizer))->collect($reader, $schema, $this->administrators($reader, $schema), $this->coreOptions($reader, $schema));
+                $data = (new ActivityCollector($this->sanitizer))->collect($reader, $schema, $this->administrators($reader, $schema), $this->coreOptions($reader, $schema), $this->applicationPasswords($reader, $schema));
 
                 return [$data, $data['complete'] ? $complete : ['status' => 'incomplete', 'reason' => 'event_limit']];
+
+            case 'email.wordfence_logins':
+                $data = (new WordfenceAlertCollector)->collect($reader, $schema);
+
+                return [$data, $data['complete'] ? $complete : ['status' => 'incomplete', 'reason' => 'alert_metadata_incomplete']];
+
+            case 'filesystem.visibility':
+                return [['complete' => false, 'data' => ['scope' => 'database', 'filesystem_inspected' => false]], ['status' => 'excluded', 'reason' => 'filesystem_not_inspected']];
 
             case 'options.autoload':
                 $summary = $reader->select($c->autoloadSummary($schema->table('options')))[0] ?? [];

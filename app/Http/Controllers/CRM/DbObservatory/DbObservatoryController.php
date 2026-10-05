@@ -384,7 +384,9 @@ class DbObservatoryController extends Controller
                 ->map(fn ($r) => ['rule_key' => $r->rule_key, 'surface_key' => $r->surface_key, 'status' => $r->status, 'reason' => $r->reason, 'matches' => (int) $r->matches])
                 ->values(),
             'time_spanning' => $model->sweep_id ? DbScanMarketRun::query()->where('sweep_id', $model->sweep_id)->count() > 1 : false,
-            'statement' => $this->coverageStatement($model, $counts->all()),
+            'statement' => $this->coverageStatement($model, $counts->all()).' Coverage is database-only; filesystem and live responses were not inspected.',
+            'coverage_scope' => ['scope' => 'database', 'filesystem_inspected' => false, 'live_responses_inspected' => false],
+            'scope_gaps' => [['surface_key' => 'filesystem.visibility', 'status' => 'excluded', 'reason' => 'filesystem_not_inspected']],
         ]);
     }
 

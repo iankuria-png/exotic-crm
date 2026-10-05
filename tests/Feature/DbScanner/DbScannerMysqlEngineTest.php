@@ -204,4 +204,44 @@ class DbScannerMysqlEngineTest extends TestCase
             $this->root->exec("DROP USER IF EXISTS '".$siteUser."'@'localhost'");
         }
     }
+
+    public function test_historical_alert_targeting_and_keyed_rotation_templates_on_mysql(): void
+    {
+        $r = $this->root;
+        $r->exec('CREATE TABLE wp_aryo_activity_log (histid BIGINT AUTO_INCREMENT PRIMARY KEY, hist_time BIGINT, hist_ip VARCHAR(45), user_id BIGINT, object_type VARCHAR(40), object_name VARCHAR(200), action VARCHAR(40), request_source VARCHAR(40)) ENGINE=InnoDB');
+        $r->exec('CREATE TABLE wp_email_log (id BIGINT AUTO_INCREMENT PRIMARY KEY, subject VARCHAR(500), message TEXT, sent_date TIMESTAMP) ENGINE=InnoDB');
+        $r->exec('ALTER TABLE wp_aryo_activity_log MODIFY object_name VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci');
+        $r->exec('ALTER TABLE wp_users MODIFY user_login VARCHAR(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        $r->exec("INSERT INTO wp_users (user_login,user_pass,user_email,user_registered,display_name) VALUES ('keyed-member','hash','member@example.test','2024-01-01','Member'),('target-member','hash','target@example.test','2024-01-01','Target')");
+        $r->prepare("INSERT INTO wp_usermeta (user_id,meta_key,meta_value) VALUES (2,'_application_passwords',?)")->execute([serialize([['name' => 'auto-bootstrap', 'password' => 'synthetic-key-private', 'last_ip' => '176.53.159.25']])]);
+        $e = $r->prepare("INSERT INTO wp_aryo_activity_log (hist_time,hist_ip,user_id,object_type,object_name,action,request_source) VALUES (?,?,?,'Users',?,?,'web')");
+        $t = strtotime('2026-09-06T10:00:00Z');
+        for ($n = 0; $n < 19; $n++) {
+            $e->execute([$t + $n * 86400, '203.0.113.'.($n + 1), 2, 'keyed-member', 'logged_in']);
+        }
+        for ($n = 0; $n < 120; $n++) {
+            $e->execute([$t + $n, '91.92.241.12', 0, 'target-member', 'failed_login']);
+        }
+        $r->exec("SET time_zone='+03:00'");
+        $r->prepare('INSERT INTO wp_email_log (subject,message,sent_date) VALUES (?,?,?)')->execute(['[Wordfence Alert] mysql-market.test Admin Login', 'A user with username "deleted-admin" who has administrator access signed in to your WordPress site.
+User IP: 185.174.136.197
+User location: Test City
+private-body-never-stored', '2023-08-15 15:00:00']);
+        $r->exec("SET time_zone='+00:00'");
+        $platform = $this->marketPlatform('MySQL update', 'mysql-market.test');
+        $connection = DbScanConnection::query()->create([
+            'platform_id' => $platform->id, 'driver' => 'mysql', 'host' => 'localhost', 'socket' => getenv('DB_SCANNER_IT_SOCKET'),
+            'database' => $this->schema, 'username' => $this->reader, 'password' => $this->readerPassword, 'prefix' => 'wp_',
+            'host_group' => 'local', 'config_version' => 1, 'enabled' => true, 'preflight_status' => 'never',
+        ]);
+        $this->assertSame('passed', app(Preflight::class)->run($connection, null)['status']);
+        app(PassController::class)->start([$platform->id], 'standard', 'manual');
+        $this->drain();
+        $this->assertSame(19, DbScanFinding::query()->where('rule_key', 'access.account_campaign')->firstOrFail()->evidence['details']['keyed_rotation']['distinct_ips']);
+        $this->assertSame('warn', DbScanFinding::query()->where('rule_key', 'access.targeted_accounts')->firstOrFail()->severity);
+        $f = DbScanFinding::query()->where('rule_key', 'access.historical_privileged_logins')->firstOrFail();
+        $this->assertSame('2023-08-15T12:00:00Z', $f->evidence['details']['at_utc']);
+        $this->assertTrue($f->evidence['details']['actor_account_missing']);
+        $this->assertStringNotContainsString('private-body-never-stored', json_encode(DbScanFinding::query()->get()));
+    }
 }

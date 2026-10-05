@@ -20,7 +20,7 @@ class InventoryMatchers
         'autoload_size', 'mass_created_posts', 'orphan_authors', 'expired_transients', 'revision_bloat',
         'slug_aliases', 'orphaned_meta', 'action_scheduler_backlog', 'unexpected_tables', 'table_integrity',
         'invisible_plugins', 'activity_behaviour', 'md5_admin_passwords', 'registration_spam', 'account_campaign', 'email_delivery_health',
-        'table_growth', 'role_privilege_risk', 'lookalike_email_domains', 'login_attack_pressure',
+        'table_growth', 'role_privilege_risk', 'lookalike_email_domains', 'login_attack_pressure', 'targeted_accounts', 'historical_privileged_logins',
     ];
 
     /**
@@ -158,7 +158,7 @@ class InventoryMatchers
             $external = array_values(array_diff($ips, $trustedIps));
             $deceptive = (bool) preg_match('/system.?key|do.?not.?delete|injector|bootstrap|xr-auto/i', $name);
             // A CRM name family still requires every recorded IP to be trusted; deceptive names never bypass.
-            if (preg_match('/^(?:EWMS|Exotic[ -]CRM(?: Sync)?)$/i', $name) && ! $deceptive && $external === [] && $ips !== []) {
+            if ((preg_match('/^(?:EWMS|Exotic[ -]CRM(?: Sync)?)$/i', $name) || ($name === 'tzz' && $rules->siteHost() === 'exotic-tz.net')) && ! $deceptive && $external === [] && $ips !== []) {
                 continue;
             }
             $risk = ! $entry['privileged'] || $deceptive || $external !== [];
@@ -282,17 +282,19 @@ class InventoryMatchers
     {
         $accounts = [];
         $data = $c['activity.behaviour']['data'] ?? [];
-        foreach (['login_windows', 'success_ips', 'control_ips'] as $type) {
+        $suspiciousKeyUsers = array_column(array_filter($c['app_passwords']['data'] ?? [], fn ($r) => ! ($r['privileged'] ?? true) && ! preg_match('/^(?:EWMS|Exotic[ -]CRM(?: Sync)?)$/i', $r['name'])), 'user_id');
+        foreach (['login_windows', 'success_ips', 'control_ips', 'keyed_account_logins'] as $type) {
             foreach ($data[$type] ?? [] as $r) {
                 $staff = HostContext::matches((string) ($r['email_domain'] ?? ''), $rules->list('allow.admin_email_domains', $key));
                 $ioc = NetworkIndicators::matches((string) ($r['ip'] ?? ''), $rules->list('ioc.ips', $key));
                 $rotating = $type === 'login_windows' && ! $staff && (int) $r['n'] >= 10 && (int) $r['ips'] >= 5 && ((int) $r['last_time'] - (int) $r['first_time']) / max(1, (int) $r['n'] - 1) <= 30;
                 $control = $type === 'control_ips';
-                if (! $ioc && ! $rotating && ! $control) {
+                $keyRotation = $type === 'keyed_account_logins' && ! $staff && in_array((int) $r['user_id'], $suspiciousKeyUsers, true);
+                if (! $ioc && ! $rotating && ! $control && ! $keyRotation) {
                     continue;
                 }
                 $id = (int) $r['user_id'];
-                $accounts[$id] ??= ['user_id' => $id, 'login' => $r['login'] ?? null, 'at_utc' => $r['at_utc'], 'ioc_successes' => 0, 'ips' => [], 'rotating_windows' => 0, 'control_failures' => 0];
+                $accounts[$id] ??= ['user_id' => $id, 'login' => $r['login'] ?? null, 'at_utc' => $r['at_utc'], 'ioc_successes' => 0, 'ips' => [], 'rotating_windows' => 0, 'control_failures' => 0, 'keyed_rotation' => null];
                 $a = &$accounts[$id];
                 $a['at_utc'] = min($a['at_utc'], $r['at_utc']);
                 if ($ioc && $type === 'success_ips') {
@@ -301,6 +303,9 @@ class InventoryMatchers
                 }
                 $a['rotating_windows'] += $rotating ? 1 : 0;
                 $a['control_failures'] += $control ? (int) $r['failures'] : 0;
+                if ($keyRotation) {
+                    $a['keyed_rotation'] = ['logins' => (int) $r['n'], 'distinct_ips' => (int) $r['ips'], 'window' => '30 days ending at latest available activity'];
+                }
                 if ($control && isset($r['ip'])) {
                     $a['ips'][$r['ip']] = true;
                 }
@@ -311,7 +316,60 @@ class InventoryMatchers
         foreach ($accounts as $id => $a) {
             $a['ips'] = array_slice(array_keys($a['ips']), 0, 30);
             $hits[] = $this->hit($key, 'Account logins match campaign or rapid rotating-IP behaviour', 'aryo_activity_log', 'campaign:account:'.$id, $a,
-                array_values(array_filter([$a['ioc_successes'] ? 'campaign_ip_success' : null, $a['rotating_windows'] ? 'rotating_ip_login_burst' : null, $a['control_failures'] ? 'success_then_other_user_failures' : null])), 'activity.behaviour', $id, 'strong', 'critical');
+                array_values(array_filter([$a['ioc_successes'] ? 'campaign_ip_success' : null, $a['rotating_windows'] ? 'rotating_ip_login_burst' : null, $a['control_failures'] ? 'success_then_other_user_failures' : null, $a['keyed_rotation'] ? 'keyed_account_rotating_ips' : null])), 'activity.behaviour', $id, 'strong', 'critical');
+        }
+
+        return $hits;
+    }
+
+    private function targetedAccounts(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $accounts = [];
+        $privileged = array_column($c['administrators']['data']['admins'] ?? [], 'id');
+        $staffTokens = array_map(fn ($email) => \App\Services\DbScanner\Engine\InventoryCollector::hmac(strtolower($email)), array_merge($rules->list('allow.it_emails', $key), $rules->list('allow.admin_emails', $key)));
+        foreach ($c['activity.behaviour']['data']['targeted_accounts'] ?? [] as $row) {
+            if (! NetworkIndicators::matches((string) $row['ip'], $rules->list('ioc.ips', $key)) || in_array((int) $row['user_id'], $privileged, true)
+                || in_array($row['email_token'] ?? '', $staffTokens, true)) {
+                continue;
+            }
+            $id = (int) $row['user_id'];
+            $accounts[$id] ??= ['user_id' => $id, 'login' => $row['login'] ?? null, 'attempts' => 0, 'ips' => [], 'at_utc' => $row['at_utc']];
+            $accounts[$id]['attempts'] += (int) $row['n'];
+            $accounts[$id]['ips'][] = $row['ip'];
+        }
+
+        return $accounts === [] ? [] : [$this->hit($key, 'Accounts under campaign targeting; no successful login in the available window', 'aryo_activity_log', 'targeted:market', [
+            'account_count' => count($accounts), 'accounts' => array_slice(array_values($accounts), 0, 50), 'list_complete' => count($accounts) <= 50,
+            'window' => '30 days ending at latest available activity', 'interpretation' => 'Failed attempts are targeting evidence, not proof of compromise. Accounts registered before this window and had no recorded successful login within it.',
+        ], ['campaign_account_targeting'], 'activity.behaviour', null, 'strong', 'warn')];
+    }
+
+    private function historicalPrivilegedLogins(string $key, RuleSet $rules, array $c, array $p): array
+    {
+        $accounts = [];
+        foreach ($c['email.wordfence_logins']['data']['logins'] ?? [] as $row) {
+            $ioc = NetworkIndicators::matches($row['ip'], $rules->list('ioc.ips', $key));
+            if (! $ioc && NetworkIndicators::matches($row['ip'], $rules->list('allow.staff_ips', $key))) {
+                continue;
+            }
+            $name = strtolower($row['login']);
+            $accounts[$name] ??= ['login' => $row['login'], 'user_id' => $row['user_id'], 'actor_account_missing' => $row['actor_account_missing'], 'alerts' => 0, 'ioc_alerts' => 0, 'ips' => [], 'samples' => [], 'at_utc' => $row['first_alert_utc']];
+            $accounts[$name]['alerts'] += $row['alerts'];
+            $accounts[$name]['ioc_alerts'] += $ioc ? $row['alerts'] : 0;
+            $accounts[$name]['ips'][$row['ip']] = true;
+            if (count($accounts[$name]['samples']) < 20) {
+                $accounts[$name]['samples'][] = ['ip' => $row['ip'], 'location' => $row['location'], 'first_alert_utc' => $row['first_alert_utc'], 'last_alert_utc' => $row['last_alert_utc'], 'alerts' => $row['alerts']];
+            }
+            $accounts[$name]['at_utc'] = min($accounts[$name]['at_utc'], $row['first_alert_utc']);
+        }
+        $hits = [];
+        foreach ($accounts as $name => $row) {
+            $row['distinct_ips'] = count($row['ips']);
+            $row['ips'] = array_slice(array_keys($row['ips']), 0, 30);
+            $row['metadata_complete'] = $c['email.wordfence_logins']['complete'] ?? false;
+            $row['source'] = $c['email.wordfence_logins']['data']['source'];
+            $hits[] = $this->hit($key, 'Historical privileged-login alerts from unconfirmed addresses'.($row['actor_account_missing'] ? ' — actor account no longer exists' : ''), 'email_log', 'wordfence:'.hash('sha256', $name), $row,
+                ['historical_admin_login_alert', $row['ioc_alerts'] ? 'campaign_ip_in_alert' : 'unconfirmed_login_address'], 'email.wordfence_logins', $row['user_id'], 'needs_review', $row['ioc_alerts'] ? 'critical' : 'warn');
         }
 
         return $hits;

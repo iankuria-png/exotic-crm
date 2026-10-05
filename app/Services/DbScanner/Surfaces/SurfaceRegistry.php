@@ -86,6 +86,7 @@ class SurfaceRegistry
             'actionscheduler.summary' => ['actionscheduler_actions'],
             'users.email_domains', 'users.registration_health' => ['users'],
             'activity.failed_logins', 'activity.behaviour' => ['aryo_activity_log'],
+            'email.wordfence_logins' => ['email_log', 'users'],
             default => [],
         };
     }
@@ -104,6 +105,7 @@ class SurfaceRegistry
             new Surface('schema.tables', 'inventory', 'Base tables and storage', profiles: $all),
             new Surface('schema.triggers', 'inventory', 'Database triggers', profiles: $all),
             new Surface('schema.events_routines', 'inventory', 'Scheduled events and stored routines', profiles: $all),
+            new Surface('filesystem.visibility', 'inventory', 'Filesystem outside database scan coverage', profiles: $all, core: false),
             new Surface('options.core', 'inventory', 'Core and security options', table: 'options', profiles: $all),
             new Surface('users.privileged', 'inventory', 'Privileged accounts and capability rows', table: 'usermeta', profiles: $all),
             new Surface('usermeta.app_passwords', 'inventory', 'Application-password metadata for every account', table: 'usermeta', profiles: $all),
@@ -117,6 +119,7 @@ class SurfaceRegistry
             new Surface('users.registration_health', 'inventory', 'Registration spam across all accounts (counts only)', table: 'users', profiles: $standard),
             new Surface('users.email_domains', 'inventory', 'Account email domains (counts only)', table: 'users', profiles: $standard),
             new Surface('activity.behaviour', 'inventory', 'Activity Log account campaigns, installs and daily pressure', table: 'aryo_activity_log', profiles: $standard, core: false),
+            new Surface('email.wordfence_logins', 'inventory', 'Wordfence historical administrator-login alert metadata', table: 'email_log', profiles: $standard, core: false),
             new Surface('activity.failed_logins', 'inventory', 'Failed logins in the Activity Log (7 days)', table: 'aryo_activity_log', profiles: $standard, core: false),
             new Surface('actionscheduler.summary', 'inventory', 'Action Scheduler backlog', table: 'actionscheduler_actions', profiles: $deep, core: false),
 

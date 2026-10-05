@@ -96,7 +96,11 @@ class SweepFinalizer
                 return 'completed_with_gaps';
             }
         }
-        foreach ((array) ($state['inventory']['surfaces'] ?? []) as $s) {
+        foreach ((array) ($state['inventory']['surfaces'] ?? []) as $key => $s) {
+            // A completed database scan still explicitly excludes filesystem coverage.
+            if ($key === 'filesystem.visibility' && ($s['status'] ?? null) === 'excluded' && ($s['reason'] ?? null) === 'filesystem_not_inspected') {
+                continue;
+            }
             if (! in_array($s['status'] ?? null, ['complete', 'not_applicable'], true)) {
                 return 'completed_with_gaps';
             }
