@@ -1,17 +1,17 @@
 # Task: CRM commercial core and operations for monetized profile content
 
 - ID / project: monetized-content / Exotic CRM + WordPress
-- Updated / status: 2026-09-28, implemented and live for Kenya. Protected delivery and the owner Private content panel were verified after production configuration. No real-money purchase, pass activation, restoration, or settlement was performed during this rollout.
+- Updated / status: 2026-10-09. Guided rollout CRM release `8ff5b117` is pushed to `origin/main` (remote verified); WordPress support is local and uncommitted. Neither repair is deployed. The original monetized-content feature was implemented and live for Kenya on 28 September. Protected delivery and the owner Private content panel were verified after production configuration. No real-money purchase, pass activation, restoration, or settlement was performed during this rollout.
 - Goal and acceptance criteria: own bi-weekly/monthly Monetize pricing, active-listing subsidies, passes, asset/single/bundle offers, entitlements, settlement and full-listed-price spend-wallet credits. Settings → Monetize is the sole audited control plane for global defaults, market overrides and WordPress runtime behavior; WordPress retains protected-file ownership.
-- Scope authorized by the current request: reuse existing provider routing, contact-unlock checkout patterns and advertiser wallets; add a Web Visitors-quality Monetize page and market configuration; coordinate with the WP profile media owner/visitor experience.
+- Scope authorized by the current request: implement the pasted guided market-rollout repair across CRM and the WP sync plugin, retaining Kenya’s configuration and leaving Uganda Off. Ian subsequently requested shipping the CRM changes; commit/push was authorized. No production activation, real-money canary or cPanel/SSH automation was requested.
 - Source plan / decisions / relevant code: authoritative source and rendered plan are in the WP repository at `/Users/ian/Local Sites/exotic/app/public/plans/monetized-content-2026-09-27/plan.mdx` and `plan.html`. Relevant CRM sources inspected include `PaymentCompletionService`, `BillingGatewayService`, `WalletService`, `WalletCheckoutService`, contact-unlock models/services/controllers, `WebVisitors.jsx`, `ClientDetail.jsx`, `Sidebar.jsx`, `router.jsx` and `routes/api.php`.
 - History reconciliation: CRM implementation commits are `bc9ef6ec`, `aea5da64`, and `ea2230e5`; the coordinated WP implementation is local commit `253111205`. Preserve the current uncommitted contact-unlock access recovery and all other unrelated work.
 - Done with evidence: CRM adds Settings → Monetize, revisioned market/runtime policy, passes, offers, purchases, immutable entitlements, creator credit after a settled live sale, staff review and operations views. WordPress adds private media storage, protected delivery, purchase recovery and advertiser management. The missing `VisitorContentPurchase` model found in the live panel was restored in `aea5da64`. `ea2230e5` keeps unsaved setup choices visible and returns an actionable provider error instead of a generic server failure.
-- Next concrete action: assign the rollout UX/automation repair below, then run a controlled end-to-end transaction only after the repair’s approval and production safeguards are reviewed.
-- Verification: focused regression passed for the provider-validation path (1 test, 3 assertions); PHP lint and Pint passed for its CRM changes; CRM frontend production build completed. The full monetization suite was started but did not produce a reliable final result in the captured tool session, so it is not claimed as passed. Production evidence below verifies configuration and delivery only.
-- Deployment: live on Kenya as of 28 Sep 2026. The feature’s configuration, protected delivery and owner availability are verified. A controlled end-to-end paid purchase, entitlement restoration and settled creator-credit test remains deliberately unperformed; do not infer it from readiness.
-- Files/hunks owned; unrelated working-tree/index changes to preserve: this task owns only this task record. Preserve all existing CRM modifications/untracked files, especially contact-unlock recovery and guided KYC.
-- Unresolved questions / blockers: none for the current live configuration. The repair backlog must be addressed before additional market rollouts.
+- Next concrete action: manually upload plugin support and pull CRM `origin/main`, run the migration/release check, then verify Kenya and take Uganda through readiness while keeping it Off. Follow [the new handoff](../../monetize-market-rollout-2026-10-09.md); payment testing remains separate.
+- Verification: 9 October repair — 69 monetization tests / 367 assertions; final setup rerun 21 / 99; seven Chromium UI fixture tests; 196 isolated WP checks; 12 CRM + four WP PHP lint files; 11-file Pint check; both release checks and Vite build pass. Browser/API/host limitations and existing build warnings are recorded in the handoff. Historical production evidence below verifies configuration/delivery, not payments.
+- Deployment: original feature live on Kenya as of 28 Sep 2026; guided rollout CRM `8ff5b117` is committed/pushed with matching isolated assets; WordPress support is uncommitted. Deployment and production verification remain pending. Uganda was not activated. A paid purchase, restoration or creator settlement remains untested and must not be inferred from readiness.
+- Files/hunks owned; unrelated working-tree/index changes to preserve: the rollout handoff maps the new setup services/migration/command/UI/tests and modified Monetize sources. Only the new setup-route hunk in mixed `routes/api.php` belongs to this task. Preserve all other work, especially Observatory/containment source/routes, state edits and shared build inputs.
+- Unresolved questions / blockers: no consequential product decisions remain for implementation. CRM release isolation and push are complete; plugin upload, cPanel deployment and actual-market verification remain; real-money testing is separate.
 
 ## Production rollout record — Kenya, 28 Sep 2026
 
@@ -110,3 +110,48 @@ full record in the WP task `docs/agent/tasks/expired-video-paywall-and-free-pass
 - Verification: 5 new tests in `VideoTeaserTest`; 48 monetization tests; migrate/rollback/migrate
   on scratch SQLite. Any deploy order is safe; full WP record in the WordPress task
   `docs/agent/tasks/expired-video-paywall-and-free-passes.md`.
+
+
+## Checkpoint — 9 October: guided market rollout repair
+
+Implemented the supplied repair specification on existing main checkouts. Guided setup
+uses stored preflight/setup reports and current revision/URL/environment/provider state;
+connection, actual market identity, public canonical repair, PHP/storage/video facts, wallet
+return authentication, providers, saved pricing, six delivery checks and explicit audited
+activation have actionable outcomes. Save errors retain staff/market-scoped browser drafts,
+with inline validation and durable feedback. Live activation requires a production provider,
+fresh complete checks and WordPress acknowledgement, with compensation on lost confirmation.
+
+An established Live market may keep the old signed delivery contract when only the new
+preflight endpoint is missing (404). New activation never uses that compatibility path.
+The release checker detects missing models/services/compiled assets; the nullable report
+migration changes no market mode. Full deployment/file map and actual verification limits:
+[handoff](../../monetize-market-rollout-2026-10-09.md).
+
+Verification: complete monetization suite **69 tests / 367 assertions passed**, including
+the migration rollback/up and legacy Live compatibility. Seven actual-component Chromium
+fixture tests and 196 isolated WP checks pass; build passes with existing
+CSS/bundle warnings. No live account, payment, production mutation, deployment, commit or
+push. Shared frontend build includes unrelated existing dirty sources, so coordinate release
+isolation before an authorized commit. Kenya's original live evidence remains historical;
+no current production parity or real-money success is claimed.
+
+Final checks: PHP syntax (12 CRM + four WP files), scoped Pint (11 files), both release
+completeness commands and whitespace checks passed. Final production build references
+`app-C5nfynP2.js` and `app-DxK8dOVo.css`. No broad staging or commit was performed;
+no changelog commit workflow was triggered.
+
+Final setup-only rerun after the last status/deep-link edits: **21 tests / 99 assertions
+passed**. The isolated Vite fixture server was stopped after browser verification.
+
+## Shipment — 9 October
+
+Ian authorized CRM shipping. Release `8ff5b117` was pushed to `origin/main`; the exact
+remote SHA was verified. The release was exported from HEAD plus task-owned files,
+including only the setup route hunk, and rebuilt independently of shared Observatory work.
+The exact snapshot passes 69 Monetize tests / 367 assertions, seven browser tests, 12-file
+syntax, 11-file Pint, release completeness and production build. Final shipped assets:
+`app-zYdPGJTB.js` / `app-kVXqvXIT.css`. Existing build warnings remain.
+The [handoff](../../monetize-market-rollout-2026-10-09.md) has the paste-ready cPanel
+pull/migration/check/cache/worker block. No plugin commit/upload, production mutation,
+Uganda activation or real payment occurred. Manual deployment/verification remains.
