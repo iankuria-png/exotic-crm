@@ -61,6 +61,7 @@ class Preflight
 
         $token = Str::random(40);
         $run = DB::transaction(function () use ($connection, $actorId, $token, $loadOverride) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $connection->platform_id]);
             if ($this->admission->marketBusy((int) $connection->platform_id)) {
                 throw new MarketBusyException([(int) $connection->platform_id]);
             }
@@ -158,6 +159,7 @@ class Preflight
 
         $passed = $code === null;
         DB::transaction(function () use ($connection, $run, $passed, $code, $capabilities, $actorId, $message, $metrics, $fingerprint) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $before = ['preflight_status' => $connection->preflight_status, 'preflight_config_version' => $connection->preflight_config_version];
             DbScanConnection::query()->whereKey($connection->id)->update([
                 'preflight_status' => $passed ? 'passed' : 'failed',

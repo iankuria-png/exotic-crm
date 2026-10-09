@@ -207,6 +207,12 @@ class Kernel extends ConsoleKernel
         // and recovery are bounded CRM-only commands. The two workers consume
         // only the db_scan queue, one 45-second slice each per minute, and are
         // not even started while no scanner run is waiting or running.
+        if (\Illuminate\Support\Facades\Schema::hasTable('db_containment_operations')) {
+            $schedule->command('crm:db-containment-tick')->everyMinute()->withoutOverlapping(5)->onOneServer()->runInBackground();
+            $schedule->command('queue:work database_long --queue=db-containment --max-time=50 --max-jobs=1 --tries=1 --timeout=120 --sleep=1')
+                ->name('db_containment_worker')->everyMinute()->withoutOverlapping(5)->onOneServer()->runInBackground();
+        }
+
         if ((bool) config('db_scanner.enabled')) {
             $schedule->command('crm:db-scan-dispatch')
                 ->name('crm_db_scan_dispatch')

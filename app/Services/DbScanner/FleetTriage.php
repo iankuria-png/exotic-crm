@@ -24,7 +24,7 @@ class FleetTriage
                     $this->add($identities, $type, $d[$field], $finding);
                 }
             }
-            foreach ($d['ips'] ?? [] as $ip) {
+            foreach (array_unique([...($d['ips'] ?? []), ...($d['observed_ips'] ?? [])]) as $ip) {
                 if (is_string($ip)) {
                     $this->add($identities, 'ip', $ip, $finding);
                 }

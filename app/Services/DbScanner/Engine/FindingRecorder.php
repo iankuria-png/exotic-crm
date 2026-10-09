@@ -139,7 +139,7 @@ class FindingRecorder
             $reopen = false;
             $reason = null;
 
-            if ($finding->status === 'resolved') {
+            if (in_array($finding->status, ['resolved', 'contained'], true)) {
                 $reopen = true;
                 $reason = 'Seen again after resolution.';
             } elseif ($finding->status === 'snoozed' && $finding->snoozed_until && $finding->snoozed_until->isPast()) {

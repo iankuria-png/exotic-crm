@@ -28,6 +28,7 @@ class RunTerminator
     public function terminate(DbScanMarketRun $run, string $status, ?string $errorCode): string
     {
         $result = DB::transaction(function () use ($run, $status, $errorCode) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
             if (! $locked || $locked->isTerminal()) {
                 return $locked?->status ?? $status;
@@ -83,6 +84,7 @@ class RunTerminator
     public function pause(DbScanMarketRun $run, string $reason): string
     {
         $result = DB::transaction(function () use ($run, $reason) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
             if (! $locked || $locked->isTerminal()) {
                 return $locked?->status ?? 'paused';

@@ -154,7 +154,7 @@ class InventoryMatchers
         $trustedIps = $rules->list('allow.crm_ips', $key);
         foreach ($c['app_passwords']['data'] ?? [] as $entry) {
             $name = (string) $entry['name'];
-            $ips = array_filter([$entry['created_ip'] ?? null, $entry['last_ip'] ?? null]);
+            $ips = array_values(array_unique(array_filter([...($entry['observed_ips'] ?? []), $entry['created_ip'] ?? null, $entry['last_ip'] ?? null])));
             $external = array_values(array_diff($ips, $trustedIps));
             $deceptive = (bool) preg_match('/system.?key|do.?not.?delete|injector|bootstrap|xr-auto/i', $name);
             // A CRM name family still requires every recorded IP to be trusted; deceptive names never bypass.
@@ -162,7 +162,7 @@ class InventoryMatchers
                 continue;
             }
             $risk = ! $entry['privileged'] || $deceptive || $external !== [];
-            $hits[] = $this->hit($key, $risk ? 'Suspicious application password on a WordPress account' : 'Application password needs ownership review', 'usermeta', 'app_password:'.$entry['user_id'].':'.$name, $entry,
+            $hits[] = $this->hit($key, $risk ? 'Suspicious application password on a WordPress account' : 'Application password needs ownership review', 'usermeta', 'app_password:'.$entry['user_id'].':'.($entry['key_binding']['name_id'] ?? $name), $entry,
                 array_values(array_filter([! $entry['privileged'] ? 'non_staff_key' : null, $deceptive ? 'deceptive_key_name' : null, $external !== [] ? 'outside_crm_hosts' : null])),
                 'usermeta.app_passwords', $entry['user_id'], $risk ? 'strong' : 'needs_review', $risk ? 'critical' : 'warn', $entry['row_id']);
         }

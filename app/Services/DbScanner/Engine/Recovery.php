@@ -40,6 +40,7 @@ class Recovery
 
         foreach (DbScanMarketRun::query()->where('status', 'running')->where('mode', '!=', 'preflight')->where('heartbeat_at', '<', now()->subSeconds($staleAfter))->limit(50)->get() as $run) {
             DB::transaction(function () use ($run, $staleAfter, &$summary) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
                 $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
                 if (! $locked || $locked->status !== 'running' || ! $locked->heartbeat_at || $locked->heartbeat_at->gte(now()->subSeconds($staleAfter))) {
                     return;
@@ -78,6 +79,7 @@ class Recovery
                 continue;
             }
             DB::transaction(function () use ($run, &$summary) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
                 $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
                 if (! $locked || ! in_array($locked->status, ['queued', 'waiting_lock'], true) || $locked->updated_at->gte(now()->subMinutes(10))) {
                     return;

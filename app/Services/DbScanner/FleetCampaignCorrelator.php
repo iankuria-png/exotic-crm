@@ -30,8 +30,10 @@ class FleetCampaignCorrelator
             $indicators = [];
             if ($f->rule_key === 'access.application_passwords' && $f->severity === 'critical' && ! empty($d['name'])) {
                 $indicators[] = ['type' => 'application_password', 'value' => $d['name'], 'at' => isset($d['created']) && is_numeric($d['created']) ? gmdate('c', (int) $d['created']) : ($d['at_utc'] ?? null)];
-                if (filter_var($d['last_ip'] ?? '', FILTER_VALIDATE_IP)) {
-                    $indicators[] = ['type' => 'application_password_last_ip', 'value' => $d['last_ip'], 'at' => ! empty($d['last_used']) && is_numeric($d['last_used']) ? gmdate('c', (int) $d['last_used']) : null];
+                foreach ($d['key_activity'] ?? [$d] as $activity) {
+                    if (filter_var($activity['last_ip'] ?? '', FILTER_VALIDATE_IP)) {
+                        $indicators[] = ['type' => 'application_password_last_ip', 'value' => $activity['last_ip'], 'at' => ! empty($activity['last_used']) && is_numeric($activity['last_used']) ? gmdate('c', (int) $activity['last_used']) : null];
+                    }
                 }
             }
             // Installs and failures alone cannot be described as successful logins.

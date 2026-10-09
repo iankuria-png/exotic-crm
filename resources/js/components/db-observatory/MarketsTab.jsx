@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import FilesystemPanel from './FilesystemPanel';
 import dbObservatory from '../../services/dbObservatory';
 import { connectionTlsDefault, generateReaderPassword, readerCommand, readerSetup } from './connectionSetup';
 import { useToast } from '../ToastProvider';
@@ -326,16 +327,16 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                 title={selected?.market || 'Market'}
                 subtitle={selected ? (
                     <div className="flex gap-2 pt-1">
-                        {['inventory', ...(canConfigure ? ['connection'] : [])].map((v) => (
+                        {['inventory', ...(canConfigure ? ['connection', 'filesystem'] : [])].map((v) => (
                             <button key={v} type="button" onClick={() => setView(v)} className={`rounded-lg border px-3 py-1 text-xs font-semibold ${view === v ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-slate-200 text-slate-600'}`}>
-                                {v === 'inventory' ? 'Inventory & drift' : 'Reader connection'}
+                                {v === 'inventory' ? 'Inventory & drift' : v === 'filesystem' ? 'Filesystem' : 'Reader connection'}
                             </button>
                         ))}
                     </div>
                 ) : null}
                 width="max-w-3xl"
             >
-                {selected ? (view === 'connection' && canConfigure ? <ConnectionForm platformId={selected.platform_id} onScan={canOperate ? () => { setOpen(null); onScanMarket(selected.platform_id); } : null} /> : <Inventory platformId={selected.platform_id} />) : null}
+                {selected ? (view === 'filesystem' && canOperate ? <FilesystemPanel key={selected.platform_id} platformId={selected.platform_id} /> : view === 'connection' && canConfigure ? <ConnectionForm platformId={selected.platform_id} onScan={canOperate ? () => { setOpen(null); onScanMarket(selected.platform_id); } : null} /> : <Inventory platformId={selected.platform_id} />) : null}
             </Drawer>
         </>
     );

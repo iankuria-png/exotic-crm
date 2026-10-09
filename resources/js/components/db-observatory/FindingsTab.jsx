@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import CampaignContainment from './CampaignContainment';
+import ContainmentPanel from './ContainmentPanel';
 import dbObservatory from '../../services/dbObservatory';
 import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../ToastProvider';
@@ -11,6 +13,7 @@ const STATUS_VIEWS = [
     ['active', 'Open & acknowledged'],
     ['unresolved', 'All unresolved'],
     ['suppressed', 'Suppressed'],
+    ['contained', 'Contained'],
     ['resolved', 'Resolved'],
     ['', 'Everything'],
 ];
@@ -66,7 +69,7 @@ function FindingActions({ data, canOperate, canConfigure, onDone }) {
     }
 
     const busy = update.isPending || suppression.isPending;
-    const unresolved = finding.status !== 'resolved';
+    const unresolved = !['resolved','contained'].includes(finding.status);
 
     return (
         <div className="space-y-3">
@@ -75,7 +78,7 @@ function FindingActions({ data, canOperate, canConfigure, onDone }) {
                 <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => update.mutate({ assigned_to: user?.id })}>Assign to me</button>
                 {unresolved ? <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => update.mutate({ status: 'snoozed', snoozed_until: new Date(Date.now() + 7 * 864e5).toISOString() })}>Snooze 7d</button> : null}
                 {unresolved ? <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => setMode(mode === 'fp' ? null : 'fp')}>False positive…</button> : null}
-                {['acknowledged', 'snoozed', 'false_positive', 'resolved'].includes(finding.status) ? <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => update.mutate({ status: 'open' })}>Reopen</button> : null}
+                {['acknowledged', 'snoozed', 'false_positive', 'resolved','contained'].includes(finding.status) ? <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => update.mutate({ status: 'open' })}>Reopen</button> : null}
                 {canConfigure && unresolved && data.rule?.allowlistable && finding.confidence !== 'confirmed' ? <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={busy} onClick={() => setMode(mode === 'suppress' ? null : 'suppress')}>Suppress…</button> : null}
                 <button type="button" className="crm-btn-secondary px-3 py-1.5" disabled={rescan.isPending} onClick={() => rescan.mutate()}>Rescan market</button>
             </div>
@@ -211,6 +214,7 @@ export function FindingDrawer({ findingId, onClose, canOperate, canConfigure }) 
                         </section>
                     ) : null}
 
+                    {canOperate ? <ContainmentPanel key={f.id} findingId={f.id} /> : null}
                     <section>
                         <h4 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">History</h4>
                         <ol className="mt-1.5 space-y-1.5 border-l border-slate-200 pl-3">
@@ -234,6 +238,8 @@ export default function FindingsTab({ initialFilters, canOperate, canConfigure, 
     const toast = useToast();
     const [filters, setFilters] = useState({ status: 'active', page: 1, group_by: 'rule', ...initialFilters });
     const [openId, setOpenId] = useState(initialFilters?.finding || null);
+    const [campaignTargets, setCampaignTargets] = useState([]);
+    const [campaignOpen, setCampaignOpen] = useState(false);
     const [exporting, setExporting] = useState(false);
 
     useEffect(() => {
@@ -277,6 +283,8 @@ export default function FindingsTab({ initialFilters, canOperate, canConfigure, 
 
     return (
         <div className="space-y-3">
+            {canOperate ? <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600"><span>Select suspicious-key findings below for an exact revoke campaign · {campaignTargets.length} selected</span><button type="button" className="crm-btn-secondary" disabled={!campaignTargets.length} onClick={() => setCampaignOpen(true)}>Review campaign</button>{campaignTargets.length ? <button type="button" className="text-xs underline" onClick={() => setCampaignTargets([])}>Clear selection</button> : null}</div> : null}
+            {campaignOpen ? <CampaignContainment targets={campaignTargets} onClose={() => setCampaignOpen(false)} /> : null}
             <div className="crm-surface flex flex-wrap items-center gap-2 px-4 py-3">
                 <button
                     type="button"
@@ -365,6 +373,7 @@ export default function FindingsTab({ initialFilters, canOperate, canConfigure, 
                             <ul className="divide-y divide-slate-100">
                                 {query.data.data.map((f) => (
                                     <li key={f.id}>
+                                        {canOperate && f.rule_key === 'access.application_passwords' && ['open','acknowledged'].includes(f.status) ? <label className="flex items-center gap-2 px-4 pt-3 text-xs text-slate-600"><input type="checkbox" checked={campaignTargets.some((t) => t.finding_id === f.id)} onChange={(e) => setCampaignTargets(e.target.checked ? [...campaignTargets, { finding_id: f.id, actions: ['revoke_app_password'] }] : campaignTargets.filter((t) => t.finding_id !== f.id))} />Select key group for campaign preview</label> : null}
                                         <button type="button" onClick={() => setOpenId(f.id)} className="grid w-full grid-cols-[auto_1fr_auto] items-start gap-3 px-4 py-2.5 text-left transition hover:bg-slate-50">
                                             <div className="pt-0.5"><SeverityBadge severity={f.severity} /></div>
                                             <div className="min-w-0">

@@ -62,6 +62,7 @@ class SweepFinalizer
 
         if ($hits !== []) {
             DB::transaction(function () use ($run, $token, $hits, $rules) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
                 $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
                 if (! $locked || $locked->owner_token !== $token) {
                     throw new LeaseLostException;

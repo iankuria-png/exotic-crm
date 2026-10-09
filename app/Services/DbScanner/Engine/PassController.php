@@ -58,6 +58,7 @@ class PassController
         }
 
         $pass = DB::transaction(function () use ($platformIds, $profile, $trigger, $actorId, $ruleSubset, $verbose, $idempotencyKey, $scheduleId, $bypassWindow, $mode, $loadOverride) {
+            \App\Services\MarketOperationCoordinator::lock($platformIds);
             if ($idempotencyKey && $actorId) {
                 $existing = DbScanPass::query()->where('triggered_by', $actorId)->where('idempotency_key', $idempotencyKey)->first();
                 if ($existing) {
@@ -142,6 +143,7 @@ class PassController
     public function continueSweep(DbScanSweep $sweep): ?DbScanPass
     {
         $pass = DB::transaction(function () use ($sweep) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $sweep->platform_id]);
             $locked = DbScanSweep::query()->whereKey($sweep->id)->lockForUpdate()->first();
             if (! $locked || ! $locked->isOpen() || $locked->continuation_paused) {
                 return null;
@@ -194,6 +196,7 @@ class PassController
     public function pause(DbScanPass $pass): DbScanPass
     {
         DB::transaction(function () use ($pass) {
+            \App\Services\MarketOperationCoordinator::lock((array) ($pass->scope['platform_ids'] ?? []));
             $locked = DbScanPass::query()->whereKey($pass->id)->lockForUpdate()->first();
             if (in_array($locked->status, DbScanPass::TERMINAL, true) || in_array($locked->status, ['stopping'], true)) {
                 throw new InvalidTransitionException('This pass cannot be paused from status '.$locked->status.'.');
@@ -222,6 +225,7 @@ class PassController
     public function resume(DbScanPass $pass): DbScanPass
     {
         DB::transaction(function () use ($pass) {
+            \App\Services\MarketOperationCoordinator::lock((array) ($pass->scope['platform_ids'] ?? []));
             $locked = DbScanPass::query()->whereKey($pass->id)->lockForUpdate()->first();
             if (! in_array($locked->status, ['paused', 'pausing'], true)) {
                 throw new InvalidTransitionException('Only a paused pass can be resumed.');
@@ -261,6 +265,7 @@ class PassController
     public function stop(DbScanPass $pass, ?int $actorId = null): DbScanPass
     {
         DB::transaction(function () use ($pass, $actorId) {
+            \App\Services\MarketOperationCoordinator::lock((array) ($pass->scope['platform_ids'] ?? []));
             $locked = DbScanPass::query()->whereKey($pass->id)->lockForUpdate()->first();
             if (in_array($locked->status, DbScanPass::TERMINAL, true)) {
                 throw new InvalidTransitionException('This pass has already finished.');
@@ -302,6 +307,7 @@ class PassController
         $count = 0;
         foreach (DbScanMarketRun::query()->where('status', 'paused')->where('pause_reason', 'operator_global')->get() as $run) {
             DB::transaction(function () use ($run, &$count) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
                 $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
                 if ($locked && $locked->status === 'paused' && $locked->pause_reason === 'operator_global') {
                     $generation = (int) $locked->generation + 1;

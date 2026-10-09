@@ -119,6 +119,11 @@ const STATUS_TONE = {
     snoozed: 'bg-slate-100 text-slate-600 ring-slate-200',
     false_positive: 'bg-slate-100 text-slate-600 ring-slate-200',
     allowlisted: 'bg-slate-100 text-slate-600 ring-slate-200',
+    contained: 'bg-teal-50 text-teal-800 ring-teal-300',
+    verified: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    cache_pending: 'bg-amber-50 text-amber-800 ring-amber-200',
+    conflict: 'bg-rose-50 text-rose-700 ring-rose-200',
+    outcome_unknown: 'bg-amber-50 text-amber-800 ring-amber-200',
     resolved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     passed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     never: 'bg-slate-100 text-slate-600 ring-slate-200',
@@ -246,7 +251,7 @@ export function Drawer({ open, title, subtitle, onClose, children, footer, width
         if (!open) return undefined;
         returnFocus.current = document.activeElement;
         const panel = panelRef.current;
-        const focusables = () => panel?.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') || [];
+        const focusables = () => Array.from(panel?.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') || []).filter((item) => !item.disabled && item.getClientRects().length > 0);
         window.setTimeout(() => (focusables()[0] || panel)?.focus(), 0);
 
         const onKey = (event) => {

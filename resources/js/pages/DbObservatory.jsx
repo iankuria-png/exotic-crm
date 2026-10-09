@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../components/ToastProvider';
 import dbObservatory from '../services/dbObservatory';
+import { ContainmentHistory } from '../components/db-observatory/ContainmentPanel';
 import OverviewTab from '../components/db-observatory/OverviewTab';
 import RunsTab from '../components/db-observatory/RunsTab';
 import FindingsTab from '../components/db-observatory/FindingsTab';
@@ -22,6 +23,7 @@ const TABS = [
     { id: 'markets', label: 'Markets' },
     { id: 'rules', label: 'Rules' },
     { id: 'schedules', label: 'Schedules & limits' },
+    { id: 'containment', label: 'Containment' },
     { id: 'audit', label: 'Logs & audit' },
 ];
 
@@ -180,7 +182,7 @@ export default function DbObservatory() {
             />
 
             <nav className="crm-surface flex gap-1.5 overflow-x-auto px-3 py-2.5" aria-label="Observatory sections">
-                {TABS.map((t) => (
+                {TABS.filter((t) => t.id !== 'containment' || isAdmin).map((t) => (
                     <button
                         key={t.id}
                         type="button"
@@ -199,6 +201,7 @@ export default function DbObservatory() {
             {tab === 'markets' ? <MarketsTab canConfigure={isAdmin} canOperate={isAdmin} onOpenFindings={openFindings} onOpenRun={openRun} onScanMarket={(id) => { setPreselect(id); setScanOpen(true); }} /> : null}
             {tab === 'rules' ? <RulesTab canConfigure={isAdmin} markets={markets} onOpenRun={openRun} /> : null}
             {tab === 'schedules' ? <SchedulesTab canConfigure={isAdmin} markets={markets} /> : null}
+            {tab === 'containment' && isAdmin ? <ContainmentHistory markets={markets} /> : null}
             {tab === 'audit' ? <AuditTab /> : null}
 
             {isAdmin ? (

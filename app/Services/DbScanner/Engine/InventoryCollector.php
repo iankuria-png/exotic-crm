@@ -387,6 +387,14 @@ class InventoryCollector
         $complete = true;
         $admins = $this->administrators($reader, $schema);
         $privileged = array_column($admins['data']['admins'] ?? [], 'id');
+        $provenanceIdentity = null;
+        if (config('db_containment.key')) {
+            $target = $reader->target();
+            $urls = $reader->select($reader->compiler()->namedRows($schema->table('options'), 'option_id', 'option_name', 'option_value', ['siteurl'], 1024));
+            $site = collect($urls)->firstWhere('name', 'siteurl');
+            $host = strtolower(preg_replace('/^www\./i', '', parse_url((string) ($site['v'] ?? ''), PHP_URL_HOST) ?? ''));
+            $provenanceIdentity = [$host, $target->database, $schema->prefix];
+        }
         do {
             $page = $reader->select($reader->compiler()->applicationPasswordMetadata($schema->table('usermeta'), $after));
             foreach ($page as $row) {
@@ -395,6 +403,15 @@ class InventoryCollector
                 unset($row['v']);
                 if (! is_array($parsed)) {
                     $complete = false;
+
+                    continue;
+                }
+                if (config('db_containment.key')) {
+                    $bound = (new \App\Services\DbScanner\KeyObservationBinder)->group($parsed, $provenanceIdentity, (int) $row['user_id'], $after, ['row_id' => $after, 'user_id' => (int) $row['user_id'], 'privileged' => in_array((int) $row['user_id'], $privileged)]);
+                    $items = array_merge($items, $bound);
+                    if (count($items) >= 10000) {
+                        return ['complete' => false, 'data' => $items];
+                    }
 
                     continue;
                 }

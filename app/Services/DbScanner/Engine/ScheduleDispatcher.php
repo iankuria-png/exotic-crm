@@ -87,6 +87,7 @@ class ScheduleDispatcher
             }
 
             DB::transaction(function () use ($run, $blocked, $now, &$resumed) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
                 $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
                 if (! $locked || $locked->status !== 'paused' || ! in_array($locked->pause_reason, ['load', 'health', 'window'], true)) {
                     return;
@@ -205,7 +206,11 @@ class ScheduleDispatcher
             if (! ScheduleWindow::isOpen((array) $schedule->window, $platform->timezone ?: 'UTC', $now)) {
                 continue;
             }
-            if (DB::transaction(fn () => $this->admission->marketBusy((int) $platformId))) {
+            if (DB::transaction(function () use ($platformId) {
+                \App\Services\MarketOperationCoordinator::lock([(int) $platformId]);
+
+                return $this->admission->marketBusy((int) $platformId);
+            })) {
                 $latest->forceFill(['skip_reason' => 'deferred: a prior scan is still active'])->save();
 
                 continue;

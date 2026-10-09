@@ -121,6 +121,7 @@ class ScanExecutor
 
         $token = Str::random(40);
         $claim = DB::transaction(function () use ($run, $expectedGeneration, $token, $connection) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
             if (! $locked || (int) $locked->generation !== $expectedGeneration || ! in_array($locked->status, ['queued', 'waiting_lock'], true)) {
                 return 'stale';
@@ -315,6 +316,7 @@ class ScanExecutor
         }
 
         DB::transaction(function () use ($run, $token, &$state, $components, $coverage, $hits, $rules, $previous) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = $this->lockOwned($run, $token);
 
             if ($run->mode !== 'test') {
@@ -429,6 +431,7 @@ class ScanExecutor
         $surface = $this->registry->get($key);
 
         DB::transaction(function () use ($run, $token, $rules, &$state, $sweep, $key, $result, $durationMs, $surface) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = $this->lockOwned($run, $token);
             $s = &$state['surfaces'][$key];
 
@@ -525,6 +528,7 @@ class ScanExecutor
     public function commitState(DbScanMarketRun $run, string $token, array $state, ?DbScanSweep $sweep): void
     {
         DB::transaction(function () use ($run, $token, $state, $sweep) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = $this->lockOwned($run, $token);
             $locked->cursor = $state;
             $locked->heartbeat_at = now();
@@ -622,6 +626,7 @@ class ScanExecutor
         }
 
         $result = DB::transaction(function () use ($run, $token, $outcome, $elapsed, $metrics, $error, $sweep) {
+            \App\Services\MarketOperationCoordinator::lock([(int) $run->platform_id]);
             $locked = DbScanMarketRun::query()->whereKey($run->id)->lockForUpdate()->first();
             if (! $locked || $locked->owner_token !== $token) {
                 $this->admission->releaseSlots($run, $token);

@@ -29,6 +29,9 @@ class AdmissionService
      */
     public function marketBusy(int $platformId): ?int
     {
+        if (\App\Services\MarketOperationCoordinator::blocksNewScan($platformId)) {
+            return -1;
+        }
         $admission = $this->admissionRow($platformId, true);
         if (! $admission->active_run_id) {
             return null;
@@ -64,6 +67,9 @@ class AdmissionService
      */
     public function acquireSlots(DbScanMarketRun $run, string $token, string $hostGroup): bool
     {
+        if (\App\Services\MarketOperationCoordinator::blocksExecution((int) $run->platform_id)) {
+            return false;
+        }
         $globalKeys = [];
         for ($i = 1; $i <= $this->settings->globalSlots(); $i++) {
             $globalKeys[] = 'global:'.$i;

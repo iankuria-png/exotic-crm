@@ -4,6 +4,22 @@ const base = '/crm/db-observatory';
 const data = (promise) => promise.then((response) => response.data);
 
 const dbObservatory = {
+    actionAvailability: (id) => data(api.get(`${base}/findings/${id}/actions`)),
+    previewActions: (id, payload) => data(api.post(`${base}/findings/${id}/actions/preview`, payload, { timeout: 90_000 })),
+    operation: (id) => data(api.get(`${base}/actions/${id}`)),
+    staffSessionsPreview: (id, payload) => data(api.post(`${base}/markets/${id}/staff-sessions/preview`, payload, { timeout: 90_000 })),
+    operations: (params) => data(api.get(`${base}/actions`, { params })),
+    confirmOperation: (id, payload) => data(api.post(`${base}/actions/${id}/confirm`, payload)),
+    restorePreview: (id, payload) => data(api.post(`${base}/actions/${id}/restore/preview`, payload, { timeout: 90_000 })),
+    cancelOperation: (id) => data(api.post(`${base}/actions/${id}/cancel`)),
+    verifyOperation: (id) => data(api.post(`${base}/actions/${id}/verify`)),
+    campaignPreview: (payload) => data(api.post(`${base}/actions/campaign/preview`, payload, { timeout: 120_000 })),
+    campaign: (id) => data(api.get(`${base}/actions/campaign/${id}`)),
+    confirmCampaign: (id, payload) => data(api.post(`${base}/actions/campaign/${id}/confirm`, payload)),
+    cancelCampaign: (id) => data(api.post(`${base}/actions/campaign/${id}/cancel`)),
+    filesystem: (id) => data(api.get(`${base}/markets/${id}/filesystem`)),
+    diagnoseFilesystem: (id) => data(api.post(`${base}/markets/${id}/filesystem/diagnose`, {}, { timeout: 90_000 })),
+    quarantinePreview: (id, payload) => data(api.post(`${base}/filesystem/${id}/quarantine/preview`, payload)),
     overview: () => data(api.get(`${base}/overview`)),
     markets: () => data(api.get(`${base}/markets`)),
     inventory: (platformId) => data(api.get(`${base}/markets/${platformId}/inventory`)),

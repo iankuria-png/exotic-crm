@@ -1176,6 +1176,28 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         $passes = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryPassController::class;
         $config = \App\Http\Controllers\CRM\DbObservatory\DbObservatoryConfigController::class;
 
+        $containment = \App\Http\Controllers\CRM\DbObservatory\DbContainmentController::class;
+        Route::get('/actions', [$containment, 'index']);
+        Route::get('/findings/{finding}/actions', [$containment, 'availability'])->whereNumber('finding');
+        Route::get('/actions/campaign/{campaign}', [$containment, 'campaignShow'])->whereUuid('campaign');
+        Route::get('/actions/{operation}', [$containment, 'show'])->whereUuid('operation');
+        Route::get('/markets/{platform}/filesystem', [$containment, 'files'])->whereNumber('platform');
+        Route::middleware('throttle:10,1')->group(function () use ($containment) {
+            Route::post('/findings/{finding}/actions/preview', [$containment, 'preview'])->whereNumber('finding');
+            Route::post('/actions/campaign/preview', [$containment, 'campaignPreview']);
+            Route::post('/actions/campaign/{campaign}/confirm', [$containment, 'campaignConfirm'])->whereUuid('campaign');
+            Route::post('/actions/campaign/{campaign}/cancel', [$containment, 'campaignCancel'])->whereUuid('campaign');
+            Route::post('/actions/{operation}/confirm', [$containment, 'confirm'])->whereUuid('operation');
+            Route::post('/actions/{operation}/restore/preview', [$containment, 'restorePreview'])->whereUuid('operation');
+            Route::post('/actions/{operation}/restore/confirm', [$containment, 'confirm'])->whereUuid('operation');
+            Route::post('/actions/{operation}/cancel', [$containment, 'cancel'])->whereUuid('operation');
+            Route::post('/actions/{operation}/verify', [$containment, 'retryVerification'])->whereUuid('operation');
+            Route::post('/actions/{operation}/backups/purge', [$containment, 'purge'])->whereUuid('operation');
+            Route::post('/markets/{platform}/staff-sessions/preview', [$containment, 'staffPreview'])->whereNumber('platform');
+            Route::post('/markets/{platform}/filesystem/diagnose', [$containment, 'diagnose'])->whereNumber('platform');
+            Route::post('/filesystem/{observation}/quarantine/preview', [$containment, 'quarantinePreview'])->whereUuid('observation');
+        });
+
         Route::get('/overview', [$observatory, 'overview']);
         Route::get('/markets', [$observatory, 'markets']);
         Route::get('/markets/{platform}/inventory', [$observatory, 'inventory'])->whereNumber('platform');
