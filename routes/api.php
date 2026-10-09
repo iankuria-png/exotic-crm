@@ -244,6 +244,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::put('/settings/monetization/markets/{platform}', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSettings']);
     Route::put('/settings/monetization/system', [\App\Http\Controllers\CRM\MonetizationController::class, 'saveSystem']);
     Route::post('/settings/monetization/markets/{platform}/sync', [\App\Http\Controllers\CRM\MonetizationController::class, 'sync']);
+    Route::post('/settings/monetization/markets/{platform}/setup/{action}', [\App\Http\Controllers\CRM\MonetizationController::class, 'setupAction'])->where('action', 'connect|canonical|activate');
     Route::post('/settings/monetization/markets/{platform}/automations/expired-content', [\App\Http\Controllers\CRM\MonetizationController::class, 'startExpiredBackfill']);
     Route::post('/settings/monetization/markets/{platform}/automations/free-passes', [\App\Http\Controllers\CRM\MonetizationController::class, 'startFreePasses']);
     Route::post('/settings/monetization/markets/{platform}/automations/video-previews', [\App\Http\Controllers\CRM\MonetizationController::class, 'startVideoPreviews']);

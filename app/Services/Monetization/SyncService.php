@@ -51,15 +51,20 @@ class SyncService
         return $this->send($s, '/wallet-credentials', ['grant_secret' => $s->grant_secret, 'device_pepper' => $s->device_pepper]);
     }
 
+    public function adminSend(ContentMonetizationSetting $s, string $route, array $payload): array
+    {
+        if (! $s->platform->wp_api_user || ! $s->platform->wp_api_password) {
+            return ['status' => 'failed', 'code' => 'wordpress_admin_missing', 'message' => 'Set this market’s WordPress administrator application password in Settings → Markets, then retry Connect WordPress.'];
+        }
+
+        return $this->transport($s, $route, $payload, [], true);
+    }
+
     public function send(ContentMonetizationSetting $s, string $route, array $payload, int $timeout = 15): array
     {
         $platform = $s->platform;
-        $base = rtrim((string) $platform->wp_api_url, '/');
-        if (! $base) {
+        if (! $platform->wp_api_url) {
             return ['status' => 'failed', 'message' => 'WordPress API URL is not configured.'];
-        }
-        if (! str_ends_with($base, '/exotic-crm-sync/v1')) {
-            $base .= '/exotic-crm-sync/v1';
         }
         $path = '/wp-json/exotic-crm-sync/v1'.$route;
         $time = (string) now()->timestamp;
@@ -67,22 +72,57 @@ class SyncService
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
         $secret = app(WalletSettingsService::class)->wpToCrmHmacSecret($platform, $s->premium_access_environment);
         if (! $secret) {
-            return ['status' => 'failed', 'message' => 'Per-market HMAC secret is missing.'];
+            return ['status' => 'failed', 'message' => 'WordPress wallet authentication is not configured for this market environment. Use Connect WordPress, then re-check.'];
         }
         $signature = hash_hmac('sha256', implode("\n", [$time, 'POST', $path, (string) $platform->id, $key, hash('sha256', $body)]), $secret);
+
+        return $this->transport($s, $route, $payload, ['X-Exotic-Platform-Id' => $platform->id, 'X-Exotic-Timestamp' => $time, 'X-Idempotency-Key' => $key, 'X-Exotic-Signature' => $signature], false, $timeout);
+    }
+
+    private function transport(ContentMonetizationSetting $s, string $route, array $payload, array $headers, bool $admin, int $timeout = 15): array
+    {
         try {
-            $response = Http::timeout($timeout)->withHeaders(['X-Exotic-Platform-Id' => $platform->id, 'X-Exotic-Timestamp' => $time, 'X-Idempotency-Key' => $key, 'X-Exotic-Signature' => $signature])->withBody($body, 'application/json')->post($base.$route);
+            $guard = app(WordPressDestination::class);
+            $base = $guard->base((string) $s->platform->wp_api_url);
+            for ($attempt = 0; $attempt < 2; $attempt++) {
+                $http = Http::timeout($timeout)->acceptJson()->withOptions($guard->options($base))->withHeaders($headers);
+                if ($admin) {
+                    $http = $http->withBasicAuth($s->platform->wp_api_user, $s->platform->wp_api_password);
+                }
+                $response = $http->withBody(json_encode($payload, JSON_UNESCAPED_SLASHES), 'application/json')->post($base.$route);
+                if (! in_array($response->status(), [301, 302, 307, 308], true) || $attempt === 1) {
+                    break;
+                }
+                $location = (string) $response->header('Location');
+                // Re-signing is unnecessary: the only accepted redirect changes the www origin.
+                if (! str_ends_with($location, $route)) {
+                    break;
+                }
+                $base = $guard->canonical((string) $s->platform->wp_api_url, substr($location, 0, -strlen($route)));
+            }
             if ($response->successful()) {
                 if ($route === '/premium-content/sync') {
+                    if ((int) $response->json('applied_revision') !== (int) $s->config_revision) {
+                        return ['status' => 'failed', 'code' => 'revision_unacknowledged', 'message' => 'WordPress did not acknowledge this settings revision. Upload the complete sync plugin and retry.'];
+                    }
                     $s->update(['wp_revision' => $s->config_revision]);
                 }
 
                 return ['status' => 'synced', 'response' => $response->json()];
             }
+            $code = $response->status();
+            $message = match ($code) {
+                401, 403 => 'WordPress refused authentication. Check the market’s application password and wallet credentials in Settings, then reconnect.',
+                404 => 'WordPress does not have this setup endpoint. Upload the complete exotic-crm-sync plugin, then re-check.',
+                409 => 'WordPress has a newer revision or different device credentials. Reconnect and re-check; do not rotate existing device credentials.',
+                default => 'WordPress could not complete the check (HTTP '.$code.'). Ask the site administrator to check the plugin/server, then retry.',
+            };
 
-            return ['status' => 'failed', 'message' => 'WordPress rejected sync ('.$response->status().').'];
+            return ['status' => 'failed', 'code' => 'wordpress_http_'.$code, 'message' => $message];
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return ['status' => 'failed', 'code' => 'unsafe_wordpress_destination', 'message' => collect($e->errors())->flatten()->first()];
         } catch (\Throwable $e) {
-            return ['status' => 'failed', 'message' => 'WordPress could not be reached.'];
+            return ['status' => 'failed', 'code' => 'wordpress_unreachable', 'message' => 'CRM could not reach WordPress. Check the market address, HTTPS and site availability, then retry.'];
         }
     }
 }

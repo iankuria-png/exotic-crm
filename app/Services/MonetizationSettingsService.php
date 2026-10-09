@@ -24,9 +24,9 @@ class MonetizationSettingsService
             'grant_secret' => bin2hex(random_bytes(32)), 'device_pepper' => bin2hex(random_bytes(32)),
             'offer_policy_json' => ['photos_enabled' => true, 'videos_enabled' => true, 'single_enabled' => true, 'bundles_enabled' => true, 'min_price' => 100, 'max_price' => 5000, 'bundle_min_items' => 2, 'bundle_max_items' => 12, 'live_offer_limit' => 50, 'upload_max_bytes' => 52428800, 'max_video_seconds' => 600],
             'surface_policy_json' => ['profile_section' => true, 'home_private_content' => true, 'videos_private_filter' => true, 'show_prices' => true],
-            'checkout_policy_json' => ['allowed_providers' => ['kopokopo'], 'device_slots' => 3, 'restore_per_hour' => 5, 'wallet_sale_credit' => 'gross'],
+            'checkout_policy_json' => ['allowed_providers' => [], 'device_slots' => 3, 'restore_per_hour' => 5, 'wallet_sale_credit' => 'gross'],
             'delivery_policy_json' => ['grant_ttl' => 300], 'test_client_ids' => [],
-        ])->load('prices');
+        ])->refresh()->load('prices');
     }
 
     public const EXPIRY_POLICY_DEFAULTS = [
@@ -191,6 +191,7 @@ class MonetizationSettingsService
             'reason' => 'required|string|min:5|max:1000', 'config_revision' => 'required|integer',
             'currency' => 'sometimes|string|size:3',
             'enabled' => 'required|boolean', 'rollout_mode' => ['required', Rule::in(['off', 'sandbox', 'live'])],
+            'premium_access_environment' => ['sometimes', Rule::in(['production', 'sandbox'])],
             'activation_kill_switch' => 'required|boolean', 'checkout_kill_switch' => 'required|boolean',
             'prices' => 'required|array|max:2', 'prices.*.duration_key' => ['required', 'distinct', Rule::in(['2_weeks', '1_month'])],
             'prices.*.price' => 'required|numeric|min:0|max:1000000',
@@ -203,7 +204,7 @@ class MonetizationSettingsService
             'offer_policy.live_offer_limit' => 'required|integer|min:1|max:200', 'offer_policy.upload_max_bytes' => 'required|integer|min:1024|max:104857600',
             'offer_policy.max_video_seconds' => 'required|integer|min:1|max:1800',
             'surface_policy' => 'required|array', 'surface_policy.*' => 'boolean',
-            'checkout_policy' => 'required|array', 'checkout_policy.allowed_providers' => 'required|array|min:1',
+            'checkout_policy' => 'required|array', 'checkout_policy.allowed_providers' => 'present|array',
             'checkout_policy.allowed_providers.*' => [Rule::in(['kopokopo', 'pawapay'])],
             'checkout_policy.device_slots' => 'required|integer|min:1|max:3', 'checkout_policy.restore_per_hour' => 'required|integer|min:1|max:10',
             'delivery_policy.grant_ttl' => 'required|integer|min:60|max:300',
@@ -237,35 +238,28 @@ class MonetizationSettingsService
                 abort_if(\App\Models\PremiumContentOffer::where('platform_id', $platform->id)->exists() || \App\Models\ClientMonetizationPass::where('platform_id', $platform->id)->exists(), 422, 'Currency is fixed once passes or offers exist. Existing purchase and wallet history must retain their currency.');
                 $s->currency = $data['currency'];
             }
-            if ($s->rollout_mode === 'sandbox' && $data['rollout_mode'] === 'live') {
-                \App\Models\ClientMonetizationPass::where('platform_id', $platform->id)->where('is_sandbox', true)->update(['status' => 'expired', 'active_marker' => null]);
-            }
-            if ($data['rollout_mode'] === 'live') {
-                foreach ($data['checkout_policy']['allowed_providers'] as $provider) {
-                    try {
-                        app(BillingModeService::class)->providerContext($platform, $provider, true, 'production', 'premium_content');
-                    } catch (\InvalidArgumentException $exception) {
-                        if ($exception->getMessage() !== 'Selected provider is disabled for this market.') {
-                            throw $exception;
-                        }
+            $environment = $data['rollout_mode'] === 'live' ? 'production' : ($data['premium_access_environment'] ?? ($data['rollout_mode'] === 'sandbox' ? 'sandbox' : $s->premium_access_environment));
+            foreach ($data['checkout_policy']['allowed_providers'] as $provider) {
+                try {
+                    app(BillingModeService::class)->providerContext($platform, $provider, true, $environment, 'premium_content');
+                } catch (\InvalidArgumentException $exception) {
+                    $label = $provider === 'kopokopo' ? 'M-Pesa · KopoKopo' : 'PawaPay';
 
-                        $label = $provider === 'kopokopo' ? 'M-Pesa · KopoKopo' : 'PawaPay';
-
-                        throw \Illuminate\Validation\ValidationException::withMessages([
-                            'checkout_policy.allowed_providers' => [
-                                "$label is not enabled for this market. Enable it in Settings → Wallet System, or remove it from Surfaces & checkout.",
-                            ],
-                        ]);
-                    }
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'checkout_policy.allowed_providers' => [
+                            $exception->getMessage() === 'Selected provider is disabled for this market.' ? "$label is not enabled for this market. Enable it in Settings → Wallet System, or remove it from Surfaces & checkout." : "$label cannot accept payments for {$platform->name} $environment. Configure the wallet and provider credentials in Settings → Wallet System, then choose it again.",
+                        ],
+                    ]);
                 }
             }
             if ($data['rollout_mode'] === 'live') {
+                abort_unless($s->rollout_mode === 'live' && $s->enabled, 422, 'Use Guided setup → Enable live market after completing the required checks.');
+                abort_unless(count($data['checkout_policy']['allowed_providers']) > 0, 422, 'Choose an available production provider before saving a live market.');
                 abort_unless((! data_get($data, 'offer_policy.videos_enabled') || data_get($s->readiness_json, 'checks.video_processing') === true) && data_get($s->readiness_json, 'ready') === true && $s->heartbeat_at?->gt(now()->subMinutes(15)), 422, 'Run readiness checks before enabling live sales.');
             }
             $s->fill(collect($data)->only(['enabled', 'rollout_mode', 'activation_kill_switch', 'checkout_kill_switch', 'test_client_ids'])->all());
-            if ($data['rollout_mode'] !== 'off') {
-                $s->premium_access_environment = $data['rollout_mode'] === 'live' ? 'production' : 'sandbox';
-            }
+            $s->premium_access_environment = $environment;
+            $s->setup_json = null;
             foreach (['offer', 'surface', 'checkout', 'delivery'] as $key) {
                 $s->{$key.'_policy_json'} = $data[$key.'_policy'];
             }

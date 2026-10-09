@@ -62,6 +62,8 @@ class VideoTeaserTest extends TestCase
         });
         $this->market = Platform::factory()->create(['currency_code' => 'KES', 'phone_prefix' => '254']);
         $this->settings = app(MonetizationSettingsService::class)->forPlatform($this->market);
+        // Established live markets have explicitly chosen a checkout provider; new markets do not.
+        $this->settings->update(['checkout_policy_json' => ['allowed_providers' => ['kopokopo'], 'device_slots' => 3, 'restore_per_hour' => 5, 'wallet_sale_credit' => 'gross']]);
         $this->settings->update(['enabled' => true, 'rollout_mode' => 'live', 'heartbeat_at' => now(), 'readiness_json' => ['ready' => true, 'checks' => ['video_processing' => true]]]);
         app(MonetizationSettingsService::class)->system()->update(['enabled' => true]);
     }

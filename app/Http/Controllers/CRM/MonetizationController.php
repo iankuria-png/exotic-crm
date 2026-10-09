@@ -16,6 +16,7 @@ use App\Models\WalletTransaction;
 use App\Services\MarketAuthorizationService;
 use App\Services\Monetization\AccessService;
 use App\Services\Monetization\FulfillmentService;
+use App\Services\Monetization\SetupService;
 use App\Services\Monetization\StatsService;
 use App\Services\Monetization\SyncService;
 use App\Services\MonetizationSettingsService;
@@ -50,17 +51,18 @@ class MonetizationController extends Controller
                 'runs' => \App\Models\MonetizationAutomationRun::where('platform_id', $s->platform_id)->latest('id')->limit(8)->get()->map(fn ($run) => $expiry->presentRun($run))->values()];
         }
 
-        return response()->json(['automation' => $automation, 'supported_currencies' => $s ? (app(\App\Services\WalletSettingsService::class)->runtimePlatformConfig($s->platform)['supported_currencies'] ?? [$s->currency]) : [], 'platforms' => $platforms, 'system' => $this->settings->system(), 'market' => $s, 'effective' => $s ? $this->settings->runtime($s) : null, 'audit' => $selected ? PremiumContentEvent::where('platform_id', $selected)->where('kind', 'settings_changed')->latest()->limit(20)->get() : [], 'can_edit_system' => $r->user()->role === 'admin']);
+        return response()->json(['setup' => $s ? app(SetupService::class)->status($s) : null, 'automation' => $automation, 'supported_currencies' => $s ? (app(\App\Services\WalletSettingsService::class)->runtimePlatformConfig($s->platform)['supported_currencies'] ?? [$s->currency]) : [], 'platforms' => $platforms, 'system' => $this->settings->system(), 'market' => $s, 'effective' => $s ? $this->settings->runtime($s) : null, 'audit' => $selected ? PremiumContentEvent::where('platform_id', $selected)->where(function ($q) {
+            $q->where('kind', 'settings_changed')->orWhere('kind', 'like', 'setup_%');
+        })->latest()->limit(20)->get() : [], 'can_edit_system' => $r->user()->role === 'admin']);
     }
 
     public function saveSettings(Request $r, Platform $platform)
     {
         $this->authorizeMarket($r, $platform->id, true);
         $s = $this->settings->save($platform, $r->all(), $r->user()->id);
-        $provision = app(SyncService::class)->provision($s);
-        $sync = app(SyncService::class)->push($s);
+        $result = app(SetupService::class)->check($s);
 
-        return response()->json(['market' => $s, 'effective' => $this->settings->runtime($s), 'sync' => $sync, 'credentials' => $provision]);
+        return response()->json(['market' => $s->fresh('prices'), 'effective' => $this->settings->runtime($s)] + $result);
     }
 
     public function saveSystem(Request $r)
@@ -89,7 +91,23 @@ class MonetizationController extends Controller
         $this->authorizeMarket($r, $platform->id, true);
         $s = $this->settings->forPlatform($platform);
 
-        return response()->json(['credentials' => app(SyncService::class)->provision($s), 'sync' => app(SyncService::class)->push($s), 'readiness' => app(\App\Services\Monetization\ReadinessService::class)->check($s)]);
+        return response()->json(app(SetupService::class)->check($s));
+    }
+
+    public function setupAction(Request $r, Platform $platform, string $action)
+    {
+        $this->authorizeMarket($r, $platform->id, true);
+        $data = $r->validate(['reason' => 'required|string|min:5|max:1000', 'config_revision' => 'required|integer', 'environment' => $action === 'connect' ? 'required|in:production,sandbox' : 'nullable|in:production,sandbox']);
+        $s = $this->settings->forPlatform($platform);
+        abort_unless((int) $s->config_revision === (int) $data['config_revision'], 409, 'Settings changed. Your draft is preserved. Reload the saved revision before retrying this action.');
+        $service = app(SetupService::class);
+        $result = match ($action) {
+            'connect' => $service->connect($s, $data['environment'] ?? $s->premium_access_environment, $data['reason'], $r->user()->id),
+            'canonical' => $service->repairCanonical($s, $data['reason'], $r->user()->id),
+            'activate' => $service->activate($s, (int) $data['config_revision'], $data['reason'], $r->user()->id),
+        };
+
+        return response()->json(['market' => $s->fresh('prices')] + $result);
     }
 
     public function index(Request $r)
