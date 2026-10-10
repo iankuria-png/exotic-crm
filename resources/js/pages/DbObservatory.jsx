@@ -136,7 +136,6 @@ export default function DbObservatory() {
     const [params, setParams] = useSearchParams();
     const tab = TABS.some((t) => t.id === params.get('tab')) ? params.get('tab') : 'overview';
     const runId = params.get('run') ? Number(params.get('run')) : null;
-    const [findingFilters, setFindingFilters] = useState(null);
     const [scanOpen, setScanOpen] = useState(false);
     const [preselect, setPreselect] = useState(null);
 
@@ -154,8 +153,7 @@ export default function DbObservatory() {
     }, [setParams]);
 
     const openFindings = useCallback((filters) => {
-        setFindingFilters({ ...filters, _t: Date.now() });
-        go('findings');
+        go('findings', { status: 'active', group_by: 'related', ...filters });
     }, [go]);
     const openRun = useCallback((id) => go('runs', { run: id }), [go]);
 
@@ -172,7 +170,7 @@ export default function DbObservatory() {
         <div className="space-y-4">
             <PageHeader
                 title="Database Observatory"
-                subtitle="Read-only malware, persistence and integrity scanning of every market's WordPress database — with explicit coverage."
+                subtitle="Review database evidence, account risks and scan coverage across markets."
                 actions={isAdmin ? (
                     <>
                         <button type="button" className="crm-btn-secondary" onClick={() => go('schedules')}>Schedules</button>
@@ -195,9 +193,9 @@ export default function DbObservatory() {
                 ))}
             </nav>
 
-            {tab === 'overview' ? <OverviewTab onOpenFindings={openFindings} onOpenRun={openRun} onConfigure={() => go('schedules')} /> : null}
+            {tab === 'overview' ? <OverviewTab onOpenFindings={openFindings} onOpenRun={openRun} onConfigure={() => go('schedules')} onOpenMarkets={() => go('markets')} markets={markets} /> : null}
             {tab === 'runs' ? <RunsTab canOperate={isAdmin} onOpenRun={openRun} openRunId={runId} onCloseRun={() => go('runs')} onOpenFindings={openFindings} /> : null}
-            {tab === 'findings' ? <FindingsTab initialFilters={findingFilters} canOperate={isAdmin} canConfigure={isAdmin} markets={markets} /> : null}
+            {tab === 'findings' ? <FindingsTab canOperate={isAdmin} canConfigure={isAdmin} markets={markets} /> : null}
             {tab === 'markets' ? <MarketsTab canConfigure={isAdmin} canOperate={isAdmin} onOpenFindings={openFindings} onOpenRun={openRun} onScanMarket={(id) => { setPreselect(id); setScanOpen(true); }} /> : null}
             {tab === 'rules' ? <RulesTab canConfigure={isAdmin} markets={markets} onOpenRun={openRun} /> : null}
             {tab === 'schedules' ? <SchedulesTab canConfigure={isAdmin} markets={markets} /> : null}

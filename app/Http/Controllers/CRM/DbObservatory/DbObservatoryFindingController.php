@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\DbScanner\DbScanAuditWriter;
 use App\Services\DbScanner\Engine\FindingRecorder;
 use App\Services\DbScanner\Evidence\EvidenceSanitizer;
+use App\Services\DbScanner\FindingInterpretation;
 use App\Services\DbScanner\ObservatoryPresenter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -64,9 +65,31 @@ class DbObservatoryFindingController extends Controller
                 ]);
         }
 
-        $page = $query->paginate($this->perPage($request));
+        $page = (clone $query)->paginate($this->perPage($request));
+        $this->presenter->prepare($page->items(), $names);
         $payload = $this->paginated($page, collect($page->items())->map(fn ($f) => $this->presenter->finding($f, $names))->all());
         $payload['groups'] = $groups;
+        $payload['families'] = FindingInterpretation::counts($query);
+        $payload['selection_sampled'] = (bool) $request->attributes->get('review_selection_sampled', false);
+        if ($request->input('group_by') === 'related' && ! $request->filled('review_group')) {
+            [$selection, $sampled] = $this->bounded($query);
+            $related = FindingInterpretation::groups($selection, $names);
+            $groupPage = max(1, $request->integer('page', 1));
+            $pageGroups = array_slice($related, ($groupPage - 1) * 10, 10);
+            $memberIds = [];
+            foreach ($pageGroups as $g) {
+                $memberIds = [...$memberIds, ...array_slice($g['member_ids'], 0, 5)];
+            }
+            $members = $this->scoped(DbScanFinding::query(), $request)->whereIn('id', $memberIds)->get()->keyBy('id');
+            $this->presenter->prepare($members, $names);
+            $payload['review_groups'] = array_map(function ($g) use ($members, $names) {
+                $g['members'] = collect(array_slice($g['member_ids'], 0, 5))->map(fn ($id) => isset($members[$id]) ? $this->presenter->finding($members[$id], $names) : null)->filter()->values()->all();
+                unset($g['member_ids']);
+
+                return $g;
+            }, $pageGroups);
+            $payload['review_meta'] = ['total' => count($related), 'current_page' => $groupPage, 'last_page' => max(1, (int) ceil(count($related) / 10)), 'sampled' => $sampled, 'findings_considered' => $selection->count(), 'selection_cap' => FindingInterpretation::GROUP_CAP];
+        }
         $payload['facets'] = [
             'status' => $this->facet($request, 'status'),
             'severity' => $this->facet($request, 'severity'),
@@ -89,6 +112,7 @@ class DbObservatoryFindingController extends Controller
         $events = DbScanFindingEvent::query()->where('finding_id', $model->id)->latest('id')->limit(50)->get();
         $actors = User::query()->whereIn('id', $events->pluck('actor_id')->filter())->pluck('name', 'id');
         $suppression = $model->suppression_id ? DbScanSuppression::query()->find($model->suppression_id) : null;
+        $this->presenter->prepare([$model], $names);
 
         return response()->json([
             'finding' => $this->presenter->finding($model, $names),
@@ -145,12 +169,27 @@ class DbObservatoryFindingController extends Controller
             'snoozed_until' => ['required_if:status,snoozed', 'nullable', 'date', 'after:now', 'before:'.now()->addDays(90)->toDateString()],
             'assigned_to' => ['sometimes', 'nullable', 'integer', Rule::exists('users', 'id')->where('status', 'active')],
             'note' => ['required_if:status,false_positive', 'nullable', 'string', 'max:1000'],
+            'record_remediation' => ['sometimes', 'boolean'],
         ]);
+
+        if ($data['record_remediation'] ?? false) {
+            $request->validate(['note' => ['required', 'string', 'min:10', 'max:1000'], 'status' => ['prohibited'], 'assigned_to' => ['prohibited'], 'snoozed_until' => ['prohibited']]);
+            abort_if(mb_strlen(trim((string) $request->input('note'))) < 10, 422, 'Describe the remediation and its evidence in at least 10 characters.');
+        }
 
         DB::transaction(function () use ($request, $model, $data) {
             $locked = DbScanFinding::query()->whereKey($model->id)->lockForUpdate()->firstOrFail();
             $before = $locked->only(['status', 'snoozed_until', 'assigned_to', 'note']);
             $from = $locked->status;
+
+            if ($data['record_remediation'] ?? false) {
+                abort_unless(in_array($locked->status, DbScanFinding::OPEN_STATUSES, true), 422, 'Record remediation on an open or acknowledged finding. Reopen a triaged finding before recording further work.');
+                $note = (new EvidenceSanitizer(1000))->clean(trim($data['note']));
+                $this->recorder->event($locked, null, 'remediation_recorded', $from, $from, $note, (int) $request->user()->id);
+                $this->audit->record((int) $request->user()->id, 'finding', $locked->id, 'remediation_report', $before, ['status' => $from, 'note' => $note], (int) $locked->platform_id);
+
+                return;
+            }
 
             if (isset($data['status'])) {
                 if ($locked->status === 'resolved' && $data['status'] !== 'open') {
@@ -176,7 +215,11 @@ class DbObservatoryFindingController extends Controller
             $this->audit->record((int) $request->user()->id, 'finding', $locked->id, 'triage', $before, $locked->only(['status', 'snoozed_until', 'assigned_to', 'note']), (int) $locked->platform_id);
         });
 
-        return response()->json($this->presenter->finding($model->fresh(), $this->marketNames($this->scopeIds($request))));
+        $fresh = $model->fresh();
+        $names = $this->marketNames($this->scopeIds($request));
+        $this->presenter->prepare([$fresh], $names);
+
+        return response()->json($this->presenter->finding($fresh, $names));
     }
 
     /**
@@ -303,7 +346,8 @@ class DbObservatoryFindingController extends Controller
         $response->headers->set('Content-Disposition', 'attachment; filename="db-observatory-findings-'.now()->format('Ymd-His').'.csv"');
         $response->headers->set('X-Export-Total', (string) $total);
         $response->headers->set('X-Export-Truncated', $truncated ? '1' : '0');
-        $response->headers->set('Access-Control-Expose-Headers', 'X-Export-Total, X-Export-Truncated, Content-Disposition');
+        $response->headers->set('X-Selection-Sampled', $request->attributes->get('review_selection_sampled', false) ? '1' : '0');
+        $response->headers->set('Access-Control-Expose-Headers', 'X-Export-Total, X-Export-Truncated, X-Selection-Sampled, Content-Disposition');
 
         return $response;
     }
@@ -323,6 +367,9 @@ class DbObservatoryFindingController extends Controller
             'q' => ['nullable', 'string', 'max:120'],
             'run_id' => ['nullable', 'integer'],
             'kind' => ['nullable', Rule::in(['signature', 'ioc_list', 'schema_object', 'threshold', 'drift', 'structured'])],
+            'family' => ['nullable', Rule::in(array_keys(FindingInterpretation::FAMILIES))],
+            'workflow' => ['nullable', Rule::in(['needs_follow_up', 'awaiting_verification'])],
+            'review_group' => ['nullable', 'string', 'regex:/^[a-f0-9]{64}$/D'],
         ]);
 
         if ($request->filled('platform_id')) {
@@ -339,12 +386,14 @@ class DbObservatoryFindingController extends Controller
             $statuses = DbScanFinding::SUPPRESSED_STATUSES;
         }
 
-        return $this->scoped(DbScanFinding::query(), $request)
+        $query = $this->scoped(DbScanFinding::query(), $request)
             ->when($statuses, fn ($q) => $q->whereIn('status', $statuses))
             ->when($request->filled('severity'), fn ($q) => $q->whereIn('severity', $list('severity')))
             ->when($request->filled('category'), fn ($q) => $q->whereIn('category', $list('category')))
             ->when($request->filled('confidence'), fn ($q) => $q->whereIn('confidence', $list('confidence')))
             ->when($request->filled('behavior'), fn ($q) => $q->whereIn('behavior', $list('behavior')))
+            ->when($request->filled('family'), fn ($q) => $q->whereRaw('('.FindingInterpretation::familySql().') = ?', [$request->input('family')]))
+            ->when($request->filled('workflow'), fn ($q) => FindingInterpretation::filterWorkflow($q, $request->input('workflow')))
             ->when($request->filled('identity'), function ($q) use ($request) {
                 $q->where(function ($w) use ($request) {
                     foreach (['evidence->details->plugin', 'evidence->details->name', 'evidence->details->login', 'evidence->details->role', 'evidence->details->option_name', 'subject->label', 'title'] as $field) {
@@ -364,6 +413,31 @@ class DbObservatoryFindingController extends Controller
             ->orderByRaw("CASE severity WHEN 'critical' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END")
             ->orderByDesc('last_seen_at')
             ->orderByDesc('id');
+
+        if ($request->filled('review_group')) {
+            [$selection, $sampled] = $this->bounded($query);
+            $ids = $selection->filter(fn ($f) => hash_equals(FindingInterpretation::groupKey($f), $request->input('review_group')))->pluck('id');
+            $request->attributes->set('review_selection_sampled', $sampled);
+            $query->whereIn('id', $ids);
+        }
+
+        return $query;
+    }
+
+    private function bounded(Builder $query): array
+    {
+        $rows = (clone $query)->limit(FindingInterpretation::GROUP_CAP + 1)->get([
+            'id', 'platform_id', 'rule_key', 'subject_hash', 'title', 'severity', 'category', 'confidence', 'behavior',
+            'evidence->details as grouping_details', 'subject->label as grouping_label',
+        ]);
+        $sampled = $rows->count() > FindingInterpretation::GROUP_CAP;
+        $selection = $rows->take(FindingInterpretation::GROUP_CAP);
+        foreach ($selection as $f) {
+            $f->evidence = ['details' => json_decode((string) $f->grouping_details, true) ?: []];
+            $f->subject = ['label' => $f->grouping_label];
+        }
+
+        return [$selection, $sampled];
     }
 
     private function facet(Request $request, string $column): array

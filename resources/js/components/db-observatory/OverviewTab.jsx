@@ -1,7 +1,8 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
-import MetricCard from '../MetricCard';
+import { useState } from 'react';
+import { activityDate, domainLabel, FAMILIES } from './interpretation';
 import { ConfidenceBadge, Empty, ErrorState, fmtAge, fmtAgo, Loading, Meter, Panel, SeverityBadge, Status } from './shared';
 
 const CATEGORIES = ['malware', 'access', 'persistence', 'content', 'config', 'seo', 'hygiene'];
@@ -43,7 +44,8 @@ export function ScannerStateBanner({ scanner, onConfigure }) {
     );
 }
 
-export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) {
+export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure, onOpenMarkets, markets = [] }) {
+    const [showAllMarkets, setShowAllMarkets] = useState(false);
     const query = useQuery({
         queryKey: ['dbo', 'overview'],
         queryFn: dbObservatory.overview,
@@ -57,71 +59,37 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
     const health = d.health || {};
     const coverage = d.coverage || {};
     const posture = d.posture || [];
+    const work = d.work || {};
+    const counts = Object.fromEntries((d.evidence_families || []).map(f => [f.key, f.findings]));
+    const readyMarkets = [...markets].sort((a, b) => (b.open?.critical || 0) - (a.open?.critical || 0) || Number(a.reader_ready) - Number(b.reader_ready) || a.market.localeCompare(b.market));
 
     return (
         <div className="space-y-4">
             <ScannerStateBanner scanner={d.scanner} onConfigure={d.permissions?.configure ? onConfigure : null} />
 
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-                <MetricCard
-                    label="Critical open"
-                    value={d.counts.critical_open}
-                    hint={`+${d.counts.critical_new_24h} in the last 24h`}
-                    tone={d.counts.critical_open ? 'danger' : 'success'}
-                    onClick={() => onOpenFindings({ severity: 'critical', status: 'active' })}
-                />
-                <MetricCard
-                    label="Warnings open"
-                    value={d.counts.warn_open}
-                    hint={`${d.counts.resolved_24h} resolved by verification in 24h`}
-                    tone="warning"
-                    onClick={() => onOpenFindings({ severity: 'warn', status: 'active' })}
-                />
-                <MetricCard
-                    label="Coverage 24h"
-                    value={`${coverage.markets_complete_24h}/${coverage.markets_total}`}
-                    hint={`${coverage.markets_complete_7d} complete in 7d · ${coverage.markets_unconnected} unconnected`}
-                    subHint={`${coverage.markets_gapped_24h} with gaps in 24h · Standard/Deep, full inventory`}
-                    tone={coverage.markets_total && coverage.markets_complete_24h < coverage.markets_total ? 'warning' : 'accent'}
-                />
-                <MetricCard label="Drift events 24h" value={d.counts.drift_24h} hint="Admins, plugins, theme, settings" tone="slate" onClick={() => onOpenFindings({ status: 'active', kind: 'drift' })} />
-                <MetricCard
-                    label="Scanner health"
-                    value={<Status value={health.status} />}
-                    hint={`queue ${health.queued_runs ?? 0} · running ${health.running_runs ?? 0} · p95 ${health.p95_query_ms_24h ?? 0} ms`}
-                    subHint={`Worker ${fmtAge(health.worker_heartbeat_age_seconds)} · dispatcher ${fmtAge(health.dispatcher_heartbeat_age_seconds)}`}
-                    tone={health.status === 'degraded' ? 'danger' : 'default'}
-                />
-            </div>
-
-            <section className="crm-surface overflow-hidden">
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-3 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-4 text-white">
-                    <div className="min-w-[10rem]">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Malware · database surfaces</p>
-                        <p className="mt-1 text-sm text-slate-300">Open findings by detection confidence</p>
-                    </div>
+            <section className="crm-surface overflow-hidden" aria-label="Review workload">
+                <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
                     {[
-                        ['confirmed', 'Confirmed indicator', 'text-rose-300'],
-                        ['strong', 'Strong behavioral match', 'text-orange-300'],
-                        ['needs_review', 'Needs review', 'text-sky-300'],
-                    ].map(([key, label, tone]) => (
-                        <button
-                            key={key}
-                            type="button"
-                            onClick={() => onOpenFindings({ category: 'malware', confidence: key, status: 'active' })}
-                            className="group rounded-lg px-3 py-1.5 text-left transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                        >
-                            <span className={`crm-mono block text-2xl font-semibold ${tone}`}>{d.malware[key]}</span>
-                            <span className="text-xs text-slate-300 group-hover:text-white">{label}</span>
-                        </button>
-                    ))}
-                    <p className="ml-auto max-w-sm text-xs leading-relaxed text-slate-400">
-                        A sweep with no findings means no database indicators were found in the surfaces it covered — never that the site is clean. Files and live pages are not scanned.
-                    </p>
+                        ['Needs follow-up', work.needs_follow_up ?? '—', 'finding records', 'Open risks needing investigation or further evidence. Historical activity can still require action.', () => onOpenFindings({ workflow: 'needs_follow_up', status: 'active' })],
+                        ['Awaiting verification', work.awaiting_verification ?? '—', 'reported fixes', `${work.resolved_24h || 0} findings verified resolved in 24h. A remediation report still needs compatible verification.`, () => onOpenFindings({ workflow: 'awaiting_verification', status: 'active' })],
+                        ['Reader readiness', `${coverage.markets_eligible || 0}/${coverage.markets_total || 0}`, 'market records', `${coverage.markets_blocked || 0} need reader setup or testing. Readiness does not guarantee scan admission.`, onOpenMarkets],
+                    ].map(([label, value, unit, hint, action]) => <button key={label} type="button" onClick={action} className="px-5 py-5 text-left hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"><p className="text-sm font-semibold text-slate-700">{label}</p><p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{value} <span className="text-xs font-normal text-slate-500">{unit}</span></p><p className="mt-2 text-xs leading-5 text-slate-600">{hint}</p></button>)}
                 </div>
             </section>
-
-            <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="Evidence to review" subtitle="Counts are finding records, not infected files or independent incidents. Open a family to review related evidence." bodyClass="p-4">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{['confirmed_payload', 'stored_script', 'login_campaign', 'permissions', 'failed_attempt', 'access_review'].map(key => <button key={key} type="button" onClick={() => onOpenFindings({ family: key, status: 'active' })} className="flex min-h-12 items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3 text-left text-sm hover:border-teal-400 hover:bg-teal-50 focus-visible:ring-2 focus-visible:ring-teal-500"><span className="font-medium text-slate-800">{FAMILIES[key]}</span><span className="font-semibold tabular-nums">{counts[key] || 0}</span></button>)}</div>
+                <p className="mt-3 max-w-3xl text-xs leading-5 text-slate-600">Login correlations are account-access evidence. Stored scripts need ownership and execution review. Zero confirmed indicators only describes database surfaces inspected; files and live pages are outside these scans.</p>
+                <div className="mt-3 flex flex-wrap gap-2">{Object.entries(FAMILIES).filter(([key]) => counts[key] && !['confirmed_payload', 'stored_script', 'login_campaign', 'permissions', 'failed_attempt', 'access_review'].includes(key)).map(([key, label]) => <button key={key} type="button" className="crm-btn-secondary text-xs" onClick={() => onOpenFindings({ family: key, status: 'active' })}>{label} · {counts[key]}</button>)}</div>
+            </Panel>
+            <section className="crm-surface flex flex-wrap justify-between gap-4 px-5 py-4" aria-label="Scanner operation and coverage">
+                <div><p className="text-sm font-semibold text-slate-800">Scanner operation <Status value={health.status} /></p><p className="mt-1 text-xs text-slate-600">{health.queued_runs || 0} queued · {health.running_runs || 0} running · {health.stalled_runs || 0} stalled</p><p className="mt-1 text-xs text-slate-500">Worker {fmtAge(health.worker_heartbeat_age_seconds)} · dispatcher {fmtAge(health.dispatcher_heartbeat_age_seconds)}{health.oldest_waiting_age_seconds != null ? ` · oldest wait ${Math.round(health.oldest_waiting_age_seconds / 60)} min` : ''}</p></div>
+                <div><p className="text-sm font-semibold text-slate-800">Database coverage in 24h</p><p className="mt-1 text-xs text-slate-600">{coverage.markets_complete_24h || 0} complete · {coverage.markets_gapped_24h || 0} finished with gaps · {coverage.markets_total || 0} market records</p><p className="mt-1 text-xs text-slate-500">Worker health and scan coverage are separate.</p></div>
+            </section>
+            <Panel title="Market review queue" subtitle="All market records include their domain, coverage and next action. No findings can mean unscanned or blocked." action={<button type="button" className="text-sm font-semibold text-teal-700 hover:underline" onClick={onOpenMarkets}>Market setup →</button>} bodyClass="overflow-x-auto">
+                {!readyMarkets.length ? <p className="px-4 py-5 text-sm text-slate-600">Market readiness is loading. Open Markets to check setup and coverage.</p> : <table className="w-full min-w-[38rem] text-sm"><thead><tr className="border-b border-slate-200 text-left text-xs text-slate-500"><th className="px-4 py-3">Market / domain</th><th className="px-3 py-3">Evidence / owner</th><th className="px-3 py-3">Next action / scan</th></tr></thead><tbody className="divide-y divide-slate-100">{(showAllMarkets ? readyMarkets : readyMarkets.slice(0, 10)).map(m => <tr key={m.platform_id}><td className="px-4 py-3 align-top"><button type="button" className="font-semibold text-slate-900 hover:text-teal-700" onClick={() => onOpenFindings({ platform_id: m.platform_id, status: 'active' })}>{m.market}</button><p className="mt-1 text-xs text-slate-500">{domainLabel(m.domain)}</p><p className="mt-1 text-xs">{m.last_sweep ? <Status value={m.last_sweep.status} /> : 'Never scanned'}</p></td><td className="px-3 py-3 align-top"><button type="button" className="font-medium text-teal-700 hover:underline" onClick={() => onOpenFindings({ platform_id: m.platform_id, status: 'active' })}>{(m.open?.critical || 0) + (m.open?.warn || 0) + (m.open?.info || 0)} finding records</button><p className="mt-1 text-xs text-slate-600">{m.evidence_families?.login_campaign || 0} login · {m.evidence_families?.stored_script || 0} script</p><p className="mt-1 text-xs text-slate-500">{m.owners?.join(', ') || 'No review owner assigned'}</p></td><td className="px-3 py-3 align-top"><p className="max-w-sm text-xs leading-5 text-slate-700">{m.next_action || 'Review reader and coverage'}</p><p className="mt-1 text-xs text-slate-500">{m.next_schedule ? `Planned ${activityDate(m.next_schedule.due_at)}` : 'No eligible scan scheduled'}</p></td></tr>)}</tbody></table>}
+                {readyMarkets.length > 10 ? <button type="button" className="w-full border-t border-slate-200 px-4 py-3 text-sm font-semibold text-teal-700 hover:bg-slate-50" onClick={() => setShowAllMarkets(!showAllMarkets)}>{showAllMarkets ? 'Show priority markets' : `Show all ${readyMarkets.length} markets`}</button> : null}
+            </Panel>
+            <details className="crm-surface p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Additional cross-market summaries</summary><div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <Panel title="Fleet triage" subtitle="Matching findings grouped across markets; roles also match their privileged capability definitions.">
                     {!d.fleet?.groups?.length ? <Empty title="No fleet findings yet">Scanned markets will appear here.</Empty> : <div className="divide-y divide-slate-100">{d.fleet.groups.slice(0, 8).map((g) => <button type="button" key={g.key} onClick={() => onOpenFindings({ rule_key: g.rule_key, identity: g.identity, definition_hash: g.definition_hash || undefined, status: 'active' })} className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-900">{g.identity}</span><span className="block text-xs text-slate-500">{g.rule_key} · {g.market_names.join(', ')}</span></span><span className="shrink-0 text-xs text-slate-600">{g.findings} findings · {g.markets} markets{g.critical ? ` · ${g.critical} critical` : ''}</span></button>)}</div>}
                     {d.fleet?.sampled ? <p className="px-4 py-2 text-xs text-amber-800">Summary limited to the 10,000 most recent open findings.</p> : null}
@@ -130,8 +98,8 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                     {!d.fleet?.correlations?.length ? <Empty title="No shared indicators yet">Connect and scan more markets to compare evidence.</Empty> : <ul className="divide-y divide-slate-100">{d.fleet.correlations.slice(0, 8).map((c) => <li key={`${c.type}:${c.value}`} className="px-4 py-3"><div className="flex flex-wrap justify-between gap-2"><span className="crm-mono break-all text-sm font-semibold text-slate-900">{c.value}</span><span className="text-xs text-slate-600">{c.markets} markets{c.same_day_markets >= 2 ? ` · ${c.same_day_markets} on one day` : ''}</span></div><p className="mt-1 text-xs text-slate-500">{c.type.replaceAll('_', ' ')} · {c.market_names.join(', ')}</p></li>)}</ul>}
                 </Panel>
             </div>
-            <div className="grid gap-4 xl:grid-cols-[1.55fr_1fr]">
-                <Panel title="Posture by market" subtitle="Open findings by category. Each cell opens the filtered findings." bodyClass="overflow-x-auto p-3">
+            </details>
+            <details className="crm-surface self-start p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Advanced category counts</summary>                <Panel title="Raw finding counts by category" subtitle="Legacy categories include related evidence. Counts are findings, not infections; open a family above for clearer interpretation." bodyClass="overflow-x-auto p-3">
                     {posture.length === 0 ? (
                         <Empty title="No open findings in your markets">
                             Either nothing has been scanned yet, or every finding has been resolved or triaged. Check Markets for coverage freshness before reading this as good news.
@@ -141,13 +109,13 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                             <thead>
                                 <tr>
                                     <th scope="col" className="px-2 py-1 text-left font-semibold text-slate-500">Market</th>
-                                    {CATEGORIES.map((c) => <th key={c} scope="col" className="px-1 py-1 font-semibold capitalize text-slate-500">{c}</th>)}
+                                    {CATEGORIES.map((c) => <th key={c} scope="col" className="px-1 py-1 font-semibold capitalize text-slate-500">{c === 'malware' ? 'Indicators*' : c}</th>)}
                                 </tr>
                             </thead>
                             <tbody>
                                 {posture.map((row) => (
                                     <tr key={row.platform_id}>
-                                        <th scope="row" className="truncate px-2 py-1 text-left text-sm font-semibold text-slate-800">{row.market}</th>
+                                        <th scope="row" className="truncate px-2 py-1 text-left text-sm font-semibold text-slate-800">{row.market}<span className="block text-xs font-normal text-slate-500">{domainLabel(row.domain)}</span></th>
                                         {CATEGORIES.map((c) => {
                                             const cell = row.categories?.[c];
                                             return (
@@ -176,9 +144,9 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                             ))}
                         </div>
                     ) : null}
-                </Panel>
+                </Panel></details>
 
-                <div className="space-y-4">
+                <div className="grid items-start gap-4 lg:grid-cols-[.75fr_1.25fr]">
                     <Panel title="Running now" bodyClass="divide-y divide-slate-100">
                         {(d.running || []).length === 0 ? (
                             <p className="px-4 py-5 text-sm text-slate-500">No scans are queued or running.</p>
@@ -202,7 +170,7 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                         })}
                     </Panel>
 
-                    <Panel title="Latest critical" bodyClass="divide-y divide-slate-100">
+                    <Panel title="Recently detected critical evidence" bodyClass="divide-y divide-slate-100">
                         {(d.latest_critical || []).length === 0 ? (
                             <p className="px-4 py-5 text-sm text-slate-500">No open critical findings.</p>
                         ) : d.latest_critical.map((f) => (
@@ -212,11 +180,10 @@ export default function OverviewTab({ onOpenFindings, onOpenRun, onConfigure }) 
                                     <ConfidenceBadge confidence={f.confidence} />
                                 </div>
                                 <p className="mt-1 text-sm font-medium text-slate-900"><span className="font-semibold">{f.market}</span> · {f.title}</p>
-                                <p className="text-xs text-slate-500">first seen {fmtAgo(f.first_seen_at)}</p>
+                                <p className="mt-1 text-xs text-slate-600">{f.interpretation?.event_at ? `${f.interpretation.event_label}: ${activityDate(f.interpretation.event_at, f.interpretation.event_precision)}` : f.linked_activity_start ? `Linked activity from ${activityDate(f.linked_activity_start)}` : 'Activity date not recorded'}</p><p className="text-xs text-slate-500">First detected {fmtAgo(f.first_seen_at)}</p>
                             </button>
                         ))}
                     </Panel>
-                </div>
             </div>
         </div>
     );

@@ -36,6 +36,16 @@ class DbScanFinding extends Model
         return $this->hasMany(DbScanFindingEvent::class, 'finding_id');
     }
 
+    public function latestRemediation()
+    {
+        return $this->hasOne(DbScanFindingEvent::class, 'finding_id')->ofMany(['id' => 'max'], fn ($q) => $q->where('type', 'remediation_recorded'));
+    }
+
+    public function assignee()
+    {
+        return $this->belongsTo(User::class, 'assigned_to');
+    }
+
     public function observations()
     {
         return $this->hasMany(DbScanObservation::class, 'finding_id');

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { activityDate, domainLabel } from './interpretation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import FilesystemPanel from './FilesystemPanel';
 import dbObservatory from '../../services/dbObservatory';
@@ -261,17 +262,17 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
         <>
             <Panel
                 title="Markets"
-                subtitle="Connection, coverage freshness and open findings per market. A stale or incomplete sweep is never shown as healthy."
+                subtitle="Reader readiness, database coverage and next action per domain. Planned scans still require safe admission."
                 action={<div className="flex flex-wrap gap-2"><input aria-label="Filter markets" className="crm-input w-48 py-1.5" placeholder="Market or domain" value={filter} onChange={(e) => setFilter(e.target.value)} /><select aria-label="Connection status" className="crm-select py-1.5 text-sm" value={connectionFilter} onChange={(e) => setConnectionFilter(e.target.value)}><option value="">All connections</option><option value="setup">Needs setup or test</option><option value="verified">Verified</option></select></div>}
                 bodyClass="overflow-x-auto"
             >
                 {rows.length === 0 ? <Empty title="No markets in your scope" /> : (
-                    <table className="w-full min-w-[56rem] text-sm">
+                    <table className="w-full min-w-[68rem] text-sm">
                         <thead>
                             <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-500">
                                 <th className="px-4 py-2">Market</th><th className="px-2 py-2">Reader</th><th className="px-2 py-2">Last sweep</th>
                                 <th className="px-2 py-2">Coverage age</th><th className="px-2 py-2 text-right">Critical</th><th className="px-2 py-2 text-right">Warn</th>
-                                <th className="px-2 py-2 text-right">Malware</th><th className="px-4 py-2" />
+                                <th className="px-2 py-2">Evidence families</th><th className="px-2 py-2">Next action / planned scan</th><th className="px-4 py-2" />
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -282,7 +283,7 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                                         <td className="px-4 py-2.5">
                                             <button type="button" className="text-left" onClick={() => { setOpen(m.platform_id); setView('inventory'); }}>
                                                 <p className="font-semibold text-slate-900 hover:text-teal-700">{m.market}</p>
-                                                <p className="text-xs text-slate-500">{m.domain} · health {m.health_status || 'unknown'}</p>
+                                                <p className="text-xs text-slate-500">{domainLabel(m.domain)} · health {m.health_status || 'unknown'}</p>
                                             </button>
                                         </td>
                                         <td className="px-2 py-2.5">
@@ -297,15 +298,17 @@ export default function MarketsTab({ canConfigure, canOperate, onOpenFindings, o
                                         </td>
                                         <td className="px-2 py-2.5">
                                             {m.last_sweep ? (
-                                                <div><Status value={m.last_sweep.status} /><p className="mt-0.5 text-xs text-slate-500">{m.last_sweep.profile}{m.last_sweep.stop_reason ? ` · ${humanize(m.last_sweep.stop_reason)}` : ''}</p></div>
-                                            ) : <span className="text-xs text-slate-400">Never scanned</span>}
+                                                <div><Status value={m.last_sweep.status} /><p className="mt-0.5 text-xs text-slate-500">{m.last_sweep.profile} · {activityDate(m.last_sweep.finished_at)}{m.last_sweep.stop_reason ? ` · ${humanize(m.last_sweep.stop_reason)}` : ''}</p></div>
+                                            ) : <span className="text-xs text-slate-500">Never scanned</span>}
+                                            {m.coverage_gaps?.length ? <details className="mt-2 text-xs text-amber-800"><summary className="cursor-pointer">{m.coverage_gaps.length} coverage gaps / exclusions</summary><ul className="mt-1 space-y-1">{m.coverage_gaps.map(g => <li key={g.surface}>{humanize(g.surface)} · {humanize(g.reason || g.status)}</li>)}</ul></details> : null}
                                         </td>
                                         <td className={`px-2 py-2.5 text-xs ${stale ? 'font-semibold text-amber-700' : 'text-slate-600'}`}>
                                             {m.coverage_age_hours === null ? 'No finished sweep' : `${m.coverage_age_hours} h`}
                                         </td>
                                         <td className="crm-mono px-2 py-2.5 text-right">{m.open.critical ? <button type="button" className="font-semibold text-rose-700 hover:underline" onClick={() => onOpenFindings({ platform_id: m.platform_id, severity: 'critical', status: 'active' })}>{m.open.critical}</button> : <span className="text-slate-300">0</span>}</td>
                                         <td className="crm-mono px-2 py-2.5 text-right">{m.open.warn || <span className="text-slate-300">0</span>}</td>
-                                        <td className="crm-mono px-2 py-2.5 text-right">{m.open.malware ? <button type="button" className="font-semibold text-rose-700 hover:underline" onClick={() => onOpenFindings({ platform_id: m.platform_id, category: 'malware', status: 'active' })}>{m.open.malware}</button> : <span className="text-slate-300">0</span>}</td>
+                                        <td className="px-2 py-2.5 align-top"><div className="flex flex-col items-start gap-1">{[['login_campaign', 'Login evidence'], ['stored_script', 'Stored scripts'], ['permissions', 'Permissions']].map(([family, label]) => <button key={family} type="button" className="text-xs text-teal-700 hover:underline" onClick={() => onOpenFindings({ platform_id: m.platform_id, family, status: 'active' })}>{label}: {m.evidence_families?.[family] || 0}</button>)}</div><p className="mt-2 text-xs text-slate-500">{m.owners?.join(', ') || 'No review owner assigned'}</p></td>
+                                        <td className="px-2 py-2.5 align-top"><p className="max-w-xs text-xs leading-5 text-slate-700">{m.next_action || 'Review reader and coverage'}</p><p className="mt-1 text-xs text-slate-500">{m.next_schedule ? `${m.next_schedule.profile} · ${activityDate(m.next_schedule.due_at)}` : 'No eligible scan scheduled'}</p><p className="mt-1 text-xs text-slate-500">Database scope; files excluded</p></td>
                                         <td className="px-4 py-2.5 text-right">
                                             <div className="flex justify-end gap-2">
                                                 {m.last_run ? <button type="button" className="text-xs font-semibold text-teal-700 hover:underline" onClick={() => onOpenRun(m.last_run.id)}>Last run</button> : null}

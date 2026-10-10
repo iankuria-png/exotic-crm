@@ -6,6 +6,7 @@ use App\Models\DbScanFinding;
 use App\Models\DbScanMarketRun;
 use App\Models\DbScanPass;
 use App\Models\DbScanSweep;
+use App\Models\Platform;
 use App\Services\DbScanner\Engine\Recovery;
 use App\Services\DbScanner\Engine\ScanSliceHeartbeat;
 use App\Services\DbScanner\Engine\ScheduleDispatcher;
@@ -17,6 +18,33 @@ use Illuminate\Support\Facades\Cache;
  */
 class ObservatoryPresenter
 {
+    private array $linked = [];
+
+    private array $domains = [];
+
+    private bool $linkedSampled = false;
+
+    /** Batch only displayed rows; summaries never present thousands of payloads. */
+    public function prepare(iterable $findings, array $names): void
+    {
+        $rows = new \Illuminate\Database\Eloquent\Collection(collect($findings)->all());
+        $rows->loadMissing(['latestRemediation', 'assignee:id,name']);
+        $this->domains = Platform::query()->whereIn('id', array_keys($names))->pluck('domain', 'id')->all();
+        $ids = [];
+        foreach ($rows as $f) {
+            if ($f->rule_key === 'malware.reinfection_cluster' || $f->behavior === 'cross_market_campaign') {
+                foreach (array_slice((array) ($f->evidence['details']['linked_finding_ids'] ?? []), 0, 500) as $id) {
+                    if (is_numeric($id) && (int) $id > 0) {
+                        $ids[(int) $id] = true;
+                    }
+                }
+            }
+        }
+        $this->linkedSampled = count($ids) > 10000;
+        $this->linked = DbScanFinding::query()->whereIn('id', array_slice(array_keys($ids), 0, 10000))
+            ->whereIn('platform_id', array_keys($names))->get(['id', 'platform_id', 'rule_key', 'title', 'evidence', 'status'])->keyBy('id')->all();
+    }
+
     public function run(DbScanMarketRun $run, array $names = []): array
     {
         $state = (array) ($run->cursor ?? []);
@@ -38,6 +66,9 @@ class ObservatoryPresenter
             'control' => $run->control,
             'error_code' => $run->error_code,
             'db_engine' => $run->db_engine,
+            'created_at' => $run->created_at?->toIso8601String(),
+            'waiting_seconds' => $run->created_at ? max(0, ($run->started_at ?? $run->finished_at ?? now())->timestamp - $run->created_at->timestamp) : null,
+            'wait_reason' => $run->pause_reason ?: ($run->status === 'waiting_lock' ? 'Another operation owns this market' : ($run->status === 'queued' ? 'Waiting for safe admission and a worker' : null)),
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'heartbeat_at' => $run->heartbeat_at?->toIso8601String(),
@@ -129,13 +160,24 @@ class ObservatoryPresenter
     public function finding(DbScanFinding $finding, array $names = []): array
     {
         $evidence = (array) $finding->evidence;
-        if ($finding->behavior === 'cross_market_campaign') {
+        $linked = [];
+        if ($finding->behavior === 'cross_market_campaign' || $finding->rule_key === 'malware.reinfection_cluster') {
             $details = (array) ($evidence['details'] ?? []);
             $ids = array_values(array_intersect((array) ($details['platform_ids'] ?? []), array_keys($names)));
             $restricted = count($ids) < count($details['platform_ids'] ?? []);
             $details['platform_ids'] = $ids;
             $details['markets'] = count($ids);
-            $details['linked_finding_ids'] = DbScanFinding::query()->whereIn('id', (array) ($details['linked_finding_ids'] ?? []))->whereIn('platform_id', $ids)->pluck('id')->all();
+            $originalLinks = (array) ($details['linked_finding_ids'] ?? []);
+            $details['linked_finding_ids'] = [];
+            foreach (array_slice($originalLinks, 0, 500) as $id) {
+                $row = $this->linked[(int) $id] ?? null;
+                if (! $row || ! in_array((int) $row->platform_id, array_map('intval', $ids), true)) {
+                    continue;
+                }
+                $details['linked_finding_ids'][] = $row->id;
+                $linked[] = ['id' => $row->id, 'market' => $names[$row->platform_id] ?? null, 'domain' => $this->domains[$row->platform_id] ?? null, 'title' => $row->title, 'subject' => $row->evidence['details']['login'] ?? null, 'event_at' => FindingInterpretation::eventAt($row), 'status' => $row->status];
+            }
+            $details['linked_evidence_limited'] = count($originalLinks) > 500 || $this->linkedSampled;
             if ($restricted) {
                 $details['within_ten_minutes'] = null;
                 $details['scope_restricted'] = true;
@@ -148,6 +190,13 @@ class ObservatoryPresenter
             'coverage_scope' => ['scope' => 'database', 'filesystem_inspected' => false, 'live_responses_inspected' => false],
             'platform_id' => $finding->platform_id,
             'market' => $names[$finding->platform_id] ?? null,
+            'domain' => $this->domains[$finding->platform_id] ?? null,
+            'interpretation' => FindingInterpretation::summary($finding),
+            'workflow' => FindingInterpretation::workflow($finding),
+            'linked_findings' => array_slice($linked, 0, 25),
+            'linked_findings_total' => count($linked),
+            'linked_activity_start' => collect($linked)->pluck('event_at')->filter()->min(),
+            'linked_activity_end' => collect($linked)->pluck('event_at')->filter()->max(),
             'rule_key' => $finding->rule_key,
             'pack' => $finding->pack,
             'pack_version' => $finding->pack_version,
@@ -173,6 +222,7 @@ class ObservatoryPresenter
             'status' => $finding->status,
             'snoozed_until' => $finding->snoozed_until?->toIso8601String(),
             'assigned_to' => $finding->assigned_to,
+            'assigned_name' => $finding->relationLoaded('assignee') ? $finding->assignee?->name : null,
             'note' => $finding->note,
             'first_seen_at' => $finding->first_seen_at?->toIso8601String(),
             'last_seen_at' => $finding->last_seen_at?->toIso8601String(),

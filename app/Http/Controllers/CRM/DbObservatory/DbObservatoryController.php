@@ -12,10 +12,12 @@ use App\Models\DbScanMarketRun;
 use App\Models\DbScanPass;
 use App\Models\DbScanRule;
 use App\Models\DbScanRuleCoverage;
+use App\Models\DbScanSchedule;
 use App\Models\DbScanSnapshot;
 use App\Models\DbScanSurfaceCoverage;
 use App\Models\DbScanSweep;
 use App\Models\Platform;
+use App\Services\DbScanner\FindingInterpretation;
 use App\Services\DbScanner\ObservatoryPresenter;
 use App\Services\DbScanner\ScannerSettings;
 use App\Services\DbScanner\Surfaces\SurfaceRegistry;
@@ -42,6 +44,7 @@ class DbObservatoryController extends Controller
         $this->ensureView($request);
         $ids = $this->scopeIds($request);
         $names = $this->marketNames($ids);
+        $domains = Platform::query()->whereIn('id', array_keys($names))->pluck('domain', 'id');
         $open = fn () => $this->scoped(DbScanFinding::query(), $request)->whereIn('status', DbScanFinding::OPEN_STATUSES);
 
         $driftRules = DbScanRule::query()->where('kind', 'drift')->pluck('key');
@@ -81,14 +84,14 @@ class DbObservatoryController extends Controller
             ->groupBy('platform_id', 'category', 'severity')
             ->get()
             ->groupBy('platform_id')
-            ->map(function ($rows, $platformId) use ($names) {
+            ->map(function ($rows, $platformId) use ($names, $domains) {
                 $cells = [];
                 foreach ($rows as $row) {
                     $cells[$row->category]['total'] = ($cells[$row->category]['total'] ?? 0) + (int) $row->n;
                     $cells[$row->category][$row->severity] = (int) $row->n;
                 }
 
-                return ['platform_id' => (int) $platformId, 'market' => $names[$platformId] ?? null, 'categories' => $cells];
+                return ['platform_id' => (int) $platformId, 'market' => $names[$platformId] ?? null, 'domain' => $domains[$platformId] ?? null, 'categories' => $cells];
             })
             ->values();
 
@@ -103,6 +106,12 @@ class DbObservatoryController extends Controller
             ->values();
 
         $row = $this->settings->row(true);
+        $latest = $open()->where('severity', 'critical')->latest('first_seen_at')->limit(6)->get();
+        $this->presenter->prepare($latest, $names);
+        $familyCounts = FindingInterpretation::counts($open());
+        $awaiting = FindingInterpretation::awaiting($open())->count();
+        $followUp = $open();
+        FindingInterpretation::filterWorkflow($followUp, 'needs_follow_up');
 
         return response()->json([
             'scanner' => [
@@ -114,6 +123,8 @@ class DbObservatoryController extends Controller
                 'packs' => DbScanRule::query()->where('retired', false)->selectRaw('pack, MAX(pack_version) AS v')->groupBy('pack')->pluck('v', 'pack'),
             ],
             'permissions' => DbScannerPermissions::capabilities($request->user()),
+            'evidence_families' => $familyCounts,
+            'work' => ['needs_follow_up' => $followUp->count(), 'awaiting_verification' => $awaiting, 'activity_records' => $open()->where('severity', 'info')->count(), 'resolved_24h' => $this->scoped(DbScanFinding::query(), $request)->where('status', 'resolved')->where('resolved_at', '>=', now()->subDay())->count()],
             'counts' => [
                 'critical_open' => $open()->where('severity', 'critical')->count(),
                 'critical_new_24h' => $open()->where('severity', 'critical')->where('first_seen_at', '>=', now()->subDay())->count(),
@@ -135,14 +146,14 @@ class DbObservatoryController extends Controller
                 'markets_gapped_24h' => $gapped,
                 'markets_unconnected' => count(array_diff($inventoryIds, $connections->pluck('platform_id')->all())),
                 'markets_eligible' => count($eligible),
+                'markets_blocked' => count(array_diff($inventoryIds, $eligible)),
                 'markets_covered_24h' => count($coveredRecently),
                 'markets_configured' => $connections->count(),
                 'unreachable' => $unreachable,
             ],
             'posture' => $posture,
             'running' => $activePasses,
-            'latest_critical' => $open()->where('severity', 'critical')->latest('first_seen_at')->limit(6)->get()
-                ->map(fn ($f) => $this->presenter->finding($f, $names))->values(),
+            'latest_critical' => $latest->map(fn ($f) => $this->presenter->finding($f, $names))->values(),
             'health' => $this->presenter->health($ids),
         ]);
     }
@@ -160,17 +171,40 @@ class DbObservatoryController extends Controller
         $malware = DbScanFinding::query()->whereIn('platform_id', $platforms->pluck('id'))->whereIn('status', DbScanFinding::OPEN_STATUSES)->where('category', 'malware')
             ->selectRaw('platform_id, COUNT(*) AS n')->groupBy('platform_id')->pluck('n', 'platform_id');
 
-        $data = $platforms->map(function (Platform $p) use ($connections, $open, $malware, $admin) {
+        $platformIds = $platforms->pluck('id');
+        $latestSweeps = DbScanSweep::query()->whereIn('id', DbScanSweep::query()->whereIn('platform_id', $platformIds)->selectRaw('MAX(id)')->groupBy('platform_id'))
+            ->get(['id', 'platform_id', 'status', 'profile', 'finished_at', 'stop_reason'])->keyBy('platform_id');
+        $completeSweeps = DbScanSweep::query()->whereIn('id', DbScanSweep::query()->whereIn('platform_id', $platformIds)->whereIn('status', ['complete', 'complete_with_gaps'])->selectRaw('MAX(id)')->groupBy('platform_id'))
+            ->get(['id', 'platform_id', 'finished_at'])->keyBy('platform_id');
+        $latestRuns = DbScanMarketRun::query()->whereIn('id', DbScanMarketRun::query()->whereIn('platform_id', $platformIds)->where('mode', 'scan')->selectRaw('MAX(id)')->groupBy('platform_id'))
+            ->get(['id', 'platform_id', 'status', 'error_code', 'finished_at'])->keyBy('platform_id');
+        $gaps = DbScanSurfaceCoverage::query()->whereIn('market_run_id', $latestRuns->pluck('id'))->whereIn('status', ['excluded', 'incomplete'])
+            ->get(['market_run_id', 'surface_key', 'status', 'reason'])->groupBy('market_run_id');
+        $schedules = DbScanSchedule::query()->where('enabled', true)->whereNotNull('next_due_at')->orderBy('next_due_at')->get();
+        $families = DbScanFinding::query()->whereIn('platform_id', $platformIds)->whereIn('status', DbScanFinding::OPEN_STATUSES)
+            ->selectRaw('platform_id, '.FindingInterpretation::familySql().' AS family, COUNT(*) AS n')->groupBy('platform_id', 'family')->get()->groupBy('platform_id');
+        $owners = DbScanFinding::query()->with('assignee:id,name')->whereIn('platform_id', $platformIds)->whereIn('status', DbScanFinding::OPEN_STATUSES)->whereNotNull('assigned_to')->get(['id', 'platform_id', 'assigned_to'])->groupBy('platform_id');
+
+        $data = $platforms->map(function (Platform $p) use ($connections, $open, $malware, $admin, $latestSweeps, $completeSweeps, $latestRuns, $gaps, $schedules, $families, $owners) {
             $c = $connections->get($p->id);
-            $lastSweep = DbScanSweep::query()->where('platform_id', $p->id)->latest('id')->first();
-            $lastComplete = DbScanSweep::query()->where('platform_id', $p->id)->whereIn('status', ['complete', 'complete_with_gaps'])->latest('finished_at')->first();
-            $lastRun = DbScanMarketRun::query()->where('platform_id', $p->id)->where('mode', 'scan')->latest('id')->first();
+            $lastSweep = $latestSweeps->get($p->id);
+            $lastComplete = $completeSweeps->get($p->id);
+            $lastRun = $latestRuns->get($p->id);
             $counts = collect($open->get($p->id, []))->mapWithKeys(fn ($r) => [$r->severity => (int) $r->n])->all();
+            $verified = $c && $c->enabled && $c->preflightValid();
+            $schedule = $verified ? $schedules->first(fn ($s) => ($s->market_scope['mode'] ?? 'enabled_connections') === 'enabled_connections' || in_array($p->id, array_map('intval', $s->market_scope['platform_ids'] ?? []), true)) : null;
+            $nextAction = ! $c ? 'Configure the reader connection' : (! $verified ? 'Correct or re-test the reader connection' : ($p->health_status !== 'healthy' ? 'Review market health before scanning' : (! $lastRun ? 'Run the first database scan' : ($lastSweep?->status === 'complete_with_gaps' ? 'Review coverage gaps and open evidence' : 'Review open evidence and scheduled coverage'))));
 
             return [
                 'platform_id' => $p->id,
                 'market' => $p->name,
                 'domain' => $p->domain,
+                'next_action' => $nextAction,
+                'reader_ready' => (bool) $verified,
+                'next_schedule' => $schedule ? ['id' => $schedule->id, 'name' => $schedule->name, 'profile' => $schedule->profile, 'due_at' => $schedule->next_due_at->toIso8601String(), 'admission_guaranteed' => false] : null,
+                'coverage_gaps' => collect($gaps->get($lastRun?->id, []))->map(fn ($g) => ['surface' => $g->surface_key, 'status' => $g->status, 'reason' => $g->reason])->values(),
+                'evidence_families' => collect($families->get($p->id, []))->mapWithKeys(fn ($f) => [$f->family => (int) $f->n])->all(),
+                'owners' => collect($owners->get($p->id, []))->map(fn ($f) => $f->assignee?->name)->filter()->unique()->values(),
                 'is_active' => (bool) $p->is_active,
                 'health_status' => $p->health_status,
                 'health_checked_at' => $p->health_checked_at?->toIso8601String(),

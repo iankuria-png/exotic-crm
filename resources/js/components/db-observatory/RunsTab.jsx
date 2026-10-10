@@ -1,3 +1,4 @@
+import { activityDate } from './interpretation';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dbObservatory from '../../services/dbObservatory';
@@ -265,6 +266,11 @@ export function RunDetail({ runId, canOperate, onBack, onOpenFindings }) {
                 </div>
             </div>
 
+            <section className="crm-surface px-5 py-4" aria-label="Scan timing and admission">
+                <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div><dt className="font-semibold text-slate-500">Admitted to queue</dt><dd className="mt-1 text-slate-800">{activityDate(run.created_at)}</dd></div><div><dt className="font-semibold text-slate-500">Started</dt><dd className="mt-1 text-slate-800">{run.started_at ? activityDate(run.started_at) : 'Not started'}</dd></div><div><dt className="font-semibold text-slate-500">Wait before start</dt><dd className="mt-1 text-slate-800">{run.waiting_seconds != null ? `${Math.round(run.waiting_seconds / 60)} min${!run.started_at && !terminal ? ' so far' : ''}` : 'Not recorded'}</dd></div><div><dt className="font-semibold text-slate-500">Last worker heartbeat</dt><dd className="mt-1 text-slate-800">{run.heartbeat_at ? activityDate(run.heartbeat_at) : 'Not recorded'}</dd></div></dl>
+                {run.wait_reason ? <p className="mt-3 text-sm text-amber-800">Waiting reason: {humanize(run.wait_reason)}{run.next_attempt_at ? ` · next attempt ${activityDate(run.next_attempt_at)}` : ''}</p> : null}
+                <p className="mt-3 text-xs leading-5 text-slate-600">Scans retain native load, health, reader and concurrency safeguards. Finished with gaps means the inspected database surfaces completed with limitations; files and live pages are outside this scan.</p>
+            </section>
             <LoadOverrideBanner pass={passQuery.data?.pass} />
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
                 {[
