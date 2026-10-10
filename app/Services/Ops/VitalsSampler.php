@@ -103,6 +103,7 @@ class VitalsSampler
             'process_ceiling_verified' => $ceilingVerified,
             'scheduler' => $scheduler,
             'process_breakdown' => $processes['breakdown'] ?? [],
+            'process_scope' => 'account',
             'process_reason' => $processes['reason'] ?? null,
         ];
 
@@ -339,8 +340,10 @@ class VitalsSampler
      * PHP processes finds none and reports zero — a silent zero reads as "no
      * pressure", which is the most dangerous wrong answer this class can give.
      *
-     * So each candidate spelling is probed against our OWN pid first. If the
-     * probe does not return our own command line, that spelling is not
+     * Each listing includes numeric ownership, so shared-host neighbours do not
+     * count against this account's process budget. Each candidate spelling is
+     * probed against our OWN pid first. If it does not return our own command
+     * line, that spelling is not
      * understood here and we move on; if none is, the signal is unavailable.
      *
      * @return array<int, string>|null
@@ -354,31 +357,28 @@ class VitalsSampler
         }
 
         foreach (['args', 'command', 'cmd'] as $keyword) {
-            $probe = $this->shell(sprintf('ps -o %s= -p %d 2>/dev/null', $keyword, $pid));
+            $probe = $this->shell(sprintf('ps -o uid= -o %s= -p %d 2>/dev/null', $keyword, $pid));
 
-            if ($probe === null || trim($probe) === '' || ! str_contains($probe, 'php')) {
+            if ($probe === null || ! preg_match('/^\s*(\d+)\s+(.+)$/', trim($probe), $match)
+                || ! str_contains($match[2], 'php')) {
+                continue;
+            }
+            $uid = (int) $match[1];
+            if (function_exists('posix_geteuid') && $uid !== posix_geteuid()) {
                 continue;
             }
 
-            $output = $this->shell(sprintf('ps -eo %s 2>/dev/null', $keyword))
-                ?? $this->shell(sprintf('ps ax -o %s 2>/dev/null', $keyword));
+            $output = $this->shell(sprintf('ps -e -o uid= -o %s= 2>/dev/null', $keyword))
+                ?? $this->shell(sprintf('ps ax -o uid= -o %s= 2>/dev/null', $keyword));
 
             if ($output === null) {
                 continue;
             }
 
-            $lines = array_values(array_filter(
-                array_map(fn ($line): string => trim((string) $line), preg_split('/\R/', $output) ?: []),
-                fn (string $line): bool => $line !== '' && ! in_array(strtoupper($line), ['CMD', 'ARGS', 'COMMAND'], true)
-            ));
-
-            // A real listing is many lines and includes our own process. Fewer
-            // than that means we are looking at an error, not a process table.
-            if (count($lines) < 2) {
-                continue;
+            $lines = AccountProcessListing::parse($output, $uid, $match[2]);
+            if ($lines !== null) {
+                return $lines;
             }
-
-            return $lines;
         }
 
         return null;
