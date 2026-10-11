@@ -7176,6 +7176,12 @@ function ErrorLogsWorkspace() {
     const [statusFilter, setStatusFilter] = useState('unresolved');
     const [selectedGroupId, setSelectedGroupId] = useState(null);
     const [exportOpen, setExportOpen] = useState(false);
+    const [clock, setClock] = useState(Date.now);
+
+    useEffect(() => {
+        const timer = window.setInterval(() => setClock(Date.now()), 15_000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     const listQuery = useQuery({
         queryKey: ['settings-error-logs', page, search, levelFilter, sourceFilter, statusFilter],
@@ -7186,16 +7192,23 @@ function ErrorLogsWorkspace() {
                 ...(search ? { search } : {}),
                 ...(levelFilter ? { level: levelFilter } : {}),
                 ...(sourceFilter ? { source: sourceFilter } : {}),
-                ...(statusFilter ? { status: statusFilter } : {}),
+                status: statusFilter || 'all',
             },
         }).then((response) => response.data),
         refetchInterval: 30_000,
+        staleTime: 0,
+        refetchOnWindowFocus: true,
+        refetchOnReconnect: true,
     });
 
     const detailQuery = useQuery({
         queryKey: ['settings-error-logs', 'detail', selectedGroupId],
         queryFn: () => api.get(`/crm/settings/error-logs/${selectedGroupId}`).then((response) => response.data?.data),
         enabled: Boolean(selectedGroupId),
+        refetchInterval: 30_000,
+        staleTime: 0,
+        refetchOnWindowFocus: true,
+        refetchOnReconnect: true,
     });
 
     const resolveMutation = useMutation({
@@ -7222,6 +7235,14 @@ function ErrorLogsWorkspace() {
     const pagination = listQuery.data || {};
 
     const detail = detailQuery.data;
+    const hasSnapshot = Boolean(listQuery.data);
+    const staleSnapshot = hasSnapshot && clock - listQuery.dataUpdatedAt > 75_000;
+    const staleDetail = Boolean(detail) && clock - detailQuery.dataUpdatedAt > 75_000;
+    const countLabel = (value) => hasSnapshot ? Number(value || 0).toLocaleString() : '—';
+    const refresh = () => {
+        listQuery.refetch();
+        if (selectedGroupId) detailQuery.refetch();
+    };
 
     return (
         <div className="error-pulse space-y-5">
@@ -7229,13 +7250,20 @@ function ErrorLogsWorkspace() {
                 <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                     <div className="max-w-2xl">
                         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-200">
-                            <span className={`h-2 w-2 rounded-full ${listQuery.isFetching ? 'animate-pulse bg-teal-300' : 'bg-teal-400'}`} aria-hidden="true" />
-                            Error pulse · refreshes every 30 seconds
+                            <span className={`h-2 w-2 rounded-full ${listQuery.isError || staleSnapshot ? 'bg-amber-300' : listQuery.isFetching ? 'animate-pulse bg-teal-300' : 'bg-teal-400'}`} aria-hidden="true" />
+                            Error pulse · updates every 30 seconds while visible
                         </div>
+                        <p className="mt-2 text-xs text-slate-300" role="status">
+                            {listQuery.isError ? 'Refresh failed' : staleSnapshot ? 'Updates delayed' : listQuery.isFetching ? 'Refreshing…' : hasSnapshot ? 'Up to date' : 'Loading incidents…'}
+                            {listQuery.dataUpdatedAt ? <> · Last updated <time dateTime={new Date(listQuery.dataUpdatedAt).toISOString()}>{new Date(listQuery.dataUpdatedAt).toLocaleTimeString()}</time></> : null}
+                        </p>
                         <h2 className="mt-3 text-3xl font-semibold tracking-[-0.045em] text-white">Know what is failing, before it becomes noise.</h2>
                         <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">A live incident queue for application exceptions, background work, and browser failures. Open an incident to inspect its trace and request context.</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
+                        <button type="button" className="error-pulse-export" onClick={refresh} disabled={listQuery.isFetching}>
+                            {listQuery.isFetching ? 'Refreshing…' : 'Refresh now'}
+                        </button>
                         <button type="button" className="error-pulse-export" onClick={() => setExportOpen(true)}>
                             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
@@ -7248,32 +7276,41 @@ function ErrorLogsWorkspace() {
                 <div className="relative z-10 mt-7 grid divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/30 sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
                     <div className="px-5 py-4">
                         <p className="error-pulse-stat-label">Open incidents</p>
-                        <p className="error-pulse-stat-value">{activeCount.toLocaleString()}</p>
+                        <p className="error-pulse-stat-value">{countLabel(activeCount)}</p>
                         <p className="mt-1 text-xs text-slate-400">deduplicated signatures</p>
                     </div>
                     <div className="px-5 py-4">
                         <p className="error-pulse-stat-label">Needs attention</p>
-                        <p className={`error-pulse-stat-value ${urgentCount > 0 ? 'text-rose-200' : ''}`}>{urgentCount.toLocaleString()}</p>
+                        <p className={`error-pulse-stat-value ${urgentCount > 0 ? 'text-rose-200' : ''}`}>{countLabel(urgentCount)}</p>
                         <p className="mt-1 text-xs text-slate-400">critical, alert, emergency</p>
                     </div>
                     <div className="px-5 py-4">
-                        <p className="error-pulse-stat-label">Occurrences today</p>
-                        <p className="error-pulse-stat-value">{Number(summary.occurrences_today || 0).toLocaleString()}</p>
-                        <p className="mt-1 text-xs text-slate-400">across all error groups</p>
+                        <p className="error-pulse-stat-label">Active today</p>
+                        <p className="error-pulse-stat-value">{countLabel(summary.active_today)}</p>
+                        <p className="mt-1 text-xs text-slate-400">incidents seen today</p>
                     </div>
                     <div className="px-5 py-4">
                         <p className="error-pulse-stat-label">Resolved this week</p>
-                        <p className="error-pulse-stat-value text-teal-200">{Number(summary.resolved_last_7_days || 0).toLocaleString()}</p>
+                        <p className="error-pulse-stat-value text-teal-200">{countLabel(summary.resolved_last_7_days)}</p>
                         <p className="mt-1 text-xs text-slate-400">last seven days</p>
                     </div>
                 </div>
 
                 <div className="relative z-10 mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-300">
                     <span className="text-slate-500">Top offender</span>
-                    <span className="font-medium text-white">{summary.top_offender?.label || 'No unresolved errors'}</span>
+                    <span className="font-medium text-white">{hasSnapshot ? (summary.top_offender?.label || 'No unresolved errors') : '—'}</span>
                     {summary.top_offender ? <span className="tabular-nums text-xs text-amber-200">{Number(summary.top_offender.count || 0).toLocaleString()} occurrences</span> : null}
                 </div>
             </section>
+
+            {listQuery.isError || staleSnapshot ? (
+                <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    {hasSnapshot ? 'Showing the last successful snapshot. Incident counts and status may have changed.' : 'Unable to load incidents. Refresh to try again.'}
+                </div>
+            ) : null}
+            {resolveMutation.isError || reopenMutation.isError ? (
+                <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">The incident status could not be saved. Try again.</div>
+            ) : null}
 
             <section className="error-pulse-controls" aria-label="Filter error incidents">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
@@ -7281,7 +7318,7 @@ function ErrorLogsWorkspace() {
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <h3 className="text-base font-semibold tracking-tight text-slate-900">Incident queue</h3>
-                                <p className="mt-0.5 text-xs text-slate-500">{totalCount.toLocaleString()} {totalCount === 1 ? 'group' : 'groups'} match this view</p>
+                                <p className="mt-0.5 text-xs text-slate-500">{countLabel(totalCount)} {totalCount === 1 ? 'group' : 'groups'} match this view</p>
                             </div>
                             {filtersActive ? (
                                 <button type="button" className="text-xs font-semibold text-teal-700 underline-offset-4 hover:underline" onClick={() => {
@@ -7375,11 +7412,13 @@ function ErrorLogsWorkspace() {
                     <div className="space-y-3 p-5" aria-label="Loading incidents">
                         {[0, 1, 2, 3].map((index) => <div key={index} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}
                     </div>
+                ) : !hasSnapshot && listQuery.isError ? (
+                    <p className="px-6 py-12 text-center text-sm text-slate-600">Incident data is unavailable. Use Refresh now to retry.</p>
                 ) : groups.length === 0 ? (
                     <div className="px-6 py-16 text-center">
                         <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-teal-50 text-teal-700">✓</div>
                         <h3 className="mt-4 text-sm font-semibold text-slate-900">No incidents match this view</h3>
-                        <p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500">Try changing the time-independent filters, or return to open incidents to continue triage.</p>
+                        <p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500">Try changing the filters, or return to open incidents to continue triage.</p>
                     </div>
                 ) : groups.map((row) => {
                     const priority = errorLogPriority(row.level);
@@ -7432,7 +7471,7 @@ function ErrorLogsWorkspace() {
                 open={exportOpen}
                 onClose={() => setExportOpen(false)}
                 matchedCount={listQuery.data?.total || 0}
-                errorFilters={{ search, level: levelFilter, source: sourceFilter, status: statusFilter }}
+                errorFilters={{ search, level: levelFilter, source: sourceFilter, status: statusFilter || 'all' }}
             />
 
             {selectedGroupId ? (
@@ -7448,6 +7487,12 @@ function ErrorLogsWorkspace() {
                         </header>
 
                         <div className="max-h-[70vh] space-y-4 overflow-auto p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                                <span role="status">{detailQuery.isError ? 'Detail refresh failed' : staleDetail ? 'Detail updates delayed' : detailQuery.isFetching ? 'Refreshing detail…' : detail ? 'Detail up to date' : 'Loading detail…'}{detailQuery.dataUpdatedAt ? ` · Last updated ${new Date(detailQuery.dataUpdatedAt).toLocaleTimeString()}` : ''}</span>
+                                <button type="button" className="error-pulse-row-action" onClick={() => detailQuery.refetch()} disabled={detailQuery.isFetching}>Refresh detail</button>
+                            </div>
+                            {detailQuery.isError || staleDetail ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{detail ? 'Showing the last successful detail snapshot. New occurrences or status changes may be missing.' : 'Unable to load incident details. Refresh detail to try again.'}</p> : null}
+                            {resolveMutation.isError || reopenMutation.isError ? <p role="alert" className="text-sm text-rose-700">The incident status could not be saved. Try again.</p> : null}
                             {detailQuery.isLoading ? (
                                 <p className="text-sm text-slate-500">Loading…</p>
                             ) : detail ? (
@@ -7475,6 +7520,12 @@ function ErrorLogsWorkspace() {
                                         <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Message</h4>
                                         <p className="mt-2 break-words text-sm text-slate-700">{detail.message}</p>
                                     </section>
+
+                                    {detail.notes ? <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{detail.resolved_at ? 'Resolution notes' : 'Previous resolution'}</h4>
+                                        <p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">{detail.notes}</p>
+                                    </section> : null}
+                                    <p className="text-xs text-slate-500">New occurrences automatically reopen resolved incidents.</p>
 
                                     {detail.occurrences?.[0]?.trace ? (
                                         <section className="rounded-md border border-slate-200 bg-white p-3">

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use App\Models\ErrorLogGroup;
+use App\Models\ErrorLogOccurrence;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -295,9 +296,13 @@ class ErrorLogController extends Controller
                 ->whereIn('level', ['critical', 'alert', 'emergency'])
                 ->count(),
             'unresolved_total' => ErrorLogGroup::query()->whereNull('resolved_at')->count(),
-            'occurrences_today' => ErrorLogGroup::query()
+            // Retained records only; the nightly prune caps occurrence history per group.
+            'occurrences_today' => ErrorLogOccurrence::query()
+                ->where('occurred_at', '>=', Carbon::today())
+                ->count(),
+            'active_today' => ErrorLogGroup::query()
                 ->where('last_seen_at', '>=', Carbon::today())
-                ->sum('occurrence_count'),
+                ->count(),
             'resolved_last_7_days' => ErrorLogGroup::query()
                 ->whereNotNull('resolved_at')
                 ->where('resolved_at', '>=', Carbon::now()->subDays(7))

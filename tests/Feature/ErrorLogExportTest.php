@@ -69,6 +69,24 @@ class ErrorLogExportTest extends TestCase
         $this->assertSame(3, substr_count(trim($csv), "\n") + 1, 'header plus two rows');
     }
 
+    public function test_daily_activity_does_not_count_lifetime_occurrences(): void
+    {
+        $this->travelTo(now()->startOfDay()->addHours(12));
+        $active = $this->group(['occurrence_count' => 900, 'last_seen_at' => now()]);
+        $this->group(['occurrence_count' => 100, 'last_seen_at' => now()->subDays(2)]);
+        $this->group(['occurrence_count' => 500, 'last_seen_at' => now(), 'resolved_at' => now()]);
+        foreach ([now()->subDay(), now()->subMinutes(2), now()] as $time) {
+            ErrorLogOccurrence::query()->create(['group_id' => $active->id, 'occurred_at' => $time]);
+        }
+        Sanctum::actingAs($this->admin());
+
+        $this->getJson('/api/crm/settings/error-logs')
+            ->assertOk()
+            ->assertJsonPath('summary.active_today', 2)
+            ->assertJsonPath('summary.occurrences_today', 2)
+            ->assertJsonPath('summary.unresolved_total', 2);
+    }
+
     public function test_csv_export_honours_the_active_filters(): void
     {
         $this->group(['message' => 'Unresolved failure']);

@@ -56,4 +56,22 @@ class ErrorLogRecorderTest extends TestCase
 
         $this->assertSame(20, ErrorLogOccurrence::query()->count());
     }
+
+    public function test_recurrence_reopens_a_resolved_group_and_retains_previous_repair_notes(): void
+    {
+        $recorder = app(ErrorLogRecorder::class);
+        $exception = new RuntimeException('A repaired incident recurs.');
+        $recorder->recordException($exception);
+        $group = ErrorLogGroup::query()->sole();
+        $group->update(['resolved_at' => now(), 'resolved_by' => 10, 'notes' => 'Verified previous repair.']);
+
+        $recorder->recordException($exception);
+
+        $group->refresh();
+        $this->assertNull($group->resolved_at);
+        $this->assertNull($group->resolved_by);
+        $this->assertSame('Verified previous repair.', $group->notes);
+        $this->assertSame(2, $group->occurrence_count);
+        $this->assertStringContainsString('automatically reopens', $group->toIncident()['suggested_action']);
+    }
 }

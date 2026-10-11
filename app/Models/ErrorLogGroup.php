@@ -80,7 +80,7 @@ class ErrorLogGroup extends Model
 
         $shortMessage = mb_strimwidth((string) $this->message, 0, 140, '…');
         $title = $this->exception_class
-            ? class_basename($this->exception_class) . ': ' . $shortMessage
+            ? class_basename($this->exception_class).': '.$shortMessage
             : $shortMessage;
 
         return [
@@ -91,8 +91,8 @@ class ErrorLogGroup extends Model
                 ? sprintf('%s:%d', $this->file, $this->line ?? 0)
                 : null,
             'suggested_action' => $this->resolved_at
-                ? 'Resolved. Reopen if it recurs after intervention.'
-                : 'Investigate the trace, then click Mark resolved to silence repeats.',
+                ? 'Resolved. A new occurrence automatically reopens this incident.'
+                : 'Investigate and verify the repair before marking resolved. A new occurrence automatically reopens this incident.',
         ];
     }
 }
