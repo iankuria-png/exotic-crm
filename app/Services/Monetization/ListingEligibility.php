@@ -27,21 +27,32 @@ class ListingEligibility
 
         if (! $client) {
             try {
-                $client = (new ClientSyncService(Platform::findOrFail($platformId)))->syncOne($postId);
+                $client = $this->syncOwnerProfile($platformId, $postId);
             } catch (Throwable $exception) {
-                Log::warning('Private-content owner profile sync is pending', [
-                    'platform_id' => $platformId,
-                    'wp_post_id' => $postId,
-                    'exception' => $exception::class,
-                    'message' => $exception->getMessage(),
-                ]);
+                // Another sync may have inserted this exact market/profile while we were fetching it.
+                if ($exception instanceof \Illuminate\Database\UniqueConstraintViolationException) {
+                    $client = Client::where('platform_id', $platformId)->where('wp_post_id', $postId)->first();
+                }
+                if (! $client) {
+                    Log::warning('Private-content owner profile sync is pending', [
+                        'platform_id' => $platformId,
+                        'wp_post_id' => $postId,
+                        'exception' => $exception::class,
+                        'message' => $exception->getMessage(),
+                    ]);
 
-                abort(503, 'Your profile setup is still syncing. Try again in a moment.');
+                    abort(503, 'Your profile setup is still syncing. Try again in a moment.');
+                }
             }
         }
 
         abort_unless($userId > 0 && (int) $client->wp_user_id === $userId, 403, 'This profile does not belong to this account.');
 
         return $client;
+    }
+
+    protected function syncOwnerProfile(int $platformId, int $postId): Client
+    {
+        return (new ClientSyncService(Platform::findOrFail($platformId)))->syncOne($postId);
     }
 }

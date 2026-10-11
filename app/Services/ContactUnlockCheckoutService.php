@@ -56,7 +56,7 @@ class ContactUnlockCheckoutService
         }
 
         $normalizedPhone = $this->normalizePhone($visitorPhone, (string) ($platform->phone_prefix ?? ''));
-        if ($normalizedPhone === '') {
+        if ($normalizedPhone === '' || ($providerKey === 'kopokopo' && ! preg_match('/^254[0-9]{9}$/D', $normalizedPhone))) {
             throw ValidationException::withMessages(['visitor_phone' => 'A valid mobile money phone number is required.']);
         }
 
@@ -343,18 +343,9 @@ class ContactUnlockCheckoutService
 
     public function normalizePhone(string $phone, string $prefix): string
     {
-        $digits = preg_replace('/\D+/', '', $phone);
-        $prefix = preg_replace('/\D+/', '', $prefix);
+        $digits = \App\Support\PhoneNormalizer::normalize($phone, $prefix);
 
-        if ($digits === '') {
-            return '';
-        }
-
-        if (str_starts_with($digits, '0') && $prefix !== '') {
-            $digits = $prefix.substr($digits, 1);
-        }
-
-        return strlen($digits) >= 8 ? $digits : '';
+        return $digits && ctype_digit($digits) && strlen($digits) >= 8 && strlen($digits) <= 15 ? $digits : '';
     }
 
     private function maskPhone(string $phone): string

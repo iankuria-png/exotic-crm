@@ -1376,20 +1376,9 @@ class PaymentController extends Controller
         return "Processed {$timeoutPayments->count()} timeout payments";
     }
 
-    private function normalizePhone($phone)
+    private function normalizePhone($phone, string $prefix = '254')
     {
-        $phone = preg_replace('/[^0-9]/', '', $phone);
-
-        // Convert to 254 format if it starts with 0
-        if (str_starts_with($phone, '0')) {
-            $phone = '254'.substr($phone, 1);
-        }
-        // Ensure it's in 254 format
-        elseif (! str_starts_with($phone, '254')) {
-            $phone = '254'.ltrim($phone, '254');
-        }
-
-        return $phone;
+        return PhoneNormalizer::normalize($phone, $prefix);
     }
 
     private function sendSMS($phone, $message, $payment = null)
@@ -1397,13 +1386,14 @@ class PaymentController extends Controller
         try {
             $phoneNumberToUse = $phone;
             $connectionName = 'mysql';
+            $phonePrefix = '254';
 
             if ($payment) {
 
                 if ($payment->platform_id) {
                     $platform = Platform::find($payment->platform_id);
                     if ($platform) {
-
+                        $phonePrefix = (string) ($platform->phone_prefix ?: '254');
                         $connectionName = 'platform_'.$platform->id;
                         DynamicDatabaseService::switchConnection($connectionName, $platform->getConnectionConfig());
                         $logContext = ['connection' => $connectionName];
@@ -1425,9 +1415,9 @@ class PaymentController extends Controller
                         ->first();
 
                     if ($phoneMeta) {
-                        $escortPhone = $this->normalizePhone($phoneMeta->meta_value);
+                        $escortPhone = $this->normalizePhone($phoneMeta->meta_value, $phonePrefix);
 
-                        if (preg_match('/^254[0-9]{9}$/', $escortPhone)) {
+                        if ($this->validMarketSmsPhone($escortPhone, $phonePrefix)) {
                             $phoneNumberToUse = $escortPhone;
                             \Log::info('Using escort phone number for SMS', [
                                 'platform_id' => $payment->platform_id ?? null,
@@ -1458,6 +1448,10 @@ class PaymentController extends Controller
             }
 
             // Send SMS using the specified gateway
+            $phoneNumberToUse = $this->normalizePhone($phoneNumberToUse, $phonePrefix);
+            if (! $this->validMarketSmsPhone($phoneNumberToUse, $phonePrefix)) {
+                return ['success' => false, 'message' => 'Missing or invalid phone number for this market.'];
+            }
             $smsResponse = Http::timeout(15)
                 ->retry(2, 500)
                 ->post('http://138.201.58.10:8093/SendMessageFON', [
@@ -1501,6 +1495,16 @@ class PaymentController extends Controller
                 'message' => $e->getMessage(),
             ];
         }
+    }
+
+    private function validMarketSmsPhone(?string $phone, string $prefix): bool
+    {
+        $prefix = preg_replace('/\D/', '', $prefix) ?: '254';
+        $nationalLength = match ($prefix) { '254', '233' => 9, '234' => 10, default => null };
+        if (! $phone || ! ctype_digit($phone) || ! str_starts_with($phone, $prefix)) return false;
+
+        return $nationalLength !== null ? strlen($phone) === strlen($prefix) + $nationalLength
+            : strlen($phone) >= 8 && strlen($phone) <= 15;
     }
 
     // 5. Optional: Timeout handler for pending payments
@@ -1761,7 +1765,7 @@ class PaymentController extends Controller
                 ->where('meta_key', 'phone')
                 ->value('meta_value');
 
-            $normalizedPhone = $this->normalizePhone($userPhone);
+            $normalizedPhone = $this->normalizePhone($userPhone, (string) ($platform->phone_prefix ?: '254'));
 
             // 7. Create a real payment record for proper logging
             $payment = Payment::create([
@@ -2014,7 +2018,7 @@ class PaymentController extends Controller
                 ->where('post_id', $postId)
                 ->where('meta_key', 'phone')
                 ->value('meta_value');
-            $normalizedPhone = $this->normalizePhone($userPhone);
+            $normalizedPhone = $this->normalizePhone($userPhone, (string) ($platform->phone_prefix ?: '254'));
 
             // 6. Create payment record
             $payment = Payment::create([
