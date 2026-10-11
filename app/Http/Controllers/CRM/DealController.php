@@ -1462,6 +1462,16 @@ class DealController extends Controller
                 'created_at' => now(),
             ]);
 
+            // Manual paid renewals bypass SubscriptionProvisioningService. Queue the
+            // same idempotent policy grant only after this activation commits.
+            if ($activatesImmediately && ! $isFreeTrial) {
+                try {
+                    \App\Jobs\GrantNewSubscriptionPass::dispatch((int) $newDeal->id)->afterCommit();
+                } catch (\Throwable $exception) {
+                    Log::warning('Free selling pass could not be queued; renewal stands.', ['deal_id' => (int) $newDeal->id, 'error' => $exception->getMessage()]);
+                }
+            }
+
             DB::commit();
 
             $newDeal->load(['client', 'product', 'platform']);

@@ -3,22 +3,23 @@
 namespace Tests\Feature;
 
 use App\Models\AuditLog;
-use App\Models\Client;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingRoutingDecision;
 use App\Models\BillingRoutingRule;
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\User;
 use App\Services\BillingGatewayService;
 use App\Services\KopokopoService;
 use App\Services\Routing\ProviderRoutingDispatcher;
-use App\Models\User;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -68,7 +69,7 @@ class DealControllerTest extends TestCase
 
         $this->mock(KopokopoService::class, function ($mock): void {
             $mock->shouldReceive('normalizePhone')
-                ->andReturnUsing(fn ($phone) => str_starts_with((string) $phone, '+') ? (string) $phone : '+' . (string) $phone);
+                ->andReturnUsing(fn ($phone) => str_starts_with((string) $phone, '+') ? (string) $phone : '+'.(string) $phone);
             $mock->shouldReceive('initiateStkPush')
                 ->once()
                 ->andReturn([
@@ -398,7 +399,7 @@ class DealControllerTest extends TestCase
         $this->assertNull($deal->payment_id);
         $this->assertDatabaseMissing('payments', [
             'deal_id' => $deal->id,
-            'transaction_reference' => 'FREE-TRIAL-' . $deal->id,
+            'transaction_reference' => 'FREE-TRIAL-'.$deal->id,
         ]);
     }
 
@@ -534,6 +535,7 @@ class DealControllerTest extends TestCase
 
     public function test_deal_renew_uses_original_amount_as_discount_base(): void
     {
+        Queue::fake();
         $platform = $this->createLinkPlatform();
         $product = $this->createProductForPlatform($platform, 'vip', 3200);
         $client = $this->createClientForPlatform($platform, 9305);
@@ -586,6 +588,46 @@ class DealControllerTest extends TestCase
         $this->assertSame($user->id, (int) $newDeal->discount_approved_by);
         $this->assertSame('agent_manual', $newDeal->discount_source);
         $this->assertSame(2880.0, (float) $payment->amount);
+        Queue::assertNotPushed(\App\Jobs\GrantNewSubscriptionPass::class);
+    }
+
+    public function test_manual_paid_renewal_queues_a_policy_pass_but_trial_renewal_does_not(): void
+    {
+        // The renewed-status migration is MySQL-only; SQLite retains its old enum.
+        $sqlite = \Illuminate\Support\Facades\DB::getDriverName() === 'sqlite';
+        if ($sqlite) {
+            \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = ON');
+        }
+        try {
+            Queue::fake();
+            $platform = $this->createProvisioningPlatform();
+            $product = $this->createProductForPlatform($platform);
+            $user = $this->createAuthorizedUser();
+            app(WalletSettingsService::class)->updateFreeTrialPin('4821', $user->id);
+            Sanctum::actingAs($user);
+            foreach (['manual', 'free_trial'] as $index => $method) {
+                $client = $this->createClientForPlatform($platform, 9400 + $index);
+                $deal = $this->createPendingDeal($platform, $product, $client, $user, ['status' => 'expired', 'activated_at' => now()->subMonths(2), 'expires_at' => now()->subDay()]);
+                $this->fakeProvisioningApis($platform, $client);
+                $response = $this->postJson("/api/crm/deals/{$deal->id}/renew", [
+                    'reason' => 'Verify renewal free pass dispatch', 'payment_method' => $method, 'additional_days' => 30,
+                    'payment_reference' => 'MPESA-RENEW-'.$index, 'free_trial_pin' => '4821',
+                ]);
+                $this->assertSame(200, $response->status(), $response->getContent());
+                $response->assertJsonPath('status', 'active');
+                $id = (int) $response->json('id');
+                if ($method === 'manual') {
+                    Queue::assertPushed(\App\Jobs\GrantNewSubscriptionPass::class, fn ($job) => $job->dealId === $id && $job->afterCommit === true);
+                } else {
+                    Queue::assertNotPushed(\App\Jobs\GrantNewSubscriptionPass::class, fn ($job) => $job->dealId === $id);
+                }
+            }
+            Queue::assertPushed(\App\Jobs\GrantNewSubscriptionPass::class, 1);
+        } finally {
+            if ($sqlite) {
+                \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = OFF');
+            }
+        }
     }
 
     private function createLinkPlatform(): Platform
@@ -708,7 +750,7 @@ class DealControllerTest extends TestCase
     {
         $profile = BillingProviderProfile::query()->create([
             'provider_type_key' => 'kopokopo',
-            'profile_name' => 'Projected KopoKopo ' . ucfirst($environment),
+            'profile_name' => 'Projected KopoKopo '.ucfirst($environment),
             'country_code' => 'KE',
             'market_id' => $platform->id,
             'merchant_scope_json' => ['scope' => 'market'],
@@ -765,9 +807,9 @@ class DealControllerTest extends TestCase
     {
         return Product::factory()->create([
             'platform_id' => $platform->id,
-            'name' => ucfirst($tier) . ' Plan',
-            'display_name' => ucfirst($tier) . ' Plan',
-            'slug' => "{$tier}-plan-" . $platform->id,
+            'name' => ucfirst($tier).' Plan',
+            'display_name' => ucfirst($tier).' Plan',
+            'slug' => "{$tier}-plan-".$platform->id,
             'tier' => $tier,
             'weekly_price' => round($monthlyPrice / 4, 2),
             'biweekly_price' => round($monthlyPrice / 2, 2),
@@ -783,7 +825,7 @@ class DealControllerTest extends TestCase
             'platform_id' => $platform->id,
             'wp_post_id' => $wpPostId,
             'wp_user_id' => $wpPostId + 4000,
-            'phone_normalized' => '254700' . str_pad((string) $wpPostId, 6, '0', STR_PAD_LEFT),
+            'phone_normalized' => '254700'.str_pad((string) $wpPostId, 6, '0', STR_PAD_LEFT),
             'profile_status' => 'private',
         ]);
     }
@@ -794,7 +836,7 @@ class DealControllerTest extends TestCase
             'role' => $role,
             'status' => 'active',
             'assigned_market_ids' => $role === 'admin' ? [] : $assignedMarketIds,
-            'email' => $role . '-' . uniqid('', true) . '@example.test',
+            'email' => $role.'-'.uniqid('', true).'@example.test',
         ]);
     }
 

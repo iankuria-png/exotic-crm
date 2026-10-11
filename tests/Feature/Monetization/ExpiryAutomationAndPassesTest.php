@@ -336,6 +336,58 @@ class ExpiryAutomationAndPassesTest extends TestCase
         $this->assertTrue($pass->isComplimentary());
     }
 
+    public function test_all_paid_policy_grants_each_activation_once_and_excludes_trials_boosts_and_old_deals(): void
+    {
+        $this->settings->update(['free_pass_policy_json' => ['new_subscriptions_enabled' => true, 'subscription_scope' => 'all_paid', 'duration_key' => '1_month', 'effective_from' => now()->subHour()->toIso8601String()]]);
+        $product = \App\Models\Product::factory()->create(['platform_id' => $this->market->id]);
+        $deal = fn (array $attrs = []) => Deal::factory()->create($attrs + ['product_id' => $product->id, 'client_id' => $this->creator->id, 'platform_id' => $this->market->id, 'status' => 'active', 'subscription_lifecycle' => 'renewal', 'activated_at' => now(), 'expires_at' => now()->addMonth(), 'is_free_trial' => false, 'origin' => 'subscription']);
+        $service = app(ComplimentaryPassService::class);
+        foreach ([$deal(['subscription_lifecycle' => 'new']), $deal(), $deal()] as $activation) {
+            $this->assertSame('granted', $service->grantForNewSubscription($activation->id));
+            $this->assertSame('already_granted', $service->grantForNewSubscription($activation->id));
+        }
+        foreach ([['is_free_trial' => true], ['origin' => 'seo_boost_manual'], ['activated_at' => now()->subDays(2)], ['activated_at' => null], ['status' => 'awaiting_payment']] as $excluded) {
+            $this->assertNull($service->grantForNewSubscription($deal($excluded)->id));
+        }
+        $this->assertSame(3, ClientMonetizationPass::count());
+        $this->assertSame(3, ClientMonetizationPass::distinct()->count('source_deal_id'));
+        $this->settings->update(['free_pass_policy_json' => ['new_subscriptions_enabled' => false, 'subscription_scope' => 'all_paid', 'duration_key' => '1_month']]);
+        $this->assertNull($service->grantForNewSubscription($deal()->id));
+    }
+
+    public function test_scope_changes_start_future_only_and_older_clients_preserve_the_selected_scope(): void
+    {
+        $service = app(MonetizationSettingsService::class);
+        $oldStart = now()->subDays(2)->toIso8601String();
+        $this->settings->update(['enabled' => false, 'rollout_mode' => 'off', 'free_pass_policy_json' => ['new_subscriptions_enabled' => true, 'duration_key' => '1_month', 'effective_from' => $oldStart]]);
+        $this->assertSame('new_only', $service->freePassPolicy($this->settings->fresh())['subscription_scope']);
+        $payload = fn (array $policy) => [
+            'reason' => 'Configure paid activation pass eligibility', 'config_revision' => $this->settings->fresh()->config_revision,
+            'enabled' => false, 'rollout_mode' => 'off', 'activation_kill_switch' => false, 'checkout_kill_switch' => false,
+            'offer_policy' => $this->settings->offer_policy_json, 'surface_policy' => $this->settings->surface_policy_json,
+            'checkout_policy' => $this->settings->checkout_policy_json, 'delivery_policy' => $this->settings->delivery_policy_json,
+            'prices' => $this->settings->prices()->get()->toArray(), 'free_pass_policy' => $policy,
+        ];
+        $actor = \App\Models\User::factory()->create(['role' => 'admin'])->id;
+        $policy = ['new_subscriptions_enabled' => true, 'subscription_scope' => 'all_paid', 'duration_key' => '1_month'];
+        $saved = $service->save($this->market, $payload($policy), $actor);
+        $start = $saved->free_pass_policy_json['effective_from'];
+        $this->assertSame('all_paid', $saved->free_pass_policy_json['subscription_scope']);
+        $this->assertTrue(\Carbon\Carbon::parse($start)->isSameSecond(now()));
+        $this->assertNotSame($oldStart, $start);
+        $this->travel(10)->minutes();
+        unset($policy['subscription_scope']);
+        $saved = $service->save($this->market, $payload($policy), $actor);
+        $this->assertSame('all_paid', $saved->free_pass_policy_json['subscription_scope']);
+        $this->assertSame($start, $saved->free_pass_policy_json['effective_from']);
+        try {
+            $service->save($this->market, $payload($policy + ['subscription_scope' => 'everything']), $actor);
+            $this->fail('Invalid subscription scope was accepted');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('free_pass_policy.subscription_scope', $e->errors());
+        }
+    }
+
     public function test_selected_grants_respect_market_scope_and_backfill_runs_track_retries(): void
     {
         $other = Client::factory()->create(['platform_id' => Platform::factory()->create()->id]);

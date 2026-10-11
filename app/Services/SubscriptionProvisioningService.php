@@ -255,7 +255,7 @@ class SubscriptionProvisioningService
             ]);
         }
 
-        // Complimentary selling pass for a genuinely new subscription. Queued after
+        // Complimentary selling pass according to the market policy. Queued after
         // commit and isolated: a grant problem can never undo this activation.
         try {
             \App\Jobs\GrantNewSubscriptionPass::dispatch((int) $deal->id)->afterCommit();

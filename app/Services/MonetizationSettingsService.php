@@ -36,7 +36,7 @@ class MonetizationSettingsService
         'pricing' => ['mode' => 'fixed', 'fixed_amount' => 500, 'min_amount' => 500, 'max_amount' => 1000, 'round_increment' => 50, 'photo_amount' => 300],
     ];
 
-    public const FREE_PASS_DEFAULTS = ['new_subscriptions_enabled' => false, 'duration_key' => '1_month', 'effective_from' => null];
+    public const FREE_PASS_DEFAULTS = ['new_subscriptions_enabled' => false, 'subscription_scope' => 'new_only', 'duration_key' => '1_month', 'effective_from' => null];
 
     /** Card previews: a blurred looping clip per private video. Strengths match the WordPress encoder. */
     public const TEASER_STRENGTHS = ['colours', 'shapes', 'outlines'];
@@ -211,6 +211,7 @@ class MonetizationSettingsService
             'test_client_ids' => 'array', 'test_client_ids.*' => 'integer',
             'expiry_video_policy' => 'sometimes|array', 'free_pass_policy' => 'sometimes|array',
             'free_pass_policy.new_subscriptions_enabled' => 'required_with:free_pass_policy|boolean',
+            'free_pass_policy.subscription_scope' => ['sometimes', Rule::in(['new_only', 'all_paid'])],
             'free_pass_policy.duration_key' => ['required_with:free_pass_policy', Rule::in(['2_weeks', '1_month'])],
             'teaser_policy' => 'sometimes|array', 'teaser_policy.enabled' => 'required_with:teaser_policy|boolean',
             'teaser_policy.strength' => ['required_with:teaser_policy', Rule::in(self::TEASER_STRENGTHS)],
@@ -270,8 +271,16 @@ class MonetizationSettingsService
             if (isset($data['free_pass_policy'])) {
                 $previous = $this->freePassPolicy($s);
                 $enabled = (bool) $data['free_pass_policy']['new_subscriptions_enabled'];
-                // Only subscriptions activated after the policy is switched on qualify.
-                $s->free_pass_policy_json = ['new_subscriptions_enabled' => $enabled, 'duration_key' => $data['free_pass_policy']['duration_key'], 'effective_from' => $enabled ? ($previous['new_subscriptions_enabled'] && $previous['effective_from'] ? $previous['effective_from'] : now()->toIso8601String()) : null];
+                $scope = $data['free_pass_policy']['subscription_scope'] ?? $previous['subscription_scope'];
+                // Enabling or changing eligibility starts a future-only policy. Older
+                // clients that omit the new field must preserve the market's scope.
+                $keepEffectiveFrom = $previous['new_subscriptions_enabled'] && $previous['effective_from'] && $scope === $previous['subscription_scope'];
+                $s->free_pass_policy_json = [
+                    'new_subscriptions_enabled' => $enabled,
+                    'subscription_scope' => $scope,
+                    'duration_key' => $data['free_pass_policy']['duration_key'],
+                    'effective_from' => $enabled ? ($keepEffectiveFrom ? $previous['effective_from'] : now()->toIso8601String()) : null,
+                ];
             }
             if (isset($data['teaser_policy'])) {
                 $s->teaser_policy_json = ['enabled' => (bool) $data['teaser_policy']['enabled'], 'strength' => $data['teaser_policy']['strength']];

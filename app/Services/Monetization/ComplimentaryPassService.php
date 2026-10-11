@@ -84,9 +84,6 @@ class ComplimentaryPassService
             if (! $deal || ! $deal->client || $deal->status !== 'active' || $deal->is_free_trial || str_starts_with((string) $deal->origin, 'seo_boost')) {
                 return null;
             }
-            if ($deal->subscription_lifecycle !== SubscriptionLifecycleService::LIFECYCLE_NEW) {
-                return null;
-            }
             // Read-only lookup: activation in a market without Monetize must not create settings.
             $s = \App\Models\ContentMonetizationSetting::where('platform_id', $deal->client->platform_id)->first();
             if (! $s) {
@@ -96,13 +93,18 @@ class ComplimentaryPassService
             if (! $policy['new_subscriptions_enabled'] || ! $this->settings->runtime($s)['enabled']) {
                 return null;
             }
-            if ($policy['effective_from'] && $deal->activated_at && $deal->activated_at->lt(\Carbon\Carbon::parse($policy['effective_from']))) {
+            if ($policy['subscription_scope'] !== 'all_paid' && $deal->subscription_lifecycle !== SubscriptionLifecycleService::LIFECYCLE_NEW) {
+                return null;
+            }
+            if ($policy['effective_from'] && (! $deal->activated_at || $deal->activated_at->lt(\Carbon\Carbon::parse($policy['effective_from'])))) {
                 return null;
             }
 
+            // Keep the original source/key so switching scope or replaying a queued
+            // job cannot grant a second pass for an already-covered activation.
             return $this->grant($deal->client, $policy['duration_key'], 'policy_new_subscription', 'deal:'.$deal->id, $deal->id)['status'];
         } catch (Throwable $e) {
-            Log::warning('New-subscription free pass failed; subscription activation stands.', ['deal_id' => $dealId, 'error' => $e->getMessage()]);
+            Log::warning('Subscription free pass failed; subscription activation stands.', ['deal_id' => $dealId, 'error' => $e->getMessage()]);
 
             return null;
         }
