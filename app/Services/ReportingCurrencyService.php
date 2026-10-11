@@ -491,8 +491,11 @@ class ReportingCurrencyService
         }
 
         $baseUrl = rtrim((string) config('services.reporting_fx.base_url', 'https://api.currencyapi.com/v3'), '/');
-        $today = now()->toDateString();
-        $endpoint = $date === $today ? "{$baseUrl}/latest" : "{$baseUrl}/historical";
+        // Reporting dates may already be tomorrow in the market's timezone.
+        // Historical data is complete only before the current UTC day.
+        $today = now('UTC')->toDateString();
+        $useLatest = $date >= $today;
+        $endpoint = $useLatest ? "{$baseUrl}/latest" : "{$baseUrl}/historical";
 
         try {
             $params = [
@@ -500,7 +503,7 @@ class ReportingCurrencyService
                 'currencies' => $targetCurrency,
             ];
 
-            if ($date !== $today) {
+            if (! $useLatest) {
                 $params['date'] = $date;
             }
 
@@ -532,17 +535,24 @@ class ReportingCurrencyService
                 return null;
             }
 
+            $rateDate = $date;
+            if ($useLatest) {
+                $asOf = $response->json('meta.last_updated_at');
+                $rateDate = $asOf ? Carbon::parse($asOf)->utc()->toDateString() : $today;
+                if ($rateDate > $today) return null;
+            }
+
             return ReportingFxRate::query()->updateOrCreate(
                 [
                     'provider' => 'currencyapi',
                     'source_currency' => $sourceCurrency,
                     'target_currency' => $targetCurrency,
-                    'rate_date' => $date,
+                    'rate_date' => $rateDate,
                 ],
                 [
                     'rate' => $rateValue,
                     'fetched_at' => now(),
-                    'metadata' => ['source' => 'live_fetch', 'fetched_at' => now()->toIso8601String()],
+                    'metadata' => ['source' => 'live_fetch', 'requested_date' => $date, 'fetched_at' => now()->toIso8601String()],
                 ]
             );
         } catch (\Throwable $e) {
