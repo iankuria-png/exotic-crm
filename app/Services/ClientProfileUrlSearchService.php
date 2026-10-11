@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\WordpressPost;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class ClientProfileUrlSearchService
@@ -435,18 +436,19 @@ class ClientProfileUrlSearchService
         try {
             $connectionName = $this->resolveConnectionName($platform);
 
-            $postId = EscortLiveUrl::on($connectionName)
+            $hasLiveUrls = Schema::connection($connectionName)->hasTable((new EscortLiveUrl)->getTable());
+            $postId = $hasLiveUrls ? EscortLiveUrl::on($connectionName)
                 ->whereIn('live_url', $urlCandidates)
-                ->value('post_id');
+                ->value('post_id') : null;
 
             if ($postId !== null) {
                 return (int) $postId;
             }
 
             if ($slugCandidates !== []) {
-                $postIdFromLiveUrlSlug = EscortLiveUrl::on($connectionName)
+                $postIdFromLiveUrlSlug = $hasLiveUrls ? EscortLiveUrl::on($connectionName)
                     ->whereIn('post_name', $slugCandidates)
-                    ->value('post_id');
+                    ->value('post_id') : null;
 
                 if ($postIdFromLiveUrlSlug !== null) {
                     return (int) $postIdFromLiveUrlSlug;

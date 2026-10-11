@@ -630,6 +630,25 @@ class DealControllerTest extends TestCase
         }
     }
 
+    public function test_renewal_lifecycle_override_requires_reason_as_validation_without_mutation(): void
+    {
+        Queue::fake();
+        $platform = $this->createProvisioningPlatform();
+        $product = $this->createProductForPlatform($platform);
+        $user = $this->createAuthorizedUser();
+        $client = $this->createClientForPlatform($platform, 9402);
+        $deal = $this->createPendingDeal($platform, $product, $client, $user, ['status' => 'expired']);
+        Sanctum::actingAs($user);
+        Http::preventStrayRequests();
+        $before = $deal->fresh()->getAttributes();
+        $this->postJson("/api/crm/deals/{$deal->id}/renew", ['reason' => 'Renew existing customer', 'payment_method' => 'manual',
+            'payment_reference' => 'synthetic', 'additional_days' => 30, 'subscription_lifecycle' => 'new'])->assertStatus(422)->assertJsonValidationErrors('subscription_lifecycle_reason');
+        $this->assertSame($before, $deal->fresh()->getAttributes());
+        $this->assertDatabaseCount('deals', 1);
+        $this->assertDatabaseCount('payments', 0);
+        Http::assertNothingSent();
+    }
+
     private function createLinkPlatform(): Platform
     {
         return Platform::factory()->create([

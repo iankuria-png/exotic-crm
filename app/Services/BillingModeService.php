@@ -163,14 +163,23 @@ class BillingModeService
         BillingProviderProfile $profile,
         ?int $chosenBindingId = null,
         bool $requireEnabled = false,
-        ?string $environmentOverride = null
+        ?string $environmentOverride = null,
+        string|BillingSurface $surface = BillingSurface::SubscriptionLink
     ): array {
         $provider = strtolower(trim((string) $profile->provider_type_key));
         $providerAdapter = $this->providerRegistry->find($provider);
         $providerDefinition = $providerAdapter?->definition();
 
-        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface(BillingSurface::SubscriptionLink)) {
-            throw new InvalidArgumentException('Unsupported subscription link billing provider.');
+        $resolvedSurface = $surface instanceof BillingSurface ? $surface : BillingSurface::from($surface);
+        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface($resolvedSurface)) {
+            throw new InvalidArgumentException('Unsupported '.$resolvedSurface->value.' billing provider.');
+        }
+
+        if ($profile->market_id !== null && (int) $profile->market_id !== (int) $platform->id) {
+            throw new InvalidArgumentException('Pinned provider profile belongs to another market.');
+        }
+        if ($environmentOverride !== null && strtolower($environmentOverride) !== strtolower((string) $profile->environment)) {
+            throw new InvalidArgumentException('Pinned provider profile environment does not match the payment.');
         }
 
         $context = $requireEnabled
@@ -182,16 +191,21 @@ class BillingModeService
         );
         $providerCredentials = array_merge((array) ($profile->config_json ?? []), (array) ($profile->secrets_json ?? []));
 
-        $this->assertCredentialsPresent($provider, $providerCredentials, $provider);
+        $runtimeProvider = $this->runtimeProviderKey($provider);
+        $directConfig = $provider === 'kopokopo' ? $providerCredentials : null;
+        if ($directConfig !== null) {
+            $providerCredentials = ['transport' => 'direct_provider'];
+        }
+        $this->assertCredentialsPresent($runtimeProvider, $providerCredentials, $provider, $directConfig);
 
         return array_merge($context, [
             'environment' => $environment,
             'provider' => $provider,
-            'provider_runtime_key' => $provider,
+            'provider_runtime_key' => $runtimeProvider,
             'provider_definition' => $providerDefinition,
             'provider_config' => ['enabled' => (bool) $profile->active],
             'provider_credentials' => $providerCredentials,
-            'provider_direct_config' => null,
+            'provider_direct_config' => $directConfig,
             'provider_profile_id' => $profile->id,
             'provider_profile_country_code' => $profile->country_code,
             'chosen_binding_id' => $chosenBindingId,

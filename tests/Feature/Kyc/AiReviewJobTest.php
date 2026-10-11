@@ -186,4 +186,55 @@ class AiReviewJobTest extends TestCase
         $this->assertSame('queued', $new->status);
         $this->assertSame($new->id, $subject->fresh()->ai_last_review_id);
     }
+
+    public function test_staff_can_distinguish_waiting_stalled_and_applied_approval(): void
+    {
+        $review = $this->review();
+        $this->actingAsKycUser();
+        config(['kyc.ai_worker_enabled' => true, 'services.seo_engine.openrouter.api_key' => 'synthetic-test-only']);
+        $url = '/api/crm/kyc/subjects/'.$review->subject_id;
+        $this->getJson($url)->assertOk()->assertJsonPath('ai_review.status', 'queued')
+            ->assertJsonPath('automation.blocked_reason', 'check_active')->assertJsonPath('automation.can_run', false);
+        $review->timestamps = false;
+        $review->update(['updated_at' => now()->subMinutes(11)]);
+        $this->getJson($url)->assertOk()->assertJsonPath('ai_review.status', 'stalled')
+            ->assertJsonPath('automation.can_run', true);
+        $this->runReview($review);
+        $this->getJson($url)->assertOk()->assertJsonPath('ai_review.action_taken', 'approved')
+            ->assertJsonPath('automation.blocked_reason', 'not_in_review')->assertJsonPath('automation.can_run', false);
+        $this->getJson('/api/crm/kyc/queue')->assertOk()->assertJsonPath('data.0.ai_review.action_taken', 'approved');
+    }
+
+    public function test_staff_context_explains_consent_and_paused_worker_without_exposing_secrets(): void
+    {
+        $review = $this->review();
+        $review->subject->update(['ai_consent_at' => null]);
+        $this->actingAsKycUser();
+        config(['services.seo_engine.openrouter.api_key' => 'synthetic-private-key', 'kyc.ai_worker_enabled' => false]);
+        $url = '/api/crm/kyc/subjects/'.$review->subject_id;
+        $this->getJson($url)->assertOk()->assertJsonPath('automation.blocked_reason', 'consent_required')
+            ->assertDontSee('synthetic-private-key');
+        $review->subject->update(['ai_consent_at' => now()]);
+        $this->getJson($url)->assertOk()->assertJsonPath('automation.blocked_reason', 'worker_paused');
+    }
+
+    public function test_old_review_version_is_stale_even_when_photo_rows_still_exist(): void
+    {
+        $review = $this->review();
+        $review->subject->increment('review_version');
+        $this->assertTrue(app(KycAiReviewService::class)->findings($review->subject->fresh())['stale']);
+    }
+
+    public function test_shadow_context_never_exposes_observations_or_recommendation(): void
+    {
+        $review = $this->review('shadow');
+        $this->runReview($review);
+        $this->actingAsKycUser();
+        $response = $this->getJson('/api/crm/kyc/subjects/'.$review->subject_id)->assertOk();
+        $payload = $response->json('ai_review');
+        $this->assertArrayNotHasKey('observations', $payload);
+        $this->assertArrayNotHasKey('recommendation', $payload);
+        $this->assertArrayNotHasKey('face_match_confidence', $payload);
+        $this->assertArrayNotHasKey('ai_last_review', $response->json('subject'));
+    }
 }

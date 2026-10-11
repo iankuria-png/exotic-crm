@@ -18,6 +18,54 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_pinned_inactive_profiles_keep_each_providers_original_verification_context(): void
+    {
+        foreach (['paystack', 'pesapal', 'pawapay', 'kopokopo'] as $provider) {
+            $payment = $this->makePayment(['provider_key' => $provider, 'product_id' => null,
+                'transaction_reference' => '6f3ae557-334e-48bb-bd73-ff04767b224f']);
+            $credentials = ['public_key' => 'pk_original', 'secret_key' => 'sk_original',
+                'consumer_key' => 'original', 'consumer_secret' => 'original', 'ipn_id' => 'original',
+                'api_key' => 'original', 'client_id' => 'original', 'client_secret' => 'original',
+                'base_url' => 'https://sandbox.kopokopo.com', 'till_number' => 'original'];
+            $profile = \App\Models\BillingProviderProfile::create(['provider_type_key' => $provider,
+                'profile_name' => 'Original', 'environment' => 'production', 'market_id' => $payment->platform_id,
+                'active' => false, 'config_json' => $credentials, 'secrets_json' => []]);
+            $surface = $provider === 'kopokopo' ? 'subscription_push' : 'subscription_link';
+            BillingRoutingDecision::create(['payment_id' => $payment->id, 'market_id' => $payment->platform_id,
+                'provider_profile_id' => $profile->id, 'provider_type_key' => $provider, 'environment' => 'production',
+                'billing_surface' => $surface, 'execution_mode' => 'direct', 'decision_version' => 1,
+                'immutable_until_terminal_state' => true, 'snapshot_json' => [], 'decision_json' => [], 'created_at' => now()]);
+            $billing = app(BillingModeService::class);
+            $context = $billing->profileBackedProviderContext($payment->platform, $profile, null, false, 'production', $surface);
+            $this->assertSame($profile->id, $context['provider_profile_id']);
+            if ($provider === 'kopokopo') $this->assertSame('original', $context['provider_direct_config']['client_secret']);
+            else $this->assertSame('original', $context['provider_credentials']['api_key']);
+            $hosted = Mockery::mock(HostedCheckoutService::class);
+            $pesapal = Mockery::mock(PesapalCompatibilityAdapter::class);
+            $pawa = Mockery::mock(PawaPayCompatibilityAdapter::class);
+            $kopo = Mockery::mock(\App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter::class);
+            $adapter = match ($provider) { 'paystack' => $hosted, 'pesapal' => $pesapal, 'pawapay' => $pawa, 'kopokopo' => $kopo };
+            $adapter->shouldReceive($provider === 'paystack' ? 'verifyPaystackTransaction' : 'verify')
+                ->once()->withArgs(fn ($p, $ctx, $ref) => $p->id === $payment->id && $ctx['provider_profile_id'] === $profile->id)
+                ->andReturn(['status' => 'pending', 'data' => []]);
+            $orchestrator = new ProviderStatusQueryOrchestrator($billing, $hosted, $pesapal, $pawa, $kopo);
+            $this->assertSame('pending', $orchestrator->verify($payment)['status']);
+        }
+    }
+
+    public function test_loaded_decisions_ignore_mutable_rows_and_select_the_latest_immutable_id(): void
+    {
+        $payment = $this->makePayment();
+        $older = new BillingRoutingDecision(['immutable_until_terminal_state' => true, 'provider_type_key' => 'paystack', 'created_at' => now()]);
+        $older->id = 10;
+        $newer = new BillingRoutingDecision(['immutable_until_terminal_state' => true, 'provider_type_key' => 'pawapay', 'created_at' => now()]);
+        $newer->id = 11;
+        $mutable = new BillingRoutingDecision(['immutable_until_terminal_state' => false, 'provider_type_key' => 'pesapal', 'created_at' => now()]);
+        $mutable->id = 12;
+        $payment->setRelation('routingDecisions', collect([$mutable, $older, $newer]));
+        $this->assertSame('pawapay', $this->makeOrchestrator()->resolveProviderType($payment));
+    }
+
     public function test_completed_payments_ignore_late_failed_provider_signals(): void
     {
         $orchestrator = $this->makeOrchestrator();

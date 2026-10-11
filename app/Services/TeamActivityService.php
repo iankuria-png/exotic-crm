@@ -982,6 +982,7 @@ class TeamActivityService
         $metrics = $this->aggregateAuditMetrics($dayStart, $dayEnd, null, null, null, true);
         $revenueByRow = $this->aggregateDailyRevenueRows($dayStart, $dayEnd);
         $platformCurrencies = Platform::query()->pluck('currency_code', 'id');
+        $validUserIds = User::query()->pluck('id')->flip();
 
         $payloads = [];
         $rowKeys = collect(array_merge(array_keys($metrics), array_keys($revenueByRow)))
@@ -990,6 +991,10 @@ class TeamActivityService
 
         foreach ($rowKeys as $key) {
             [$userId, $platformId] = explode(':', (string) $key);
+            // System audits remain in global history; they have no market rollup row.
+            if (! $platformCurrencies->has((int) $platformId) || ! $validUserIds->has((int) $userId)) {
+                continue;
+            }
             $metricRow = $metrics[$key] ?? $this->emptyMetricRow();
             $revenueRow = $revenueByRow[$key] ?? [
                 'revenue' => '0.00',

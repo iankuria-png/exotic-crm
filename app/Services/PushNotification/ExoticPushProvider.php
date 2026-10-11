@@ -178,7 +178,8 @@ class ExoticPushProvider implements PushProviderInterface
         if (! $response->successful()) {
             $raw = $response->json();
             $body = is_array($raw) ? $raw : ['body' => $response->body()];
-            $description = trim((string) $this->firstValue($body, ['message', 'error', 'description'], ''));
+            $error = $this->firstValue($body, ['message', 'error', 'description'], '');
+            $description = trim(is_scalar($error) ? (string) $error : (string) json_encode($error));
             if ($description === '') {
                 $description = trim((string) json_encode($body));
             }

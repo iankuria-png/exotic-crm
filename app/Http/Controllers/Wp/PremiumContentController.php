@@ -299,12 +299,16 @@ class PremiumContentController extends Controller
 
     public function lifecycle(Request $r)
     {
-        $client = Client::where('platform_id', $this->platform($r)->id)->where('wp_post_id', $r->input('wp_post_id'))->firstOrFail();
         $r->validate(['status' => 'required|in:publish,private,draft,trash,deleted,pending']);
-        $client->update(['profile_status' => $r->input('status')]);
-        if ($r->input('status') === 'deleted') {
-            PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'kind' => 'profile_deleted', 'reason' => 'Protected purchases retained.']);
-        }
+        $client = \Illuminate\Support\Facades\DB::transaction(function () use ($r) {
+            $client = Client::where('platform_id', $this->platform($r)->id)->where('wp_post_id', $r->input('wp_post_id'))->lockForUpdate()->firstOrFail();
+            $wasDeleted = $client->profile_status === 'deleted';
+            $client->update(['profile_status' => $r->input('status')]);
+            if ($r->input('status') === 'deleted' && ! $wasDeleted) {
+                PremiumContentEvent::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'kind' => 'profile_deleted', 'reason' => 'Protected purchases retained.']);
+            }
+            return $client;
+        });
         app(SyncService::class)->profile($client);
 
         return response()->json(['saved' => true]);

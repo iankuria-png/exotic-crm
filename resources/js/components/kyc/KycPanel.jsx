@@ -302,7 +302,7 @@ export default function KycPanel({ client, canReview = true }) {
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[1.16fr_0.84fr]">
                 <div className="xl:order-2">
-            <KycAiFindings review={subjectQuery.data?.ai_review} subjectId={subjectId} canReview={canActOnSubject} onRefresh={refreshAll} onRequestInfo={() => setShowRequestInfoDialog(true)} />
+            <KycAiFindings review={subjectQuery.data?.ai_review} subject={subject} automation={subjectQuery.data?.automation} subjectId={subjectId} canReview={canActOnSubject} onRefresh={refreshAll} onRequestInfo={() => setShowRequestInfoDialog(true)} />
                 <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                         <div>

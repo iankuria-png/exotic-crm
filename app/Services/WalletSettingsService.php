@@ -494,46 +494,15 @@ class WalletSettingsService
     {
         $system = $this->resolveSystemConfig();
         $smtp = $system['smtp'] ?? [];
-
-        if (!(bool) ($smtp['enabled'] ?? false)) {
-            throw new InvalidArgumentException('Wallet SMTP delivery is disabled.');
-        }
-
-        if (
-            empty($smtp['host'])
-            || empty($smtp['port'])
-            || empty($smtp['username'])
-            || empty($smtp['password'])
-            || empty($smtp['from_address'])
-        ) {
-            throw new InvalidArgumentException('SMTP settings are incomplete.');
-        }
-
-        config([
-            'mail.mailers.wallet_smtp' => [
-                'transport' => 'smtp',
-                'host' => (string) $smtp['host'],
-                'port' => (int) $smtp['port'],
-                'encryption' => $smtp['encryption'] ?: null,
-                'username' => (string) $smtp['username'],
-                'password' => (string) $smtp['password'],
-                'timeout' => 10,
-            ],
-            'mail.from.address' => (string) $smtp['from_address'],
-            'mail.from.name' => (string) ($smtp['from_name'] ?: config('app.name', 'ExoticCRM')),
-        ]);
-
-        Mail::mailer('wallet_smtp')
-            ->to($toEmail)
-            ->send(new WalletSettingsTestMail(
-                (string) ($smtp['from_name'] ?: config('app.name', 'ExoticCRM')),
-                (string) ($system['mode'] ?? 'disabled')
-            ));
+        $mailer = app(CrmMailerService::class)->send($toEmail, new WalletSettingsTestMail(
+            (string) ($smtp['from_name'] ?: config('app.name', 'ExoticCRM')),
+            (string) ($system['mode'] ?? 'disabled')
+        ), requireStored: true);
 
         return [
             'status' => 'success',
             'to_email' => $toEmail,
-            'mailer' => 'wallet_smtp',
+            'mailer' => $mailer,
             'message' => 'Wallet test email sent.',
         ];
     }

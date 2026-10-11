@@ -293,6 +293,7 @@ class ClientSyncService
             }
         }
 
+        \App\Jobs\RetryUnlinkedPaymentClientJob::dispatch((int) $this->platform->id)->onQueue('default')->afterCommit();
         return $wasRecentlyCreated ? 'created' : 'updated';
     }
 
@@ -803,6 +804,7 @@ class ClientSyncService
                 ->all();
 
             app(ClientChurnStamper::class)->syncClientIds($syncedClientIds);
+            \App\Jobs\RetryUnlinkedPaymentClientJob::dispatch((int) $this->platform->id)->onQueue('default')->afterCommit();
         }
 
         // Dispatch recompute jobs for any clients whose WP bio was edited directly

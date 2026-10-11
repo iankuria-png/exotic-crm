@@ -367,16 +367,24 @@ class ManualPaymentSubmissionService
             return;
         }
 
+        // A delayed job for an older submission must never clear a newer submission's message.
+        $latest = PaymentManualSubmission::query()->where('client_id', $client->id)
+            ->where('platform_id', $platformId)->orderByDesc('id')->first();
+        if (! $latest || ! $latest->payment) return;
+        $payment = $latest->payment->load(['manualSubmission', 'deal']);
         $state = $this->resolveCustomerState($payment);
+        $changedAt = collect([$latest->updated_at, $latest->reviewed_at, $payment->updated_at])->filter()->sortDesc()->first();
+        $timestamp = $changedAt->copy()->utc()->toIso8601String();
 
         try {
             $wpSync = WpSyncService::forPlatform($platformId);
-            $wpSync->updateClientProfile($wpPostId, [
+            $result = $wpSync->updateManualPaymentState($wpPostId, [
                 'billing_manual_payment_state' => $state['state'] ?? '',
                 'billing_manual_payment_message' => $state['message'] ?? '',
                 'billing_manual_payment_reason' => $state['reason'] ?? '',
-                'billing_manual_payment_updated_at' => now()->toIso8601String(),
-            ]);
+                'billing_manual_payment_updated_at' => $timestamp,
+            ], ['state_changed_at' => $timestamp, 'payment_id' => (int) $payment->id, 'submission_id' => (int) $latest->id]);
+            if ($result['deferred'] ?? false) Log::notice('Manual payment state sync awaits plugin capability.', ['payment_id' => $payment->id, 'platform_id' => $platformId, 'wp_post_id' => $wpPostId]);
         } catch (\Throwable $exception) {
             Log::warning('Manual payment state sync to WordPress failed.', [
                 'payment_id' => $payment->id,

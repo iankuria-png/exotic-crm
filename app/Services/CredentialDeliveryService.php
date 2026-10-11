@@ -551,14 +551,12 @@ class CredentialDeliveryService
     private function sendEmail(string $to, string $subject, string $body): array
     {
         try {
-            Mail::raw($body, function ($message) use ($to, $subject) {
-                $message->to($to)->subject($subject);
-            });
+            $mailer = app(CrmMailerService::class)->raw($to, $subject, $body);
 
             return [
                 'success' => true,
                 'status' => 'sent',
-                'provider' => (string) config('mail.default', 'smtp'),
+                'provider' => $mailer,
                 'provider_response' => 'Email accepted by mailer.',
             ];
         } catch (\Throwable $exception) {

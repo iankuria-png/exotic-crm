@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // Enable operationally only after the current review policy is confirmed.
+    'ai_worker_enabled' => (bool) env('KYC_AI_WORKER_ENABLED', false),
     'settings_id' => 1,
     'max_doc_bytes' => 20 * 1024 * 1024,
     'signed_put_ttl_seconds' => 300,

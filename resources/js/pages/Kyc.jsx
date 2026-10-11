@@ -87,6 +87,7 @@ export default function Kyc() {
 
     const queueQuery = useQuery({
         queryKey: ['kyc-queue', { statusFilter, sort, platformId, aiFilter, page, ageFilter }],
+        refetchInterval: (query) => Number(query.state.data?.operational?.checking) > 0 ? 5000 : false,
         queryFn: () => kyc.getQueue({
             per_page: 25, page, ai_filter: aiFilter, age_days: ageFilter,
             sort,
@@ -236,8 +237,8 @@ export default function Kyc() {
                     <div className="grid gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 sm:grid-cols-2 xl:grid-cols-5" aria-label="KYC operations summary">
                         {[
                             ['Submissions', operational.submissions ?? queueQuery.data?.total ?? 0, 'Completed evidence sets'],
-                            ['Needs a reviewer', operational.needs_human ?? 0, 'No usable automated outcome'],
-                            ['Checking now', operational.checking ?? 0, 'Queued or running'],
+                            ['Needs a reviewer', operational.needs_human ?? 0, 'Awaiting a staff decision'],
+                            ['AI in progress', operational.checking ?? 0, 'Waiting to start or reviewing'],
                             ['Retakes open', operational.retakes ?? 0, 'Waiting on new photos'],
                             ['No submission yet', operational.unsubmitted_profiles ?? 0, 'Profiles, excluded from queue'],
                         ].map(([label, value, hint]) => <div key={label} className="bg-white px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{Number(value).toLocaleString()}</p><p className="mt-1 text-[11px] text-slate-500">{hint}</p></div>)}
@@ -280,7 +281,7 @@ export default function Kyc() {
                                             </td>
                                             <td className="px-4 py-4 align-top text-sm text-slate-600">{row.client?.platform?.name || row.client?.platform?.platform_name || '—'}</td>
                                             <td className="px-4 py-4 align-top"><span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusChip(row.status)}`}>{String(row.status || '').replaceAll('_', ' ')}</span></td>
-                                            <td className="px-4 py-4 align-top text-sm text-slate-600">{aiLabel(row.ai_review)}</td>
+                                            <td className="px-4 py-4 align-top text-sm text-slate-600">{aiLabel(row.ai_review, row.status)}</td>
                                             <td className="px-4 py-4 align-top text-sm text-slate-600">{formatDate(row.updated_at)}</td>
                                             <td className="px-4 py-4 text-right align-top">
                                                 <button type="button" onClick={() => setReviewRow(row)} className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Review</button>
@@ -306,7 +307,7 @@ export default function Kyc() {
                                         {isHighRevenue(row) ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">High revenue</span> : null}
                                     </div>
                                     <dl className="mt-3 grid gap-2 text-sm text-slate-600">
-                                        <div className="flex items-center justify-between gap-3"><dt>AI check</dt><dd>{aiLabel(row.ai_review)}</dd></div>
+                                        <div className="flex items-center justify-between gap-3"><dt>AI check</dt><dd>{aiLabel(row.ai_review, row.status)}</dd></div>
                                         <div className="flex items-center justify-between gap-3"><dt>Updated</dt><dd>{formatDate(row.updated_at)}</dd></div>
                                     </dl>
                                     <button type="button" onClick={() => setReviewRow(row)} className="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Review submission</button>

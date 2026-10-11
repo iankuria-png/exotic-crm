@@ -80,7 +80,7 @@ class QueueController extends Controller
         $page->getCollection()->transform(function ($subject) {
             $finding = app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject);
             $subject->unsetRelation('aiLastReview');
-            $subject->setAttribute('ai_review', $finding ? \Illuminate\Support\Arr::only($finding, ['id', 'status', 'mode', 'recommendation', 'qa_sample', 'error', 'stale']) : null);
+            $subject->setAttribute('ai_review', $finding ? \Illuminate\Support\Arr::only($finding, ['id', 'status', 'mode', 'recommendation', 'action_taken', 'human_decision', 'qa_sample', 'error', 'stale', 'reason_codes']) : null);
 
             return $subject;
         });

@@ -48,6 +48,21 @@ class SchedulerConcurrencyTest extends TestCase
         return (string) $event->command;
     }
 
+    public function test_kyc_lane_requires_flag_and_runs_one_bounded_background_job(): void
+    {
+        config(['kyc.ai_worker_enabled' => false]);
+        $this->assertCount(0, array_filter($this->events(), fn ($event) => str_contains($this->commandOf($event), '--queue=kyc-ai')));
+        config(['kyc.ai_worker_enabled' => true]);
+        $events = array_values(array_filter($this->events(), fn ($event) => str_contains($this->commandOf($event), '--queue=kyc-ai')));
+        $this->assertCount(1, $events);
+        $this->assertTrue($events[0]->runInBackground);
+        $this->assertTrue($events[0]->withoutOverlapping);
+        $this->assertGreaterThanOrEqual(5, $events[0]->expiresAt);
+        $this->assertStringContainsString('--max-jobs=1', $this->commandOf($events[0]));
+        $this->assertStringContainsString('--timeout=180', $this->commandOf($events[0]));
+        $this->assertGreaterThan(180, config('queue.connections.database.retry_after'));
+    }
+
     public function test_queue_workers_never_block_the_scheduler(): void
     {
         $workers = array_filter(

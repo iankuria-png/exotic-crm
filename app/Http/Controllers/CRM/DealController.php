@@ -1484,6 +1484,10 @@ class DealController extends Controller
                 'deal' => $newDeal,
                 'payment' => $payment?->fresh(['platform', 'product', 'client']),
             ], 202);
+        } catch (ValidationException $exception) {
+            DB::rollBack();
+            return response()->json(['message' => collect($exception->errors())->flatten()->first() ?: 'Renewal validation failed.',
+                'errors' => $exception->errors()], 422);
         } catch (\Throwable $exception) {
             DB::rollBack();
             Log::error('Deal renewal failed', [

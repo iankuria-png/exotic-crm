@@ -63,8 +63,28 @@ class ReconcilePendingPayments extends Command
                 Payment::PURPOSE_VISITOR_CONTACT_UNLOCK,
             ])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))
+            ->where(function ($due) use ($staleMinutes) {
+                foreach ([[null, 1, 15], [1, 7, 60], [7, null, 1440]] as [$minDays, $maxDays, $retryMinutes]) {
+                    $due->orWhere(function ($age) use ($minDays, $maxDays, $retryMinutes, $staleMinutes) {
+                        if ($minDays !== null) $age->where('payments.created_at', '<', now()->subDays($minDays));
+                        if ($maxDays !== null) $age->where('payments.created_at', '>=', now()->subDays($maxDays));
+                        $age->whereDoesntHave('attempts', fn ($attempt) => $attempt
+                            ->where('attempt_type', 'reconciliation_check')
+                            ->where('created_at', '>=', now()->subMinutes(max($retryMinutes, $staleMinutes))));
+                    });
+                }
+            })
             ->orderBy('updated_at')
             ->limit($limit);
+
+        if (! $includeSandbox) {
+            $grammar = $paymentsQuery->getQuery()->getGrammar();
+            $decisions = $grammar->wrapTable('billing_routing_decisions');
+            $payments = $grammar->wrapTable('payments');
+            $paymentsQuery->where(fn ($q) => $q->whereNull('record_classification')->orWhere('record_classification', '!=', Payment::RECORD_CLASSIFICATION_TEST))
+                ->where(fn ($q) => $q->whereNull('payment_data->test_mode')->orWhere('payment_data->test_mode', false))
+                ->whereRaw("LOWER(COALESCE((SELECT environment FROM {$decisions} WHERE payment_id = {$payments}.id AND immutable_until_terminal_state = 1 ORDER BY id DESC LIMIT 1), {$payments}.provider_environment, 'production')) != ?", ['sandbox']);
+        }
 
         $payments = $paymentsQuery->get()
             ->filter(fn (Payment $payment) => $this->shouldProcessPayment($payment, $includeSandbox))
@@ -216,7 +236,7 @@ class ReconcilePendingPayments extends Command
             return true;
         }
 
-        if ((bool) data_get($payment->payment_data, 'test_mode', false)) {
+        if ($payment->isClassifiedTest() || (bool) data_get($payment->payment_data, 'test_mode', false)) {
             return false;
         }
 
@@ -243,13 +263,6 @@ class ReconcilePendingPayments extends Command
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
-        if ($payment->relationLoaded('routingDecisions')) {
-            return $payment->routingDecisions->first();
-        }
-
-        return $payment->routingDecisions()
-            ->where('immutable_until_terminal_state', true)
-            ->latest('id')
-            ->first();
+        return $payment->latestPinnedRoutingDecision();
     }
 }

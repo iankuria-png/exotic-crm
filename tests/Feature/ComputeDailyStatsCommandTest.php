@@ -12,6 +12,27 @@ class ComputeDailyStatsCommandTest extends TestCase
     use InteractsWithTeamActivityFixtures;
     use RefreshDatabase;
 
+    public function test_unscoped_system_audits_do_not_break_valid_market_rollups(): void
+    {
+        $platform = $this->createTeamPlatform();
+        $agent = $this->createTeamUser('sales', [$platform->id]);
+        foreach ([$platform->id, null] as $marketId) {
+            $this->createTeamAudit([
+                'actor_id' => $agent->id,
+                'action' => 'lead_status_update',
+                'platform_id' => $marketId,
+                'entity_type' => 'lead',
+                'entity_id' => 123,
+                'after_state' => ['status' => 'contacted'],
+                'created_at' => '2026-10-10 12:00:00',
+            ]);
+        }
+        $this->artisan('crm:compute-daily-stats', ['--date' => '2026-10-10'])->assertExitCode(0);
+        $this->assertDatabaseHas('agent_daily_stats', ['user_id' => $agent->id, 'platform_id' => $platform->id, 'leads_contacted' => 1]);
+        $this->assertDatabaseCount('agent_daily_stats', 1);
+        $this->assertDatabaseHas('audit_log', ['actor_id' => $agent->id, 'platform_id' => null]);
+    }
+
     public function test_command_rolls_up_action_metrics_and_stable_revenue_for_the_given_day(): void
     {
         $targetDate = Carbon::parse('2026-03-20 00:00:00');

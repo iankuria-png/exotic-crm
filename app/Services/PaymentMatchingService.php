@@ -30,81 +30,18 @@ class PaymentMatchingService
      */
     public function matchPayment(Payment $payment, ?string $prefix = null): array
     {
-        if ($payment->isVisitorPayment()) return ['matched' => false, 'confidence' => 'excluded', 'reason' => 'Visitor payments cannot match advertisers.'];
-        if ($payment->client_id) {
-            return [
-                'matched' => true,
-                'confidence' => 'already_matched',
-                'client_id' => $payment->client_id,
-            ];
+        $result = $this->dryRunMatchPayment($payment, $prefix);
+        if (($result['confidence'] ?? '') === 'excluded' || ($result['confidence'] ?? '') === 'already_matched') return $result;
+        if (! $result['matched']) {
+            $payment->update(['reconciliation_confidence' => ($result['confidence'] ?? '') === 'auto_low' ? 'medium' : 'low', 'reconciliation_state' => 'manual_review']);
+            return $result;
         }
-
-        if ($prefix === null) {
-            $payment->loadMissing('platform');
-            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
-        }
-
-        $phone = PhoneNormalizer::normalize($payment->phone, $prefix);
-        if (!$phone) {
-            $payment->update([
-                'reconciliation_confidence' => 'low',
-                'reconciliation_state' => 'manual_review',
-            ]);
-
-            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No phone number'];
-        }
-
-        $clients = Client::where('platform_id', $payment->platform_id)
-            ->where('phone_normalized', $phone)
-            ->get();
-
-        if ($clients->isEmpty()) {
-            $payment->update([
-                'reconciliation_confidence' => 'low',
-                'reconciliation_state' => 'manual_review',
-            ]);
-
-            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No client with this phone'];
-        }
-
-        if ($clients->count() > 1) {
-            $payment->update([
-                'reconciliation_confidence' => 'medium',
-                'reconciliation_state' => 'manual_review',
-            ]);
-
-            return [
-                'matched' => false,
-                'confidence' => 'auto_low',
-                'reason' => 'Multiple clients share this phone number',
-                'candidates' => $clients->pluck('id')->toArray(),
-            ];
-        }
-
-        $client = $clients->first();
-
-        // Check if amount matches a product price
-        $product = $this->matchProductByAmount(
-            (float) $payment->amount,
-            $payment->product_id ? (int) $payment->product_id : null,
-            $payment->platform_id ? (int) $payment->platform_id : null,
-            $payment->currency
-        );
-        $amountMatches = $product !== null;
-
-        $payment->update([
-            'client_id' => $client->id,
-            'match_confidence' => $amountMatches ? 'auto_high' : 'auto_low',
-            'reconciliation_confidence' => $amountMatches ? 'high' : 'medium',
-            'reconciliation_state' => $amountMatches ? 'resolved' : 'open',
-        ]);
-
-        return [
-            'matched' => true,
-            'confidence' => $amountMatches ? 'auto_high' : 'auto_low',
-            'client_id' => $client->id,
-            'product_id' => $product?->id,
-        ];
+        $high = $result['confidence'] === 'auto_high';
+        $needsFulfillment = $payment->status === 'completed' && ! $payment->deal_id && $this->isSubscriptionPayment($payment);
+        $payment->update(['client_id' => $result['client_id'], 'match_confidence' => $result['confidence'],
+            'reconciliation_confidence' => $high ? 'high' : 'medium',
+            'reconciliation_state' => $needsFulfillment ? 'manual_review' : ($high ? 'resolved' : 'open')]);
+        return $result;
     }
 
     /**
@@ -198,66 +135,16 @@ class PaymentMatchingService
      */
     public function dryRunMatchPayment(Payment $payment, ?string $prefix = null): array
     {
-        if ($payment->isVisitorPayment()) return ['matched' => false, 'confidence' => 'excluded', 'reason' => 'Visitor payments cannot match advertisers.'];
-        if ($payment->client_id) {
-            return [
-                'matched' => true,
-                'confidence' => 'already_matched',
-                'payment_id' => $payment->id,
-                'client_id' => $payment->client_id,
-            ];
-        }
-
-        if ($prefix === null) {
-            $payment->loadMissing('platform');
-            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
-        }
-
-        $phone = PhoneNormalizer::normalize($payment->phone, $prefix);
-        if (!$phone) {
-            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No phone number', 'payment_id' => $payment->id];
-        }
-
-        $clients = Client::where('platform_id', $payment->platform_id)
-            ->where('phone_normalized', $phone)
-            ->get();
-
-        if ($clients->isEmpty()) {
-            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No client with this phone', 'payment_id' => $payment->id];
-        }
-
-        if ($clients->count() > 1) {
-            return [
-                'matched' => false,
-                'confidence' => 'auto_low',
-                'reason' => 'Multiple clients share this phone number',
-                'payment_id' => $payment->id,
-                'payment_phone' => $payment->phone,
-                'payment_amount' => $payment->amount,
-                'payment_currency' => $payment->currency,
-            ];
-        }
-
-        $client = $clients->first();
-        $product = $this->matchProductByAmount(
-            (float) $payment->amount,
-            $payment->product_id ? (int) $payment->product_id : null,
-            $payment->platform_id ? (int) $payment->platform_id : null,
-            $payment->currency
-        );
-
-        return [
-            'matched' => true,
-            'confidence' => $product ? 'auto_high' : 'auto_low',
-            'payment_id' => $payment->id,
-            'payment_phone' => $payment->phone,
-            'payment_amount' => $payment->amount,
-            'payment_currency' => $payment->currency,
-            'client_id' => $client->id,
-            'client_name' => $client->name,
-            'product_id' => $product?->id,
-            'product_name' => $product?->name,
-        ];
+        $identity = app(PaymentClientIdentityService::class)->resolve($payment, $prefix);
+        if (! $identity['matched']) return array_diff_key($identity, ['client' => true]) + ['payment_id' => $payment->id];
+        $client = $identity['client'];
+        if ($identity['confidence'] === 'already_matched') return ['matched' => true, 'confidence' => 'already_matched', 'payment_id' => $payment->id, 'client_id' => $client->id];
+        $product = $this->matchProductByAmount((float) $payment->amount, $payment->product_id ? (int) $payment->product_id : null,
+            $payment->platform_id ? (int) $payment->platform_id : null, $payment->currency);
+        return ['matched' => true, 'confidence' => $product ? 'auto_high' : 'auto_low', 'payment_id' => $payment->id,
+            'payment_phone' => $payment->phone, 'payment_amount' => $payment->amount, 'payment_currency' => $payment->currency,
+            'client_id' => $client->id, 'client_name' => $client->name, 'product_id' => $product?->id, 'product_name' => $product?->name,
+            'source' => $identity['source'], 'fulfillment_review' => $payment->status === 'completed' && ! $payment->deal_id && $this->isSubscriptionPayment($payment)];
     }
 
     public function dryRunBatchMatch(?int $platformId = null): array

@@ -67,6 +67,31 @@ class MonetizationContractTest extends TestCase
         return VisitorContentPurchase::create(['public_id' => (string) Str::uuid(), 'platform_id' => $this->market->id, 'client_id' => $this->creator->id, 'payment_id' => $payment->id, 'status' => 'pending_payment', 'offer_kind' => 'single', 'offer_version' => 1, 'currency' => 'KES', 'gross_amount' => 350, 'entitlement_snapshot_json' => [['public_id' => $a->public_id, 'content_fingerprint' => $a->content_fingerprint, 'media_type' => 'photo', 'preview_url' => $a->preview_url]], 'visitor_phone_hash' => hash_hmac('sha256', '254711000111', $this->settings->device_pepper), 'visitor_phone_masked' => '*******0111', 'first_device_hash' => str_repeat('b', 64), 'public_token_hash' => str_repeat('c', 64), 'idempotency_key_hash' => hash('sha256', (string) Str::uuid()), 'is_sandbox' => $sandbox]);
     }
 
+    public function test_lifecycle_accepts_all_wp_states_retains_purchases_and_deduplicates_deleted_event(): void
+    {
+        $purchase = $this->purchase();
+        $purchase->update(['status' => 'active']);
+        $snapshot = $purchase->fresh()->getAttributes();
+        $wallet = app(\App\Services\WalletSettingsService::class);
+        $wallet->rotateWpCredentials($this->market, 'sandbox', 'both');
+        $pair = $wallet->wpToCrmCredentialPair($this->market, 'sandbox');
+        $this->mock(BillingModeService::class, fn ($m) => $m->shouldReceive('assertWalletAvailable')->andReturn(['environment' => 'sandbox']));
+        $path = '/api/wp-svc/premium-content/lifecycle';
+        foreach (['publish', 'private', 'draft', 'pending', 'trash', 'deleted', 'deleted'] as $status) {
+            $body = ['wp_post_id' => $this->creator->wp_post_id, 'status' => $status];
+            $key = (string) Str::uuid();
+            $time = (string) now()->timestamp;
+            $headers = ['Authorization' => 'Bearer '.$pair['bearer_key'], 'X-Exotic-Platform-Id' => (string) $this->market->id,
+                'X-Exotic-Timestamp' => $time, 'X-Idempotency-Key' => $key,
+                'X-Exotic-Signature' => hash_hmac('sha256', implode("\n", [$time, 'POST', $path, (string) $this->market->id, $key, hash('sha256', json_encode($body))]), $pair['hmac_secret'])];
+            $this->postJson($path, $body, $headers)->assertOk()->assertJsonPath('saved', true);
+            $this->assertSame($status, $this->creator->fresh()->profile_status);
+            $this->assertSame($snapshot, $purchase->fresh()->getAttributes());
+        }
+        $this->assertSame(1, \App\Models\PremiumContentEvent::where('client_id', $this->creator->id)->where('kind', 'profile_deleted')->count());
+        $this->assertFalse(app(ListingEligibility::class)->facts($this->creator->fresh())['listing_active']);
+    }
+
     public function test_kopokopo_lost_callback_reconciles_premium_sale_once(): void
     {
         $purchase = $this->purchase();

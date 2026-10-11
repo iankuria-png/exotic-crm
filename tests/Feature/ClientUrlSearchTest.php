@@ -483,6 +483,26 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_missing_optional_live_url_table_preserves_wordpress_slug_lookup_and_market_scope(): void
+    {
+        Schema::drop('escort_live_urls');
+        Schema::create('posts', function (Blueprint $table) {
+            $table->unsignedBigInteger('ID')->primary();
+            $table->string('post_name');
+            $table->string('guid');
+        });
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $other = $this->createPlatform('Other', 'https://other.example.test');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, ['wp_post_id' => 7722]);
+        $this->createClient($other, ['wp_post_id' => 7722]);
+        DB::table('posts')->insert(['ID' => 7722, 'post_name' => 'fallback-profile', 'guid' => 'https://www.exoticghana.com/?p=7722']);
+        Sanctum::actingAs($user);
+        $this->getJson('/api/crm/clients?platform_id='.$ghana->id.'&search='.urlencode('https://www.exoticghana.com/escort/fallback-profile/'))
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonPath('search_resolution.source', 'local_wp_lookup');
+    }
+
     private function createPlatform(string $name, string $domain): Platform
     {
         return Platform::query()->create([

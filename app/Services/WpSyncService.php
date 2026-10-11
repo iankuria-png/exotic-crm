@@ -311,6 +311,15 @@ class WpSyncService
         ]);
     }
 
+    public function updateManualPaymentState(int $postId, array $fields, array $version): array
+    {
+        $probe = $this->probeClientSyncMeta();
+        if (data_get($probe, 'meta.supports_manual_payment_state') !== true) {
+            return ['saved' => false, 'deferred' => true, 'reason' => 'manual_payment_state_plugin_required'];
+        }
+        return $this->post("/clients/{$postId}/manual-payment-state", ['fields' => $fields, 'version' => $version]);
+    }
+
     /**
      * Set the public verified badge on WordPress.
      *

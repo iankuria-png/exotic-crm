@@ -407,39 +407,7 @@ class PaymentCompletionService
 
     public function resolveClientForPayment(Payment $payment): ?Client
     {
-        if ($payment->client_id) {
-            return Client::find($payment->client_id);
-        }
-
-        if ($payment->platform_id && $payment->user_id) {
-            $client = Client::query()
-                ->where('platform_id', $payment->platform_id)
-                ->where('wp_user_id', $payment->user_id)
-                ->orderByDesc('id')
-                ->first();
-            if ($client) {
-                return $client;
-            }
-        }
-
-        if ($payment->platform_id && $payment->escort_post_id) {
-            $client = Client::query()
-                ->where('platform_id', $payment->platform_id)
-                ->where('wp_post_id', $payment->escort_post_id)
-                ->first();
-            if ($client) {
-                return $client;
-            }
-        }
-
-        if ($payment->platform_id && $payment->phone) {
-            $match = app(PaymentMatchingService::class)->matchPayment($payment);
-            if (!empty($match['matched']) && !empty($match['client_id'])) {
-                return Client::find($match['client_id']);
-            }
-        }
-
-        return null;
+        return app(PaymentClientIdentityService::class)->resolve($payment)['client'];
     }
 
     public function resolvePaymentMethod(Payment $payment, ?array $metadata = null, array $rawData = []): string
@@ -561,18 +529,7 @@ class PaymentCompletionService
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
-        if ($payment->relationLoaded('routingDecisions')) {
-            return $payment->routingDecisions
-                ->sortByDesc(function (BillingRoutingDecision $decision) {
-                    return optional($decision->created_at)->getTimestamp() ?? 0;
-                })
-                ->first();
-        }
-
-        return $payment->routingDecisions()
-            ->where('immutable_until_terminal_state', true)
-            ->latest('id')
-            ->first();
+        return $payment->latestPinnedRoutingDecision();
     }
 
     private function resolveProviderType(Payment $payment): string

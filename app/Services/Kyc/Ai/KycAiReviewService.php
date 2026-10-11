@@ -154,15 +154,50 @@ class KycAiReviewService
         if (! $review) {
             return null;
         }
-        if ($review->mode === 'shadow') {
-            return ['id' => $review->id, 'mode' => 'shadow', 'status' => $review->status];
-        }
-        $data = $review->toArray();
-        $data['stale'] = $review->document_ids !== $subject->documents()->whereIn('id', $review->document_ids)->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $data = $review->mode === 'shadow'
+            ? ['id' => $review->id, 'mode' => 'shadow', 'status' => $review->status]
+            : $review->toArray();
+        $data['stale'] = (int) $review->review_version !== (int) $subject->review_version
+            || $review->document_ids !== $subject->submitted_document_ids
+            || $review->document_ids !== $subject->documents()->whereIn('id', $review->document_ids)->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->all();
         if (in_array($review->status, ['queued', 'running']) && $review->updated_at->lt(now()->subMinutes(10))) {
             $data['status'] = 'stalled';
         }
 
         return $data;
+    }
+
+    public function automationContext(KycSubject $subject): array
+    {
+        $service = app(KycSettingsService::class);
+        $policy = $service->aiSettings((int) $subject->client->platform_id);
+        $reason = null;
+        if ($subject->status !== 'in_review') {
+            $reason = 'not_in_review';
+        } elseif (! $subject->submitted_at || ! $subject->submitted_document_ids) {
+            $reason = 'submission_required';
+        } elseif (! $subject->ai_consent_at) {
+            $reason = 'consent_required';
+        } elseif ($subject->submitted_document_ids !== $subject->documents()->whereIn('id', $subject->submitted_document_ids)->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->all()) {
+            $reason = 'photos_changed';
+        } elseif ($policy['mode'] === 'off') {
+            $reason = 'automation_off';
+        } elseif (! config('kyc.ai_worker_enabled')) {
+            $reason = 'worker_paused';
+        } elseif (trim((string) config('services.seo_engine.openrouter.api_key')) === '') {
+            $reason = 'provider_not_configured';
+        } elseif (in_array($this->findings($subject)['status'] ?? null, ['queued', 'running'], true)) {
+            $reason = 'check_active';
+        }
+
+        return [
+            'mode' => $policy['mode'],
+            'can_run' => $reason === null,
+            'blocked_reason' => $reason,
+            'worker_enabled' => (bool) config('kyc.ai_worker_enabled'),
+            'approve_threshold' => (float) $policy['approve_threshold'],
+            'auto_reject_enabled' => $policy['mode'] === 'full_auto' && (bool) $policy['auto_reject_enabled'],
+            'reject_requires_second_opinion' => (bool) $policy['reject_requires_second_opinion'],
+        ];
     }
 }

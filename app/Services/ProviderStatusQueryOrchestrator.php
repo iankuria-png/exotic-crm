@@ -30,13 +30,34 @@ class ProviderStatusQueryOrchestrator
             throw new InvalidArgumentException('Live provider checks are available only for Paystack, Pesapal, pawaPay, and KopoKopo payments.');
         }
 
-        $context = $this->billingModeService->providerContext(
+        $decision = $this->latestPinnedDecision($payment);
+        if ($decision?->provider_profile_id) {
+            $profile = $decision->providerProfile;
+            if (! $profile || (int) $decision->market_id !== (int) $payment->platform_id
+                || strtolower((string) $profile->provider_type_key) !== $provider
+                || strtolower((string) $profile->environment) !== $this->resolveEnvironment($payment)) {
+                throw new InvalidArgumentException('Pinned provider profile does not match the payment routing contract.');
+            }
+            if ($decision->chosen_binding_id) {
+                $binding = $decision->chosenBinding;
+                if (! $binding || (int) $binding->market_id !== (int) $payment->platform_id
+                    || (int) $binding->provider_profile_id !== (int) $profile->id) {
+                    throw new InvalidArgumentException('Pinned provider binding does not match the payment routing contract.');
+                }
+            }
+            $context = $this->billingModeService->profileBackedProviderContext(
+                $payment->platform, $profile, $decision->chosen_binding_id, false,
+                $this->resolveEnvironment($payment), $this->resolveSurface($payment)
+            );
+        } else {
+            $context = $this->billingModeService->providerContext(
             $payment->platform,
             $provider,
             requireEnabled: false,
             environmentOverride: $this->resolveEnvironment($payment),
             surface: $this->resolveSurface($payment)
         );
+        }
 
         $verification = match ($provider) {
             'kopokopo' => $this->kopoKopoCompatibilityAdapter->verify($payment, $context, (string) $payment->transaction_reference),
@@ -316,18 +337,7 @@ class ProviderStatusQueryOrchestrator
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
-        if ($payment->relationLoaded('routingDecisions')) {
-            return $payment->routingDecisions
-                ->sortByDesc(function (BillingRoutingDecision $decision) {
-                    return optional($decision->created_at)->getTimestamp() ?? 0;
-                })
-                ->first();
-        }
-
-        return $payment->routingDecisions()
-            ->where('immutable_until_terminal_state', true)
-            ->latest('id')
-            ->first();
+        return $payment->latestPinnedRoutingDecision();
     }
 
     private function expectedProviderReference(Payment $payment, string $provider): string

@@ -150,9 +150,15 @@ class ReviewController extends Controller
         // Timeline data is transformed below. Never serialize the underlying relation:
         // a shadow review must not reveal stored observations through an eager relation.
         $subject->unsetRelation('reviewEvents');
+        $reviews = app(\App\Services\Kyc\Ai\KycAiReviewService::class);
+        $findings = $reviews->findings($subject);
+        $automation = $reviews->automationContext($subject);
+        // Keep raw calibration observations out of the serialized subject relation too.
+        $subject->unsetRelation('aiLastReview');
 
         return [
-            'ai_review' => app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject),
+            'ai_review' => $findings,
+            'automation' => $automation,
             'subject' => $subject,
             'review_events' => $events->map(function ($event) use ($shadowReviewIds) {
                 $shadow = in_array((int) $event->ai_review_id, $shadowReviewIds, true);

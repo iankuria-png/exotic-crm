@@ -476,6 +476,12 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->runInBackground();
 
+        $schedule->command('crm:recover-payment-client-links')
+            ->name('crm_recover_payment_client_links')
+            ->cron('8,23,38,53 * * * *')
+            ->withoutOverlapping(5)->onOneServer()->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_recover_payment_client_links.log'));
+
         $schedule->command('crm:reconcile-pending-payments')
             ->name('crm_reconcile_pending_payments')
             ->everyFifteenMinutes()
@@ -631,6 +637,13 @@ class Kernel extends ConsoleKernel
                 ->onOneServer()
                 ->runInBackground()
                 ->sendOutputTo(storage_path('logs/queue_worker_sync.log'));
+
+            if (config('kyc.ai_worker_enabled', false)) {
+                $schedule->command(sprintf('queue:work %s --queue=kyc-ai --max-time=55 --max-jobs=1 --tries=1 --timeout=180 --sleep=3', $queueConnection))
+                    ->name('queue_worker_kyc_ai')->everyMinute()->withoutOverlapping(5)->onOneServer()
+                    ->runInBackground()->skip(fn () => ! $allows('heavy_queue_worker'))
+                    ->sendOutputTo(storage_path('logs/queue_worker_kyc_ai.log'));
+            }
 
             // Lane 3 (heavy): long LLM/WordPress work — auto-optimize items plus
             // the `heavy` queue on the `database_long` connection, whose wider

@@ -66,7 +66,7 @@ class PaymentManualRejectionTest extends TestCase
         });
 
         Http::assertSent(function ($request) use ($platform, $client) {
-            return $request->url() === rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/update"
+            return $request->url() === rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/manual-payment-state"
                 && $request->method() === 'POST'
                 && data_get($request->data(), 'fields.billing_manual_payment_state') === 'rejected'
                 && data_get($request->data(), 'fields.billing_manual_payment_reason') === 'Receipt not valid';
@@ -112,10 +112,42 @@ class PaymentManualRejectionTest extends TestCase
         });
 
         Http::assertSent(function ($request) use ($platform, $client) {
-            return $request->url() === rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/update"
+            return $request->url() === rtrim($platform->wp_api_url, '/') . "/clients/{$client->wp_post_id}/manual-payment-state"
                 && $request->method() === 'POST'
                 && data_get($request->data(), 'fields.billing_manual_payment_state') === 'rejected';
         });
+    }
+
+    public function test_old_submission_job_sends_latest_state_with_stable_version(): void
+    {
+        [$platform, $client, $oldPayment, , $oldSubmission] = $this->createManualReviewFixture(withActiveDeal: false);
+        $newPayment = $oldPayment->replicate(['deal_id']);
+        $newPayment->save();
+        $newSubmission = $oldSubmission->replicate();
+        $newSubmission->payment_id = $newPayment->id;
+        $newSubmission->save();
+        $oldSubmission->update(['review_decision' => 'approved']);
+        $oldPayment->update(['status' => 'completed', 'reconciliation_state' => 'resolved']);
+        $this->fakeWordPressForManualRejection($platform, $client, 'publish');
+        $service = app(\App\Services\ManualPaymentSubmissionService::class);
+        $service->synchronizeWpState($oldPayment);
+        $this->travel(1)->hours();
+        $service->synchronizeWpState($oldPayment);
+        $sent = Http::recorded(fn ($request) => str_ends_with($request->url(), '/manual-payment-state'))->values();
+        $this->assertCount(2, $sent);
+        $this->assertSame($sent[0][0]->data(), $sent[1][0]->data());
+        $this->assertSame('awaiting_review', data_get($sent[0][0]->data(), 'fields.billing_manual_payment_state'));
+        $this->assertSame($newPayment->id, data_get($sent[0][0]->data(), 'version.payment_id'));
+        $this->assertSame($newSubmission->id, data_get($sent[0][0]->data(), 'version.submission_id'));
+    }
+
+    public function test_legacy_plugin_defers_without_sending_billing_fields_to_content_editor(): void
+    {
+        [$platform, $client, $payment] = $this->createManualReviewFixture(withActiveDeal: false);
+        Http::fake(['*' => Http::response(['supports_cursor_sync' => true])]);
+        app(\App\Services\ManualPaymentSubmissionService::class)->synchronizeWpState($payment);
+        Http::assertNotSent(fn ($request) => $request->method() === 'POST');
+        $this->assertSame('pending', $payment->fresh()->status);
     }
 
     /**
@@ -204,11 +236,12 @@ class PaymentManualRejectionTest extends TestCase
         ];
 
         Http::fake([
+            $baseUrl . '/sync/meta' => Http::response(['supports_cursor_sync' => true, 'supports_manual_payment_state' => true]),
             $baseUrl . "/clients/{$client->wp_post_id}/deactivate" => Http::response([
                 'success' => true,
             ], 200),
             $baseUrl . "/clients/{$client->wp_post_id}" => Http::response($profilePayload, 200),
-            $baseUrl . "/clients/{$client->wp_post_id}/update" => Http::response([
+            $baseUrl . "/clients/{$client->wp_post_id}/manual-payment-state" => Http::response([
                 'success' => true,
             ], 200),
         ]);

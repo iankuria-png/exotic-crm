@@ -17,6 +17,28 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_recent_historic_attempts_and_classified_tests_do_not_consume_the_limit(): void
+    {
+        ['platform' => $platform, 'product' => $product] = $this->seedBillingContext();
+        Http::fake(['https://api.paystack.co/transaction/verify/*' => Http::response([
+            'status' => true, 'data' => ['status' => 'pending', 'reference' => 'DUE-001'],
+        ])]);
+        $old = $this->createStalePayment(['platform_id' => $platform->id, 'product_id' => $product->id, 'provider_key' => 'paystack', 'provider_environment' => 'production', 'purpose' => 'subscription', 'status' => 'pending']);
+        $old->forceFill(['created_at' => now()->subDays(30), 'updated_at' => now()->subDays(30)])->save();
+        $old->attempts()->create(['attempt_type' => 'reconciliation_check', 'status' => 'failed', 'created_at' => now()->subHours(2)]);
+        $test = $this->createStalePayment(['platform_id' => $platform->id, 'product_id' => $product->id, 'provider_key' => 'paystack', 'purpose' => 'subscription', 'status' => 'initiated', 'record_classification' => Payment::RECORD_CLASSIFICATION_TEST]);
+        $test->forceFill(['created_at' => now()->subDays(60), 'updated_at' => now()->subDays(60)])->save();
+        $due = $this->createStalePayment(['platform_id' => $platform->id, 'product_id' => $product->id, 'provider_key' => 'paystack', 'provider_environment' => 'production', 'purpose' => 'subscription', 'status' => 'pending', 'reference_number' => 'DUE-001']);
+        $this->artisan('crm:reconcile-pending-payments', ['--limit' => 1, '--delay-ms' => 0])->assertExitCode(0);
+        Http::assertSentCount(1);
+        $this->assertSame(1, $due->attempts()->count());
+        $this->assertSame(1, $old->attempts()->count());
+        $this->assertSame(0, $test->attempts()->count());
+        $this->artisan('crm:reconcile-pending-payments', ['--limit' => 1, '--delay-ms' => 0])->assertExitCode(0);
+        Http::assertSentCount(1);
+        $this->assertSame('pending', $due->fresh()->status);
+    }
+
     public function test_command_reconciles_completed_wallet_and_subscription_payments(): void
     {
         [

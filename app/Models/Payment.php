@@ -245,6 +245,17 @@ class Payment extends Model
         return $this->hasMany(BillingRoutingDecision::class);
     }
 
+    public function latestPinnedRoutingDecision(): ?BillingRoutingDecision
+    {
+        if ($this->relationLoaded('routingDecisions')) {
+            return $this->routingDecisions
+                ->filter(fn (BillingRoutingDecision $decision) => $decision->immutable_until_terminal_state)
+                ->sortByDesc('id')->first();
+        }
+
+        return $this->routingDecisions()->where('immutable_until_terminal_state', true)->latest('id')->first();
+    }
+
     public function providerTransactions()
     {
         return $this->hasMany(BillingProviderTransaction::class);
