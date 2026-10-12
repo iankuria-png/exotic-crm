@@ -14,6 +14,8 @@ use Illuminate\Support\Collection;
 
 class ActiveSubscriptionProfileRepairService
 {
+    public function __construct(private readonly ClientLifecycleMutationLock $lifecycleLock) {}
+
     public function hasFutureActiveDeal(Client $client): bool
     {
         return $this->futureActiveDealQuery($client)->exists();
@@ -41,6 +43,7 @@ class ActiveSubscriptionProfileRepairService
     public function affectedClients(?int $platformId = null, ?int $clientId = null, ?int $wpPostId = null, int $limit = 200): Collection
     {
         $query = Client::query()
+            ->whereNull('profile_removal_requested_at')
             ->with(['platform', 'deals' => fn ($dealQuery) => $this->applyFutureActiveDealScope($dealQuery)])
             ->whereHas('deals', fn ($dealQuery) => $this->applyFutureActiveDealScope($dealQuery))
             ->where(function (Builder $builder): void {
@@ -82,6 +85,19 @@ class ActiveSubscriptionProfileRepairService
         string $source = 'active_subscription_profile_repair',
         bool $syncWordPress = true
     ): array {
+        // Existing provisioning/recovery callers already hold the shared lock
+        // and pass syncWordPress=false. Only remote repair owns a new lock.
+        if ($syncWordPress) {
+            return $this->lifecycleLock->run($client, fn () => $this->repairClientLocked($client, $deal, $dryRun, $source, true));
+        }
+
+        return $this->repairClientLocked($client, $deal, $dryRun, $source, false);
+    }
+
+    private function repairClientLocked(Client $client, ?Deal $deal, bool $dryRun, string $source, bool $syncWordPress): array
+    {
+        $client->refresh();
+        $deal = $deal?->fresh();
         $client->loadMissing('platform');
         $deal ??= $this->bestFutureActiveDeal($client);
 
@@ -96,7 +112,13 @@ class ActiveSubscriptionProfileRepairService
             'expires_at' => $deal?->expires_at ? Carbon::parse($deal->expires_at)->toDateTimeString() : null,
         ];
 
-        if (! $deal || ! $this->isFutureActiveDeal($deal)) {
+        if ($client->profile_removal_requested_at !== null) {
+            $row['reason'] = 'profile_removal_requested';
+
+            return $row;
+        }
+
+        if (! $deal || (int) $deal->client_id !== (int) $client->id || ! $this->isFutureActiveDeal($deal)) {
             $row['reason'] = 'no_future_active_deal';
 
             return $row;

@@ -11,6 +11,8 @@ use App\Models\TimelineEvent;
 use App\Support\ClientLifecycleState;
 use App\Support\LifecyclePolicy;
 use App\Support\LifecycleRestoreEligibility;
+use App\Support\MarketTimezone;
+use App\Support\SubscriptionExpiry;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -274,6 +276,116 @@ class ProfileLifecycleRestoreService
         return ['reverted' => $reverted, 'skipped' => $skipped, 'failed' => $failed];
     }
 
+    /** Cached eligibility is advisory; the mutation checks fresh WordPress state too. */
+    public function profileRevertBlockReason(Client $client): ?string
+    {
+        if (($client->client_type ?? 'escort') !== 'escort' || (int) $client->wp_post_id <= 0) {
+            return 'Only linked advertiser profiles can be reverted.';
+        }
+        if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+            return 'This profile has an active paid subscription.';
+        }
+        if ($client->profile_removal_requested_at !== null) {
+            return null; // A partial removal may already have cleared lifecycle metadata.
+        }
+        if ($client->profile_status !== 'publish'
+            || ! in_array($client->lifecycle_state, [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED], true)) {
+            return 'Only published Expired or Archived profiles can be reverted.';
+        }
+
+        return null;
+    }
+
+    public function revertProfile(Client $client, int $actorId, string $reason): Client
+    {
+        return $this->lifecycleLock->run($client, function () use ($client, $actorId, $reason): Client {
+            $client->refresh()->loadMissing('platform');
+            if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
+                throw ClientLifecycleMutationException::paidEntitlement();
+            }
+            if ($blocked = $this->profileRevertBlockReason($client)) {
+                throw new \InvalidArgumentException($blocked);
+            }
+
+            $wp = WpSyncService::forPlatform((int) $client->platform_id);
+            $remote = $wp->getClient((int) $client->wp_post_id);
+            if ((int) ($remote['wp_post_id'] ?? 0) !== (int) $client->wp_post_id || empty($remote['post_status'])) {
+                throw new \RuntimeException('WordPress did not identify the requested profile.');
+            }
+            $status = (string) ($remote['post_status'] ?? '');
+            if (! in_array($status, ['publish', 'private'], true)) {
+                throw new \InvalidArgumentException('WordPress must report a published or private advertiser profile.');
+            }
+            $timezone = MarketTimezone::resolve($client->platform?->timezone, config('app.timezone', 'UTC'));
+            foreach (['escort_expire', 'premium_expire', 'featured_expire'] as $key) {
+                $expiry = (int) ($remote[$key] ?? 0);
+                if ($expiry > 0 && ! SubscriptionExpiry::isExpired($expiry, $timezone, now()->timestamp)) {
+                    throw ClientLifecycleMutationException::paidEntitlement();
+                }
+            }
+            if ($status === 'publish'
+                && ! in_array($remote['crm_lifecycle_state'] ?? '', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED], true)) {
+                throw new \InvalidArgumentException('WordPress no longer reports this profile as Expired or Archived. Sync the profile and try again.');
+            }
+            if ($status === 'private' && $client->profile_reverted_at !== null) {
+                return (new ClientSyncService($client->platform))->syncOne((int) $client->wp_post_id);
+            }
+
+            $context = [
+                'reason' => $reason,
+                'previous_lifecycle_state' => $client->lifecycle_state,
+                'run_id' => $client->lifecycle_restore_run_id,
+                'scope' => 'client_profile_revert',
+            ];
+            // Persist intent and its explanation before the remote write. A failed
+            // request must remain excluded from background publishers.
+            \Illuminate\Support\Facades\DB::transaction(function () use ($client, $actorId, $context, $reason): void {
+                $client->forceFill([
+                    'profile_removal_requested_at' => $client->profile_removal_requested_at ?? now(),
+                ])->save();
+                $this->recordRemovalEvent($client, $actorId, 'profile_removal_requested', $context);
+                app(AuditService::class)->record([
+                    'platform_id' => $client->platform_id,
+                    'actor_id' => $actorId,
+                    'action' => 'client_profile_revert_requested',
+                    'entity_type' => 'client',
+                    'entity_id' => $client->id,
+                    'before_state' => $context,
+                    'after_state' => ['profile_removal_requested_at' => $client->profile_removal_requested_at?->toIso8601String()],
+                    'reason' => $reason,
+                ]);
+            });
+
+            try {
+                $updated = $this->deactivateAndVerify(
+                    $client, $wp, new ClientSyncService($client->platform),
+                    $actorId, 'profile_restore_reverted', $context,
+                );
+                $updated->forceFill(['profile_reverted_at' => now()])->save();
+
+                return $updated;
+            } catch (\Throwable $exception) {
+                $this->recordRemovalEvent($client, $actorId, 'profile_removal_failed', $context + [
+                    'message' => 'WordPress removal was not confirmed. Retry the request.',
+                ]);
+                throw $exception;
+            }
+        });
+    }
+
+    private function recordRemovalEvent(Client $client, int $actorId, string $type, array $content): void
+    {
+        TimelineEvent::create([
+            'platform_id' => $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => $type,
+            'actor_id' => $actorId,
+            'content' => $content,
+            'created_at' => now(),
+        ]);
+    }
+
     public function revertClient(Client $client, ?int $actorId = null, ?string $reason = null): Client
     {
         return $this->lifecycleLock->run($client, function () use ($client, $actorId, $reason): Client {
@@ -403,6 +515,9 @@ class ProfileLifecycleRestoreService
         ClientSyncService $sync,
     ): string {
         $client->refresh();
+        if ($client->profile_removal_requested_at !== null) {
+            return 'skipped';
+        }
         if ($this->activeSubscriptionRepair->hasFutureActiveDeal($client)) {
             $this->activeSubscriptionRepair->repairClient(
                 $client,

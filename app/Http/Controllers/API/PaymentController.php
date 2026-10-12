@@ -1651,6 +1651,26 @@ class PaymentController extends Controller
             'product_id' => 'required|exists:products,id',
             'platform_id' => 'required|exists:platforms,id',
         ]);
+        $client = Client::query()->where('platform_id', (int) $request->platform_id)
+            ->where('wp_post_id', (int) $request->post_id)->first();
+        if ($client) {
+            return app(\App\Services\ClientLifecycleMutationLock::class)->run(
+                $client, fn () => $this->manualActivateLocked($request),
+            );
+        }
+
+        return $this->manualActivateLocked($request);
+    }
+
+    private function manualActivateLocked(Request $request)
+    {
+        $request->validate([
+            'post_id' => 'required|numeric',
+            'days' => 'required|numeric|min:1',
+            'is_free_trial' => 'sometimes|boolean',
+            'product_id' => 'required|exists:products,id',
+            'platform_id' => 'required|exists:platforms,id',
+        ]);
 
         $postId = $request->post_id;
         $days = $request->days;
@@ -1746,6 +1766,13 @@ class PaymentController extends Controller
                 ['post_id' => $postId, 'meta_key' => 'subscription_end'],
                 ['meta_value' => $endDate->format('Y-m-d H:i:s')]
             );
+
+            // Publication and subscription dates succeeded for this exact profile.
+            // Do not wait for SMS or cache sync to lift a completed removal hold.
+            Client::query()->where('platform_id', (int) $platformId)->where('wp_post_id', (int) $postId)->update([
+                'profile_removal_requested_at' => null,
+                'profile_reverted_at' => null,
+            ]);
 
             // 5. Record activation
             $activation = Activation::updateOrCreate(

@@ -1334,6 +1334,9 @@ export default function ClientDetail() {
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
     const [closeCaseDialogOpen, setCloseCaseDialogOpen] = useState(false);
     const [closeCaseError, setCloseCaseError] = useState(null);
+    const [revertProfileOpen, setRevertProfileOpen] = useState(false);
+    const [revertProfileReason, setRevertProfileReason] = useState('');
+    const [revertProfileError, setRevertProfileError] = useState(null);
     const [showReopenConfirm, setShowReopenConfirm] = useState(false);
     const [deletePreview, setDeletePreview] = useState(null);
     const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -2113,6 +2116,27 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Client deletion failed.');
+        },
+    });
+
+    const refreshProfileRemoval = () => {
+        for (const queryKey of [['client', id], ['clients'], ['client-timeline', id], ['lifecycle-restore']]) {
+            queryClient.invalidateQueries({ queryKey });
+        }
+    };
+
+    const revertProfileMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/revert`, { reason: revertProfileReason.trim() }).then((response) => response.data),
+        onSuccess: (data) => {
+            refreshProfileRemoval();
+            setRevertProfileOpen(false);
+            setRevertProfileReason('');
+            setRevertProfileError(null);
+            toast.success(data?.message || 'Profile reverted and removed from the public website.');
+        },
+        onError: (error) => {
+            refreshProfileRemoval();
+            setRevertProfileError(error?.response?.data?.message || 'Could not confirm removal. Retry the request.');
         },
     });
 
@@ -4224,6 +4248,18 @@ export default function ClientDetail() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
                                         </svg>
                                         New subscription
+                                    </button>
+                                ) : null}
+                                {canManageWallet && client.can_revert_profile ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setRevertProfileError(null); setRevertProfileOpen(true); }}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-800 transition hover:bg-orange-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10H4V5m0 5a8 8 0 111 8" />
+                                        </svg>
+                                        {client.profile_removal_requested_at ? 'Retry profile removal' : 'Revert profile'}
                                     </button>
                                 ) : null}
                                 {!isReadOnly && !isCaseClosed ? (
@@ -7379,6 +7415,30 @@ export default function ClientDetail() {
                     </div>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={revertProfileOpen}
+                title="Revert this profile?"
+                message="This removes the profile from the public website, including Unlockable Profiles. The client and their history stay in CRM."
+                confirmLabel="Revert profile"
+                tone="warning"
+                isPending={revertProfileMutation.isPending}
+                confirmDisabled={!revertProfileReason.trim()}
+                onCancel={() => { if (!revertProfileMutation.isPending) setRevertProfileOpen(false); }}
+                onConfirm={() => revertProfileMutation.mutate()}
+            >
+                <label className="block text-sm font-medium text-slate-700" htmlFor="profile-revert-reason">Reason</label>
+                <textarea
+                    id="profile-revert-reason"
+                    className="crm-input min-h-24 w-full"
+                    maxLength={500}
+                    value={revertProfileReason}
+                    onChange={(event) => setRevertProfileReason(event.target.value)}
+                    disabled={revertProfileMutation.isPending}
+                    placeholder="Why is this advertiser requesting removal?"
+                />
+                {revertProfileError ? <p role="alert" className="text-sm text-rose-700">{revertProfileError}</p> : null}
+            </ConfirmDialog>
 
             <CloseCaseDialog
                 open={closeCaseDialogOpen}

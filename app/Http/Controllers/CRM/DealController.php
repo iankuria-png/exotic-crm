@@ -1372,8 +1372,24 @@ class DealController extends Controller
                 );
                 $deal->update(['status' => 'renewed']);
 
+                Client::query()->whereKey($client->id)->update([
+                    'profile_removal_requested_at' => null,
+                    'profile_reverted_at' => null,
+                ]);
+
                 $syncService = new ClientSyncService($platform);
-                $syncService->syncOne($client->wp_post_id);
+                try {
+                    $syncService->syncOne($client->wp_post_id);
+                } catch (\Throwable $exception) {
+                    // WordPress already accepted the renewal. A cache read must
+                    // not roll back the sale or restore a completed removal hold.
+                    Log::warning('Post-renewal client sync failed; activation stands.', [
+                        'client_id' => $client->id, 'deal_id' => $newDeal->id, 'error' => $exception->getMessage(),
+                    ]);
+                    app(\App\Services\ActiveSubscriptionProfileRepairService::class)->repairClient(
+                        $client, $newDeal, false, 'renewal_activation_sync_failed', false,
+                    );
+                }
                 $client->refresh();
             }
 

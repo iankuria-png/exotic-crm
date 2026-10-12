@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 function confirmButtonClass(tone) {
     if (tone === 'danger') {
@@ -27,24 +27,63 @@ export default function ConfirmDialog({
     const dialogId = useMemo(() => `confirm-dialog-${Math.random().toString(36).slice(2, 10)}`, []);
     const titleId = `${dialogId}-title`;
     const messageId = message ? `${dialogId}-message` : undefined;
+    const panelRef = useRef(null);
+    const latestRef = useRef({ isPending, onCancel });
+    latestRef.current = { isPending, onCancel };
 
     useEffect(() => {
         if (!open) {
             return undefined;
         }
 
-        const handleEscape = (event) => {
-            if (event.key !== 'Escape' || isPending) {
+        const previousFocus = document.activeElement;
+        const controls = () => Array.from(panelRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') || [])
+            .filter((element) => element.getClientRects().length > 0);
+        const focusFirst = () => (controls()[0] || panelRef.current)?.focus();
+        const frame = requestAnimationFrame(focusFirst);
+        const isTopDialog = () => Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1) === panelRef.current;
+        const handleKey = (event) => {
+            if (!isTopDialog()) {
                 return;
             }
-
-            event.preventDefault();
-            onCancel?.();
+            if (event.key === 'Escape') {
+                if (!latestRef.current.isPending) {
+                    event.preventDefault();
+                    latestRef.current.onCancel?.();
+                }
+            } else if (event.key === 'Tab') {
+                const elements = controls();
+                const first = elements[0];
+                const last = elements.at(-1);
+                if (!first || (event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)
+                    || !panelRef.current?.contains(document.activeElement)) {
+                    event.preventDefault();
+                    (event.shiftKey ? last : first)?.focus();
+                    if (!first) panelRef.current?.focus();
+                }
+            }
         };
-
-        window.addEventListener('keydown', handleEscape);
-        return () => window.removeEventListener('keydown', handleEscape);
-    }, [isPending, onCancel, open]);
+        const containFocus = (event) => {
+            if (isTopDialog() && !panelRef.current?.contains(event.target)) focusFirst();
+        };
+        window.addEventListener('keydown', handleKey);
+        document.addEventListener('focusin', containFocus);
+        return () => {
+            cancelAnimationFrame(frame);
+            window.removeEventListener('keydown', handleKey);
+            document.removeEventListener('focusin', containFocus);
+            if (previousFocus?.isConnected) {
+                previousFocus.focus();
+            } else {
+                // A completed action may remove its own trigger button.
+                const heading = document.querySelector('main h1, h1');
+                if (heading) {
+                    heading.setAttribute('tabindex', '-1');
+                    heading.focus();
+                }
+            }
+        };
+    }, [open]);
 
     if (!open) {
         return null;
@@ -53,6 +92,8 @@ export default function ConfirmDialog({
     return (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4" onClick={isPending ? undefined : onCancel}>
             <div
+                ref={panelRef}
+                tabIndex={-1}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

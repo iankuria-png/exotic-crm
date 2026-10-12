@@ -43,6 +43,10 @@ class ClientLifecycleService
     {
         $client->refresh()->loadMissing('platform');
 
+        if ($client->profile_removal_requested_at !== null) {
+            throw new ClientLifecycleMutationException('This profile has a removal request and cannot be republished by lifecycle actions.', 'profile_removal_requested');
+        }
+
         if ($client->deals()->currentlyActive()->exists()) {
             throw ClientLifecycleMutationException::paidEntitlement();
         }
@@ -96,6 +100,10 @@ class ClientLifecycleService
         ?int $recoveryRunId,
     ): Client {
         $client->refresh()->loadMissing('platform');
+
+        if ($client->profile_removal_requested_at !== null) {
+            throw new ClientLifecycleMutationException('This profile has a removal request and cannot be republished by lifecycle actions.', 'profile_removal_requested');
+        }
 
         if ($client->lifecycle_state === ClientLifecycleState::EXPIRED) {
             return $client;

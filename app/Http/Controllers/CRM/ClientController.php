@@ -50,6 +50,7 @@ use App\Services\MediaConversionStatusService;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
+use App\Services\ProfileLifecycleRestoreService;
 use App\Services\ProfileMediaMetadataBackfillService;
 use App\Services\Seo\ProfileImageAltTextGenerator;
 use App\Services\SupportBoardService;
@@ -852,6 +853,7 @@ class ClientController extends Controller
         ]);
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);
+        $this->appendProfileRevertMetadata($request, $client);
         $this->appendAgencyManagedProfiles($client);
         $this->appendAgencyOwnershipContext($client);
         $client->setAttribute('whatsapp_inbound_count', \App\Models\WhatsAppMessage::query()
@@ -6926,6 +6928,46 @@ class ClientController extends Controller
             'reasons' => $reasons,
             'recent_notes' => $recentNotes,
         ]);
+    }
+
+    private function appendProfileRevertMetadata(Request $request, Client $client): void
+    {
+        $allowed = in_array($request->user()?->role, ['admin', 'sub_admin', 'sales', 'field_sales'], true);
+        $reason = app(ProfileLifecycleRestoreService::class)->profileRevertBlockReason($client);
+        $completed = $client->profile_status === 'private' && $client->profile_reverted_at !== null;
+        $client->setAttribute('can_revert_profile', $allowed && ! $completed && $reason === null);
+        $client->setAttribute('revert_profile_disabled_reason', $reason);
+    }
+
+    public function revertProfile(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+        $validated = $request->validate(['reason' => 'required|string|max:500']);
+        $reason = trim($validated['reason']);
+        if ($reason === '') {
+            throw \Illuminate\Validation\ValidationException::withMessages(['reason' => 'Enter the reason for removing this profile.']);
+        }
+
+        try {
+            $updated = app(ProfileLifecycleRestoreService::class)->revertProfile($client, (int) $request->user()->id, $reason);
+        } catch (\App\Exceptions\ClientLifecycleMutationException $exception) {
+            throw $exception;
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage(), 'reason_code' => 'wrong_state'], 422);
+        } catch (\Throwable $exception) {
+            Log::warning('Client profile removal not confirmed', ['client_id' => $client->id, 'error' => $exception->getMessage()]);
+
+            return response()->json([
+                'message' => 'WordPress removal was not confirmed. Your request is saved if removal started. Retry to confirm the profile is private.',
+                'reason_code' => 'wordpress_removal_unconfirmed',
+            ], 502);
+        }
+
+        $this->appendProfileRevertMetadata($request, $updated);
+        $this->auditService->fromRequest($request, (int) $client->platform_id, 'client_profile_reverted', 'client', (int) $client->id,
+            null, ['profile_status' => $updated->profile_status, 'profile_reverted_at' => $updated->profile_reverted_at?->toIso8601String()], $reason);
+
+        return response()->json(['message' => 'Profile reverted and removed from the public website.', 'client' => $updated]);
     }
 
     public function closeCase(Request $request, Client $client)

@@ -116,6 +116,7 @@ final class LifecycleRestoreEligibility
             })
             // Idempotency: a profile restored by an earlier run stays restored.
             ->whereNull('lifecycle_restored_at');
+        $query->whereNull('profile_removal_requested_at');
 
         $this->applyHistoryMode($query);
         $this->applySafetyToggles($query);

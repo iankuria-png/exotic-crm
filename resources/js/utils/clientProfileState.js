@@ -13,6 +13,20 @@ export function deriveClientProfileState(client) {
     const needsPayment = normalizeBoolean(client?.needs_payment);
     const notactive = normalizeBoolean(client?.notactive);
 
+    if (client?.profile_removal_requested_at && lifecycleState !== 'removed') {
+        const completed = profileStatus === 'private' && Boolean(client?.profile_reverted_at);
+        return {
+            status: completed ? 'reverted' : 'manual_review',
+            tone: completed ? 'reverted' : 'manual_review',
+            label: completed ? 'Reverted' : 'Removal pending',
+            detail: completed
+                ? 'Reverted — removed from the public website, including Unlockable Profiles'
+                : 'Removal requested — retry to confirm the profile is private',
+            isConflict: !completed,
+            isPubliclyActive: false,
+        };
+    }
+
     // Authoritative lifecycle states published to WordPress. Archived is its own
     // terminal badge; Expired reuses the amber "expired_public" tone below. Both keep
     // the profile published/indexed for SEO with contact methods hidden on the site.

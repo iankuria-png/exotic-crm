@@ -607,6 +607,7 @@ class DealControllerTest extends TestCase
             Sanctum::actingAs($user);
             foreach (['manual', 'free_trial'] as $index => $method) {
                 $client = $this->createClientForPlatform($platform, 9400 + $index);
+                $client->update(['profile_removal_requested_at' => now(), 'profile_reverted_at' => now()]);
                 $deal = $this->createPendingDeal($platform, $product, $client, $user, ['status' => 'expired', 'activated_at' => now()->subMonths(2), 'expires_at' => now()->subDay()]);
                 $this->fakeProvisioningApis($platform, $client);
                 $response = $this->postJson("/api/crm/deals/{$deal->id}/renew", [
@@ -615,6 +616,8 @@ class DealControllerTest extends TestCase
                 ]);
                 $this->assertSame(200, $response->status(), $response->getContent());
                 $response->assertJsonPath('status', 'active');
+                $this->assertNull($client->fresh()->profile_removal_requested_at);
+                $this->assertNull($client->fresh()->profile_reverted_at);
                 $id = (int) $response->json('id');
                 if ($method === 'manual') {
                     Queue::assertPushed(\App\Jobs\GrantNewSubscriptionPass::class, fn ($job) => $job->dealId === $id && $job->afterCommit === true);
@@ -627,6 +630,36 @@ class DealControllerTest extends TestCase
             if ($sqlite) {
                 \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = OFF');
             }
+        }
+    }
+
+    public function test_successful_renewal_keeps_hold_cleared_when_wp_cache_sync_fails(): void
+    {
+        $sqlite = \Illuminate\Support\Facades\DB::getDriverName() === 'sqlite';
+        if ($sqlite) \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = ON');
+        try {
+            Queue::fake();
+            $platform = $this->createProvisioningPlatform();
+            $product = $this->createProductForPlatform($platform);
+            $user = $this->createAuthorizedUser();
+            Sanctum::actingAs($user);
+            $client = $this->createClientForPlatform($platform, 9420);
+            $client->update(['profile_removal_requested_at' => now(), 'profile_reverted_at' => now()]);
+            $deal = $this->createPendingDeal($platform, $product, $client, $user, ['status' => 'expired', 'expires_at' => now()->subDay()]);
+            $base = rtrim($platform->wp_api_url, '/');
+            Http::fake([
+                $base.'/clients/'.$client->wp_post_id.'/activate' => Http::response(['success' => true]),
+                $base.'/clients/'.$client->wp_post_id => Http::response(['message' => 'Unavailable'], 422),
+                '*' => Http::response([]),
+            ]);
+            $this->postJson('/api/crm/deals/'.$deal->id.'/renew', ['reason' => 'Authorized paid return', 'payment_method' => 'manual',
+                'payment_reference' => 'REMOVAL-RETURN-TEST', 'additional_days' => 30])->assertOk()->assertJsonPath('status', 'active');
+            $this->assertNull($client->fresh()->profile_removal_requested_at);
+            $this->assertNull($client->fresh()->profile_reverted_at);
+            $this->assertSame('publish', $client->fresh()->profile_status);
+            $this->assertSame('renewed', $deal->fresh()->status);
+        } finally {
+            if ($sqlite) \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = OFF');
         }
     }
 

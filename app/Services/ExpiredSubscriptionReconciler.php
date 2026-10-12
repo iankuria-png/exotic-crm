@@ -24,6 +24,8 @@ use Throwable;
  */
 class ExpiredSubscriptionReconciler
 {
+    public function __construct(private readonly ClientLifecycleMutationLock $lifecycleLock) {}
+
     /**
      * Resolve the market timezone for a client's platform.
      */
@@ -38,6 +40,9 @@ class ExpiredSubscriptionReconciler
      */
     public function isStuck(Client $client): bool
     {
+        if ($client->profile_removal_requested_at !== null) {
+            return false;
+        }
         if ((string) $client->profile_status !== 'publish') {
             return false;
         }
@@ -69,6 +74,7 @@ class ExpiredSubscriptionReconciler
         $query = Client::query()
             ->with('platform')
             ->where('client_type', 'escort')
+            ->whereNull('profile_removal_requested_at')
             ->active() // profile_status=publish AND not needs_payment AND not notactive
             ->whereNotNull('escort_expire')
             ->where('escort_expire', '>', 0)
@@ -154,6 +160,15 @@ class ExpiredSubscriptionReconciler
      * @return array<string, mixed>
      */
     public function reconcileClient(Client $client, ?int $actorId, bool $dryRun): array
+    {
+        return $this->lifecycleLock->run($client, function () use ($client, $actorId, $dryRun): array {
+            $client->refresh();
+
+            return $this->reconcileClientLocked($client, $actorId, $dryRun);
+        });
+    }
+
+    private function reconcileClientLocked(Client $client, ?int $actorId, bool $dryRun): array
     {
         $client->loadMissing('platform');
         $tz = $this->timezoneFor($client);

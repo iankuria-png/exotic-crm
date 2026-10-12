@@ -68,6 +68,11 @@ class SubscriptionProvisioningService
             throw new InvalidArgumentException('Deal has no associated client.');
         }
 
+        $client->refresh();
+        if ($client->profile_removal_requested_at !== null && (string) $deal->origin === 'seo_boost') {
+            throw new \App\Exceptions\ClientLifecycleMutationException('SEO Boost cannot republish a profile with a removal request.', 'profile_removal_requested');
+        }
+
         $payment = $options['payment'] ?? null;
         if ($payment !== null && ! $payment instanceof Payment) {
             throw new InvalidArgumentException('Provisioning payment must be a Payment model.');
@@ -115,6 +120,14 @@ class SubscriptionProvisioningService
         $wpActivation = $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
 
         $this->wordPressActivations[(int) $deal->id] = true;
+
+        // A fresh successful subscription is an explicit return to the site.
+        // Routine sync and the already-active shortcut never lift removal holds.
+        Client::query()->whereKey($client->id)->update([
+            'profile_removal_requested_at' => null,
+            'profile_reverted_at' => null,
+        ]);
+
 
         // ---- The advertiser is now live on WordPress. ------------------------
         // There is no compensating call below this line, and three of this

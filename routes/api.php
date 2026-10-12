@@ -598,6 +598,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/managed-profiles', [ClientController::class, 'storeManagedProfile'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/revert', [ClientController::class, 'revertProfile'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/archive', [ClientController::class, 'archive'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/unarchive', [ClientController::class, 'unarchive'])->middleware('role:admin,sub_admin,sales,field_sales');

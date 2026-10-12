@@ -153,6 +153,7 @@ class LifecycleArchiveRecoveryService
         $query = Client::query()
             ->where('platform_id', (int) $platform->id)
             ->where('lifecycle_state', ClientLifecycleState::ARCHIVED)
+            ->whereNull('profile_removal_requested_at')
             ->whereNotNull('wp_post_id')
             ->where('wp_post_id', '>', 0);
 
@@ -170,7 +171,7 @@ class LifecycleArchiveRecoveryService
 
     private function isCandidate(Client $client, Platform $platform, LifecycleArchiveRecoveryRun $run): bool
     {
-        if (! $platform->lifecycleEnabled() || $client->lifecycle_state !== ClientLifecycleState::ARCHIVED) {
+        if ($client->profile_removal_requested_at !== null || ! $platform->lifecycleEnabled() || $client->lifecycle_state !== ClientLifecycleState::ARCHIVED) {
             return false;
         }
 
