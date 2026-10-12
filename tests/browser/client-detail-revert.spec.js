@@ -98,3 +98,16 @@ test('active paid and marketing profiles do not expose removal', async ({ page }
     await setup(page, { role: 'marketing' });
     await expect(page.getByRole('button', { name: 'Revert profile', exact: true })).toHaveCount(0);
 });
+
+test('private expired Payment Required profile exposes Revert and records removal', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 1000 });
+    const calls = await setup(page, { initial: { profile_status: 'private', lifecycle_state: 'expired', needs_payment: true, escort_expire: null } });
+    await expect(page.getByText('Payment Required', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Revert profile', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Revert this profile?' });
+    await dialog.getByLabel('Reason').fill('Advertiser requested permanent removal from public listings.');
+    await dialog.getByRole('button', { name: 'Revert profile', exact: true }).click();
+    await expect(page.getByText('Reverted', { exact: true })).toBeVisible();
+    expect(calls).toHaveLength(1);
+    await expect(page.getByRole('button', { name: 'Revert profile', exact: true })).toHaveCount(0);
+});

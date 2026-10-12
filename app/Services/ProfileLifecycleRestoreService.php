@@ -288,9 +288,9 @@ class ProfileLifecycleRestoreService
         if ($client->profile_removal_requested_at !== null) {
             return null; // A partial removal may already have cleared lifecycle metadata.
         }
-        if ($client->profile_status !== 'publish'
+        if (! in_array($client->profile_status, ['publish', 'private'], true)
             || ! in_array($client->lifecycle_state, [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED], true)) {
-            return 'Only published Expired or Archived profiles can be reverted.';
+            return 'Only published or private Expired or Archived profiles can be reverted.';
         }
 
         return null;

@@ -2,6 +2,8 @@
 
 Sales and field-sales staff can revert a linked Expired/Archived advertiser in their assigned markets from the client page. The profile becomes private in WordPress, the CRM displays Reverted, and a durable removal request prevents automatic recovery from republishing it. Active subscriptions remain protected. A successful new subscription or renewal can return the advertiser to the site.
 
+On the client page, **Revert profile** appears in the action row beside **New subscription** and **Close case**. Expired/Archived profiles are eligible whether published or already private (including Payment Required profiles). Already-private profiles still need the recorded removal hold to prevent future automatic recovery. Enter the advertiser's removal reason and confirm. Active paid profiles and profiles already marked Reverted do not show this action.
+
 The release includes the CRM source, tests and a matching frontend build. No WordPress theme/plugin upload, seeder or configuration change is required.
 
 Apply the new migration before web requests or refreshed workers use the removal-hold queries. From the normal CRM cPanel terminal:

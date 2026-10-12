@@ -137,6 +137,40 @@ class SalesProfileRevertTest extends TestCase
         $this->postJson('/api/crm/lifecycle-restore/runs/'.$run->id.'/revert')->assertForbidden();
     }
 
+    public static function privateLifecycleStates(): array
+    {
+        return [['expired'], ['archived']];
+    }
+
+    #[DataProvider('privateLifecycleStates')]
+    public function test_private_expired_or_archived_profile_can_record_removal_and_block_recovery(string $state): void
+    {
+        // Screenshot clients are already private/payment-required after expiry.
+        $this->client->update(['profile_status' => 'private', 'lifecycle_state' => $state, 'needs_payment' => true, 'escort_expire' => null]);
+        $this->remote = array_merge($this->remote, ['post_status' => 'private', 'crm_lifecycle_state' => $state, 'needs_payment' => true, 'escort_expire' => null]);
+        $this->getJson('/api/crm/clients/'.$this->client->id)->assertOk()->assertJsonPath('can_revert_profile', true);
+        $this->revert()->assertOk()->assertJsonPath('client.profile_status', 'private')->assertJsonPath('client.can_revert_profile', false);
+        $fresh = $this->client->fresh();
+        $this->assertNotNull($fresh->profile_removal_requested_at);
+        $this->assertNotNull($fresh->profile_reverted_at);
+        $this->assertDatabaseHas('timeline_events', ['entity_id' => $fresh->id, 'event_type' => 'profile_removal_requested']);
+        $this->assertSame(0, (new LifecycleRestoreEligibility(['history_mode' => 'any_wp_profile']))->query($this->platform->id)->count());
+    }
+
+    public function test_private_profile_still_requires_expired_or_archived_state_and_no_paid_entitlement(): void
+    {
+        $this->client->update(['profile_status' => 'private', 'lifecycle_state' => 'active', 'needs_payment' => true]);
+        $this->getJson('/api/crm/clients/'.$this->client->id)->assertOk()->assertJsonPath('can_revert_profile', false);
+        $this->revert()->assertUnprocessable();
+        Http::assertNothingSent();
+        $this->client->update(['lifecycle_state' => 'expired']);
+        $this->remote['post_status'] = 'private';
+        $this->remote['escort_expire'] = now()->addWeek()->timestamp;
+        $this->revert()->assertStatus(409)->assertJsonPath('reason_code', 'paid_entitlement');
+        $this->assertNull($this->client->fresh()->profile_removal_requested_at);
+        $this->assertFalse($this->deactivated);
+    }
+
     public function test_wrong_market_and_marketing_are_denied_without_wordpress_calls(): void
     {
         $this->actingRole('sales', false);
