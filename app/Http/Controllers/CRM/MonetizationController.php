@@ -16,6 +16,7 @@ use App\Models\WalletTransaction;
 use App\Services\MarketAuthorizationService;
 use App\Services\Monetization\AccessService;
 use App\Services\Monetization\AnalyticsService;
+use App\Services\Monetization\CreatorReportService;
 use App\Services\Monetization\FulfillmentService;
 use App\Services\Monetization\SetupService;
 use App\Services\Monetization\StatsService;
@@ -197,15 +198,8 @@ class MonetizationController extends Controller
         $summary['active_sellers'] = (clone $currentPasses)->distinct()->count('client_id');
         $summary['expiring_sellers'] = (clone $currentPasses)->where('expires_at', '<=', now()->addDays(7))->distinct()->count('client_id');
         $providers = Payment::query()->whereIn('id', (clone $salesBase)->whereNotNull('payment_id')->select('payment_id'))->whereNotNull('provider_key')->distinct()->orderBy('provider_key')->pluck('provider_key')->values();
-        $clientQuery = $this->markets->applyPlatformScope(Client::query(), $r->user())->where(function ($q) use ($passes, $r) {
-            $q->whereIn('id', (clone $passes)->select('client_id'));
-            if ($r->integer('client_id')) {
-                $q->orWhere('id', $r->integer('client_id'));
-            }
-        });
-        $creators = $clientQuery->limit(100)->get()->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'platform_id' => $c->platform_id, 'stats' => app(StatsService::class)->owner($c), 'pass' => app(\App\Services\Monetization\PassService::class)->current($c)]);
 
-        return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'offer:id,title,origin,bundle_scope', 'allocations.client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets.client:id,name', 'client:id,name']))->latest('id')->limit(100)->get()->map(fn ($o) => $o->toArray() + ['needs_attention' => $o->origin === PremiumContentOffer::ORIGIN_ADMIN_BUNDLE && ($o->status === 'paused' && str_starts_with((string) $o->paused_by, 'member') || $o->assets->contains(fn ($a) => $a->status !== 'ready')), 'creator_count' => $o->assets->pluck('client_id')->unique()->count()]), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name', 'currency_code']), 'can_manage' => $this->markets->isManager($r->user())]);
+        return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'offer:id,title,origin,bundle_scope', 'allocations.client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'content' => $scope(PremiumContentOffer::with(['assets.client:id,name', 'client:id,name']))->latest('id')->limit(100)->get()->map(fn ($o) => $o->toArray() + ['needs_attention' => $o->origin === PremiumContentOffer::ORIGIN_ADMIN_BUNDLE && ($o->status === 'paused' && str_starts_with((string) $o->paused_by, 'member') || $o->assets->contains(fn ($a) => $a->status !== 'ready')), 'creator_count' => $o->assets->pluck('client_id')->unique()->count()]), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name', 'currency_code']), 'can_manage' => $this->markets->isManager($r->user())]);
     }
 
     /** Performance trend for the Overview chart, scoped like index() and converted for reporting. */
@@ -231,6 +225,93 @@ class MonetizationController extends Controller
             $r->input('reporting_currency'),
             (string) $r->input('bucket', 'auto')
         ));
+    }
+
+    /** Sortable creator directory: pass state, passes bought and content sales per creator. */
+    public function creators(Request $r, CreatorReportService $report)
+    {
+        return response()->json($report->creators($this->reportScope($r), $this->creatorOptions($r)));
+    }
+
+    public function creatorsExport(Request $r, CreatorReportService $report)
+    {
+        $rows = $report->creatorExportRows($this->reportScope($r), $this->creatorOptions($r));
+
+        return $this->csv('monetize-creators.csv', ['Creator ID', 'Creator', 'Market', 'Pass state', 'Current pass ends', 'Passes', 'Paid passes', 'Currency', 'Paid for passes', 'Content sales', 'Sales value', 'Last pass'], $rows->map(fn ($c) => [$c['id'], $c['name'], $c['platform_name'], $c['state'], $c['expires_at'], $c['passes'], $c['paid_passes'], $c['currency'], $c['pass_paid'], $c['sales_count'], $c['sales_gross'], $c['last_pass_at']]));
+    }
+
+    /** Selling-pass ledger: who bought (or was given) each pass, and what was paid. */
+    public function passes(Request $r, CreatorReportService $report)
+    {
+        return response()->json($report->passes($this->reportScope($r), $this->passOptions($r)));
+    }
+
+    public function passesExport(Request $r, CreatorReportService $report)
+    {
+        $query = $report->passQuery($this->reportScope($r), $this->passOptions($r));
+
+        return $this->csv('monetize-passes.csv', ['Pass ID', 'Creator ID', 'Creator', 'Market', 'Type', 'Source', 'Status', 'Duration', 'Currency', 'List price', 'Subsidy', 'Paid', 'Payment reference', 'Bought', 'Starts', 'Ends'], (function () use ($query, $report) {
+            foreach ($query->cursor() as $pass) {
+                $p = $report->passRow($pass);
+                yield [$p['id'], $p['client']['id'] ?? '', $p['client']['name'] ?? '', $p['platform_name'], $p['type'], $p['grant_source'], $p['status'], $p['duration_key'], $p['currency'], $p['list_amount'], $p['subsidy_amount'], $p['paid_amount'], $p['payment_reference'], $p['created_at'], $p['starts_at'], $p['expires_at']];
+            }
+        })());
+    }
+
+    private function reportScope(Request $r): array
+    {
+        $platformId = $r->integer('platform_id') ?: null;
+        $this->authorizeMarket($r, $platformId);
+        $r->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'search' => 'nullable|string|max:120',
+            'direction' => 'nullable|in:asc,desc',
+            'per_page' => 'nullable|integer|in:15,30,50',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
+        ]);
+
+        return [
+            'platform_ids' => $platformId ? [$platformId] : $this->markets->resolveAccessiblePlatformIds($r->user()),
+            'client_id' => $r->integer('client_id') ?: null,
+            'include_tests' => $r->boolean('include_tests'),
+            'from' => $r->input('from'),
+            'to' => $r->input('to'),
+        ];
+    }
+
+    private function creatorOptions(Request $r): array
+    {
+        $r->validate([
+            'state' => 'nullable|in:'.implode(',', CreatorReportService::STATES),
+            'pass_type' => 'nullable|in:paid,free',
+            'sort' => 'nullable|in:'.implode(',', CreatorReportService::CREATOR_SORTS),
+        ]);
+
+        return $r->only(['search', 'state', 'pass_type', 'sort', 'direction', 'reporting_currency']) + ['page' => max(1, $r->integer('page') ?: 1), 'per_page' => $r->integer('per_page') ?: 30];
+    }
+
+    private function passOptions(Request $r): array
+    {
+        $r->validate([
+            'pass_type' => 'nullable|in:paid,free,all',
+            'status' => 'nullable|in:active,queued,granted,held,expired,refunded,retired,reversed',
+            'sort' => 'nullable|in:created_at,starts_at,expires_at',
+        ]);
+
+        return $r->only(['search', 'status', 'sort', 'direction']) + ['pass_type' => $r->input('pass_type', 'paid'), 'page' => max(1, $r->integer('page') ?: 1), 'per_page' => $r->integer('per_page') ?: 30];
+    }
+
+    private function csv(string $name, array $header, iterable $rows)
+    {
+        return response()->streamDownload(function () use ($header, $rows) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, $header);
+            foreach ($rows as $fields) {
+                fputcsv($out, array_map(fn ($v) => preg_match('/^[=+@-]/', (string) $v) ? "'".$v : (string) $v, $fields));
+            }
+            fclose($out);
+        }, $name, ['Content-Type' => 'text/csv']);
     }
 
     public function export(Request $r)

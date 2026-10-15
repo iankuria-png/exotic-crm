@@ -260,6 +260,10 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/monetization/assets/{asset}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'assetHold']);
     Route::get('/monetization/export', [\App\Http\Controllers\CRM\MonetizationController::class, 'export']);
     Route::get('/monetization/analytics', [\App\Http\Controllers\CRM\MonetizationController::class, 'analytics']);
+    Route::get('/monetization/creators', [\App\Http\Controllers\CRM\MonetizationController::class, 'creators']);
+    Route::get('/monetization/creators/export', [\App\Http\Controllers\CRM\MonetizationController::class, 'creatorsExport']);
+    Route::get('/monetization/passes', [\App\Http\Controllers\CRM\MonetizationController::class, 'passes']);
+    Route::get('/monetization/passes/export', [\App\Http\Controllers\CRM\MonetizationController::class, 'passesExport']);
     Route::get('/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'index']);
     Route::post('/monetization/purchases/{purchase}/{action}', [\App\Http\Controllers\CRM\MonetizationController::class, 'purchaseAction'])->where('action', 'refund|release-review');
     Route::post('/monetization/offers/{offer}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'hold']);
