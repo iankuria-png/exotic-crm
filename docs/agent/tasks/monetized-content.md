@@ -155,3 +155,9 @@ syntax, 11-file Pint, release completeness and production build. Final shipped a
 The [handoff](../../monetize-market-rollout-2026-10-09.md) has the paste-ready cPanel
 pull/migration/check/cache/worker block. No plugin commit/upload, production mutation,
 Uganda activation or real payment occurred. Manual deployment/verification remains.
+
+## Overview performance trend (15 Oct 2026) — local, uncommitted
+- Added `GET /crm/monetization/analytics` (`App\Services\Monetization\AnalyticsService`) and `MonetizeTrendWidget` on the Monetize Overview with the shared Flat/Native reporting-currency control.
+- Series: content sales, creator earnings, pass revenue (separate; never added to buyer spend), purchases and checkout completion; day/week/month buckets, equal prior window (none for All time) and a by-market split.
+- Same scope as the Overview cards (active purchases and all passes by `created_at`, sandbox toggle). Flat uses cached FX only and names excluded currencies; Native falls back to Flat when the scope mixes currencies.
+- Evidence: `MonetizationAnalyticsTest` 4/39, with `ExpiryAutomationAndPassesTest` 19/176; `tests/browser/monetize-trend.spec.js` plus 7 setup specs pass against Vite. Not built, committed or pushed.

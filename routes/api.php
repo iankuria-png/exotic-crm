@@ -259,6 +259,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/monetization/assets/{asset}/purge', [\App\Http\Controllers\CRM\MonetizationController::class, 'purgeAsset']);
     Route::post('/monetization/assets/{asset}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'assetHold']);
     Route::get('/monetization/export', [\App\Http\Controllers\CRM\MonetizationController::class, 'export']);
+    Route::get('/monetization/analytics', [\App\Http\Controllers\CRM\MonetizationController::class, 'analytics']);
     Route::get('/monetization', [\App\Http\Controllers\CRM\MonetizationController::class, 'index']);
     Route::post('/monetization/purchases/{purchase}/{action}', [\App\Http\Controllers\CRM\MonetizationController::class, 'purchaseAction'])->where('action', 'refund|release-review');
     Route::post('/monetization/offers/{offer}/hold', [\App\Http\Controllers\CRM\MonetizationController::class, 'hold']);

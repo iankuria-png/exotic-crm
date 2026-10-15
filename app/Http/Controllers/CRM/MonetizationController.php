@@ -15,6 +15,7 @@ use App\Models\VisitorContentPurchase;
 use App\Models\WalletTransaction;
 use App\Services\MarketAuthorizationService;
 use App\Services\Monetization\AccessService;
+use App\Services\Monetization\AnalyticsService;
 use App\Services\Monetization\FulfillmentService;
 use App\Services\Monetization\SetupService;
 use App\Services\Monetization\StatsService;
@@ -205,6 +206,31 @@ class MonetizationController extends Controller
         $creators = $clientQuery->limit(100)->get()->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'platform_id' => $c->platform_id, 'stats' => app(StatsService::class)->owner($c), 'pass' => app(\App\Services\Monetization\PassService::class)->current($c)]);
 
         return response()->json(['summary' => $summary, 'providers' => $providers, 'wallet_attribution' => app(StatsService::class)->ledger($scope(WalletTransaction::query())), 'totals' => $totals, 'activation' => $activation, 'sales' => (clone $sales)->with(['client:id,name', 'offer:id,title,origin,bundle_scope', 'allocations.client:id,name', 'payment:id,status,provider_key,provider_environment,reference_number,transaction_reference,failure_reason,completed_at'])->latest('id')->paginate($r->integer('per_page') ?: 30), 'creators' => $creators, 'content' => $scope(PremiumContentOffer::with(['assets.client:id,name', 'client:id,name']))->latest('id')->limit(100)->get()->map(fn ($o) => $o->toArray() + ['needs_attention' => $o->origin === PremiumContentOffer::ORIGIN_ADMIN_BUNDLE && ($o->status === 'paused' && str_starts_with((string) $o->paused_by, 'member') || $o->assets->contains(fn ($a) => $a->status !== 'ready')), 'creator_count' => $o->assets->pluck('client_id')->unique()->count()]), 'safety' => $scope(PremiumContentEvent::query())->where('kind', '!=', 'settings_changed')->latest()->limit(100)->get(), 'setup' => $this->markets->applyPlatformScope(ContentMonetizationSetting::with('prices'), $r->user())->when($platformId, fn ($q) => $q->where('platform_id', $platformId))->get(), 'platforms' => $this->markets->applyPlatformScope(Platform::query(), $r->user(), 'id')->orderBy('name')->get(['id', 'name', 'currency_code']), 'can_manage' => $this->markets->isManager($r->user())]);
+    }
+
+    /** Performance trend for the Overview chart, scoped like index() and converted for reporting. */
+    public function analytics(Request $r, AnalyticsService $analytics)
+    {
+        $platformId = $r->integer('platform_id') ?: null;
+        $this->authorizeMarket($r, $platformId);
+        $r->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'currency_mode' => 'nullable|in:flat,native',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
+            'bucket' => 'nullable|in:auto,day,week,month',
+        ]);
+
+        return response()->json($analytics->analytics(
+            $platformId ? [$platformId] : $this->markets->resolveAccessiblePlatformIds($r->user()),
+            $r->integer('client_id') ?: null,
+            $r->boolean('include_tests'),
+            $r->input('from'),
+            $r->input('to'),
+            (string) $r->input('currency_mode', 'flat'),
+            $r->input('reporting_currency'),
+            (string) $r->input('bucket', 'auto')
+        ));
     }
 
     public function export(Request $r)
