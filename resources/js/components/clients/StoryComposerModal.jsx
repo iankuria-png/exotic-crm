@@ -152,6 +152,7 @@ export default function StoryComposerModal({ open, clientId, limits, liveCount =
         }
         try {
             const { data } = await api.post(`/crm/clients/${clientId}/stories`, form, {
+                headers: { 'Content-Type': 'multipart/form-data' },
                 onUploadProgress: source === 'upload'
                     ? (event) => event.total && setProgress(Math.round((event.loaded / event.total) * 100))
                     : undefined,
