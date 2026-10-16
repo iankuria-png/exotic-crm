@@ -157,6 +157,91 @@ class ClientDeletionFlowTest extends TestCase
             && $request->url() === 'https://example.test/wp-json/exotic-crm-sync/v1/clients/9302/delete');
     }
 
+    public function test_sales_user_can_preview_and_delete_client_in_assigned_market(): void
+    {
+        $platform = $this->createPlatform();
+        $sales = $this->createStaff($platform, 'sales');
+        $client = $this->createClient($platform, 9310);
+
+        Http::fake([
+            'https://example.test/wp-json/exotic-crm-sync/v1/clients/9310/delete' => Http::response([
+                'deleted' => true,
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($sales);
+
+        $this->postJson("/api/crm/clients/{$client->id}/delete-preview")
+            ->assertOk()
+            ->assertJsonPath('wp_post_id', 9310);
+
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+            'reason' => 'Sales requested removal',
+        ])->assertOk()
+            ->assertJsonPath('deleted', true);
+
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
+        $this->assertDatabaseHas('client_sync_exclusions', [
+            'platform_id' => $platform->id,
+            'wp_post_id' => 9310,
+            'deleted_by' => $sales->id,
+        ]);
+    }
+
+    public function test_sales_user_cannot_delete_client_outside_assigned_market(): void
+    {
+        $platform = $this->createPlatform();
+        $otherPlatform = $this->createPlatform();
+        $sales = $this->createStaff($otherPlatform, 'sales');
+        $client = $this->createClient($platform, 9311);
+
+        Http::fake();
+        Sanctum::actingAs($sales);
+
+        $this->postJson("/api/crm/clients/{$client->id}/delete-preview")->assertForbidden();
+        $this->deleteJson("/api/crm/clients/{$client->id}", [
+            'confirm' => $client->name,
+        ])->assertForbidden();
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        Http::assertNothingSent();
+    }
+
+    public function test_field_sales_and_marketing_cannot_delete_clients(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createClient($platform, 9312);
+
+        Http::fake();
+
+        foreach (['field_sales', 'marketing'] as $role) {
+            Sanctum::actingAs($this->createStaff($platform, $role));
+
+            $this->postJson("/api/crm/clients/{$client->id}/delete-preview")->assertForbidden();
+            $this->deleteJson("/api/crm/clients/{$client->id}", [
+                'confirm' => $client->name,
+            ])->assertForbidden();
+        }
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+        Http::assertNothingSent();
+    }
+
+    public function test_sales_user_cannot_bulk_delete_clients(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createClient($platform, 9313);
+
+        Sanctum::actingAs($this->createStaff($platform, 'sales'));
+
+        $this->postJson('/api/crm/clients/bulk-delete', [
+            'client_ids' => [$client->id],
+        ])->assertForbidden();
+
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
+    }
+
     public function test_destroy_rejects_agency_clients(): void
     {
         $platform = $this->createPlatform();
@@ -397,8 +482,13 @@ class ClientDeletionFlowTest extends TestCase
 
     private function createManager(Platform $platform): User
     {
+        return $this->createStaff($platform, 'sub_admin');
+    }
+
+    private function createStaff(Platform $platform, string $role): User
+    {
         return User::factory()->create([
-            'role' => 'sub_admin',
+            'role' => $role,
             'status' => 'active',
             'assigned_market_ids' => [$platform->id],
         ]);

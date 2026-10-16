@@ -2366,7 +2366,7 @@ class ClientController extends Controller
 
     public function deletePreview(Request $request, Client $client)
     {
-        $this->marketAuthorizationService->ensureManager($request->user());
+        $this->ensureCanDeleteClient($request);
         $this->authorizeClientAccess($request, $client);
 
         return response()->json(
@@ -2546,7 +2546,7 @@ class ClientController extends Controller
 
     public function destroy(Request $request, Client $client)
     {
-        $this->marketAuthorizationService->ensureManager($request->user());
+        $this->ensureCanDeleteClient($request);
         $this->authorizeClientAccess($request, $client);
 
         $validated = $request->validate([
@@ -5296,6 +5296,19 @@ class ClientController extends Controller
             abort(403, 'You do not have access to this client market.');
         }
     }
+    private function ensureCanDeleteClient(Request $request): void
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [
+                MarketAuthorizationService::ROLE_ADMIN,
+                MarketAuthorizationService::ROLE_SUB_ADMIN,
+                MarketAuthorizationService::ROLE_SALES,
+            ],
+            'Only admin, sub-admin or sales users can delete clients.'
+        );
+    }
+
 
     private function clientSessionFallbackResponse(
         Request $request,

@@ -1728,7 +1728,7 @@ export default function ClientDetail() {
     const currentUser = meData?.user || null;
     const isReadOnly = String(currentUser?.role || '') === 'marketing';
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
-    const canDeleteClient = !isAgency && ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
+    const canDeleteClient = !isAgency && ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const boostLimit = client?.boost_limit || null;
     const boostLimitApplies = boostLimit?.applies_to_actor === true;
