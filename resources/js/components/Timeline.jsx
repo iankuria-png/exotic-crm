@@ -9,6 +9,8 @@ const eventTones = {
     profile_expired: 'bg-amber-100 text-amber-800',
     profile_archived: 'bg-orange-100 text-orange-800',
     profile_unarchived: 'bg-teal-100 text-teal-700',
+    profile_paused: 'bg-indigo-100 text-indigo-700',
+    profile_resumed: 'bg-teal-100 text-teal-700',
     profile_bio_scrubbed: 'bg-amber-100 text-amber-800',
     profile_bio_restored: 'bg-emerald-100 text-emerald-700',
     note_added: 'bg-amber-100 text-amber-700',
@@ -50,6 +52,12 @@ function formatEventDescription(event) {
             return 'Profile archived — indexed but removed from listings';
         case 'profile_unarchived':
             return 'Profile restored to Expired — returned to listings';
+        case 'profile_paused':
+            return `Profile paused — hidden from the website, plan still running${content.reason ? `: ${content.reason}` : ''}`;
+        case 'profile_resumed':
+            return content.post_status === 'private'
+                ? 'Pause lifted — plan lapsed while paused, profile stays hidden until payment'
+                : 'Profile resumed — public again';
         case 'profile_bio_scrubbed':
             return `Contact details redacted from bio (${content.redactions || 0}${content.kinds ? ': ' + Object.keys(content.kinds).join(', ') : ''}) — original kept for renewal`;
         case 'profile_bio_restored':

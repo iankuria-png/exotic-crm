@@ -897,6 +897,12 @@ class LifecycleSmsService
             ->whereNull('closed_at')
             ->whereNotNull('phone_normalized')
             ->whereNotNull('escort_expire')
+            // A companion who asked to be hidden is not chased to come back.
+            ->where(function (Builder $builder) {
+                $builder->whereNull('profile_paused_at')
+                    ->orWhere('notactive', false)
+                    ->orWhereNull('notactive');
+            })
             ->where(function (Builder $builder) use ($windows) {
                 foreach ($windows as $days) {
                     $builder->orWhereBetween('escort_expire', [

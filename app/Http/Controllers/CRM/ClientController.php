@@ -31,6 +31,7 @@ use App\Services\ClientLifecycleService;
 use App\Services\ClientLifetimeValueService;
 use App\Services\ClientOutreachService;
 use App\Services\ClientProfileImageService;
+use App\Services\ClientProfilePauseService;
 use App\Services\ClientProfileUrlSearchService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSegmentService;
@@ -1494,6 +1495,96 @@ class ClientController extends Controller
 
         return response()->json([
             'message' => 'Profile restored to Expired and returned to listings.',
+            'client' => $fresh,
+        ]);
+    }
+
+    /**
+     * Hide a public profile from the website at the companion's request. The
+     * paid plan is untouched and keeps running; Resume brings the profile back.
+     */
+    public function pauseProfile(Request $request, Client $client, ClientProfilePauseService $pauses)
+    {
+        $this->ensureCanPauseProfile($request);
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->profileVisibilitySnapshot($client);
+
+        try {
+            $fresh = $pauses->pause($client, (int) $request->user()->id, $validated['reason'] ?? null);
+        } catch (\App\Exceptions\ClientLifecycleMutationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Profile pause failed', [
+                'client_id' => $client->id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Failed to pause the profile in WordPress. Please retry.'], 502);
+        }
+
+        $this->decorateExpiryState($fresh);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_PROFILE_PAUSE,
+            'client',
+            (int) $client->id,
+            $before,
+            $this->profileVisibilitySnapshot($fresh),
+            'Paused profile (hidden from the website, plan unchanged)'
+        );
+
+        return response()->json([
+            'message' => 'Profile paused. It is hidden from the website; the plan keeps running.',
+            'client' => $fresh,
+        ]);
+    }
+
+    public function resumeProfile(Request $request, Client $client, ClientProfilePauseService $pauses)
+    {
+        $this->ensureCanPauseProfile($request);
+        $this->authorizeClientAccess($request, $client);
+
+        $before = $this->profileVisibilitySnapshot($client);
+
+        try {
+            $fresh = $pauses->resume($client, (int) $request->user()->id);
+        } catch (\App\Exceptions\ClientLifecycleMutationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Profile resume failed', [
+                'client_id' => $client->id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Failed to resume the profile in WordPress. Please retry.'], 502);
+        }
+
+        $this->decorateExpiryState($fresh);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_PROFILE_RESUME,
+            'client',
+            (int) $client->id,
+            $before,
+            $this->profileVisibilitySnapshot($fresh),
+            'Resumed paused profile'
+        );
+
+        return response()->json([
+            'message' => (string) $fresh->profile_status === 'publish'
+                ? 'Profile resumed and public again.'
+                : 'Pause lifted. The plan lapsed while paused, so the profile stays hidden until payment.',
             'client' => $fresh,
         ]);
     }
@@ -5295,6 +5386,28 @@ class ClientController extends Controller
         if (! $this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
             abort(403, 'You do not have access to this client market.');
         }
+    }
+
+    private function ensureCanPauseProfile(Request $request): void
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [
+                MarketAuthorizationService::ROLE_ADMIN,
+                MarketAuthorizationService::ROLE_SUB_ADMIN,
+                MarketAuthorizationService::ROLE_SALES,
+            ],
+            'Only admin, sub-admin or sales users can pause profiles.'
+        );
+    }
+
+    private function profileVisibilitySnapshot(Client $client): array
+    {
+        return [
+            'profile_status' => $client->profile_status,
+            'notactive' => (bool) $client->notactive,
+            'profile_paused_at' => optional($client->profile_paused_at)->toDateTimeString(),
+        ];
     }
 
     private function ensureCanDeleteClient(Request $request): void

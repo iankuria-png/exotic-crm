@@ -52,6 +52,20 @@ export function deriveClientProfileState(client) {
         };
     }
 
+    // Paused by staff at the companion's request: private + notactive in
+    // WordPress, plan untouched. profile_paused_at separates it from a new
+    // profile awaiting admin activation, which WordPress also marks notactive.
+    if (client?.profile_paused_at && notactive && profileStatus === 'private') {
+        return {
+            status: 'paused',
+            tone: 'paused',
+            label: 'Paused',
+            detail: 'Hidden from the website at the companion\u2019s request — plan still running',
+            isConflict: false,
+            isPubliclyActive: false,
+        };
+    }
+
     const isConflict = profileStatus === 'publish' && (needsPayment || notactive);
 
     if (isConflict) {

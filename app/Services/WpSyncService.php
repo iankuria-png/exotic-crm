@@ -713,6 +713,15 @@ class WpSyncService
     }
 
     /**
+     * Pause (hide) or resume a profile at the companion's request without
+     * touching the paid plan. Needs exotic-crm-sync with /visibility.
+     */
+    public function setClientVisibility(int $postId, string $action): array
+    {
+        return $this->post("/clients/{$postId}/visibility", ['action' => $action]);
+    }
+
+    /**
      * Deactivate a client profile
      */
     public function deactivateClient(int $postId): array

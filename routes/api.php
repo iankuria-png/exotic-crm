@@ -607,6 +607,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/archive', [ClientController::class, 'archive'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/unarchive', [ClientController::class, 'unarchive'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/pause', [ClientController::class, 'pauseProfile'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/resume', [ClientController::class, 'resumeProfile'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/boost', [ClientController::class, 'boost'])->middleware('role:admin,sub_admin,sales,field_sales');

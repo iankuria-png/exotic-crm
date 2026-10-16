@@ -1335,6 +1335,8 @@ export default function ClientDetail() {
     const [closeCaseDialogOpen, setCloseCaseDialogOpen] = useState(false);
     const [closeCaseError, setCloseCaseError] = useState(null);
     const [revertProfileOpen, setRevertProfileOpen] = useState(false);
+    const [pauseDialogOpen, setPauseDialogOpen] = useState(false);
+    const [pauseReason, setPauseReason] = useState('');
     const [revertProfileReason, setRevertProfileReason] = useState('');
     const [revertProfileError, setRevertProfileError] = useState(null);
     const [showReopenConfirm, setShowReopenConfirm] = useState(false);
@@ -1729,6 +1731,7 @@ export default function ClientDetail() {
     const isReadOnly = String(currentUser?.role || '') === 'marketing';
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = !isAgency && ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
+    const canPauseProfile = !isAgency && ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const boostLimit = client?.boost_limit || null;
     const boostLimitApplies = boostLimit?.applies_to_actor === true;
@@ -2170,6 +2173,34 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Could not expire this profile.');
+        },
+    });
+
+    const pauseProfileMutation = useMutation({
+        mutationFn: (reason) => api.post(`/crm/clients/${id}/pause`, { reason: reason || null }).then((r) => r.data),
+        onSuccess: (data) => {
+            setPauseDialogOpen(false);
+            setPauseReason('');
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success(data?.message || 'Profile paused.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not pause this profile.');
+        },
+    });
+
+    const resumeProfileMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/resume`).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success(data?.message || 'Profile resumed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not resume this profile.');
         },
     });
 
@@ -4260,6 +4291,33 @@ export default function ClientDetail() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10H4V5m0 5a8 8 0 111 8" />
                                         </svg>
                                         {client.profile_removal_requested_at ? 'Retry profile removal' : 'Revert profile'}
+                                    </button>
+                                ) : null}
+                                {canPauseProfile && profileState.status === 'paused' ? (
+                                    <button
+                                        type="button"
+                                        disabled={resumeProfileMutation.isPending}
+                                        onClick={() => resumeProfileMutation.mutate()}
+                                        title="Make this profile public again"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664zM21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        {resumeProfileMutation.isPending ? 'Resuming…' : 'Resume profile'}
+                                    </button>
+                                ) : null}
+                                {canPauseProfile && client.profile_status === 'publish' && !profileState.isConflict && !client.profile_removal_requested_at ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setPauseReason(''); setPauseDialogOpen(true); }}
+                                        title="Hide this profile from the website without changing the plan"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Pause profile
                                     </button>
                                 ) : null}
                                 {!isReadOnly && !isCaseClosed ? (
@@ -7151,6 +7209,33 @@ export default function ClientDetail() {
                     confirmDisabled={syncMutation.isPending}
                     isPending={syncMutation.isPending}
                 />
+            ) : null}
+
+            {canPauseProfile ? (
+                <ConfirmDialog
+                    open={pauseDialogOpen}
+                    title="Pause profile"
+                    message="The profile is hidden from the website until you resume it. The plan is not changed and keeps running, and the companion cannot unhide it themselves."
+                    confirmLabel="Pause profile"
+                    tone="warning"
+                    onCancel={() => setPauseDialogOpen(false)}
+                    onConfirm={() => pauseProfileMutation.mutate(pauseReason.trim())}
+                    confirmDisabled={pauseProfileMutation.isPending}
+                    isPending={pauseProfileMutation.isPending}
+                >
+                    <label className="mt-3 block text-xs font-semibold text-slate-700" htmlFor="pause-profile-reason">
+                        Reason <span className="font-normal text-slate-500">(optional)</span>
+                    </label>
+                    <textarea
+                        id="pause-profile-reason"
+                        rows={2}
+                        maxLength={500}
+                        value={pauseReason}
+                        onChange={(event) => setPauseReason(event.target.value)}
+                        placeholder="e.g. Companion travelling for two weeks"
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+                    />
+                </ConfirmDialog>
             ) : null}
 
             {!isReadOnly ? (

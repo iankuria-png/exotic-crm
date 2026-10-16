@@ -258,6 +258,10 @@ final class CrmAuditAction
 
     public const CLIENT_SUBSCRIPTION_DEACTIVATE = 'client_subscription_deactivate';
 
+    public const CLIENT_PROFILE_PAUSE = 'client_profile_pause';
+
+    public const CLIENT_PROFILE_RESUME = 'client_profile_resume';
+
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
 
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';

@@ -16,6 +16,7 @@ const statusStyles = {
     media_pending: 'bg-amber-50 text-amber-700 ring-amber-200',
     skipped_duplicate: 'bg-slate-100 text-slate-600 ring-slate-200',
     reverted: 'bg-orange-50 text-orange-800 ring-orange-300',
+    paused: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
     // Deal statuses
     active: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     awaiting_payment: 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -78,6 +79,7 @@ const statusLabels = {
     media_pending: 'Media pending',
     skipped_duplicate: 'Skipped duplicate',
     reverted: 'Reverted',
+    paused: 'Paused',
     renewed: 'Renewed',
     untracked: 'Untracked',
     auto_high: 'Auto (High)',

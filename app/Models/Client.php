@@ -69,6 +69,8 @@ class Client extends Model
         'lifecycle_restore_run_id',
         'profile_removal_requested_at',
         'profile_reverted_at',
+        'profile_paused_at',
+        'profile_paused_by',
         'needs_payment',
         'notactive',
         'is_high_risk',
@@ -167,6 +169,7 @@ class Client extends Model
         'lifecycle_restore_run_id' => 'integer',
         'profile_removal_requested_at' => 'datetime',
         'profile_reverted_at' => 'datetime',
+        'profile_paused_at' => 'datetime',
         'churned_at' => 'datetime',
         'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
@@ -354,6 +357,18 @@ class Client extends Model
             && ! (bool) $this->needs_payment
             && ! (bool) $this->notactive
             && ($this->lifecycle_state ?? \App\Support\ClientLifecycleState::ACTIVE) === \App\Support\ClientLifecycleState::ACTIVE;
+    }
+
+    /**
+     * Hidden from the website by staff at the companion's request. WordPress
+     * marks the profile private + notactive; profile_paused_at tells it apart
+     * from a new profile awaiting admin activation.
+     */
+    public function isProfilePaused(): bool
+    {
+        return $this->profile_paused_at !== null
+            && (bool) $this->notactive
+            && (string) $this->profile_status === 'private';
     }
 
     /**
