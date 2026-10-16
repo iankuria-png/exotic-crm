@@ -5296,6 +5296,7 @@ class ClientController extends Controller
             abort(403, 'You do not have access to this client market.');
         }
     }
+
     private function ensureCanDeleteClient(Request $request): void
     {
         $this->marketAuthorizationService->ensureRole(
@@ -5308,7 +5309,6 @@ class ClientController extends Controller
             'Only admin, sub-admin or sales users can delete clients.'
         );
     }
-
 
     private function clientSessionFallbackResponse(
         Request $request,
