@@ -80,6 +80,8 @@ class RenewalService
                 'deal_products.name as deal_product_name',
                 'deals.plan_type as deal_plan_type',
                 'deals.duration as deal_duration',
+                'deals.duration_days as deal_duration_days',
+                'deals.activated_at as deal_activated_at',
                 'deals.amount as deal_amount',
                 'deals.currency as deal_currency',
                 'deals.origin as deal_origin',
@@ -293,6 +295,8 @@ class RenewalService
                     'payment_status' => $paymentStatus,
                     'plan_type' => $client->deal_plan_type ?? $inferredPlanType,
                     'duration' => $isUntracked ? null : ($client->deal_duration ?? $legacyEstimate['duration']),
+                    'duration_days' => $client->deal_id ? $client->deal_duration_days : null,
+                    'activated_at' => $client->deal_id ? $client->deal_activated_at : null,
                     'amount' => $isUntracked ? null : ($client->deal_amount ?? $legacyEstimate['amount']),
                     'currency' => $isUntracked
                         ? (string) ($client->platform?->currency_code ?: ($legacyEstimate['currency'] ?? 'KES'))

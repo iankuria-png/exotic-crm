@@ -663,6 +663,36 @@ class DealControllerTest extends TestCase
         }
     }
 
+    public function test_renewal_records_the_expiry_wordpress_reports_and_the_granted_days(): void
+    {
+        $sqlite = \Illuminate\Support\Facades\DB::getDriverName() === 'sqlite';
+        if ($sqlite) \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = ON');
+        try {
+            Queue::fake();
+            $platform = $this->createProvisioningPlatform();
+            $product = $this->createProductForPlatform($platform);
+            $user = $this->createAuthorizedUser();
+            Sanctum::actingAs($user);
+            $client = $this->createClientForPlatform($platform, 9421);
+            $deal = $this->createPendingDeal($platform, $product, $client, $user, ['status' => 'expired', 'duration' => 'weekly', 'expires_at' => now()->subDay()]);
+            // WordPress stacks onto remaining time and rounds to local end-of-day, so its answer differs from now()+7.
+            $wpExpiry = now()->addDays(9)->setTime(20, 59, 59);
+            $base = rtrim($platform->wp_api_url, '/');
+            Http::fake([
+                $base.'/clients/'.$client->wp_post_id.'/activate' => Http::response(['success' => true, 'escort_expire' => $wpExpiry->timestamp]),
+                '*' => Http::response([]),
+            ]);
+            $response = $this->postJson('/api/crm/deals/'.$deal->id.'/renew', ['reason' => 'Weekly renewal', 'payment_method' => 'manual',
+                'payment_reference' => 'WP-EXPIRY-RENEW', 'additional_days' => 7])->assertOk();
+            $newDeal = Deal::query()->findOrFail((int) $response->json('id'));
+            $this->assertSame($wpExpiry->toDateTimeString(), $newDeal->expires_at->toDateTimeString());
+            $this->assertSame(7, $newDeal->duration_days);
+            $this->assertSame($wpExpiry->toDateTimeString(), $response->json('expires_at') ? \Illuminate\Support\Carbon::parse($response->json('expires_at'))->toDateTimeString() : null);
+        } finally {
+            if ($sqlite) \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = OFF');
+        }
+    }
+
     public function test_renewal_lifecycle_override_requires_reason_as_validation_without_mutation(): void
     {
         Queue::fake();

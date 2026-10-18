@@ -16,6 +16,7 @@ import { platformOptionsWithFlags } from '../utils/flags';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
+import { renewDaysForDeal } from '../utils/dealDuration';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SHARED_BUNDLE_DURATION_OPTIONS = [
@@ -802,7 +803,7 @@ export default function Deals() {
         }
         if (type === 'renew') {
             setRenewReason('Renewed from subscriptions page');
-            setRenewDays('30');
+            setRenewDays(renewDaysForDeal(deal));
         }
         if (type === 'deactivate') {
             setDeactivationReasonCode('other');

@@ -1308,6 +1308,7 @@ class DealController extends Controller
                 'status' => $activatesImmediately ? 'active' : 'awaiting_payment',
                 'activated_at' => $activatesImmediately ? now() : null,
                 'expires_at' => $activatesImmediately ? now()->addDays($additionalDays) : null,
+                'duration_days' => $additionalDays,
                 'assigned_to' => $deal->assigned_to,
                 'is_free_trial' => $isFreeTrial,
                 'free_trial_approved_by' => null,
@@ -1364,12 +1365,21 @@ class DealController extends Controller
 
             if ($activatesImmediately) {
                 $wpSync = WpSyncService::forPlatform($client->platform_id);
-                $wpSync->activateClient(
+                $wpActivation = $wpSync->activateClient(
                     $client->wp_post_id,
                     $newDeal->plan_type,
                     $additionalDays,
                     $newDeal->id
                 );
+                // Record the expiry WordPress granted (stacked, market-local end-of-day), as
+                // activate and extend do, so the renewed deal cannot drift from the profile.
+                $newDeal->update([
+                    'expires_at' => WpSubscriptionExpiry::resolve(
+                        $wpActivation,
+                        $newDeal->expires_at,
+                        ['deal_id' => (int) $newDeal->id, 'wp_post_id' => (int) $client->wp_post_id, 'source' => 'renew']
+                    ),
+                ]);
                 $deal->update(['status' => 'renewed']);
 
                 Client::query()->whereKey($client->id)->update([

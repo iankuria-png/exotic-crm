@@ -43,6 +43,7 @@ import RegionCitySelect from '../components/clients/profile-fields/RegionCitySel
 import CurrencySelect, { formatCurrencyBadge } from '../components/clients/profile-fields/CurrencySelect';
 import { BioTextCheck, BioTextSaveWarning } from '../components/seo/BioTextCheck';
 import { inspectBioText } from '../utils/bioTextIntegrity';
+import { renewDaysForDeal } from '../utils/dealDuration';
 
 const mediaProxyAvailabilityCache = new Map();
 
@@ -3554,7 +3555,7 @@ export default function ClientDetail() {
         }
         if (type === 'renew') {
             setRenewReason('Renewed from client profile');
-            setRenewDays('30');
+            setRenewDays(renewDaysForDeal(deal));
         }
     };
 
