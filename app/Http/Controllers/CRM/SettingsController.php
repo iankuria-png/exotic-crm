@@ -45,6 +45,7 @@ use App\Services\NotificationService;
 use App\Services\ProductCatalogService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ReportingCurrencyService;
+use App\Services\ReportingFxRefreshService;
 use App\Services\SbLeadImportRunService;
 use App\Services\ScraperSourceService;
 use App\Services\SupportBoardLeadImportService;
@@ -234,6 +235,7 @@ class SettingsController extends Controller
 
         return response()->json([
             'settings' => $settings,
+            'refresh' => app(ReportingFxRefreshService::class)->status(),
             'mode_options' => [
                 ['value' => ReportingCurrencyService::MODE_FLAT, 'label' => 'Converted USD'],
                 ['value' => ReportingCurrencyService::MODE_NATIVE, 'label' => 'Native currencies'],

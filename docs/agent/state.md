@@ -1,3 +1,5 @@
+- Reporting FX refresh (22 Oct): [task](tasks/reporting-fx-refresh.md) — 30-day CRM USD +0.16% (+USD101) vs transaction-date rates, no market material; intraday captures drive the bias. Daily close pull/freshness card/Error Logs alert built and tested LOCALLY (22 pass); uncommitted, not deployed. Report `output/fx-reporting-review-2026-10-22/`.
+
 - Renew 30-day default (18 Oct): [task](tasks/renew-days-default.md) — root cause found; fleet audit 48 default-30 renewals. LIVE CRM-only correction of 19 deals (Ops 28735cc, audits 597475–597493, private backup); 28018/28047 left per Ian, trials excluded, WordPress untouched. Renew dialog default + Renew WP-expiry recording pushed to origin/main with matching build; cPanel pull pending.
 
 - Profile pause (16 Oct): [task](tasks/profile-pause.md) — CRM pause/resume + plugin `/visibility` built and tested locally (CRM 14 tests, plugin 10 Local checks); not committed/uploaded. Plugin zip would include another session's unreleased VVIP 1.3.19/1.3.20 work.

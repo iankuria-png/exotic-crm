@@ -8955,6 +8955,85 @@ function ReportingFxRateCard({ rate, onSave, onDelete }) {
     );
 }
 
+const FX_REFRESH_STATUS_STYLES = {
+    ok: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    degraded: 'bg-amber-50 text-amber-700 ring-amber-200',
+    failed: 'bg-rose-50 text-rose-700 ring-rose-200',
+    never_run: 'bg-slate-100 text-slate-700 ring-slate-300',
+};
+
+const FX_CURRENCY_STATE_STYLES = {
+    current: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    aging: 'border-amber-200 bg-amber-50 text-amber-800',
+    outdated: 'border-rose-200 bg-rose-50 text-rose-800',
+};
+
+function ReportingFxRefreshStatus({ refresh, loading }) {
+    const [showCurrencies, setShowCurrencies] = useState(false);
+
+    if (loading) {
+        return (
+            <div className="border-t border-slate-100 px-5 py-4">
+                <p className="text-xs text-slate-400">Loading rate refresh status…</p>
+            </div>
+        );
+    }
+    if (!refresh) {
+        return null;
+    }
+
+    const currencies = Object.values(refresh.currencies || {});
+    const status = refresh.status || 'never_run';
+    const quota = refresh.quota;
+
+    return (
+        <div className="border-t border-slate-100 px-5 py-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Daily Rate Refresh</p>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${FX_REFRESH_STATUS_STYLES[status] || FX_REFRESH_STATUS_STYLES.never_run}`}>
+                    {status.replaceAll('_', ' ')}
+                </span>
+            </div>
+            <p className="text-xs text-slate-500">
+                Closing rates are fetched daily at 01:42 UTC.
+                {' '}Last run {formatDateTime(refresh.last_run_at)} · last success {formatDateTime(refresh.last_success_at)}
+                {quota ? ` · ${quota.used}/${quota.total} provider requests used this month` : ''}
+            </p>
+            {(refresh.issues || []).length > 0 ? (
+                <ul className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {refresh.issues.map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+            ) : null}
+            {currencies.length > 0 ? (
+                <div className="mt-2">
+                    <button
+                        type="button"
+                        onClick={() => setShowCurrencies((value) => !value)}
+                        className="text-xs font-medium text-teal-700 hover:text-teal-800"
+                    >
+                        {showCurrencies ? 'Hide' : 'Show'} {currencies.length} market currencies
+                        {refresh.outdated_count > 0 ? ` (${refresh.outdated_count} outside the ${refresh.stale_days}-day window)` : ''}
+                    </button>
+                    {showCurrencies ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                            {currencies.map((row) => (
+                                <span
+                                    key={row.currency}
+                                    title={row.latest_fetched_at ? `Fetched ${formatDateTime(row.latest_fetched_at)}` : 'No rate stored'}
+                                    className={`rounded-md border px-2 py-1 text-xs ${FX_CURRENCY_STATE_STYLES[row.state] || FX_CURRENCY_STATE_STYLES.outdated}`}
+                                >
+                                    <span className="font-semibold">{row.currency}</span>
+                                    {' '}{row.latest_rate_date || 'no rate'}
+                                </span>
+                            ))}
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function ReportingCurrencySettingsPanel() {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -9159,6 +9238,8 @@ function ReportingCurrencySettingsPanel() {
                     ) : null}
                 </div>
             </div>
+
+            <ReportingFxRefreshStatus refresh={settingsQuery.data?.refresh} loading={settingsQuery.isLoading} />
 
             <div className="border-t border-slate-100 px-5 py-4">
                 <div className="mb-3 flex items-center justify-between gap-3">

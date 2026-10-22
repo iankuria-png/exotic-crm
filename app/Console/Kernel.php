@@ -476,6 +476,15 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->runInBackground();
 
+        // Closing FX rates for the previous UTC day. Up to six paced provider calls (~45s).
+        $schedule->command('crm:refresh-fx-rates')
+            ->name('crm_refresh_fx_rates')
+            ->dailyAt('01:42')
+            ->withoutOverlapping(15)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_refresh_fx_rates.log'));
+
         $schedule->command('crm:recover-payment-client-links')
             ->name('crm_recover_payment_client_links')
             ->cron('8,23,38,53 * * * *')
