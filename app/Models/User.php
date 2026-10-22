@@ -133,6 +133,15 @@ class User extends Authenticatable
         )));
     }
 
+    public function fxRefreshSmsEnabled(): bool
+    {
+        if (! in_array($this->role, ['admin', 'sub_admin'], true)) {
+            return false;
+        }
+
+        return (bool) data_get($this->notification_prefs ?? [], 'fx_refresh_sms.enabled', false);
+    }
+
     public function marketDownSmsState(): string
     {
         if (! in_array($this->role, ['admin', 'sub_admin'], true)) {

@@ -1,7 +1,7 @@
 # Task: daily reporting FX refresh, freshness status and failure alert
 
 - ID / project: reporting-fx-refresh / exotic-crm (evidence check in exotic-ops)
-- Updated / status: 22 Oct 2026 — measurement done; code ready locally, uncommitted, not deployed.
+- Updated / status: 22 Oct 2026 — measurement done; shipped as CRM b8e646cc (pushed to origin/main), awaiting cPanel pull.
 - Goal and acceptance criteria: answer the revenue-report FX questions with production evidence;
   quantify 30-day CRM USD vs transaction-date rates by market; confirm per-currency freshness;
   add a daily closing-rate pull, a visible freshness status, and failure alerting (Error Logs).
@@ -20,6 +20,7 @@
   `output/fx-reporting-review-2026-10-22/`. Core 30-day CRM USD 62,123.29 vs transaction-date
   62,022.22 = +101.08 (+0.16%); no market material; 0 manual overrides, 0 missing, 0 unresolved.
   Intraday `/latest` captures stored as the day's rate drive the bias (up to 0.6% vs close).
+- Follow-up (22 Oct, after Ian's live check): Refresh now (manager POST → RefreshReportingFxRatesJob on default lane, card polls), in-use vs dormant currency split (only in-use currencies raise outside-window issues), next-run time, and opt-in `fx_refresh_sms` SMS for admin/sub_admin via SendFxRefreshAlertJob (alerts lane; same issue repeats at most once per 20h). 13 FX tests + 21 related + 59 role/SMS regression pass; fixture-checked never-run/queued/healthy/degraded/375px. LOCAL, uncommitted.
 - In progress / remaining: Ian decides commit/push (needs matching `npm run build` — resources/js is
   shared, build from a clean archive if other UI work is dirty) and deploy; optional restatement of
   past intraday rates is a finance decision.
@@ -29,7 +30,7 @@
   22 passed/180 assertions, 22 Oct 2026, PHP 8.2, HEAD 5430494b plus the owned files below.
   Pint pass on new PHP files. Isolated Vite fixture (real panel, mocked API) checked degraded,
   never-run, expanded list and 375px layout; fixture removed afterwards.
-- Deployment: local only.
+- Deployment: pushed b8e646cc to origin/main 22 Oct 2026 (build from git archive of the commit; foreign rebates.css edit verified absent; 16 tests passed in the clean archive). Old hashed assets kept per prior build commits. Changelog entry WP 21bb6bc76 (local). Not yet pulled on cPanel.
 - Files/hunks owned: new ReportingFxRefreshService.php, RefreshReportingFxRates.php,
   tests/Feature/ReportingFxRefreshTest.php; Kernel.php hunk after `crm_prune_job_batches`;
   SettingsController.php import + `refresh` key in `reportingCurrency()` (file has other sessions'

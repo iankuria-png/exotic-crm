@@ -920,6 +920,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::get('/settings/reporting-currency', [SettingsController::class, 'reportingCurrency'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/settings/reporting-currency', [SettingsController::class, 'updateReportingCurrency'])->middleware('role:admin,sub_admin');
     Route::get('/settings/reporting-currency/test', [SettingsController::class, 'testReportingCurrencyProvider'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/reporting-currency/refresh', [SettingsController::class, 'refreshReportingFxRates'])->middleware('role:admin,sub_admin');
     Route::get('/settings/reporting-fx-rates', [SettingsController::class, 'listReportingFxRates'])->middleware('role:admin,sub_admin');
     Route::post('/settings/reporting-fx-rates', [SettingsController::class, 'createReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'updateReportingFxRate'])->middleware('role:admin,sub_admin');

@@ -11,6 +11,7 @@ use App\Billing\Support\BillingSurface;
 use App\Billing\Support\ProviderCapability;
 use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
+use App\Jobs\RefreshReportingFxRatesJob;
 use App\Jobs\RollbackLifecycleProfilesJob;
 use App\Jobs\RunClientSyncJob;
 use App\Jobs\RunSbLeadImportJob;
@@ -289,6 +290,22 @@ class SettingsController extends Controller
         $result = $this->reportingCurrencyService->testProvider();
 
         return response()->json($result, $result['ok'] ? 200 : 422);
+    }
+
+    public function refreshReportingFxRates(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can refresh exchange rates.'
+        );
+
+        $refreshService = app(ReportingFxRefreshService::class);
+        if ($refreshService->status()['queued_at'] === null) {
+            $refreshService->markQueued($request->user()?->id);
+            RefreshReportingFxRatesJob::dispatch($request->user()?->id);
+        }
+
+        return response()->json(['refresh' => $refreshService->status()], 202);
     }
 
     public function listReportingFxRates(Request $request)
@@ -5010,6 +5027,8 @@ class SettingsController extends Controller
             'notification_prefs.market_down_sms.enabled' => 'nullable|boolean',
             'notification_prefs.market_down_sms.market_ids' => 'nullable|array',
             'notification_prefs.market_down_sms.market_ids.*' => 'integer|exists:platforms,id',
+            'notification_prefs.fx_refresh_sms' => 'nullable|array',
+            'notification_prefs.fx_refresh_sms.enabled' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -5111,6 +5130,8 @@ class SettingsController extends Controller
             'notification_prefs.market_down_sms.enabled' => 'nullable|boolean',
             'notification_prefs.market_down_sms.market_ids' => 'nullable|array',
             'notification_prefs.market_down_sms.market_ids.*' => 'integer|exists:platforms,id',
+            'notification_prefs.fx_refresh_sms' => 'nullable|array',
+            'notification_prefs.fx_refresh_sms.enabled' => 'nullable|boolean',
             'password' => 'nullable|string|min:8',
             'reason' => 'nullable|string|max:500',
         ]);

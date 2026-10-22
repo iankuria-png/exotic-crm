@@ -8211,6 +8211,24 @@ function RolesWorkspace() {
         });
     };
 
+    const getFxRefreshSmsEnabled = () => !!editor?.notification_prefs?.fx_refresh_sms?.enabled;
+
+    const setFxRefreshSmsEnabled = (enabled) => {
+        setEditor((current) => ({
+            ...current,
+            notification_prefs: {
+                ...current.notification_prefs,
+                fx_refresh_sms: { enabled },
+            },
+        }));
+    };
+
+    const getFxRefreshAlertState = () => {
+        if (!editor) return 'disabled';
+        if (!['admin', 'sub_admin'].includes(editor.role)) return 'not_eligible';
+        return getFxRefreshSmsEnabled() ? 'enabled' : 'disabled';
+    };
+
     const getMarketDownAlertState = () => {
         if (!editor) return 'disabled';
         if (!['admin', 'sub_admin'].includes(editor.role)) return 'not_eligible';
@@ -8639,6 +8657,33 @@ function RolesWorkspace() {
                                     ) : null}
                                 </div>
 
+                                <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-medium text-slate-700">Exchange-rate refresh SMS alerts</p>
+                                            <p className="text-xs text-slate-500">
+                                                {['admin', 'sub_admin'].includes(editor.role)
+                                                    ? 'Receive an SMS when the daily exchange-rate refresh fails or a currency in use falls outside the rate window. The same issue repeats at most once a day.'
+                                                    : 'This operational alert is available for admin and sub-admin roles only.'}
+                                            </p>
+                                        </div>
+                                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(getFxRefreshAlertState())}`}>
+                                            {paymentFailureSmsStateLabel(getFxRefreshAlertState())}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={getFxRefreshSmsEnabled()}
+                                            aria-label="Exchange-rate refresh SMS alerts"
+                                            disabled={!['admin', 'sub_admin'].includes(editor.role)}
+                                            onClick={() => setFxRefreshSmsEnabled(!getFxRefreshSmsEnabled())}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${!['admin', 'sub_admin'].includes(editor.role) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${getFxRefreshSmsEnabled() ? 'bg-slate-900' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${getFxRefreshSmsEnabled() ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div className="md:col-span-2">
                                     <label htmlFor="edit-password" className="mb-1 block text-sm font-medium text-slate-700">New Password <span className="font-normal text-slate-400">(leave blank to keep current)</span></label>
                                     <input
@@ -8955,21 +9000,52 @@ function ReportingFxRateCard({ rate, onSave, onDelete }) {
     );
 }
 
-const FX_REFRESH_STATUS_STYLES = {
-    ok: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    degraded: 'bg-amber-50 text-amber-700 ring-amber-200',
-    failed: 'bg-rose-50 text-rose-700 ring-rose-200',
-    never_run: 'bg-slate-100 text-slate-700 ring-slate-300',
+const FX_REFRESH_STATUS = {
+    ok: { label: 'Healthy', classes: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+    degraded: { label: 'Needs attention', classes: 'bg-amber-50 text-amber-700 ring-amber-200' },
+    failed: { label: 'Failed', classes: 'bg-rose-50 text-rose-700 ring-rose-200' },
+    skipped: { label: 'Paused', classes: 'bg-slate-100 text-slate-700 ring-slate-300' },
+    never_run: { label: 'Not run yet', classes: 'bg-slate-100 text-slate-700 ring-slate-300' },
 };
 
-const FX_CURRENCY_STATE_STYLES = {
-    current: 'border-emerald-200 bg-emerald-50 text-emerald-800',
-    aging: 'border-amber-200 bg-amber-50 text-amber-800',
-    outdated: 'border-rose-200 bg-rose-50 text-rose-800',
+const FX_CURRENCY_STATE = {
+    outdated: { label: 'Outside window', dot: 'bg-rose-500', chip: 'border-rose-200 bg-rose-50 text-rose-800', order: 0 },
+    aging: { label: 'Aging', dot: 'bg-amber-500', chip: 'border-amber-200 bg-amber-50 text-amber-800', order: 1 },
+    current: { label: 'Current', dot: 'bg-emerald-500', chip: 'border-emerald-200 bg-emerald-50 text-emerald-800', order: 2 },
 };
 
-function ReportingFxRefreshStatus({ refresh, loading }) {
-    const [showCurrencies, setShowCurrencies] = useState(false);
+function formatFxDate(value) {
+    if (!value) return null;
+    const date = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+function formatFxDateTime(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function FxCurrencyChip({ row, muted = false }) {
+    const state = FX_CURRENCY_STATE[row.state] || FX_CURRENCY_STATE.outdated;
+    const fetched = formatFxDateTime(row.latest_fetched_at);
+    const classes = muted ? 'border-slate-200 bg-white text-slate-600' : state.chip;
+
+    return (
+        <span
+            title={row.latest_rate_date ? `Rate for ${formatFxDate(row.latest_rate_date)}${fetched ? `, fetched ${fetched}` : ''}` : 'No rate stored yet'}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs tabular-nums ${classes}`}
+        >
+            <span className="font-semibold">{row.currency}</span>
+            <span className={muted ? 'text-slate-400' : 'opacity-80'}>{row.latest_rate_date ? formatFxDate(row.latest_rate_date) : 'no rate'}</span>
+        </span>
+    );
+}
+
+function ReportingFxRefreshStatus({ refresh, loading, canRefresh, onRefresh, refreshPending }) {
+    const [showDormant, setShowDormant] = useState(false);
 
     if (loading) {
         return (
@@ -8982,50 +9058,99 @@ function ReportingFxRefreshStatus({ refresh, loading }) {
         return null;
     }
 
-    const currencies = Object.values(refresh.currencies || {});
-    const status = refresh.status || 'never_run';
+    const rows = Object.values(refresh.currencies || {});
+    const inUse = rows
+        .filter((row) => row.in_use)
+        .sort((a, b) => (FX_CURRENCY_STATE[a.state]?.order ?? 0) - (FX_CURRENCY_STATE[b.state]?.order ?? 0) || a.currency.localeCompare(b.currency));
+    const dormant = rows.filter((row) => !row.in_use);
+    const counts = refresh.in_use_counts || {};
+    const status = FX_REFRESH_STATUS[refresh.status] || FX_REFRESH_STATUS.never_run;
+    const queued = Boolean(refresh.queued_at) || refreshPending;
     const quota = refresh.quota;
+    const lastRun = formatFxDateTime(refresh.last_run_at);
+    const nextRun = formatFxDateTime(refresh.next_run_at);
 
     return (
         <div className="border-t border-slate-100 px-5 py-4">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Daily Rate Refresh</p>
-                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${FX_REFRESH_STATUS_STYLES[status] || FX_REFRESH_STATUS_STYLES.never_run}`}>
-                    {status.replaceAll('_', ' ')}
-                </span>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Daily Rate Refresh</p>
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${status.classes}`}>{status.label}</span>
+                    </div>
+                    <p className="mt-1.5 text-xs text-slate-500">
+                        {lastRun
+                            ? <>Last refreshed {lastRun}{refresh.last_trigger === 'manual' ? ' (manual)' : ''}</>
+                            : 'No refresh has run yet'}
+                        {nextRun ? <> · next automatic run {nextRun}</> : null}
+                        {quota ? <> · {quota.used} of {quota.total} provider requests used this month</> : null}
+                    </p>
+                </div>
+                {canRefresh ? (
+                    <button
+                        type="button"
+                        onClick={onRefresh}
+                        disabled={queued}
+                        className="crm-btn-secondary inline-flex items-center gap-2 px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                        {queued ? (
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700 motion-reduce:animate-none" aria-hidden="true" />
+                        ) : null}
+                        {queued ? 'Refreshing…' : 'Refresh now'}
+                    </button>
+                ) : null}
             </div>
-            <p className="text-xs text-slate-500">
-                Closing rates are fetched daily at 01:42 UTC.
-                {' '}Last run {formatDateTime(refresh.last_run_at)} · last success {formatDateTime(refresh.last_success_at)}
-                {quota ? ` · ${quota.used}/${quota.total} provider requests used this month` : ''}
-            </p>
-            {(refresh.issues || []).length > 0 ? (
-                <ul className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+
+            {queued ? (
+                <p className="mt-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-800" role="status">
+                    Fetching the latest closing rates. This usually takes under a minute; the list below updates when it finishes.
+                </p>
+            ) : null}
+
+            {!queued && (refresh.issues || []).length > 0 ? (
+                <ul className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     {refresh.issues.map((issue) => <li key={issue}>{issue}</li>)}
                 </ul>
             ) : null}
-            {currencies.length > 0 ? (
-                <div className="mt-2">
-                    <button
-                        type="button"
-                        onClick={() => setShowCurrencies((value) => !value)}
-                        className="text-xs font-medium text-teal-700 hover:text-teal-800"
-                    >
-                        {showCurrencies ? 'Hide' : 'Show'} {currencies.length} market currencies
-                        {refresh.outdated_count > 0 ? ` (${refresh.outdated_count} outside the ${refresh.stale_days}-day window)` : ''}
-                    </button>
-                    {showCurrencies ? (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                            {currencies.map((row) => (
-                                <span
-                                    key={row.currency}
-                                    title={row.latest_fetched_at ? `Fetched ${formatDateTime(row.latest_fetched_at)}` : 'No rate stored'}
-                                    className={`rounded-md border px-2 py-1 text-xs ${FX_CURRENCY_STATE_STYLES[row.state] || FX_CURRENCY_STATE_STYLES.outdated}`}
-                                >
-                                    <span className="font-semibold">{row.currency}</span>
-                                    {' '}{row.latest_rate_date || 'no rate'}
+
+            {inUse.length > 0 ? (
+                <div className="mt-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                        <p className="text-xs font-medium text-slate-700">
+                            {inUse.length} currencies with payments in the last 35 days
+                        </p>
+                        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                            {['current', 'aging', 'outdated'].map((key) => (
+                                <span key={key} className="inline-flex items-center gap-1.5">
+                                    <span className={`h-2 w-2 rounded-full ${FX_CURRENCY_STATE[key].dot}`} aria-hidden="true" />
+                                    <span className="tabular-nums font-semibold text-slate-700">{counts[key] ?? 0}</span> {FX_CURRENCY_STATE[key].label.toLowerCase()}
                                 </span>
                             ))}
+                        </p>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                        {inUse.map((row) => <FxCurrencyChip key={row.currency} row={row} />)}
+                    </div>
+                    <p className="mt-2 text-[11px] text-slate-400">
+                        Current = yesterday's close or newer. Outside window = older than {refresh.stale_days} days, so converted totals for that currency show as partial.
+                    </p>
+                </div>
+            ) : null}
+
+            {dormant.length > 0 ? (
+                <div className="mt-3 border-t border-dashed border-slate-200 pt-3">
+                    <button
+                        type="button"
+                        onClick={() => setShowDormant((value) => !value)}
+                        aria-expanded={showDormant}
+                        className="text-left text-xs font-medium text-slate-500 hover:text-slate-700"
+                    >
+                        {showDormant ? 'Hide' : 'Show'} {dormant.length} other market currencies
+                        <span className="font-normal text-slate-400"> · no recent payments, not used in reports</span>
+                    </button>
+                    {showDormant ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                            {dormant.map((row) => <FxCurrencyChip key={row.currency} row={row} muted />)}
                         </div>
                     ) : null}
                 </div>
@@ -9052,6 +9177,7 @@ function ReportingCurrencySettingsPanel() {
     const settingsQuery = useQuery({
         queryKey: ['reporting-currency-settings'],
         queryFn: () => api.get('/crm/settings/reporting-currency').then((response) => response.data),
+        refetchInterval: (query) => (query.state.data?.refresh?.queued_at ? 4000 : false),
     });
     const settings = settingsQuery.data?.settings || {};
 
@@ -9138,6 +9264,33 @@ function ReportingCurrencySettingsPanel() {
             toast.success('Rate removed.');
         },
         onError: (error) => toast.error(error?.response?.data?.message || 'Could not remove rate.'),
+    });
+
+    const { user } = useAuth();
+    const canRefreshRates = ['admin', 'sub_admin'].includes(user?.role || '');
+    const refreshQueuedAt = settingsQuery.data?.refresh?.queued_at || null;
+    const previousRefreshQueuedAt = useRef(refreshQueuedAt);
+
+    useEffect(() => {
+        const finished = previousRefreshQueuedAt.current && !refreshQueuedAt;
+        previousRefreshQueuedAt.current = refreshQueuedAt;
+        if (!finished) return;
+        const outcome = settingsQuery.data?.refresh?.status;
+        if (outcome === 'ok') {
+            toast.success('Exchange rates refreshed.');
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+        } else if (outcome) {
+            toast.error('Rate refresh finished with problems. See Daily Rate Refresh for details.');
+        }
+    }, [refreshQueuedAt, settingsQuery.data, toast, queryClient]);
+
+    const refreshRatesMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/reporting-currency/refresh').then((response) => response.data?.refresh),
+        onSuccess: (refresh) => {
+            previousRefreshQueuedAt.current = refresh?.queued_at || null;
+            queryClient.setQueryData(['reporting-currency-settings'], (current) => (current ? { ...current, refresh } : current));
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'The rate refresh could not be started.'),
     });
 
     const health = settings.health || {};
@@ -9239,7 +9392,13 @@ function ReportingCurrencySettingsPanel() {
                 </div>
             </div>
 
-            <ReportingFxRefreshStatus refresh={settingsQuery.data?.refresh} loading={settingsQuery.isLoading} />
+            <ReportingFxRefreshStatus
+                refresh={settingsQuery.data?.refresh}
+                loading={settingsQuery.isLoading}
+                canRefresh={canRefreshRates}
+                onRefresh={() => refreshRatesMutation.mutate()}
+                refreshPending={refreshRatesMutation.isPending}
+            />
 
             <div className="border-t border-slate-100 px-5 py-4">
                 <div className="mb-3 flex items-center justify-between gap-3">

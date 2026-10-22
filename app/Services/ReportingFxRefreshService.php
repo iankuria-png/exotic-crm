@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\SendFxRefreshAlertJob;
 use App\Models\IntegrationSetting;
 use App\Models\ReportingFxRate;
 use Carbon\Carbon;
@@ -27,6 +28,14 @@ class ReportingFxRefreshService
 
     public const FAILURE_EVENT = 'reporting_fx.daily_refresh_failed';
 
+    public const SCHEDULED_AT_UTC = '01:42';
+
+    // A manual run that has not reported back within this window is treated as lost.
+    private const QUEUED_TIMEOUT_MINUTES = 10;
+
+    // The same unresolved issue pages again at most once per this many hours.
+    private const ALERT_REPEAT_HOURS = 20;
+
     // The provider allows ~10 requests per minute and the plan has a small monthly quota.
     private const MAX_CALLS_PER_RUN = 6;
 
@@ -42,15 +51,18 @@ class ReportingFxRefreshService
     /**
      * @return array<string, mixed>
      */
-    public function refresh(?string $throughDate = null, bool $dryRun = false): array
+    public function refresh(?string $throughDate = null, bool $dryRun = false, string $trigger = 'schedule', ?int $userId = null): array
     {
         $settings = $this->reportingCurrencyService->settings();
         $target = (string) ($settings['target_currency'] ?? ReportingCurrencyService::DEFAULT_TARGET_CURRENCY);
         $staleDays = max(1, (int) ($settings['stale_days'] ?? 7));
         $yesterday = now('UTC')->subDay()->toDateString();
         $through = $throughDate !== null ? min(Carbon::parse($throughDate)->toDateString(), $yesterday) : $yesterday;
-        $currencies = $this->expectedCurrencies($target);
+        $usage = $this->currencyUsage($target);
+        $currencies = $usage['all'];
         $result = [
+            'trigger' => $trigger,
+            'run_by' => $userId,
             'started_at' => now()->toIso8601String(),
             'target_currency' => $target,
             'through_date' => $through,
@@ -68,7 +80,7 @@ class ReportingFxRefreshService
             $result['status'] = 'skipped';
             $result['issues'][] = 'Reporting FX is disabled or not using CurrencyAPI.';
 
-            return $this->finish($result, false);
+            return $this->finish($result);
         }
 
         $apiKey = $this->reportingCurrencyService->resolvedApiKey();
@@ -120,8 +132,9 @@ class ReportingFxRefreshService
             $result['issues'][] = 'CurrencyAPI returned no rate for: '.implode(', ', $result['unsupported_currencies']).'.';
         }
 
+        // Only currencies with recent payments affect reports; a dormant market without a rate is not an incident.
         $outdated = array_keys(array_filter(
-            $this->currencyFreshness($currencies, $target, $staleDays),
+            $this->currencyFreshness($usage['in_use'], $target, $staleDays),
             fn (array $row) => $row['state'] === 'outdated'
         ));
         if ($outdated !== [] && ! $dryRun) {
@@ -139,20 +152,124 @@ class ReportingFxRefreshService
         $settings = $this->reportingCurrencyService->settings();
         $target = (string) ($settings['target_currency'] ?? ReportingCurrencyService::DEFAULT_TARGET_CURRENCY);
         $staleDays = max(1, (int) ($settings['stale_days'] ?? 7));
-        $stored = IntegrationSetting::query()->where('key', self::STATUS_KEY)->value('value');
-        $stored = is_array($stored) ? $stored : [];
-        $currencies = $this->currencyFreshness($this->expectedCurrencies($target), $target, $staleDays);
+        $stored = $this->storedStatus();
+        $usage = $this->currencyUsage($target);
+        $inUse = array_flip($usage['in_use']);
+        $currencies = [];
+        foreach ($this->currencyFreshness($usage['all'], $target, $staleDays) as $code => $row) {
+            $currencies[$code] = $row + ['in_use' => isset($inUse[$code])];
+        }
+        $inUseRows = array_filter($currencies, fn (array $row) => $row['in_use']);
+        $counts = ['current' => 0, 'aging' => 0, 'outdated' => 0];
+        foreach ($inUseRows as $row) {
+            $counts[$row['state']]++;
+        }
+
+        $nextRun = Carbon::parse(now('UTC')->toDateString().' '.self::SCHEDULED_AT_UTC, 'UTC');
+        if ($nextRun->lte(now())) {
+            $nextRun->addDay();
+        }
 
         return [
             'last_run_at' => $stored['last_run_at'] ?? null,
             'last_success_at' => $stored['last_success_at'] ?? null,
+            'last_trigger' => $stored['last_trigger'] ?? null,
             'status' => $stored['status'] ?? 'never_run',
             'issues' => $stored['issues'] ?? [],
             'quota' => $stored['quota'] ?? null,
+            'queued_at' => $this->pendingQueuedAt($stored),
+            'next_run_at' => $nextRun->toIso8601String(),
             'stale_days' => $staleDays,
             'currencies' => $currencies,
-            'outdated_count' => count(array_filter($currencies, fn (array $row) => $row['state'] === 'outdated')),
+            'in_use_count' => count($inUseRows),
+            'in_use_counts' => $counts,
+            'outdated_count' => $counts['outdated'],
         ];
+    }
+
+    /**
+     * Record that a manual refresh was queued, so the card can show progress until it reports back.
+     */
+    public function markQueued(?int $userId): void
+    {
+        $stored = $this->storedStatus();
+        $stored['queued_at'] = now()->toIso8601String();
+        $stored['queued_by'] = $userId;
+        IntegrationSetting::query()->updateOrCreate(['key' => self::STATUS_KEY], ['value' => $stored]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $stored
+     */
+    public function pendingQueuedAt(array $stored): ?string
+    {
+        $queuedAt = $stored['queued_at'] ?? null;
+        if (! $queuedAt) {
+            return null;
+        }
+
+        $queued = Carbon::parse($queuedAt);
+        $lastRun = isset($stored['last_run_at']) ? Carbon::parse($stored['last_run_at']) : null;
+        if (($lastRun && $lastRun->gte($queued)) || $queued->lt(now()->subMinutes(self::QUEUED_TIMEOUT_MINUTES))) {
+            return null;
+        }
+
+        return $queued->toIso8601String();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function storedStatus(): array
+    {
+        $stored = IntegrationSetting::query()->where('key', self::STATUS_KEY)->value('value');
+
+        return is_array($stored) ? $stored : [];
+    }
+
+    /**
+     * Every market currency, plus which of them carried payments in the last 35 days.
+     *
+     * @return array{all: array<int, string>, in_use: array<int, string>}
+     */
+    public function currencyUsage(string $target): array
+    {
+        $resolve = function (iterable $rows) use ($target): array {
+            $codes = [];
+            foreach ($rows as $row) {
+                $resolved = $this->currencyCanonicalizer->resolve($row->currency, [
+                    'platform_country' => $row->country,
+                    'platform_name' => $row->name,
+                ]);
+                if ($resolved['code'] !== null && $resolved['code'] !== $target) {
+                    $codes[$resolved['code']] = true;
+                }
+            }
+            $codes = array_keys($codes);
+            sort($codes);
+
+            return $codes;
+        };
+
+        $inUse = $resolve(
+            DB::table('payments')
+                ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+                ->selectRaw('COALESCE(payments.currency, platforms.currency_code) as currency, platforms.country, platforms.name')
+                ->where('payments.created_at', '>=', now()->subDays(35))
+                ->whereRaw('COALESCE(payments.currency, platforms.currency_code) IS NOT NULL')
+                ->distinct()
+                ->get()
+        );
+        $markets = $resolve(
+            DB::table('platforms')
+                ->select('currency_code as currency', 'country', 'name')
+                ->whereNotNull('currency_code')
+                ->get()
+        );
+        $all = array_values(array_unique(array_merge($markets, $inUse)));
+        sort($all);
+
+        return ['all' => $all, 'in_use' => $inUse];
     }
 
     /**
@@ -162,35 +279,7 @@ class ReportingFxRefreshService
      */
     public function expectedCurrencies(string $target): array
     {
-        $rows = DB::table('platforms')
-            ->select('currency_code as currency', 'country', 'name')
-            ->whereNotNull('currency_code')
-            ->get()
-            ->concat(
-                DB::table('payments')
-                    ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-                    ->select('payments.currency', 'platforms.country', 'platforms.name')
-                    ->whereNotNull('payments.currency')
-                    ->where('payments.created_at', '>=', now()->subDays(35))
-                    ->distinct()
-                    ->get()
-            );
-
-        $codes = [];
-        foreach ($rows as $row) {
-            $resolved = $this->currencyCanonicalizer->resolve($row->currency, [
-                'platform_country' => $row->country,
-                'platform_name' => $row->name,
-            ]);
-            if ($resolved['code'] !== null && $resolved['code'] !== $target) {
-                $codes[$resolved['code']] = true;
-            }
-        }
-
-        $codes = array_keys($codes);
-        sort($codes);
-
-        return $codes;
+        return $this->currencyUsage($target)['all'];
     }
 
     /**
@@ -388,47 +477,91 @@ class ReportingFxRefreshService
      * @param  array<string, mixed>  $result
      * @return array<string, mixed>
      */
-    private function finish(array $result, bool $record = true): array
+    private function finish(array $result): array
     {
         $result['status'] ??= $result['issues'] === [] ? 'ok' : ($result['dates_fetched'] === [] && $result['dates_requested'] !== [] ? 'failed' : 'degraded');
         if ($result['issues'] !== [] && $result['status'] === 'ok') {
             $result['status'] = 'degraded';
         }
-        if ($result['dry_run'] || ! $record) {
+        if ($result['dry_run']) {
             return $result;
         }
 
-        $stored = IntegrationSetting::query()->where('key', self::STATUS_KEY)->value('value');
-        $stored = is_array($stored) ? $stored : [];
-        $now = now()->toIso8601String();
+        $stored = $this->storedStatus();
+        $now = now();
+        $alert = $this->shouldAlert($result, $stored, $now);
         IntegrationSetting::query()->updateOrCreate(
             ['key' => self::STATUS_KEY],
             ['value' => [
-                'last_run_at' => $now,
-                'last_success_at' => $result['status'] === 'ok' ? $now : ($stored['last_success_at'] ?? null),
+                'last_run_at' => $now->toIso8601String(),
+                'last_success_at' => $result['status'] === 'ok' ? $now->toIso8601String() : ($stored['last_success_at'] ?? null),
+                'last_trigger' => $result['trigger'],
+                'last_run_by' => $result['run_by'],
                 'status' => $result['status'],
                 'issues' => $result['issues'],
                 'quota' => $result['quota'],
                 'dates_fetched' => $result['dates_fetched'],
                 'rows_written' => $result['rows_written'],
+                'last_alert_at' => $alert ? $now->toIso8601String() : ($stored['last_alert_at'] ?? null),
+                'last_alert_fingerprint' => $alert ? $this->alertFingerprint($result) : ($stored['last_alert_fingerprint'] ?? null),
             ]]
         );
+
+        if ($result['status'] === 'skipped') {
+            return $result;
+        }
 
         // Error level reaches Settings → Error Logs; warnings would only sit in the file log.
         if ($result['issues'] !== []) {
             Log::error(self::FAILURE_EVENT, [
                 'status' => $result['status'],
+                'trigger' => $result['trigger'],
                 'issues' => $result['issues'],
                 'dates_requested' => $result['dates_requested'],
                 'dates_fetched' => $result['dates_fetched'],
             ]);
         } else {
             Log::info('reporting_fx.daily_refresh_ok', [
+                'trigger' => $result['trigger'],
                 'dates_fetched' => $result['dates_fetched'],
                 'rows_written' => $result['rows_written'],
             ]);
         }
 
+        if ($alert) {
+            SendFxRefreshAlertJob::dispatch($result['status'], $result['issues']);
+        }
+
         return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $stored
+     */
+    private function shouldAlert(array $result, array $stored, Carbon $now): bool
+    {
+        if ($result['issues'] === [] || $result['status'] === 'skipped') {
+            return false;
+        }
+
+        $lastAlertAt = isset($stored['last_alert_at']) ? Carbon::parse($stored['last_alert_at']) : null;
+
+        return ($stored['last_alert_fingerprint'] ?? null) !== $this->alertFingerprint($result)
+            || $lastAlertAt === null
+            || $lastAlertAt->lt($now->copy()->subHours(self::ALERT_REPEAT_HOURS));
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function alertFingerprint(array $result): string
+    {
+        // Strip the leading date so the same provider failure on consecutive days counts as one issue.
+        $issues = array_map(fn (string $issue) => preg_replace('/^\d{4}-\d{2}-\d{2}: /', '', $issue), $result['issues']);
+        $issues = array_values(array_unique($issues));
+        sort($issues);
+
+        return sha1($result['status'].'|'.implode('|', $issues));
     }
 }
