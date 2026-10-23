@@ -38,6 +38,21 @@ class CurrencyCanonicalizerTest extends TestCase
         $this->assertSame('canonicalized', $result['status']);
     }
 
+    public function test_resolves_gambias_secondary_cfa_currency_to_xof(): void
+    {
+        foreach (['CFA', 'FCFA'] as $currency) {
+            foreach (['Gambia', 'The Gambia', 'GM', 'GMB'] as $hint) {
+                $result = $this->canonicalizer->resolve($currency, ['platform_country' => $hint]);
+                $this->assertSame('XOF', $result['code']);
+                $this->assertSame('canonicalized', $result['status']);
+            }
+        }
+
+        $this->assertSame('XOF', $this->canonicalizer->resolve('CFA', ['platform_name' => 'Gambia'])['code']);
+        $this->assertSame('GMD', $this->canonicalizer->resolve('GMD', ['platform_country' => 'Gambia'])['code']);
+        $this->assertSame('XAF', $this->canonicalizer->resolve('XAF', ['platform_country' => 'Gambia'])['code']);
+    }
+
     public function test_resolves_cfa_to_xaf_for_gabon(): void
     {
         $result = $this->canonicalizer->resolve('CFA', [

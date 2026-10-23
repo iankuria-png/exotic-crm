@@ -60,6 +60,15 @@ class CurrencyCanonicalizer
         'REPUBLIC OF THE CONGO',
     ];
 
+    // Gambia accepts West African CFA alongside GMD. This is a market alias,
+    // not a claim that Gambia's national currency belongs to the CFA zone.
+    private const XOF_SECONDARY_CURRENCY_MARKETS = [
+        'GM',
+        'GMB',
+        'GAMBIA',
+        'THE GAMBIA',
+    ];
+
     /**
      * @param  array<string, mixed>  $context
      * @return array{code: string|null, original: string, status: string, reason: string|null}
@@ -142,7 +151,8 @@ class CurrencyCanonicalizer
                 continue;
             }
 
-            if (in_array($normalized, self::XOF_COUNTRIES, true)) {
+            if (in_array($normalized, self::XOF_COUNTRIES, true)
+                || in_array($normalized, self::XOF_SECONDARY_CURRENCY_MARKETS, true)) {
                 return 'XOF';
             }
 
