@@ -25,6 +25,7 @@ import ClientStoriesTab from '../components/clients/ClientStoriesTab';
 import KycPanel from '../components/kyc/KycPanel';
 import CompliancePanel from '../components/compliance/CompliancePanel';
 import { proxyImageUrl } from '../utils/imageProxy';
+import ClientMediaPreview from '../components/clients/ClientMediaPreview';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 import { MEDIA_UPLOAD_LIMITS, getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
 import AgencyManagedProfileModal from '../components/clients/AgencyManagedProfileModal';
@@ -44,8 +45,6 @@ import CurrencySelect, { formatCurrencyBadge } from '../components/clients/profi
 import { BioTextCheck, BioTextSaveWarning } from '../components/seo/BioTextCheck';
 import { inspectBioText } from '../utils/bioTextIntegrity';
 import { renewDaysForDeal } from '../utils/dealDuration';
-
-const mediaProxyAvailabilityCache = new Map();
 
 const RISK_REASON_OPTIONS = [
     { value: 'manual_proof_invalid', label: 'Invalid manual proof' },
@@ -1391,7 +1390,7 @@ export default function ClientDetail() {
     const [mediaUploadWatermarkOptionsOpen, setMediaUploadWatermarkOptionsOpen] = useState(false);
     const [selectedMediaIds, setSelectedMediaIds] = useState([]);
     const [mediaBulkDeleteOpen, setMediaBulkDeleteOpen] = useState(false);
-    const [mediaPreviewRecoveryVersion, setMediaPreviewRecoveryVersion] = useState(0);
+    const [mediaPreviewVersion, setMediaPreviewVersion] = useState(0);
     const lastSelectedMediaIndexRef = useRef(null);
     const mediaUploadInputRef = useRef(null);
     const [healthAction, setHealthAction] = useState('keep_primary');
@@ -3104,16 +3103,8 @@ export default function ClientDetail() {
     );
     const mediaDeletionRunning = clientMediaDeletions.some((deletion) => deletion.status === 'deleting');
 
-    const recoverMediaPreviews = async () => {
-        const previewUrls = mediaItems
-            .map((media) => proxyImageUrl(media?.url || ''))
-            .filter((url) => url.trim() !== '');
-
-        // An unavailable preview is deliberately cached so a broken market
-        // cannot be re-probed by every render. A staff-triggered recovery is
-        // the explicit escape hatch once the source is available again.
-        previewUrls.forEach((url) => mediaProxyAvailabilityCache.delete(url));
-        setMediaPreviewRecoveryVersion((version) => version + 1);
+    const refreshMediaPreviews = async () => {
+        setMediaPreviewVersion((version) => version + 1);
 
         const result = await refetchMedia();
         if (result.error) {
@@ -3121,7 +3112,7 @@ export default function ClientDetail() {
             return;
         }
 
-        toast.success(`Rechecking ${previewUrls.length} media file${previewUrls.length === 1 ? '' : 's'} from WordPress.`);
+        toast.success('Media refreshed from WordPress.');
     };
 
     const toggleMediaSelection = (mediaKey, index, shiftKey = false) => {
@@ -6535,12 +6526,12 @@ export default function ClientDetail() {
                                                     </p>
                                                     <button
                                                         type="button"
-                                                        onClick={() => void recoverMediaPreviews()}
+                                                        onClick={() => void refreshMediaPreviews()}
                                                         disabled={mediaRefreshing}
-                                                        title="Refresh the WordPress media list and retry previews that previously failed. This does not change or re-upload any files."
+                                                        title="Previews retry automatically. Refresh to load the latest media from WordPress."
                                                         className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        {mediaRefreshing ? 'Recovering…' : 'Recover previews'}
+                                                        {mediaRefreshing ? 'Refreshing…' : 'Refresh media'}
                                                     </button>
                                                 </div>
                                             </div>
@@ -6578,7 +6569,7 @@ export default function ClientDetail() {
                                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                                     {visibleMediaItems.map(({ media, key }, index) => (
                                                         <ClientMediaCard
-                                                            key={`${key}-${mediaPreviewRecoveryVersion}`}
+                                                            key={`${key}-${mediaPreviewVersion}`}
                                                             media={media}
                                                             selected={selectedMediaKeySet.has(key)}
                                                             onToggleSelect={(shiftKey) => toggleMediaSelection(key, index, shiftKey)}
@@ -7552,18 +7543,6 @@ export default function ClientDetail() {
     );
 }
 
-function resolveMediaUnavailableMessage(status) {
-    if (status === 404) {
-        return 'File missing on market site';
-    }
-
-    if (status === 403 || status === 502 || status === 503 || status === 504) {
-        return 'File blocked or unavailable';
-    }
-
-    return 'File unavailable';
-}
-
 function resolveMediaKind(media) {
     const mimeType = String(media?.mime_type || '').toLowerCase();
     if (mimeType.startsWith('video/')) {
@@ -7595,95 +7574,7 @@ function ClientMediaCard({
     const displayName = media.title || media.file_name || media.filename || 'Untitled media';
     const fileName = media.file_name || media.filename || '';
     const mediaKind = resolveMediaKind(media);
-    const proxiedUrl = proxyImageUrl(media?.url || '');
-    const hasAssetUrl = proxiedUrl.trim() !== '';
-    const cachedAvailability = hasAssetUrl ? mediaProxyAvailabilityCache.get(proxiedUrl) : null;
-    const [assetState, setAssetState] = useState(() => {
-        if (!hasAssetUrl) {
-            return 'unavailable';
-        }
-
-        return cachedAvailability?.state || 'checking';
-    });
-    const [assetStatus, setAssetStatus] = useState(() => {
-        if (!hasAssetUrl) {
-            return 404;
-        }
-
-        return cachedAvailability?.status ?? null;
-    });
-
-    useEffect(() => {
-        let cancelled = false;
-
-        if (!hasAssetUrl) {
-            setAssetState('unavailable');
-            setAssetStatus(404);
-            return () => {
-                cancelled = true;
-            };
-        }
-
-        const cachedResult = mediaProxyAvailabilityCache.get(proxiedUrl);
-        if (cachedResult) {
-            setAssetState(cachedResult.state);
-            setAssetStatus(cachedResult.status ?? null);
-
-            return () => {
-                cancelled = true;
-            };
-        }
-
-        setAssetState('checking');
-        setAssetStatus(null);
-
-        fetch(proxiedUrl, {
-            method: 'HEAD',
-            cache: 'no-store',
-            credentials: 'same-origin',
-        })
-            .then((response) => {
-                if (cancelled) {
-                    return;
-                }
-
-                if (response.ok) {
-                    mediaProxyAvailabilityCache.set(proxiedUrl, {
-                        state: 'ready',
-                        status: response.status,
-                    });
-                    setAssetState('ready');
-                    setAssetStatus(response.status);
-                    return;
-                }
-
-                mediaProxyAvailabilityCache.set(proxiedUrl, {
-                    state: 'unavailable',
-                    status: response.status,
-                });
-                setAssetState('unavailable');
-                setAssetStatus(response.status);
-            })
-            .catch(() => {
-                if (cancelled) {
-                    return;
-                }
-
-                mediaProxyAvailabilityCache.set(proxiedUrl, {
-                    state: 'unavailable',
-                    status: null,
-                });
-                setAssetState('unavailable');
-                setAssetStatus(null);
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [hasAssetUrl, proxiedUrl]);
-
-    const unavailableMessage = resolveMediaUnavailableMessage(assetStatus);
-
+    const proxiedUrl = proxyImageUrl(media?.url || '').trim();
     const borderClass = selected
         ? 'border-teal-500 bg-teal-50/40 ring-2 ring-teal-200'
         : media.is_main
@@ -7703,49 +7594,12 @@ function ClientMediaCard({
             </span>
             <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-100">
                 <div className="aspect-[4/3]">
-                    {assetState === 'checking' ? (
-                        <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-slate-500">
-                            Checking file…
-                        </div>
-                    ) : assetState === 'ready' && mediaKind === 'video' ? (
-                        <video
-                            src={proxiedUrl}
-                            controls
-                            playsInline
-                            preload="metadata"
-                            className="h-full w-full bg-slate-950 object-contain"
-                            onError={() => {
-                                mediaProxyAvailabilityCache.set(proxiedUrl, {
-                                    state: 'unavailable',
-                                    status: null,
-                                });
-                                setAssetState('unavailable');
-                                setAssetStatus(null);
-                            }}
-                        />
-                    ) : assetState === 'ready' ? (
-                        <img
-                            src={proxiedUrl}
-                            alt={displayName}
-                            className="h-full w-full object-cover"
-                            loading="lazy"
-                            onError={() => {
-                                mediaProxyAvailabilityCache.set(proxiedUrl, {
-                                    state: 'unavailable',
-                                    status: null,
-                                });
-                                setAssetState('unavailable');
-                                setAssetStatus(null);
-                            }}
-                        />
-                    ) : (
-                        <div className="flex h-full flex-col items-center justify-center gap-2 bg-slate-100 px-4 text-center">
-                            <span className="text-sm font-medium text-slate-700">{unavailableMessage}</span>
-                            <span className="text-xs text-slate-500">
-                                {mediaKind === 'video' ? 'The video could not be loaded from the market site.' : 'The image could not be loaded from the market site.'}
-                            </span>
-                        </div>
-                    )}
+                    <ClientMediaPreview
+                        key={`${mediaKind}:${proxiedUrl}`}
+                        src={proxiedUrl}
+                        kind={mediaKind}
+                        label={displayName}
+                    />
                 </div>
             </div>
 
