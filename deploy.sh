@@ -21,6 +21,18 @@ ROLLBACK_DB_BACKUP="${ROLLBACK_DB_BACKUP:-}"
 PHP_BIN="${DEPLOY_PHP_BINARY:-php}"
 COMPOSER_PATH="$(command -v composer 2>/dev/null || echo 'composer')"
 
+# Retain this guard across checkout, including rollback to a version predating it.
+ASSET_CHECK_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/crm-frontend-guard.XXXXXX")"
+chmod 600 "$ASSET_CHECK_SCRIPT"
+cp "$APP_DIR/scripts/frontend-assets.php" "$ASSET_CHECK_SCRIPT"
+trap 'rm -f "$ASSET_CHECK_SCRIPT"' EXIT
+verify_frontend_assets() {
+    DEPLOY_ASSET_ROOT_RUNTIME="$APP_DIR" "$PHP_BIN" "$ASSET_CHECK_SCRIPT" --repair-modes
+}
+verify_served_frontend() {
+    DEPLOY_ASSET_ROOT_RUNTIME="$APP_DIR" "$PHP_BIN" "$ASSET_CHECK_SCRIPT" --web
+}
+
 mkdir -p "$(dirname "$STATUS_FILE")"
 mkdir -p "$(dirname "$LOG_FILE")"
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -374,7 +386,8 @@ if [[ -n "$ROLLBACK_TARGET_SHA" ]]; then
     write_status "rolling_back" "true" "Rolling back to ${ROLLBACK_TARGET_SHA:0:8}..." "" ""
 
     git_fetch
-    git reset --hard "$ROLLBACK_TARGET_SHA"
+    (umask 0022; git reset --hard "$ROLLBACK_TARGET_SHA")
+    verify_frontend_assets
 
     CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
     CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
@@ -396,6 +409,7 @@ if [[ -n "$ROLLBACK_TARGET_SHA" ]]; then
     "$PHP_BIN" artisan view:cache
     "$PHP_BIN" artisan queue:restart
 
+    verify_served_frontend
     finish_success
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback completed successfully."
     exit 0
@@ -403,7 +417,8 @@ fi
 
 echo "Pulling latest changes from origin/${DEPLOY_BRANCH}..."
 git_fetch
-git reset --hard "origin/$DEPLOY_BRANCH"
+(umask 0022; git reset --hard "origin/$DEPLOY_BRANCH")
+verify_frontend_assets
 
 CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
@@ -418,5 +433,6 @@ backup_database
 "$PHP_BIN" artisan view:cache
 "$PHP_BIN" artisan queue:restart
 
+verify_served_frontend
 finish_success
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deployment finished successfully."
