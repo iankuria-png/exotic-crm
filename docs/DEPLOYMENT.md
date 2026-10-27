@@ -419,3 +419,29 @@ mysql -u d9410_ExoticSSP -p'0.S3pWFm@4' d9410_ExoticManagementDB < /home/d9410/d
 ```bash
 cp /home/d9410/PaymentController.php.bak /home/d9410/testing.exotic-ads.com/management/api/app/Http/Controllers/API/PaymentController.php
 ```
+
+## Frontend acceptance after the 27 October incident
+
+The payment-recovery rollout inherited `umask 0077` into Git checkout. New build files
+became `0600`; PHP/Artisan and the HTML shell still worked while Apache could not
+serve the bundles. The feature was rolled back to stable `61a77269`; retained recovery
+tables and verified financial evidence must survive that code rollback.
+
+`deploy.sh` now scopes checkout to `umask 0022` and uses `scripts/frontend-assets.php`
+to validate the complete manifest before repairing only referenced public runtime files
+to `0644` and their build directories to `0755`. It retains a private copy of that guard
+across checkout so rollback to an older commit cannot remove the running check.
+Environment files, backups and application source permissions are outside this repair.
+
+Before deployment success, the guard checks the real public homepage references,
+HTTP status, exact served asset hashes, and JavaScript/CSS content types. Explicitly
+set `DEPLOY_PUBLIC_ORIGIN` only when the configured `APP_URL` is not the actual public
+origin. Do not accept HTML200, CLI readability, source hashes or a migration pass alone.
+Verify that a fresh browser mounts the login page and that the affected authenticated
+workflow works. Retain blocked browser checks as blocked coverage.
+
+The original dated Ops payment deployer is retired. Keeping stable CRM also requires
+restoring the previous WordPress checkout footer: plugin1.3.22 can stay installed, but
+its new owner checkout must not be used against absent recovery API routes. Feature
+redeployment remains held until separately resumed; do not replay customer activations
+or rerun historical backfills merely because application code was rolled back.
