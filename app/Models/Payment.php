@@ -35,6 +35,17 @@ class Payment extends Model
 
     protected static function booted(): void
     {
+        static::creating(static function (Payment $payment): void { app(\App\Services\PaymentPurchaseSnapshot::class)->pin($payment); });
+        static::updating(static function (Payment $payment): void {
+            $original = $payment->getOriginal('payment_data');
+            $pinned = is_array($original) ? ($original['recovery_purchase'] ?? null) : null;
+            if ($pinned) {
+                $data = $payment->payment_data ?? [];
+                if (isset($data['recovery_purchase']) && $data['recovery_purchase'] !== $pinned) throw new \LogicException('Pinned purchase terms cannot be rewritten.');
+                $data['recovery_purchase'] = $pinned;
+                $payment->payment_data = $data;
+            }
+        });
         $refresh = static function (Payment $payment): void {
             if (in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE], true)) return;
             $clientId = $payment->client_id
@@ -45,6 +56,10 @@ class Payment extends Model
         };
 
         static::saved($refresh);
+        static::saved(static function (Payment $payment): void {
+            app(\App\Services\PaymentAttributionService::class)->capture($payment);
+            if (!$payment->isVisitorPayment()) app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($payment);
+        });
         static::saved(static function (Payment $payment): void {
             if (
                 in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE], true)
@@ -162,6 +177,9 @@ class Payment extends Model
         'end_date' => 'datetime',
     ];
     
+    public function attribution() { return $this->hasOne(PaymentAttribution::class, 'payment_id'); }
+    public function recoveryCase() { return $this->hasOne(PaymentRecoveryCase::class); }
+
     public function product()
     {
         return $this->belongsTo(Product::class);

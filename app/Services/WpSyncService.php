@@ -662,6 +662,16 @@ class WpSyncService
     /**
      * Activate a client profile
      */
+    public function subscriptionOperation(int $postId, ?string $operationId = null): array
+    {
+        return $this->get("/clients/{$postId}/subscription-operation", $operationId ? ['operation_id'=>$operationId] : []);
+    }
+
+    public function applySubscriptionOperation(int $postId, array $payload): array
+    {
+        return $this->post("/clients/{$postId}/subscription-operation", $payload);
+    }
+
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array
     {
         $body = [

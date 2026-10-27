@@ -56,7 +56,7 @@ class PaymentClientIdentityRecoveryTest extends TestCase
         $this->assertDatabaseHas('audit_log', ['action' => 'payment_client_identity_recovery', 'entity_id' => $payment->id]);
         Http::assertNothingSent();
         (new RetryUnlinkedPaymentClientJob($market->id))->handle(app(PaymentClientIdentityService::class));
-        $this->assertDatabaseCount('audit_log', 1);
+        $this->assertSame(1, \App\Models\AuditLog::where('action', 'payment_client_identity_recovery')->count());
     }
 
     public function test_existing_free_trial_is_preserved_and_fulfillment_review_stays_open(): void

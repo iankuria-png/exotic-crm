@@ -758,6 +758,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/reports/scorecard/export', [ScorecardExportController::class, 'exportScorecard']);
 
         // Payments
+        Route::get('/payment-recovery-cases', [\App\Http\Controllers\CRM\PaymentRecoveryCaseController::class, 'index']);
+        Route::patch('/payment-recovery-cases/{case}', [\App\Http\Controllers\CRM\PaymentRecoveryCaseController::class, 'update']);
         Route::get('/payments', [PaymentQueueController::class, 'index']);
         Route::post('/payments/export', [PaymentExportController::class, 'exportPayments']);
         Route::get('/payments/reference-check', [ManualPaymentBundleController::class, 'referenceCheck']);
@@ -1427,4 +1429,9 @@ Route::prefix('wp-svc/send-love')->middleware(['wallet.auth:access', 'throttle:1
     Route::post('gifts/{ref}/hide',[$c,'hide']);
     Route::post('gifts/{ref}/report',[$c,'report']);
     Route::post('gifts/{ref}/simulate',[$c,'simulate']);
+});
+
+Route::middleware(['wp.service.auth','throttle:60,1'])->group(function () {
+    Route::post('/payment-recovery/status', [\App\Http\Controllers\API\PaymentRecoveryStatusController::class,'status']);
+    Route::post('/payment-recovery/checkout', [\App\Http\Controllers\API\PaymentRecoveryStatusController::class,'checkout']);
 });

@@ -55,6 +55,9 @@ class RetryUnlinkedPaymentClientJob implements ShouldBeUnique, ShouldQueue
                     $updates = ['client_id' => $client->id, 'reconciliation_state' => 'manual_review',
                         'reconciliation_confidence' => 'high', 'match_confidence' => 'auto_high'];
                     DB::table('payments')->where('id', $payment->id)->update($updates);
+                    $linked = $payment->fresh();
+                    app(\App\Services\PaymentAttributionService::class)->capture($linked);
+                    app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($linked);
                     $audit = app(\App\Services\AuditService::class)->record(['platform_id' => $payment->platform_id,
                         'action' => 'payment_client_identity_recovery', 'entity_type' => 'payment', 'entity_id' => $payment->id,
                         'before_state' => ['client_id' => null], 'after_state' => $updates,

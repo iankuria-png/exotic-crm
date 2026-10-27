@@ -39,6 +39,13 @@ class PaymentManualSubmission extends Model
         'reviewed_at' => 'datetime',
     ];
 
+    protected static function booted(): void
+    {
+        static::saved(static function (self $submission): void {
+            if ($payment=$submission->payment()->first()) app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($payment);
+        });
+    }
+
     public function payment()
     {
         return $this->belongsTo(Payment::class);

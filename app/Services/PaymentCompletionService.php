@@ -209,6 +209,24 @@ class PaymentCompletionService
             $deal = null;
             $settlementAssessment = $this->settlementTolerancePolicy->evaluate($payment, $providerPayload, $options);
             $this->billingProviderTransactionRecorder->recordSettlement($payment, $settlementAssessment, $providerPayload);
+            if (!empty($options['recovery_verification_method'])) {
+                $decision = $payment->latestPinnedRoutingDecision();
+                $transaction = data_get($providerPayload, 'data.reference') ?? data_get($providerPayload, 'data.id')
+                    ?? data_get($providerPayload, 'data.attributes.resource.id') ?? data_get($providerPayload, 'reference')
+                    ?? data_get($providerPayload, 'depositId') ?? data_get($providerPayload, 'id');
+                $receiptAccepted = app(PaymentRecoveryEvidencePolicy::class)->observe($payment, $settlementAssessment, [
+                    'account' => $decision?->provider_profile_id ? 'profile:'.$decision->provider_profile_id : 'legacy-market:'.$payment->platform_id.':provider:'.$payment->provider_key,
+                    'environment' => $decision?->environment ?? $payment->provider_environment,
+                    'transaction_id' => is_scalar($transaction) ? (string)$transaction : null,
+                    'verification_method' => $options['recovery_verification_method'],
+                    'payload_sha256' => hash('sha256', json_encode($providerPayload)),
+                ]);
+                if (!$receiptAccepted) {
+                    $settlementAssessment['completion_policy'] = 'hold_for_review';
+                    $settlementAssessment['review_required'] = true;
+                    $settlementAssessment['disposition'] = 'receipt_evidence_conflict';
+                }
+            }
 
             if ($this->isSandboxPayment($payment)) {
                 $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [

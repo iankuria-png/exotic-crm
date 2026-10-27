@@ -217,12 +217,12 @@ class PaymentQueueController extends Controller
             $manualProofContributionQuery->whereHas('manualSubmission');
         }
         $failedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $failedStatsQuery);
-        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
+        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery(\App\Services\Revenue\PaymentAttributionQuery::matched(clone $confirmedStatsQuery, false));
         $pendingNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
         $reversedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
         $failedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $failedStatsQuery, $targetCurrency);
-        $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
+        $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(\App\Services\Revenue\PaymentAttributionQuery::matched(clone $confirmedStatsQuery, false), $targetCurrency);
         $customerMix = $this->buildCustomerMixStats(
             clone $confirmedStatsQuery,
             $from,
@@ -283,9 +283,9 @@ class PaymentQueueController extends Controller
                 $awaitingStatuses,
                 $targetCurrency
             ),
-            'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
-            'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
-            'unmatched_review' => (clone $confirmedStatsQuery)->whereNull('client_id')->count(),
+            'matched' => \App\Services\Revenue\PaymentAttributionQuery::matched(clone $statsQuery)->count(),
+            'unmatched' => \App\Services\Revenue\PaymentAttributionQuery::matched(clone $statsQuery, false)->count(),
+            'unmatched_review' => \App\Services\Revenue\PaymentAttributionQuery::matched(clone $confirmedStatsQuery, false)->count(),
             'unmatched_review_amount' => $unmatchedBreakdown['scalar_amount'],
             'unmatched_review_amount_breakdown' => $unmatchedBreakdown['breakdown'],
             'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
@@ -318,6 +318,7 @@ class PaymentQueueController extends Controller
             ],
         ];
 
+        if (\Illuminate\Support\Facades\Schema::hasTable('payment_attributions')) $query->with(['attribution','recoveryCase']);
         $payments = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
 
@@ -609,6 +610,12 @@ class PaymentQueueController extends Controller
         }
 
         $snapshot = $this->deleteTestPaymentSnapshot($payment);
+        if (\Illuminate\Support\Facades\Schema::hasTable('payment_recovery_cases')) {
+            if (\App\Models\PaymentReceiptObservation::where('payment_id',$payment->id)->exists() || \App\Models\PaymentFulfillmentOperation::where('payment_id',$payment->id)->exists() || \App\Models\PaymentAttribution::where('payment_id',$payment->id)->whereNotNull('original_client_id')->exists()) {
+                return response()->json(['message'=>'Verified financial or service evidence must be retained; this record cannot be hard-deleted.'],422);
+            }
+            $snapshot['recovery_case']=$payment->recoveryCase?->toArray();
+        }
         $paymentId = (int) $payment->id;
         $platformId = (int) $payment->platform_id;
 
@@ -624,6 +631,12 @@ class PaymentQueueController extends Controller
                 (string) $validated['reason']
             );
 
+            if (\Illuminate\Support\Facades\Schema::hasTable('payment_recovery_cases')) {
+                $caseIds=\App\Models\PaymentRecoveryCase::where('payment_id',$payment->id)->pluck('id');
+                DB::table('payment_recovery_actions')->whereIn('case_id',$caseIds)->delete();
+                \App\Models\PaymentRecoveryCase::where('payment_id',$payment->id)->delete();
+                \App\Models\PaymentAttribution::where('payment_id',$payment->id)->delete();
+            }
             $payment->delete();
         });
 
@@ -2250,6 +2263,10 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
+        if (!$payment->client || !$payment->deal) {
+            return response()->json(['message' => 'Original profile or subscription is unavailable. Reconcile the historical receipt before verification.'], 422);
+        }
+
         if (! $submission->activated_on_submit && (! $payment->deal || (string) $payment->deal->status !== 'active')) {
             return response()->json([
                 'message' => 'Use approve and activate for manual submissions that are not already live.',
@@ -3272,8 +3289,8 @@ class PaymentQueueController extends Controller
                     $builder->where('review_decision', 'rejected');
                 })
                 ->count(),
-            'matched' => (clone $query)->whereNotNull('client_id')->count(),
-            'unmatched' => (clone $query)->whereNull('client_id')->count(),
+            'matched' => \App\Services\Revenue\PaymentAttributionQuery::matched(clone $query)->count(),
+            'unmatched' => \App\Services\Revenue\PaymentAttributionQuery::matched(clone $query, false)->count(),
         ];
     }
 
@@ -3284,10 +3301,7 @@ class PaymentQueueController extends Controller
 
         return [
             'payments_count' => (int) (clone $query)->count(),
-            'clients_count' => (int) (clone $query)
-                ->whereNotNull('payments.client_id')
-                ->distinct('payments.client_id')
-                ->count('payments.client_id'),
+            'clients_count' => \App\Services\Revenue\PaymentAttributionQuery::clientsCount(clone $query),
             'amount' => $breakdown['scalar_amount'],
             'amount_breakdown' => $breakdown['breakdown'],
             'currency_count' => $breakdown['currency_count'],

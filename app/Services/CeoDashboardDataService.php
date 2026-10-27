@@ -1137,10 +1137,7 @@ class CeoDashboardDataService
             $buckets[$bucketKey] = [
                 'key' => $bucketKey,
                 'payments_count' => (int) (clone $bucketQuery)->count(),
-                'clients_count' => (int) $countQuery
-                    ->whereNotNull('payments.client_id')
-                    ->distinct('payments.client_id')
-                    ->count('payments.client_id'),
+                'clients_count' => \App\Services\Revenue\PaymentAttributionQuery::clientsCount($countQuery),
                 'source_breakdown' => $normalized['source_breakdown'],
                 'normalized_amount' => $normalized['normalized_total'],
                 'normalized_currency' => $normalized['normalized_currency'],

@@ -60,7 +60,7 @@ class ProviderStatusQueryOrchestrator
         }
 
         $verification = match ($provider) {
-            'kopokopo' => $this->kopoKopoCompatibilityAdapter->verify($payment, $context, (string) $payment->transaction_reference),
+            'kopokopo' => $this->kopoKopoCompatibilityAdapter->verify($payment, $context, $this->resolveKopoKopoLocation($payment)),
             'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
                 $payment,
                 $context,
@@ -79,7 +79,7 @@ class ProviderStatusQueryOrchestrator
         };
 
         $providerReference = match ($provider) {
-            'kopokopo' => (string) $payment->transaction_reference,
+            'kopokopo' => $this->resolveKopoKopoLocation($payment),
             'pesapal' => $this->resolvePesapalTrackingId($payment, $options),
             'pawapay' => $this->resolvePawaPayDepositId($payment, $options),
             default => (string) ($options['reference'] ?? $payment->transaction_reference ?: $payment->reference_number),
@@ -297,6 +297,23 @@ class ProviderStatusQueryOrchestrator
         }
 
         return $depositId;
+    }
+
+    public function resolveKopoKopoLocation(Payment $payment): string
+    {
+        $valid = fn($value) => is_string($value) && preg_match('~^https://[^/]+/api/v1/incoming_payments/[a-zA-Z0-9-]+/?$~D', $value);
+        if ($valid($payment->transaction_reference)) return $payment->transaction_reference;
+        $locations=[];
+        $walk=function($value,$depth=0)use(&$walk,&$locations,$valid){
+            if($depth>8)return;
+            if(is_array($value)){foreach($value as$item)$walk($item,$depth+1);}elseif($valid($value))$locations[]=$value;
+        };
+        $walk(data_get($payment->raw_payload,'mpesa_stk',[]));
+        $walk(data_get($payment->payment_data,'resume',[]));
+        $locations=array_values(array_unique($locations));
+        if(count($locations)!==1)throw new RuntimeException('KopoKopo original provider status location is missing or ambiguous.');
+        // KopoKopoService additionally binds scheme/host/path to the pinned provider origin before authentication.
+        return $locations[0];
     }
 
     public function resolveSurface(Payment $payment): string

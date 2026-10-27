@@ -59,6 +59,7 @@ class PaymentExportDataService
             $with['product'] = 'product:id,name';
         }
 
+        if (\Illuminate\Support\Facades\Schema::hasTable('payment_attributions')) $with['attribution']='attribution';
         return array_values($with);
     }
 }

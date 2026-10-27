@@ -22,6 +22,7 @@ class PaymentQueueQueryBuilder
             'per_page' => 'nullable|integer|min:1|max:200',
             'search' => 'nullable|string|max:120',
             'status' => 'nullable|string|max:60',
+            'attribution_state' => 'nullable|in:current,archived,unresolved,disputed',
             'matched' => 'nullable|in:matched,unmatched',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'source' => 'nullable|string|max:80',
@@ -101,8 +102,7 @@ class PaymentQueueQueryBuilder
                 $query->where(function (Builder $builder) use ($successfulStatuses) {
                     $builder->whereIn('status', ['initiated', 'pending', 'failed'])
                         ->orWhere(function (Builder $unmatchedCompleted) use ($successfulStatuses) {
-                            $unmatchedCompleted->whereIn('status', $successfulStatuses)
-                                ->whereNull('client_id');
+                            \App\Services\Revenue\PaymentAttributionQuery::matched($unmatchedCompleted->whereIn('status', $successfulStatuses), false);
                         });
                 });
             } elseif ($statusFilter === 'reversed') {
@@ -121,12 +121,13 @@ class PaymentQueueQueryBuilder
         $matchedFilter = trim((string) ($validated['matched'] ?? $request->input('matched', '')));
         if ($matchedFilter !== '') {
             if ($matchedFilter === 'unmatched') {
-                $query->whereNull('client_id');
+                \App\Services\Revenue\PaymentAttributionQuery::matched($query, false);
             } elseif ($matchedFilter === 'matched') {
-                $query->whereNotNull('client_id');
+                \App\Services\Revenue\PaymentAttributionQuery::matched($query);
             }
         }
 
+        if (!empty($validated['attribution_state'])) \App\Services\Revenue\PaymentAttributionQuery::state($query, $validated['attribution_state']);
         $sourceFilter = trim((string) ($validated['source'] ?? $request->input('source', '')));
         if ($sourceFilter !== '') {
             $query->where('source', $sourceFilter);
@@ -248,8 +249,7 @@ class PaymentQueueQueryBuilder
                 $query->where(function (Builder $builder) use ($context) {
                     $builder->whereIn('status', ['initiated', 'pending', 'failed'])
                         ->orWhere(function (Builder $unmatchedCompleted) use ($context) {
-                            $unmatchedCompleted->whereIn('status', $context['successful_statuses'])
-                                ->whereNull('client_id');
+                            \App\Services\Revenue\PaymentAttributionQuery::matched($unmatchedCompleted->whereIn('status', $context['successful_statuses']), false);
                         });
                 });
             } elseif ($statusFilter === 'reversed') {
@@ -268,12 +268,13 @@ class PaymentQueueQueryBuilder
         $matchedFilter = trim((string) ($validated['matched'] ?? $request->input('matched', '')));
         if ($matchedFilter !== '') {
             if ($matchedFilter === 'unmatched') {
-                $query->whereNull('client_id');
+                \App\Services\Revenue\PaymentAttributionQuery::matched($query, false);
             } elseif ($matchedFilter === 'matched') {
-                $query->whereNotNull('client_id');
+                \App\Services\Revenue\PaymentAttributionQuery::matched($query);
             }
         }
 
+        if (!empty($validated['attribution_state'])) \App\Services\Revenue\PaymentAttributionQuery::state($query, $validated['attribution_state']);
         $sourceFilter = trim((string) ($validated['source'] ?? $request->input('source', '')));
         if ($sourceFilter !== '') {
             $query->where('source', $sourceFilter);

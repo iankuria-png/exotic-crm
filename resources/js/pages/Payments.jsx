@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
+import PaymentRecoveryCases from '../components/PaymentRecoveryCases';
 import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
@@ -1536,6 +1537,7 @@ export default function Payments() {
         const requested = (searchParams.get('matched') || '').trim();
         return allowedMatchFilters.has(requested) ? requested : '';
     });
+    const [attributionFilter, setAttributionFilter] = useState(() => ['current','archived','unresolved','disputed'].includes(searchParams.get('attribution_state')) ? searchParams.get('attribution_state') : '');
     const [hasDiscountFilter, setHasDiscountFilter] = useState(() => {
         const requested = (searchParams.get('has_discount') || '').trim();
         return allowedHasDiscountFilters.has(requested) ? requested : '';
@@ -1705,6 +1707,7 @@ export default function Payments() {
         ...(search && { search }),
         ...(statusFilter && { status: statusFilter }),
         ...(matchFilter && { matched: matchFilter }),
+        ...(attributionFilter && { attribution_state: attributionFilter }),
         ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
         ...(hideLifecycle && { hide_lifecycle: 1 }),
         ...(platformFilter && { platform_id: Number(platformFilter) }),
@@ -1725,6 +1728,7 @@ export default function Payments() {
         search,
         statusFilter,
         matchFilter,
+        attributionFilter,
         hasDiscountFilter,
         hideLifecycle,
         platformFilter,
@@ -1745,7 +1749,7 @@ export default function Payments() {
     ]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, collectionChannelFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, attributionFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, collectionChannelFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -1754,6 +1758,7 @@ export default function Payments() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(matchFilter && { matched: matchFilter }),
+        ...(attributionFilter && { attribution_state: attributionFilter }),
                     ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
                     ...(hideLifecycle && { hide_lifecycle: 1 }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
@@ -3094,21 +3099,14 @@ export default function Payments() {
             key: 'client',
             label: 'Matched Client',
             width: '12rem',
-            render: (row) => (
-                row.client
-                    ? (
-                        <a
-                            href={`/clients/${row.client.id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(event) => event.stopPropagation()}
-                            className="text-xs text-teal-700 hover:text-teal-900 hover:underline"
-                        >
-                            {row.client.name || `Client #${row.client.id}`}
-                        </a>
-                    )
-                    : <span className="text-xs text-slate-400">Unmatched</span>
-            ),
+            render: row => {
+                const a = row.attribution;
+                if (a?.attribution_state === 'disputed') return <span className="text-xs text-amber-700">Identity under review</span>;
+                if (a?.attribution_state === 'archived') return <span className="text-xs text-slate-600">Archived customer<span className="block text-slate-400">Historical #{a.original_client_id || a.wp_post_id}</span><details className="mt-1"><summary className="cursor-pointer text-teal-700">Attribution evidence</summary><span className="mt-1 block">{String(a.evidence_json?.method || 'Original customer record').replaceAll('_',' ')}{a.evidence_json?.deletion_audit_id ? ` · Deletion audit #${a.evidence_json.deletion_audit_id}` : ''}</span></details></span>;
+                if (row.client) return <a href={`/clients/${row.client.id}`} className="text-sm font-medium text-teal-700 hover:underline">{row.client.name || `Client #${row.client.id}`}</a>;
+                if (a?.original_client_id || a?.wp_post_id) return <span className="text-xs text-slate-600">Known customer #{a.original_client_id || a.wp_post_id}<span className="block text-slate-400">Profile unavailable</span></span>;
+                return <span className="text-xs text-slate-400">Unmatched</span>;
+            },
         },
         {
             key: 'match_confidence',
@@ -3144,7 +3142,7 @@ export default function Payments() {
             render: (row) => {
                 const testRow = isTestPayment(row);
                 const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
-                const isCompletedUnmatched = row.status === 'completed' && !row.client_id;
+                const isCompletedUnmatched = row.status === 'completed' && !row.client_id && !['archived', 'disputed'].includes(row.attribution?.attribution_state);
                 const isFailedUnmatched = row.status === 'failed' && !row.client_id;
                 const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !testRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
@@ -3450,6 +3448,7 @@ export default function Payments() {
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                         {[
                             ['payments', 'Payment queue'],
+                            ['service', 'Paid customer recovery'],
                             ['recovery', 'Failed recovery'],
                             ...(canAccessFraudAudit ? [['fraud', 'Fraud audit']] : []),
                         ].map(([key, label]) => (
@@ -3470,7 +3469,9 @@ export default function Payments() {
                 </div>
             </section>
 
-            {workspaceTab === 'recovery' ? (
+            {workspaceTab === 'service' ? (
+                <PaymentRecoveryCases platformId={platformFilter} canManage={canManageBundleFinanceReview} staffId={user?.id} />
+            ) : workspaceTab === 'recovery' ? (
                 <RecoveryLedger
                     report={recoveryReportData}
                     isLoading={recoveryReportLoading}
@@ -3784,6 +3785,13 @@ export default function Payments() {
                     />
 
                     <FilterSelect
+                        label="Customer attribution"
+                        value={attributionFilter}
+                        onChange={event => { setAttributionFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All customers' }, { value: 'current', label: 'Current customer' }, { value: 'archived', label: 'Archived customer' }, { value: 'unresolved', label: 'Unresolved' }, { value: 'disputed', label: 'Identity under review' }]}
+                    />
+
+                    <FilterSelect
                         label="Type"
                         value={purposeFilter}
                         onChange={(event) => { setPurposeFilter(event.target.value); setPage(1); }}
@@ -3960,7 +3968,7 @@ export default function Payments() {
                         Hide SMS payment links
                     </label>
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || collectionChannelFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    {(search || statusFilter || matchFilter || attributionFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || collectionChannelFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -3968,6 +3976,7 @@ export default function Payments() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setMatchFilter('');
+                                setAttributionFilter('');
                                 setHasDiscountFilter('');
                                 setHideLifecycle(false);
                                 setPlatformFilter('');

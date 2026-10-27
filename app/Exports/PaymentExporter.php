@@ -25,6 +25,8 @@ class PaymentExporter
             'created_at' => 'Created At',
             'transaction_reference' => 'Transaction Reference',
             'client_name' => 'Client Name',
+            'attribution_state' => 'Customer Attribution',
+            'original_customer_reference' => 'Original Customer Reference',
             'deal_subscription_lifecycle' => 'Subscription Lifecycle',
             'product_name' => 'Product Name',
             'match_confidence' => 'Match Confidence',
@@ -75,6 +77,7 @@ class PaymentExporter
      */
     private function mapRow(Payment $payment, array $columns, string $dateFormat): array
     {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('payment_attributions')) $payment->setRelation('attribution',null);
         return array_map(function (string $column) use ($payment, $dateFormat) {
             return match ($column) {
                 'id' => $payment->id,
@@ -85,7 +88,9 @@ class PaymentExporter
                 'completed_at' => $this->formatDateValue($payment->completed_at, $dateFormat),
                 'created_at' => $this->formatDateValue($payment->created_at, $dateFormat),
                 'transaction_reference' => $payment->transaction_reference,
-                'client_name' => $payment->client?->name,
+                'client_name' => $payment->attribution?->attribution_state === 'disputed' ? 'Identity under review' : ($payment->attribution?->attribution_state === 'archived' ? 'Archived customer #'.($payment->attribution->original_client_id ?: $payment->attribution->wp_post_id) : $payment->client?->name),
+                'attribution_state' => $payment->attribution?->attribution_state ?? ($payment->client_id ? 'current' : 'unresolved'),
+                'original_customer_reference' => $payment->attribution?->original_client_id ?: $payment->attribution?->wp_post_id,
                 'deal_subscription_lifecycle' => $payment->subscription_lifecycle ?: $payment->deal?->subscription_lifecycle,
                 'product_name' => $payment->product?->name,
                 'match_confidence' => $payment->match_confidence,

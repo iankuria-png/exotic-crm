@@ -671,6 +671,7 @@ class BillingGatewayService
 
         $completed = $this->paymentCompletionService->complete($payment, $payload, [
             'transaction_reference' => $payload['reference'] ?? $payment->transaction_reference,
+            'recovery_verification_method' => 'kopokopo_verified_signature',
         ]);
         $this->recordBillingCallbackAttempt($completed['payment'], 'kopokopo_webhook', 'success', [
             'response_meta' => $responseMeta,
@@ -1363,6 +1364,7 @@ class BillingGatewayService
 
     private function completeVerifiedPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
+        $options['recovery_verification_method'] = 'provider_status_verified';
         return $this->paymentCompletionService->complete($payment, $providerPayload, $options);
     }
 

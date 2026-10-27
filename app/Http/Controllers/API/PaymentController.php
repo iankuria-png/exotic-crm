@@ -486,6 +486,7 @@ class PaymentController extends Controller
                 ]);
 
                 $completionOptions = [
+                    'recovery_verification_method' => request()->attributes->get('legacy_payment_callback_id') ? 'legacy_verified_signature' : null,
                     'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
                     'raw_payload' => [
                         'webhook_data' => $rawData,
@@ -830,6 +831,7 @@ class PaymentController extends Controller
         return [
             'status' => true,
             'payment_status' => $status,
+            'service_status' => app(\App\Services\PaymentRecoveryEvidencePolicy::class)->benefit($payment) ? 'fulfilled' : (in_array($payment->status, Payment::SUCCESSFUL_STATUSES, true) ? 'awaiting_review' : 'not_settled'),
             'payment_id' => $payment->id,
             'data' => [
                 'id' => $payment->id,
@@ -843,7 +845,7 @@ class PaymentController extends Controller
                 'purpose' => $payment->purpose,
                 'provider_key' => $payment->provider_key,
                 'provider_environment' => $payment->provider_environment,
-                'provisioning_status' => data_get($payment->payment_data, 'provisioning_status'),
+                'provisioning_status' => data_get($payment->payment_data, 'canonical_state.provisioning_status') ?? data_get($payment->payment_data, 'provisioning_status'),
                 'sandbox_suppressed' => (bool) data_get($payment->payment_data, 'sandbox_suppressed', false),
                 'amount' => $payment->amount,
                 'currency' => $payment->currency,

@@ -485,6 +485,8 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_refresh_fx_rates.log'));
 
+        $schedule->command('crm:recover-paid-service')->name('crm_recover_paid_service')->everyMinute()->withoutOverlapping(10)->onOneServer()->runInBackground()->sendOutputTo(storage_path('logs/crm_recover_paid_service.log'));
+
         $schedule->command('crm:recover-payment-client-links')
             ->name('crm_recover_payment_client_links')
             ->cron('8,23,38,53 * * * *')

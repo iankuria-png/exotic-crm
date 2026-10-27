@@ -1,0 +1,114 @@
+[
+  {
+    "payment_id": 37627,
+    "platform_id": 8,
+    "original_client_id": 3866328,
+    "wp_post_id": 8169,
+    "deletion_audit_id": 615635
+  },
+  {
+    "payment_id": 36532,
+    "platform_id": 3,
+    "original_client_id": 3766372,
+    "wp_post_id": 147970,
+    "deletion_audit_id": 606708
+  },
+  {
+    "payment_id": 36242,
+    "platform_id": 30,
+    "original_client_id": 3568539,
+    "wp_post_id": 69292,
+    "deletion_audit_id": 604539
+  },
+  {
+    "payment_id": 34941,
+    "platform_id": 30,
+    "original_client_id": 3568539,
+    "wp_post_id": 69292,
+    "deletion_audit_id": 604539
+  },
+  {
+    "payment_id": 34913,
+    "platform_id": 4,
+    "original_client_id": 11852,
+    "wp_post_id": 51609,
+    "deletion_audit_id": 615715
+  },
+  {
+    "payment_id": 34717,
+    "platform_id": 14,
+    "original_client_id": 3503574,
+    "wp_post_id": 17099,
+    "deletion_audit_id": 608150
+  },
+  {
+    "payment_id": 33849,
+    "platform_id": 3,
+    "original_client_id": 3438526,
+    "wp_post_id": 146832,
+    "deletion_audit_id": 616765
+  },
+  {
+    "payment_id": 33787,
+    "platform_id": 3,
+    "original_client_id": 3438403,
+    "wp_post_id": 146794,
+    "deletion_audit_id": 616764
+  },
+  {
+    "payment_id": 33524,
+    "platform_id": 3,
+    "original_client_id": 3406137,
+    "wp_post_id": 146657,
+    "deletion_audit_id": 615071
+  },
+  {
+    "payment_id": 33144,
+    "platform_id": 4,
+    "original_client_id": 1930215,
+    "wp_post_id": 61805,
+    "deletion_audit_id": 592480
+  },
+  {
+    "payment_id": 33138,
+    "platform_id": 4,
+    "original_client_id": 1930215,
+    "wp_post_id": 61805,
+    "deletion_audit_id": 592480
+  },
+  {
+    "payment_id": 32377,
+    "platform_id": 2,
+    "original_client_id": 191,
+    "wp_post_id": 29490,
+    "deletion_audit_id": 591273
+  },
+  {
+    "payment_id": 32224,
+    "platform_id": 4,
+    "original_client_id": 3332084,
+    "wp_post_id": 63302,
+    "deletion_audit_id": 587807
+  },
+  {
+    "payment_id": 31988,
+    "platform_id": 4,
+    "original_client_id": 3332084,
+    "wp_post_id": 63302,
+    "deletion_audit_id": 587807
+  },
+  {
+    "payment_id": 31114,
+    "platform_id": 3,
+    "original_client_id": 3296182,
+    "wp_post_id": 145753,
+    "deletion_audit_id": 606615
+  },
+  {
+    "payment_id": 31049,
+    "platform_id": 1,
+    "original_client_id": 3296130,
+    "wp_post_id": 112841,
+    "deletion_audit_id": 580031
+  }
+]

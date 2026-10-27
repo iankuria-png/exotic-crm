@@ -50,27 +50,30 @@ class PaymentMatchingService
     public function confirmMatch(Payment $payment, int $clientId, int $confirmedBy): Payment
     {
         abort_if($payment->isVisitorPayment(), 422, 'Visitor payments cannot match advertisers.');
+        abort_if(\Illuminate\Support\Facades\Schema::hasTable('payment_attributions') && in_array($payment->attribution?->attribution_state,['archived','disputed'],true),422,'Historical or disputed attribution requires a reviewed correction before matching.');
+        abort_if(\Illuminate\Support\Facades\Schema::hasTable('payment_attributions') && $payment->attribution?->original_client_id && (int)$payment->attribution->original_client_id !== $clientId,422,'Changing the original customer requires an audited attribution correction.');
+        Client::where('platform_id',$payment->platform_id)->findOrFail($clientId);
+        $needsService=in_array($payment->status,Payment::SUCCESSFUL_STATUSES,true) && $this->isSubscriptionPayment($payment) && !app(PaymentRecoveryEvidencePolicy::class)->benefit($payment);
         $payment->update([
             'client_id' => $clientId,
             'match_confidence' => 'manual',
             'confirmed_by' => $confirmedBy,
             'confirmed_at' => now(),
             'reconciliation_confidence' => $this->confidenceService->fromMatchConfidence('manual'),
-            'reconciliation_state' => 'resolved',
+            'reconciliation_state' => $needsService ? 'manual_review' : 'resolved',
         ]);
 
         $payment = $payment->fresh();
 
         // Automatically create deal if payment is completed
-        if ($payment->status === 'completed'
-            && !$payment->deal_id
-            && $this->isSubscriptionPayment($payment)
-            && !$this->isSandboxPayment($payment)
+        if ($needsService && !$this->isSandboxPayment($payment)
         ) {
             try {
                 $this->createDealFromPayment($payment, $confirmedBy);
-            } catch (\Exception $e) {
-                // Log but don't block match confirmation
+            } catch (\Throwable $e) {
+                $payment->update(['reconciliation_state' => 'manual_review']);
+                app(PaymentRecoveryCaseService::class)->synchronize($payment->fresh());
+                // Identity confirmation survives; fulfillment remains visibly unresolved.
                 \Illuminate\Support\Facades\Log::error('Auto-deal creation failed after manual match', [
                     'payment_id' => $payment->id,
                     'error' => $e->getMessage()
@@ -87,7 +90,7 @@ class PaymentMatchingService
     public function batchMatch(?int $platformId = null): array
     {
         $query = Payment::excludingContactUnlocks()->whereNull('client_id')->excludingContactUnlocks()
-            ->where('status', 'completed');
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
 
         if ($platformId) {
             $query->where('platform_id', $platformId);
@@ -104,7 +107,7 @@ class PaymentMatchingService
 
         $query = Payment::query()
             ->whereNull('client_id')->excludingContactUnlocks()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
 
         return $this->runBatchMatch($query);
@@ -150,7 +153,7 @@ class PaymentMatchingService
     public function dryRunBatchMatch(?int $platformId = null): array
     {
         $query = Payment::excludingContactUnlocks()->whereNull('client_id')->excludingContactUnlocks()
-            ->where('status', 'completed');
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
 
         if ($platformId) {
             $query->where('platform_id', $platformId);
@@ -167,7 +170,7 @@ class PaymentMatchingService
 
         $query = Payment::query()
             ->whereNull('client_id')->excludingContactUnlocks()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
 
         return $this->runDryRunBatchMatch($query);

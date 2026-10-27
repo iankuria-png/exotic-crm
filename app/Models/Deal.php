@@ -14,6 +14,12 @@ class Deal extends Model
 
     protected static function booted(): void
     {
+        static::saved(static function (Deal $deal): void {
+            if ($deal->payment_id && ($p = Payment::find($deal->payment_id))) {
+                app(\App\Services\PaymentAttributionService::class)->capture($p,$deal->client);
+                app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($p);
+            }
+        });
         static::saved(function (Deal $deal): void {
             ClientRetentionInsightService::scheduleRefreshForClientId($deal->client_id ? (int) $deal->client_id : null);
             if ($deal->client_id) {

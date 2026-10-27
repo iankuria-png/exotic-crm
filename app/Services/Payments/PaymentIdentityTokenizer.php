@@ -66,22 +66,6 @@ class PaymentIdentityTokenizer
 
     public function canonicalPhone(?string $phone, string $prefix = '254'): ?string
     {
-        if ($phone === null || $phone === '') {
-            return null;
-        }
-
-        $value = preg_replace('/[^\d+]/', '', $phone);
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = ltrim($value, '+');
-
-        if (str_starts_with($value, '0')) {
-            $value = $prefix.substr($value, 1);
-        }
-
-        return $value !== '' ? $value : null;
+        return \App\Support\PhoneNormalizer::normalize($phone, $prefix);
     }
 }

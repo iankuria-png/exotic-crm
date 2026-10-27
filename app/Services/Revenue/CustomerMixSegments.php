@@ -47,31 +47,12 @@ class CustomerMixSegments
      */
     public static function apply(Builder $query, string $bucketKey, ?Carbon $from, Carbon $to): Builder
     {
+        [$state, $subject, $firstSeen] = PaymentAttributionQuery::expressions($query);
         return match ($bucketKey) {
-            self::NEW_ACTIVE => $query->whereHas('client', function (Builder $clientQuery) use ($from, $to) {
-                if ($from) {
-                    $clientQuery->where('created_at', '>=', $from);
-                }
-
-                $clientQuery->where('created_at', '<=', $to);
-            }),
-
-            self::EXISTING_ACTIVE => $from
-                ? $query->whereHas('client', fn (Builder $clientQuery) => $clientQuery->where('created_at', '<', $from))
-                : $query->whereRaw('1 = 0'),
-
-            self::UNATTRIBUTED => $query->whereNull('payments.client_id'),
-
-            // Everything still matched to a client but outside both windows: the client row
-            // has since been deleted, or it was created after the window closed (a profile
-            // backfilled later than the payment it is matched to).
-            self::OTHER_MATCHED => $query
-                ->whereNotNull('payments.client_id')
-                ->where(function (Builder $builder) use ($to) {
-                    $builder->whereDoesntHave('client')
-                        ->orWhereHas('client', fn (Builder $clientQuery) => $clientQuery->where('created_at', '>', $to));
-                }),
-
+            self::NEW_ACTIVE => PaymentAttributionQuery::matched($query)->whereRaw("($firstSeen) <= ?", [$to])->when($from, fn($q) => $q->whereRaw("($firstSeen) >= ?", [$from])),
+            self::EXISTING_ACTIVE => $from ? PaymentAttributionQuery::matched($query)->whereRaw("($firstSeen) < ?", [$from]) : $query->whereRaw('1 = 0'),
+            self::UNATTRIBUTED => PaymentAttributionQuery::matched($query, false),
+            self::OTHER_MATCHED => PaymentAttributionQuery::matched($query)->where(fn($q) => $q->whereRaw("($firstSeen) IS NULL")->orWhereRaw("($firstSeen) > ?", [$to])),
             default => $query,
         };
     }

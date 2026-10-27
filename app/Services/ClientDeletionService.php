@@ -217,6 +217,7 @@ class ClientDeletionService
         $beforeState = ['client' => $client->only(['id', 'name', 'platform_id', 'wp_post_id', 'phone_normalized', 'email', 'profile_status']), 'impact' => $impact];
 
         DB::transaction(function () use ($client, $clientId, $dealIds): void {
+            app(PaymentAttributionService::class)->archiveClient($client);
             Client::query()->where('duplicate_of', $clientId)->update(['duplicate_of' => null]);
             DB::table('push_campaign_items')->where('client_id', $clientId)->update(['client_id' => null]);
             DB::table('leads')->where('converted_client_id', $clientId)->update(['converted_client_id' => null]);

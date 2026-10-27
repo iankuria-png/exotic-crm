@@ -18,6 +18,9 @@ class PaymentClientIdentityService
         if (! $payment->platform_id) {
             return $miss('Payment market is missing');
         }
+        if (\Illuminate\Support\Facades\Schema::hasTable('payment_attributions') && \App\Models\PaymentAttribution::where('payment_id', $payment->id)->whereIn('attribution_state', ['archived','disputed'])->exists()) {
+            return $miss('Historical customer identity requires reviewed reconciliation.', 'excluded');
+        }
         $base = fn () => Client::query()->where('platform_id', $payment->platform_id);
         if ($payment->client_id) {
             $client = $base()->find($payment->client_id);
