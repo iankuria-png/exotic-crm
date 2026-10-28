@@ -1697,6 +1697,111 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('https://kenya.example/escort/aisha/', (string) $fresh->profile_url);
     }
 
+    /**
+     * @return array{0: PushCampaignItem, 1: \Mockery\MockInterface, 2: \Closure}
+     */
+    private function pushItemWithImages(?string $snapshot, ?string $main, ?string $display, int $wpPostId = 0): array
+    {
+        $platform = $this->createPlatform('Tanzania', 'tz.example', 'Tanzania');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => $wpPostId,
+            'name' => 'Neema',
+            'phone_normalized' => '255700000042',
+            'city' => 'Dar es Salaam',
+            'main_image_url' => $main,
+            'display_image_url' => $display,
+        ]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Image guard campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-image-guard',
+            'provider' => 'exoticpush',
+        ]);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => $wpPostId,
+            'profile_name' => 'Neema',
+            'profile_city' => 'Dar es Salaam',
+            'profile_image_url' => $snapshot,
+            'profile_url' => 'https://tz.example/escort/neema/',
+            'custom_message' => 'Hi from Neema',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        $captured = new \ArrayObject();
+        $mock = \Mockery::mock(PushProviderService::class);
+        $mock->shouldReceive('sendPush')->once()->andReturnUsing(function ($notification) use ($captured) {
+            $captured['notification'] = $notification;
+
+            return ['success' => true, 'provider' => 'exoticpush', 'provider_notification_id' => 'n-1', 'provider_response' => ['success' => true]];
+        });
+        $this->app->instance(PushProviderService::class, $mock);
+
+        $run = function () use ($item, $mock, $captured): array {
+            (new SendPushNotificationJob((int) $item->id))->handle($mock, app(\App\Services\AuditService::class));
+
+            return $captured['notification'];
+        };
+
+        return [$item, $mock, $run];
+    }
+
+    public function test_send_push_job_replaces_deleted_snapshot_image_with_stored_client_image(): void
+    {
+        Http::fake([
+            'tz.example/wp-content/uploads/old.jpeg' => Http::response('', 404),
+            'tz.example/wp-content/uploads/current.jpg' => Http::response('', 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+        [$item, , $run] = $this->pushItemWithImages(
+            'https://tz.example/wp-content/uploads/old.jpeg',
+            'https://tz.example/wp-content/uploads/old.jpeg',
+            'https://tz.example/wp-content/uploads/current.jpg'
+        );
+
+        $notification = $run();
+
+        $this->assertSame('https://tz.example/wp-content/uploads/current.jpg', $notification['image_url']);
+        $this->assertSame('https://tz.example/wp-content/uploads/current.jpg', $notification['icon_url']);
+        $this->assertSame('https://tz.example/wp-content/uploads/current.jpg', (string) $item->fresh()->profile_image_url);
+    }
+
+    public function test_send_push_job_keeps_image_when_check_is_blocked_or_fails(): void
+    {
+        Http::fake([
+            'tz.example/wp-content/uploads/challenged.jpg' => Http::response('challenge', 403),
+        ]);
+        [$item, , $run] = $this->pushItemWithImages('https://tz.example/wp-content/uploads/challenged.jpg', null, null);
+
+        $notification = $run();
+
+        $this->assertSame('https://tz.example/wp-content/uploads/challenged.jpg', $notification['image_url']);
+        $this->assertSame('https://tz.example/wp-content/uploads/challenged.jpg', (string) $item->fresh()->profile_image_url);
+    }
+
+    public function test_send_push_job_sends_without_image_when_every_candidate_is_gone(): void
+    {
+        Http::fake([
+            'tz.example/wp-content/uploads/*' => Http::response('', 404),
+        ]);
+        [$item, , $run] = $this->pushItemWithImages(
+            'https://tz.example/wp-content/uploads/gone.jpeg',
+            'https://tz.example/wp-content/uploads/gone.jpeg',
+            'https://tz.example/wp-content/uploads/also-gone.jpg'
+        );
+
+        $notification = $run();
+
+        $this->assertNull($notification['image_url']);
+        $this->assertNull($notification['icon_url']);
+        $this->assertNull($item->fresh()->profile_image_url);
+    }
+
     public function test_send_push_job_falls_back_to_display_image_url_when_main_is_empty(): void
     {
         $platform = $this->createPlatform('Ghana', 'ghana.example', 'Ghana');

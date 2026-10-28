@@ -9,6 +9,7 @@ use App\Models\TimelineEvent;
 use App\Services\AuditService;
 use App\Services\ClientProfileImageService;
 use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
+use App\Services\PushCampaign\PushImageGuard;
 use App\Services\PushNotification\PushProviderService;
 use App\Support\CrmAuditAction;
 use App\Support\MarketTimezone;
@@ -170,6 +171,52 @@ class SendPushNotificationJob implements ShouldBeUnique, ShouldQueue
             if ($imageUrl) {
                 $item->forceFill(['profile_image_url' => $imageUrl])->save();
             }
+        }
+
+        // A deleted upload makes every subscribed device request a missing file at the
+        // same moment. Swap a definite 404/410 for another stored or freshly selected
+        // image, or send without one so the worker falls back to the site icon.
+        if ($imageUrl && app(PushImageGuard::class)->isDefinitelyMissing($imageUrl)) {
+            $missingUrl = $imageUrl;
+            $imageUrl = null;
+            $clientRow ??= $item->client_id ? Client::query()->find((int) $item->client_id) : null;
+
+            if ($clientRow) {
+                $candidates = array_unique(array_filter([
+                    trim((string) ($clientRow->main_image_url ?? '')),
+                    trim((string) ($clientRow->display_image_url ?? '')),
+                ]));
+                foreach ($candidates as $candidate) {
+                    if ($candidate !== $missingUrl && ! app(PushImageGuard::class)->isDefinitelyMissing($candidate)) {
+                        $imageUrl = $candidate;
+                        break;
+                    }
+                }
+
+                if (! $imageUrl && (int) ($clientRow->wp_post_id ?? 0) > 0) {
+                    try {
+                        $selection = app(ClientProfileImageService::class)
+                            ->refreshClient($clientRow, verifyReachable: true);
+                        $fresh = isset($selection['url']) ? trim((string) $selection['url']) : '';
+                        $imageUrl = $fresh !== '' && $fresh !== $missingUrl ? $fresh : null;
+                    } catch (\Throwable $exception) {
+                        Log::warning('Push image live-refresh failed', [
+                            'item_id' => (int) $item->id,
+                            'client_id' => (int) $item->client_id,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+            }
+
+            Log::warning('Push image missing; replaced before send', [
+                'item_id' => (int) $item->id,
+                'client_id' => $item->client_id,
+                'campaign_id' => (int) $campaign->id,
+                'missing_path' => (string) parse_url($missingUrl, PHP_URL_PATH),
+                'replacement' => $imageUrl ? (string) parse_url($imageUrl, PHP_URL_PATH) : null,
+            ]);
+            $item->forceFill(['profile_image_url' => $imageUrl])->save();
         }
 
         if (! $imageUrl) {
