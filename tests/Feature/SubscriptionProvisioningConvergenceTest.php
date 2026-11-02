@@ -59,6 +59,12 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         $this->assertSame('active', $deal->status);
         $this->assertSame('MANUAL-REF-001', $deal->payment_reference);
         $this->assertSame('completed', $payment->status);
+        $activation = app(\App\Services\SubscriptionActivationAuditService::class)->forPayment($payment);
+        $this->assertSame('staff', $activation['state']);
+        $this->assertSame(auth()->id(), $activation['actor']['id']);
+        $this->assertSame('manual', $activation['method']);
+        $this->assertSame('crm_activation', $activation['source']);
+        $this->assertNotNull($activation['activated_at']);
         $this->assertSame($deal->id, $payment->deal_id);
         $this->assertSame($client->id, $payment->client_id);
         $this->assertNotNull($payment->start_date);
@@ -214,6 +220,9 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
 
         $this->assertSame('completed', $payment->status);
         $this->assertSame('CALLBACK-SUCCESS-001', $payment->transaction_reference);
+        $activation = app(\App\Services\SubscriptionActivationAuditService::class)->forPayment($payment);
+        $this->assertSame(auth()->id(), $activation['actor']['id']);
+        $this->assertSame('crm_manual_payment_update', $activation['source']);
         $this->assertSame('active', $deal->status);
         $this->assertSame($payment->id, $deal->payment_id);
         $this->assertSame($payment->transaction_reference, $deal->payment_reference);
@@ -318,11 +327,13 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         ]);
 
         Http::fake();
+        $evidenceBefore = \App\Models\TimelineEvent::where('event_type', \App\Services\SubscriptionActivationAuditService::EVENT)->count();
 
         app(SubscriptionProvisioningService::class)->activateDeal($deal, [
             'payment_method' => 'manual',
         ]);
 
+        $this->assertSame($evidenceBefore, \App\Models\TimelineEvent::where('event_type', \App\Services\SubscriptionActivationAuditService::EVENT)->count());
         $fresh = $client->fresh();
         $this->assertSame(ClientLifecycleState::ACTIVE, $fresh->lifecycle_state);
         $this->assertNull($fresh->lifecycle_expired_at);
@@ -330,6 +341,23 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         $this->assertGreaterThan(now()->timestamp, (int) $fresh->escort_expire);
 
         Http::assertNothingSent();
+    }
+
+    public function test_failed_wordpress_activation_does_not_create_success_attribution(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createClient($platform, 9010);
+        $product = $this->createProduct($platform, 'Basic Escort', 1500);
+        $deal = Deal::factory()->create(['platform_id' => $platform->id, 'client_id' => $client->id,
+            'product_id' => $product->id, 'status' => 'pending', 'activated_at' => null, 'expires_at' => null]);
+        Http::fake(['*' => Http::response(['message' => 'Market unavailable'], 503)]);
+        Sanctum::actingAs($this->createAdminUser());
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'payment_method' => 'manual', 'payment_reference' => 'FAILED-WP-TEST', 'reason' => 'Failed activation check',
+        ]);
+        $this->assertContains($response->status(), [202, 500]);
+        $this->assertNotSame('active', $deal->fresh()->status);
+        $this->assertSame(0, \App\Models\TimelineEvent::where('event_type', \App\Services\SubscriptionActivationAuditService::EVENT)->count());
     }
 
     private function createPlatform(): Platform

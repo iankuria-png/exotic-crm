@@ -282,6 +282,8 @@ class PaymentCompletionService
             if ($client) {
                 $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
                     'client' => $client,
+                    'actor_id' => $options['actor_id'] ?? null,
+                    'activation_source' => $options['activation_source'] ?? 'payment_completion',
                     'confirmed_at' => $options['confirmed_at'] ?? ($payment->confirmed_at ?? now()),
                     'match_confidence' => $options['match_confidence'] ?? ($payment->match_confidence ?: 'auto_high'),
                     'reconciliation_confidence' => $options['reconciliation_confidence'] ?? 'high',

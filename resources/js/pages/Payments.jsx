@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
 import PaymentRecoveryCases from '../components/PaymentRecoveryCases';
+import ActivationResponsibility from '../components/payments/ActivationResponsibility';
 import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
@@ -1675,6 +1676,7 @@ export default function Payments() {
         notes: '',
     });
     const proofObjectUrlCacheRef = useRef(new Map());
+    const diagnosticsPanelRef = useRef(null);
     const [manualProofPreview, setManualProofPreview] = useState({
         objectUrl: '',
         isLoading: false,
@@ -3020,6 +3022,32 @@ export default function Payments() {
         setSandboxReconcileSnapshot(null);
     }, [diagnosticsDrawer.open, diagnosticsDrawer.payment?.id]);
 
+    useEffect(() => {
+        if (!diagnosticsDrawer.open) return undefined;
+        const previousFocus = document.activeElement;
+        diagnosticsPanelRef.current?.querySelector('button')?.focus();
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setDiagnosticsDrawer({ open: false, payment: null });
+            }
+            if (event.key !== 'Tab') return;
+            const controls = [...(diagnosticsPanelRef.current?.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') || [])]
+                .filter((element) => element.getClientRects().length > 0);
+            const target = event.shiftKey ? controls.at(-1) : controls[0];
+            const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+            if (target && document.activeElement === boundary) {
+                event.preventDefault();
+                target.focus();
+            }
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => {
+            document.removeEventListener('keydown', onKeyDown);
+            if (previousFocus?.isConnected) previousFocus.focus();
+        };
+    }, [diagnosticsDrawer.open]);
+
     const columns = [
         {
             key: 'phone',
@@ -4056,13 +4084,17 @@ export default function Payments() {
             {diagnosticsDrawer.open ? (
                 <div className="fixed inset-0 z-40 flex bg-slate-900/45" onClick={closeDiagnostics}>
                     <aside
+                        ref={diagnosticsPanelRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="payment-diagnostics-title"
                         className="ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-xl"
                         onClick={(event) => event.stopPropagation()}
                     >
                         <header className="crm-panel-header sticky top-0 z-10 border-b border-slate-100 bg-white/95 backdrop-blur">
                             <div className="flex items-start justify-between gap-3">
                                 <div>
-                                    <h3 className="crm-panel-title">Payment Diagnostics</h3>
+                                    <h3 id="payment-diagnostics-title" className="crm-panel-title">Payment Diagnostics</h3>
                                     <p className="crm-panel-subtitle">
                                         Payment #{diagnosticsPayment?.id || '--'} • {diagnosticsPayment?.phone || 'No phone'}
                                     </p>
@@ -4201,6 +4233,8 @@ export default function Payments() {
                                                 ))}
                                             </div>
                                         </section>
+
+                                        <ActivationResponsibility data={diagnosticsData.activation_responsibility} />
 
                                         {manualSubmissionData ? (
                                             <section id="payment-diagnostics-manual-proof" className="rounded-xl border border-slate-200 bg-white p-4">

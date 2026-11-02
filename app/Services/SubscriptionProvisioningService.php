@@ -184,6 +184,12 @@ class SubscriptionProvisioningService
             'expires_at' => $expiresAt,
         ]));
 
+        app(SubscriptionActivationAuditService::class)->record(
+            $deal, $payment, $actorId, $paymentMethod,
+            (string) ($options['activation_source'] ?? data_get($options, 'timeline_context.source') ?? 'subscription_provisioning'),
+            $options['activation_reason'] ?? null,
+        );
+
         $syncedClient = null;
 
         if (($options['sync_client'] ?? true) !== false) {

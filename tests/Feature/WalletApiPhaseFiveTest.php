@@ -2216,6 +2216,25 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertDontSee('CRM SPA');
     }
 
+    public function test_wallet_auto_renew_records_system_activation_once_for_the_new_payment(): void
+    {
+        ['platform' => $platform, 'product' => $product, 'client' => $client] = $this->seedWalletContext(['client_balance' => 5000]);
+        $deal = \App\Models\Deal::factory()->create(['platform_id' => $platform->id, 'client_id' => $client->id,
+            'product_id' => $product->id, 'duration' => 'monthly', 'status' => 'active', 'currency' => 'KES']);
+        Http::fake(['*' => Http::response(['success' => true, 'escort_expire' => now()->addDays(60)->timestamp], 200)]);
+        $service = app(WalletCheckoutService::class);
+        $result = $service->autoRenewDealFromWallet($deal, 'attribution-auto-renew', ['environment' => 'production']);
+        $activation = app(\App\Services\SubscriptionActivationAuditService::class)->forPayment($result['payment']);
+        $this->assertSame('automatic', $activation['state']);
+        $this->assertNull($activation['actor']);
+        $this->assertSame('wallet_auto_renew', $activation['source']);
+        $this->assertSame('wallet', $activation['method']);
+        $replay = $service->autoRenewDealFromWallet($deal->fresh(), 'attribution-auto-renew', ['environment' => 'production']);
+        $this->assertTrue($replay['replayed']);
+        $this->assertSame($result['payment']->id, $replay['payment']->id);
+        $this->assertSame(1, \App\Models\TimelineEvent::where('event_type', \App\Services\SubscriptionActivationAuditService::EVENT)->count());
+    }
+
     private function seedWalletContext(array $overrides = []): array
     {
         config([

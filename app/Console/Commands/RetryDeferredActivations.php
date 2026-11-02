@@ -73,6 +73,7 @@ class RetryDeferredActivations extends Command
 
             try {
                 $provisioning->activateDeal($deal, [
+                    'activation_source' => 'deferred_activation_retry',
                     'payment' => $deal->payment,
                     'payment_method' => $deal->payment?->payment_method,
                     'bypass_market_health' => true,

@@ -199,6 +199,7 @@ class ManualPaymentBundleService
 
                 $this->subscriptionProvisioningService->activateDeal($deal, [
                     'payment' => $payment,
+                    'activation_source' => 'crm_manual_payment_bundle',
                     'payment_method' => 'manual',
                     'duration_days' => (int) $item['duration_days'],
                     'payment_reference' => (string) $item['child_reference'],

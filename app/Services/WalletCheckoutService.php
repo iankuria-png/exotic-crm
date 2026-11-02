@@ -236,6 +236,8 @@ class WalletCheckoutService
         try {
             $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
                 'client' => $client->fresh(['platform']),
+                'actor_id' => ($options['lifecycle_request'] ?? null)?->user()?->id,
+                'activation_source' => ($options['lifecycle_request'] ?? null)?->user() ? 'crm_wallet_checkout' : 'wallet_checkout',
                 'confirmed_at' => now(),
                 'match_confidence' => 'manual',
                 'reconciliation_confidence' => 'high',
@@ -449,6 +451,10 @@ class WalletCheckoutService
                 'reconciliation_state' => 'resolved',
                 'match_confidence' => 'manual',
             ])->save();
+
+            app(SubscriptionActivationAuditService::class)->record(
+                $lockedDeal, $payment, null, 'wallet', 'wallet_auto_renew', null, $payment->start_date?->toIso8601String(),
+            );
 
             return [
                 'client' => $debit['client'],

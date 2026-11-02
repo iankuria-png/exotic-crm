@@ -473,10 +473,10 @@ class PaymentController extends Controller
     /**
      * Handle successful payment webhook
      */
-    private function handleSuccessfulPayment(Payment $payment, array $resource, ?array $metadata, array $rawData)
+    private function handleSuccessfulPayment(Payment $payment, array $resource, ?array $metadata, array $rawData, array $activationContext = [])
     {
         try {
-            DB::transaction(function () use ($payment, $resource, $metadata, $rawData) {
+            DB::transaction(function () use ($payment, $resource, $metadata, $rawData, $activationContext) {
                 \Log::info('Starting successful payment handling', [
                     'payment_id' => $payment->id,
                     'user_id' => $payment->user_id,
@@ -486,6 +486,8 @@ class PaymentController extends Controller
                 ]);
 
                 $completionOptions = [
+                    'actor_id' => $activationContext['actor_id'] ?? null,
+                    'activation_source' => $activationContext['source'] ?? 'payment_callback',
                     'recovery_verification_method' => request()->attributes->get('legacy_payment_callback_id') ? 'legacy_verified_signature' : null,
                     'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
                     'raw_payload' => [
@@ -3760,6 +3762,9 @@ class PaymentController extends Controller
                     ], null, [
                         'manual_update' => true,
                         'processed_at' => now()->toDateTimeString(),
+                    ], [
+                        'actor_id' => (int) $request->user()->id,
+                        'source' => 'crm_manual_payment_update',
                     ]);
 
                     break;

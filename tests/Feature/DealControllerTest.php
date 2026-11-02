@@ -687,6 +687,9 @@ class DealControllerTest extends TestCase
             $newDeal = Deal::query()->findOrFail((int) $response->json('id'));
             $this->assertSame($wpExpiry->toDateTimeString(), $newDeal->expires_at->toDateTimeString());
             $this->assertSame(7, $newDeal->duration_days);
+            $activation = app(\App\Services\SubscriptionActivationAuditService::class)->forPayment(\App\Models\Payment::findOrFail($newDeal->payment_id));
+            $this->assertSame($user->id, $activation['actor']['id']);
+            $this->assertSame('crm_renewal', $activation['source']);
             $this->assertSame($wpExpiry->toDateTimeString(), $response->json('expires_at') ? \Illuminate\Support\Carbon::parse($response->json('expires_at'))->toDateTimeString() : null);
         } finally {
             if ($sqlite) \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = OFF');

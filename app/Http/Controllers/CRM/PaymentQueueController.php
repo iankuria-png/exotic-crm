@@ -1368,6 +1368,7 @@ class PaymentQueueController extends Controller
 
         $payload = [
             'payment' => $payment,
+            'activation_responsibility' => app(\App\Services\SubscriptionActivationAuditService::class)->forPayment($payment),
             'failure' => [
                 'status' => $payment->status,
                 'stage' => $failureStage,

@@ -138,6 +138,7 @@ class PaymentFulfillmentRecoveryService
             $at = \Illuminate\Support\Carbon::parse($result['applied_at']);
             $expiry = \Illuminate\Support\Carbon::createFromTimestamp((int) $result['escort_expire']);
             $deal->update(['status' => 'active', 'activated_at' => $at, 'expires_at' => $expiry, 'is_free_trial' => false]);
+            app(SubscriptionActivationAuditService::class)->record($deal, $payment, null, $payment->payment_method, 'verified_payment_recovery');
             $payment = Payment::lockForUpdate()->findOrFail($payment->id);
             $data = $payment->payment_data ?? [];
             data_set($data, 'canonical_state.provisioning_status', 'completed');

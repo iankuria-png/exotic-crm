@@ -683,6 +683,8 @@ class DealController extends Controller
                 'free_trial_approved_by' => null,
                 'actor_id' => (int) $request->user()->id,
                 'activated_by_field_agent' => $fieldAgentId,
+                'activation_source' => 'crm_activation',
+                'activation_reason' => $validated['reason'] ?? null,
                 'emit_profile_activated_timeline' => true,
                 'emit_deal_activated_timeline' => true,
             ]);
@@ -1113,6 +1115,11 @@ class DealController extends Controller
             $syncService = new ClientSyncService($platform);
             $syncService->syncOne($client->wp_post_id);
 
+            app(\App\Services\SubscriptionActivationAuditService::class)->record(
+                $deal, $payment, (int) $request->user()->id, $paymentMethod,
+                'crm_extension', $validated['reason'] ?? null, now()->toIso8601String(),
+            );
+
             $this->auditService->fromRequest(
                 $request,
                 (int) $client->platform_id,
@@ -1381,6 +1388,10 @@ class DealController extends Controller
                     ),
                 ]);
                 $deal->update(['status' => 'renewed']);
+                app(\App\Services\SubscriptionActivationAuditService::class)->record(
+                    $newDeal, $payment, (int) $request->user()->id, $paymentMethod,
+                    'crm_renewal', $validated['reason'] ?? null,
+                );
 
                 Client::query()->whereKey($client->id)->update([
                     'profile_removal_requested_at' => null,
