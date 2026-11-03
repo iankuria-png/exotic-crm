@@ -942,6 +942,40 @@ class WpSyncService
     /**
      * List all tours for a client profile.
      */
+    public function getTourTrip(int $tripId): array { return $this->get('/tour-trips/'.$tripId); }
+    public function setTourPaymentState(int $tripId, array $data): array { return $this->post('/tour-trips/'.$tripId.'/payment-state', $data); }
+    public function getTourCapability(?int $timeout = null): array { return $timeout === null ? $this->get('/tour-capability') : $this->getTourDiscovery('/tour-capability', $timeout); }
+    public function getTourLocations(?int $timeout = null): array { return $timeout === null ? $this->get('/tour-locations') : $this->getTourDiscovery('/tour-locations', $timeout); }
+    private function getTourDiscovery(string $path, int $timeout): array
+    {
+        $this->assertMarketAvailable();
+        $response = Http::withHeaders($this->headers())->connectTimeout(3)->timeout(max(1, min(8, $timeout)))->get($this->baseUrl.$path);
+        return $this->decodeResponse($response, 'GET', $path);
+    }
+    public function putTourVisitor(string $key, array $data): array
+    {
+        $path='/tour-visitors/'.$key;
+        $this->assertRemoteWriteAllowed($path); $this->assertMarketAvailable();
+        return $this->decodeResponse(Http::withHeaders($this->headers())->timeout($this->defaultTimeout)->put($this->baseUrl.$path,$data),'PUT',$path);
+    }
+    public function getTourVisitor(string $key): array { return $this->get('/tour-visitors/'.$key); }
+    public function deleteTourVisitor(string $key, array $data): array
+    {
+        $path='/tour-visitors/'.$key;
+        $this->assertRemoteWriteAllowed($path); $this->assertMarketAvailable();
+        return $this->decodeResponse(Http::withHeaders($this->headers())->timeout($this->defaultTimeout)->delete($this->baseUrl.$path,$data),'DELETE',$path);
+    }
+
+    public function getTourConfiguration(): array
+    {
+        return $this->get('/tours/config');
+    }
+
+    public function publishTourConfiguration(array $configuration): array
+    {
+        return $this->post('/tours/config', $configuration);
+    }
+
     public function getTours(int $postId): array
     {
         return $this->get("/clients/{$postId}/tours");

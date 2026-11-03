@@ -42,6 +42,8 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
+        $schedule->command('tours:refresh-catalog')->cron('11,26,41,56 * * * *')->withoutOverlapping(60)->onOneServer()->runInBackground();
+        $schedule->command('tours:sweep --limit=50')->cron('7,22,37,52 * * * *')->withoutOverlapping(20)->onOneServer()->runInBackground();
         $schedule->command('monetize:expire-passes')->hourly()->withoutOverlapping()->runInBackground();
         $tickStartedAt = microtime(true);
 

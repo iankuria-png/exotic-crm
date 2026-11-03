@@ -324,6 +324,7 @@ class ProviderStatusQueryOrchestrator
         }
 
         return match ((string) $payment->purpose) {
+            Payment::PURPOSE_TOUR_PASS => BillingSurface::TourPass->value,
             Payment::PURPOSE_SEND_LOVE => BillingSurface::SendLove->value,
             Payment::PURPOSE_PREMIUM_CONTENT_SALE => BillingSurface::PremiumContent->value,
             Payment::PURPOSE_VISITOR_CONTACT_UNLOCK => BillingSurface::ContactUnlock->value,
@@ -344,6 +345,7 @@ class ProviderStatusQueryOrchestrator
             BillingSurface::WalletFunding->value => BillingSurface::WalletFunding->value,
             BillingSurface::WalletAutoRenew->value => BillingSurface::WalletAutoRenew->value,
             BillingSurface::PremiumContent->value => BillingSurface::PremiumContent->value,
+            BillingSurface::TourPass->value => BillingSurface::TourPass->value,
             BillingSurface::SendLove->value => BillingSurface::SendLove->value,
             BillingSurface::ContactUnlock->value => BillingSurface::ContactUnlock->value,
             BillingSurface::ManualConfirmation->value => BillingSurface::ManualConfirmation->value,

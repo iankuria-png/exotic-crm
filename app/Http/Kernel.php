@@ -79,6 +79,7 @@ class Kernel extends HttpKernel
         'crm.active' => \App\Http\Middleware\EnsureCrmUserIsActive::class,
         'crm.ceo' => \App\Http\Middleware\EnsureCeoAccess::class,
         'crm.impersonation' => \App\Http\Middleware\CrmImpersonationMiddleware::class,
+        'tours.auth' => \App\Http\Middleware\AuthenticateTourRequest::class,
         'wallet.auth' => \App\Http\Middleware\AuthenticateWalletRequest::class,
         'verify.wordpress.shared_key' => \App\Http\Middleware\VerifyWordPressSharedKey::class,
         'verify.kyc.upload' => \App\Http\Middleware\VerifyKycUploadToken::class,

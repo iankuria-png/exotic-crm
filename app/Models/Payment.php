@@ -17,6 +17,8 @@ class Payment extends Model
 {
     use HasFactory;
 
+    public const PURPOSE_TOUR_PASS = 'tour_pass';
+
     public const PURPOSE_SEND_LOVE = 'send_love';
 
     public const PURPOSE_PREMIUM_CONTENT_SALE = 'premium_content_sale';
@@ -47,7 +49,7 @@ class Payment extends Model
             }
         });
         $refresh = static function (Payment $payment): void {
-            if (in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE], true)) return;
+            if (in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE, self::PURPOSE_TOUR_PASS], true)) return;
             $clientId = $payment->client_id
                 ? (int) $payment->client_id
                 : (int) (Deal::query()->whereKey($payment->deal_id)->value('client_id') ?: 0);
@@ -58,11 +60,11 @@ class Payment extends Model
         static::saved($refresh);
         static::saved(static function (Payment $payment): void {
             app(\App\Services\PaymentAttributionService::class)->capture($payment);
-            if (!$payment->isVisitorPayment()) app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($payment);
+            if (!$payment->isVisitorPayment() && $payment->purpose !== self::PURPOSE_TOUR_PASS) app(\App\Services\PaymentRecoveryCaseService::class)->synchronize($payment);
         });
         static::saved(static function (Payment $payment): void {
             if (
-                in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE], true)
+                in_array($payment->purpose, [self::PURPOSE_MONETIZE_PASS, self::PURPOSE_PREMIUM_CONTENT_SALE, self::PURPOSE_SEND_LOVE, self::PURPOSE_TOUR_PASS], true)
                 || ! in_array((string) $payment->status, self::SUCCESSFUL_STATUSES, true)
                 || (! $payment->wasRecentlyCreated && ! $payment->wasChanged(['status', 'client_id', 'completed_at']))
             ) {
@@ -79,7 +81,7 @@ class Payment extends Model
             }
         });
         static::saved(static function (Payment $payment): void {
-            if ($payment->isVisitorPayment() || !$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
+            if ($payment->isVisitorPayment() || $payment->purpose === self::PURPOSE_TOUR_PASS || !$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
                 return;
             }
 
@@ -307,6 +309,7 @@ class Payment extends Model
                     self::PURPOSE_PREMIUM_CONTENT_SALE,
                     self::PURPOSE_SEND_LOVE,
                     self::PURPOSE_MONETIZE_PASS,
+                    self::PURPOSE_TOUR_PASS,
                     self::PURPOSE_WALLET_TOPUP,
                     self::PURPOSE_VISITOR_CONTACT_UNLOCK,
                 ]);

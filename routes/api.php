@@ -929,6 +929,13 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::delete('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'deleteReportingFxRate'])->middleware('role:admin,sub_admin');
     // My Exotic rollout: read/flip the customer-product flags that otherwise
     // need a WP-CLI or phpMyAdmin session on each market.
+    Route::prefix('/tours')->middleware('role:admin,sub_admin')->group(function () {
+        Route::get('/markets', [\App\Http\Controllers\CRM\TourSettingsController::class, 'markets']);
+        Route::get('/{platform}/settings', [\App\Http\Controllers\CRM\TourSettingsController::class, 'show'])->whereNumber('platform');
+        Route::put('/{platform}/settings', [\App\Http\Controllers\CRM\TourSettingsController::class, 'update'])->whereNumber('platform')->middleware('role:admin');
+        Route::post('/{platform}/publish', [\App\Http\Controllers\CRM\TourSettingsController::class, 'publish'])->whereNumber('platform')->middleware('role:admin');
+    });
+
     Route::get('/settings/customer-rollout', [SettingsController::class, 'customerRollout'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/customer-rollout', [SettingsController::class, 'updateCustomerRollout'])->middleware('role:admin');
     Route::post('/settings/customer-rollout/provision', [SettingsController::class, 'provisionCustomerPages'])->middleware('role:admin');
@@ -1434,4 +1441,15 @@ Route::prefix('wp-svc/send-love')->middleware(['wallet.auth:access', 'throttle:1
 Route::middleware(['wp.service.auth','throttle:60,1'])->group(function () {
     Route::post('/payment-recovery/status', [\App\Http\Controllers\API\PaymentRecoveryStatusController::class,'status']);
     Route::post('/payment-recovery/checkout', [\App\Http\Controllers\API\PaymentRecoveryStatusController::class,'checkout']);
+});
+
+// Advertiser Tours have their own server-owned environment and signed identity.
+Route::prefix('wp-svc/tours')->middleware(['tours.auth', 'throttle:60,1'])->group(function () {
+    $controller = \App\Http\Controllers\Wp\TourController::class;
+    Route::post('config', [$controller, 'config']);
+    Route::post('catalog', [$controller, 'catalog']);
+    Route::post('quote', [$controller, 'quote']);
+    Route::post('intents', [$controller, 'intent']);
+    Route::post('orders/{ref}/status', [$controller, 'status']);
+    Route::post('orders/{ref}/cancel', [$controller, 'cancel']);
 });

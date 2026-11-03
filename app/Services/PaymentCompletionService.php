@@ -32,6 +32,7 @@ class PaymentCompletionService
     public function complete(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         return match ((string) $payment->purpose) {
+            Payment::PURPOSE_TOUR_PASS => app(\App\Services\Tours\FulfillmentService::class)->complete($payment, $providerPayload, $options),
             Payment::PURPOSE_SEND_LOVE => app(\App\Services\SendLove\FulfillmentService::class)->complete($payment, $providerPayload, $options),
             Payment::PURPOSE_PREMIUM_CONTENT_SALE => app(\App\Services\Monetization\FulfillmentService::class)->complete($payment, $providerPayload, $options),
             Payment::PURPOSE_WALLET_TOPUP => $this->completeTopupPayment($payment, $providerPayload, $options),

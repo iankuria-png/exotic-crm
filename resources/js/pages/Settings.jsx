@@ -22,6 +22,7 @@ import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSe
 import FieldSalesSettingsPanel from '../components/settings/FieldSalesSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import CustomerRolloutPanel from '../components/settings/CustomerRolloutPanel';
+import ToursSettingsPanel from '../components/settings/tours/ToursSettingsPanel';
 import AutoOptimizePanel from '../components/settings/AutoOptimizePanel';
 import AiWorkspacePanel from '../components/settings/AiWorkspacePanel';
 import McpWorkspacePanel from '../components/settings/McpWorkspacePanel';
@@ -45,6 +46,7 @@ const baseTabs = [
     { id: 'billing', label: 'Billing' },
     { id: 'seo-engine', label: 'SEO Engine' },
     { id: 'my-exotic', label: 'My Exotic' },
+    { id: 'tours', label: 'Tours' },
     { id: 'auto-optimize', label: 'Auto Optimize' },
     { id: 'ai', label: 'AI Briefings' },
     { id: 'mcp', label: 'MCP' },
@@ -9888,7 +9890,7 @@ export default function Settings() {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
-            if (tab.id === 'my-exotic') {
+            if (['my-exotic', 'tours'].includes(tab.id)) {
                 return ['admin', 'sub_admin'].includes(user?.role || '');
             }
 
@@ -9974,6 +9976,7 @@ export default function Settings() {
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
             {activeTab === 'my-exotic' ? <CustomerRolloutPanel canWrite={(user?.role || '') === 'admin'} /> : null}
+            {activeTab === 'tours' ? <ToursSettingsPanel canWrite={(user?.role || '') === 'admin'} /> : null}
             {activeTab === 'auto-optimize' ? <AutoOptimizePanel /> : null}
             {activeTab === 'ai' ? <AiWorkspacePanel /> : null}
             {activeTab === 'mcp' ? <McpWorkspacePanel userRole={user?.role || ''} /> : null}
