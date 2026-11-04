@@ -2,8 +2,10 @@
 
 namespace App\Services\Seo\Llm\Adapters;
 
+use App\Services\Seo\Llm\BioGenerationRun;
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
+use App\Services\Seo\Llm\LlmTransport;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -44,14 +46,25 @@ class OpenRouterAdapter implements LlmClient
         }
 
         $failures = [];
-        foreach ($this->modelsToTry($opts['model'] ?? null) as $model) {
+        $run = $opts['_bio_run'] ?? null;
+        $models = $this->modelsToTry($opts['model'] ?? null);
+        if ($run instanceof BioGenerationRun && ! empty($opts['model'])) {
+            $models = array_slice($models, 0, 1);
+        }
+        foreach ($models as $model) {
+            if ($run instanceof BioGenerationRun && ! $run->canAttempt()) {
+                break;
+            }
             try {
                 return $this->generateWithModel($model, $system, $user, $opts);
             } catch (\Throwable $e) {
-                $failures[$model] = $e->getMessage();
+                $message = $run instanceof BioGenerationRun
+                    ? ($e instanceof \App\Services\Seo\Llm\ProviderRequestException || $e instanceof \App\Services\Seo\Llm\GenerationBudgetExceededException ? $e->getMessage() : 'AI provider response failed.')
+                    : $e->getMessage();
+                $failures[$model] = $message;
                 Log::warning('seo.openrouter_model_failed', [
                     'model' => $model,
-                    'error' => $e->getMessage(),
+                    'error' => $message,
                 ]);
             }
         }
@@ -75,18 +88,21 @@ class OpenRouterAdapter implements LlmClient
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user', 'content' => $user],
             ],
-            'provider' => $this->providerPreferences(),
+            'provider' => $this->providerPreferences($opts),
         ], fn ($value): bool => $value !== null && $value !== []);
 
-        $response = Http::withHeaders(array_filter([
+        if (($opts['_bio_run'] ?? null) instanceof BioGenerationRun && $this->supportsOptionalReasoning($model)) {
+            $payload['reasoning'] = ['enabled' => false];
+            $payload['provider']['require_parameters'] = true;
+        }
+
+        $response = LlmTransport::post(Http::withHeaders(array_filter([
             'Authorization' => 'Bearer '.$this->apiKey,
             'Content-Type' => 'application/json',
             'HTTP-Referer' => config('services.seo_engine.openrouter.site_url'),
             'X-Title' => config('services.seo_engine.openrouter.app_name'),
             'X-OpenRouter-Metadata' => 'enabled',
-        ]))
-            ->timeout(45)
-            ->post('https://openrouter.ai/api/v1/chat/completions', $payload);
+        ])), 'https://openrouter.ai/api/v1/chat/completions', $payload, $opts, $this->name(), $model, $this->apiKey, 45);
 
         if ($response->failed()) {
             throw new RuntimeException('OpenRouter API error for '.$model.': '.$response->status().' '.$response->body());
@@ -102,6 +118,7 @@ class OpenRouterAdapter implements LlmClient
         }
 
         return new LlmResponse(
+            model: $model,
             text: $text,
             inputTokens: (int) ($json['usage']['prompt_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['completion_tokens'] ?? 0),
@@ -193,13 +210,21 @@ class OpenRouterAdapter implements LlmClient
         return mb_substr((string) $text, 0, 180);
     }
 
-    private function providerPreferences(): array
+    private function supportsOptionalReasoning(string $model): bool
+    {
+        $base = explode(':', $model)[0];
+
+        return in_array($base, ['deepseek/deepseek-v3.2', 'deepseek/deepseek-v4.1-flash-1017',
+            'deepseek/deepseek-v4.1-flash', '~deepseek/deepseek-v4-flash-latest', 'qwen/qwen3.8-flash'], true);
+    }
+
+    private function providerPreferences(array $opts = []): array
     {
         $preferences = [
             'allow_fallbacks' => (bool) config('services.seo_engine.openrouter.allow_fallbacks', true),
         ];
 
-        $sort = trim((string) config('services.seo_engine.openrouter.provider_sort', ''));
+        $sort = trim((string) ($opts['provider_sort'] ?? config('services.seo_engine.openrouter.provider_sort', '')));
         if (in_array($sort, ['price', 'latency', 'throughput'], true)) {
             $preferences['sort'] = $sort;
         }

@@ -4,6 +4,7 @@ namespace App\Services\Seo\Llm\Adapters;
 
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
+use App\Services\Seo\Llm\LlmTransport;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -56,9 +57,7 @@ class GeminiAdapter implements LlmClient
             ],
         ];
 
-        $response = Http::withHeaders(['Content-Type' => 'application/json'])
-            ->timeout(30)
-            ->post($url, $payload);
+        $response = LlmTransport::post(Http::withHeaders(['Content-Type' => 'application/json']), $url, $payload, $opts, $this->name(), $model, $this->apiKey, 30);
 
         if ($response->failed()) {
             throw new RuntimeException('Gemini API error: '.$response->status().' '.$response->body());
@@ -75,6 +74,7 @@ class GeminiAdapter implements LlmClient
         $outputTokens = (int) ($json['usageMetadata']['candidatesTokenCount'] ?? 0);
 
         return new LlmResponse(
+            model: $model,
             text: $text,
             inputTokens: $inputTokens,
             outputTokens: $outputTokens,

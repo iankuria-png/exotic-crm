@@ -1,0 +1,176 @@
+{
+  "base_head": "8c64050968e97a432adf5c3f6afd3ec035735192",
+  "deployment": "CRM commit/push authorized; cPanel pull and live acceptance pending",
+  "migrations": [],
+  "settings_changes": [],
+  "files": [
+    {
+      "path": "app/Services/Seo/Llm/LlmResponse.php",
+      "before_sha256": "57a70d934face5de342f789d0527d53677c632cbcc927b595a7776fdc2dc8638",
+      "after_sha256": "f3f1a95e7f3e5453bb2303f0c94a5d5bf96e0d32ab8828ec6b1ff049fc59ffb0",
+      "bytes": 314
+    },
+    {
+      "path": "app/Services/Seo/Llm/ProviderWaterfall.php",
+      "before_sha256": "06dfbb7ea9e50bbac19655594f0c59756140fdb28e50598c47e04325963f2065",
+      "after_sha256": "2d237d730299062667641c4d73515ff89e0a2c21ac0e4bbd9bb4b14d72f4f96c",
+      "bytes": 5060
+    },
+    {
+      "path": "app/Services/Seo/BioGenerationService.php",
+      "before_sha256": "09cae2fda0b0d55924e898c8c4721ccfb3299dda7a319a4d8e5efebde7c08edd",
+      "after_sha256": "794a2cc49647c3e966d24a8a5993a3fe06e55042816f6a5cbf8f58f4091d8178",
+      "bytes": 42637
+    },
+    {
+      "path": "app/Services/Seo/ProfileSnapshotBuilder.php",
+      "before_sha256": "1978fa9095904f9b10f13c5211753bb3f9a665862ffa6b76b652db51e7d90dbd",
+      "after_sha256": "2d1ba3929e2439baca905a8de33d01ea31ebf6f43af10ffc598fcdc5a93ca555",
+      "bytes": 13313
+    },
+    {
+      "path": "app/Services/Seo/LinkCatalogService.php",
+      "before_sha256": "334d670248c0192cb93b869238c8627c97a4b87bb8a8443025adbad1970870a6",
+      "after_sha256": "7922bfdd6abcb3156727e07eca4adbbd96b0c8aac7efc72d397b10b9f6003cfb",
+      "bytes": 5664
+    },
+    {
+      "path": "app/Services/Seo/BioUniquenessAnalyzer.php",
+      "before_sha256": "d8e515536320293d5a337f3513d9486fe2e602c22965fc78f1821173d7a3bad9",
+      "after_sha256": "058656b5d6a00b9651794c6e5b67713fa595d4121687b4879cf7256748d9ea8a",
+      "bytes": 15536
+    },
+    {
+      "path": "app/Services/WpSyncService.php",
+      "before_sha256": "9f8c006da8210800a76d706d39f1d060de4fee6dcecc41a942715792a77b01f1",
+      "after_sha256": "972b6fccbaa20636bad8974c8131494f3e71583dfd001880f0c102a2b1915462",
+      "bytes": 50191
+    },
+    {
+      "path": "app/Http/Controllers/CRM/SeoController.php",
+      "before_sha256": "39378dccf53fdec6753258ce50ffe96447e237b6c5797090236563464508500f",
+      "after_sha256": "565976af778a90fb801cd7c65fd3f44bba5fcd4a7ef2834f29fa091a701fed6e",
+      "bytes": 17921
+    },
+    {
+      "path": "config/services.php",
+      "before_sha256": "dee2c27c638adef12a34e2da55a7af73849cca2bc1e81b250274d42b754ba0a3",
+      "after_sha256": "7bbe2569b435eac41b2a38f1eea3829492eecbdb6c68a7afeee75c0b1cb2c121",
+      "bytes": 13518
+    },
+    {
+      "path": "config/logging.php",
+      "before_sha256": "5a891164cbfae664e98437af6897e4e92c639c1ca6bd61dd084606250f72e171",
+      "after_sha256": "325b8620d8726eec9b732abd4dc46fea868ed7e6dc6d9463c0b0dc607fdc26cf",
+      "bytes": 4056
+    },
+    {
+      "path": "resources/js/components/seo/GenerateBioButton.jsx",
+      "before_sha256": "76f5bc2bec8c32511b412c6388a3a1c41a051d29d40648ed7c40ede1eb85af53",
+      "after_sha256": "147410bd1c671dafd71877cea07b9b3e660316d2230f52a09aee3e73aa092ddd",
+      "bytes": 18769
+    },
+    {
+      "path": "resources/js/components/seo/BioPreviewModal.jsx",
+      "before_sha256": "03f652f9269ab57ede24ac59393c864150dc2eeab242001dda98ceb319b4afd6",
+      "after_sha256": "b90273dbd22ccb8d2157024ee6d1da325b9fcc131cf7b1e7d718f8b48f2264d7",
+      "bytes": 45556
+    },
+    {
+      "path": "app/Services/Seo/Llm/Adapters/DeepSeekAdapter.php",
+      "before_sha256": "25df1b9b07323c1aa560ed9d378268a3145073252dfc2ab26366fe5a76c069e7",
+      "after_sha256": "5a3b992315519953e6b9d549eaa464d1d8436650de647d7ebfb6c347025a8a5d",
+      "bytes": 4769
+    },
+    {
+      "path": "app/Services/Seo/Llm/Adapters/OpenAiAdapter.php",
+      "before_sha256": "18073224385fb223529eb69d48a6f5d00b2aff722c5509459b35e03b8006c213",
+      "after_sha256": "b8d1f1b2892139bff6f4bf555f613634bdf493b741158aadf7cb7c4ebf744a34",
+      "bytes": 2770
+    },
+    {
+      "path": "app/Services/Seo/Llm/Adapters/ClaudeAdapter.php",
+      "before_sha256": "7aa4e92c1a393157f3f2582f82b9b2a667ba9302e4a53de3e3cd715ec5f71bd9",
+      "after_sha256": "a3dd561c6043ee40feedd1fe5513a0568208a886cf71c6298ee9ffdc33b32ef7",
+      "bytes": 2622
+    },
+    {
+      "path": "app/Services/Seo/Llm/Adapters/GeminiAdapter.php",
+      "before_sha256": "7259eaba36a5534f263a338aec8ab6805d4c824119e3e7d0bec83cb029ed977c",
+      "after_sha256": "5600fe0a4ace0dbf762df3a4c61c368066e55d5a8c2bdebe9ca19e2139411d40",
+      "bytes": 2955
+    },
+    {
+      "path": "app/Services/Seo/Llm/Adapters/OpenRouterAdapter.php",
+      "before_sha256": "622260249c5b1dc1e52576ecba3b87843dfa8dbb4fe30739c48cd3e085e75c5a",
+      "after_sha256": "ffc924c48218004b1717f4e07aedbeee0130b5aa43ff572b96b389957e49147f",
+      "bytes": 8933
+    },
+    {
+      "path": "app/Services/Seo/Llm/BioGenerationRun.php",
+      "before_sha256": null,
+      "after_sha256": "23daf90f66f094b0360f0c36c3bd22e8aa3844478e97f2aa4eecc188c292d697",
+      "bytes": 9512
+    },
+    {
+      "path": "app/Services/Seo/Llm/LlmTransport.php",
+      "before_sha256": null,
+      "after_sha256": "d273205c671ac192210b3138ee877287cac5f7cfa01430020118844798706468",
+      "bytes": 604
+    },
+    {
+      "path": "app/Services/Seo/Llm/GenerationBudgetExceededException.php",
+      "before_sha256": null,
+      "after_sha256": "67cdfb5a8cc9996048a8e997b7c4659e70a322b5ad63b0be5609bf5e1cc85287",
+      "bytes": 131
+    },
+    {
+      "path": "app/Services/Seo/Llm/ProviderRequestException.php",
+      "before_sha256": null,
+      "after_sha256": "934f8eca44e06bfc0a368938b9570a6a7e21948a2a6434a9e17a35c1cf4e6de4",
+      "bytes": 637
+    },
+    {
+      "path": "public/build/manifest.json",
+      "after_sha256": "a22a5eb2ee0e89a0e4510e1efda65f694ab476be76d6ddfe25f62043c14a369f",
+      "bytes": 898
+    },
+    {
+      "path": "public/build/assets/app-CjE1l39C.css",
+      "after_sha256": "8f064cfba4f34af7a9b3c5e7b7c2150a0063610485bc767e7b2550909a233025",
+      "bytes": 266804
+    },
+    {
+      "path": "public/build/assets/app-DQ5syIO6.js",
+      "after_sha256": "ef005fca26bd5cae0770d4badad90f45ea31572a09bc0421700325d717648dd1",
+      "bytes": 5452991
+    },
+    {
+      "path": "public/build/assets/marker-icon-hN30_KVU.png",
+      "after_sha256": "574c3a5cca85f4114085b6841596d62f00d7c892c7b03f28cbfa301deb1dc437",
+      "bytes": 1466
+    },
+    {
+      "path": "public/build/assets/layers-2x-Bpkbi35X.png",
+      "after_sha256": "066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf",
+      "bytes": 1259
+    },
+    {
+      "path": "public/build/assets/layers-BWBAp2CZ.png",
+      "after_sha256": "1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6",
+      "bytes": 696
+    }
+  ],
+  "source_count": 21,
+  "frontend_build": "clean HEAD + only task-owned GenerateBioButton/BioPreviewModal overlays",
+  "artifacts": {
+    "crm-bio-speed-2026-11-04.zip": {
+      "sha256": "dce46a3ba0c174d9773b4b55edf07829526ba5b1c830da256b07a328c99c0944",
+      "bytes": 1434849
+    },
+    "crm-bio-speed-rollback-2026-11-04.zip": {
+      "sha256": "6eabb4f5a90e6f6c7e45ac892b4cc35691233fd266f8aa465a76a51f116bc941",
+      "bytes": 65592
+    }
+  }
+}

@@ -4,6 +4,7 @@ namespace App\Services\Seo\Llm\Adapters;
 
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
+use App\Services\Seo\Llm\LlmTransport;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -50,13 +51,11 @@ class ClaudeAdapter implements LlmClient
             ],
         ];
 
-        $response = Http::withHeaders([
+        $response = LlmTransport::post(Http::withHeaders([
             'x-api-key' => $this->apiKey,
             'anthropic-version' => '2023-06-01',
             'content-type' => 'application/json',
-        ])
-            ->timeout(30)
-            ->post('https://api.anthropic.com/v1/messages', $payload);
+        ]), 'https://api.anthropic.com/v1/messages', $payload, $opts, $this->name(), $model, $this->apiKey, 30);
 
         if ($response->failed()) {
             throw new RuntimeException('Claude API error: '.$response->status().' '.$response->body());
@@ -70,6 +69,7 @@ class ClaudeAdapter implements LlmClient
         }
 
         return new LlmResponse(
+            model: $model,
             text: $text,
             inputTokens: (int) ($json['usage']['input_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['output_tokens'] ?? 0),

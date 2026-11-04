@@ -3,6 +3,7 @@
 namespace App\Services\Seo;
 
 use App\Models\Client;
+use App\Services\Seo\Llm\BioGenerationRun;
 use App\Services\WpSyncService;
 
 /**
@@ -29,6 +30,7 @@ class ProfileSnapshotBuilder
         ?int   $wpPostId,
         int    $platformId,
         ?array $overlay = null,
+        ?BioGenerationRun $run = null,
     ): ProfileSnapshot {
         $base = [];
 
@@ -44,7 +46,11 @@ class ProfileSnapshotBuilder
 
         if ($wpPostId !== null) {
             try {
-                $wpData = WpSyncService::forPlatform($platformId)->getClientProfile($wpPostId);
+                $sync = WpSyncService::forPlatform($platformId);
+                if ($run !== null) {
+                    $sync = $sync->withReadBudget(fn (): float => $run->readTimeout());
+                }
+                $wpData = $sync->getClientProfile($wpPostId);
                 $base   = array_merge($base, $this->baseFromWpPayload($wpData));
             } catch (\Throwable) {
                 // WP unreachable — continue with what we have

@@ -209,6 +209,11 @@ return [
     ],
 
     'seo_engine' => [
+        'interactive' => [
+            'deadline_seconds' => env('SEO_BIO_DEADLINE_SECONDS', 30),
+            'attempt_seconds' => env('SEO_BIO_ATTEMPT_SECONDS', 12),
+            'provider_sort' => env('SEO_BIO_PROVIDER_SORT', 'latency'),
+        ],
         'enabled' => filter_var(env('SEO_ENGINE_ENABLED', false), FILTER_VALIDATE_BOOL),
         'providers' => array_filter(array_map(
             'trim',

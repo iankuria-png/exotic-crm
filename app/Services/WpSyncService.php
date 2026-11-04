@@ -40,6 +40,17 @@ class WpSyncService
 
     private int $mediaUploadTimeout;
 
+    private ?\Closure $readBudget = null;
+
+    /** A single bounded GET on a clone; ordinary instances keep their retry policy. */
+    public function withReadBudget(\Closure $remainingSeconds): self
+    {
+        $bounded = clone $this;
+        $bounded->readBudget = $remainingSeconds;
+
+        return $bounded;
+    }
+
     public function __construct(Platform|WordPressSiteConnection $site)
     {
         $this->site = $site instanceof Platform
@@ -1164,6 +1175,22 @@ class WpSyncService
     private function getResponse(string $path, array $params = [], ?int $timeout = null): Response
     {
         $this->assertMarketAvailable();
+
+        if ($this->readBudget !== null) {
+            $remaining = min($timeout ?? $this->defaultTimeout, (float) ($this->readBudget)());
+            if ($remaining <= 0) {
+                throw new RuntimeException('WordPress read budget exhausted.');
+            }
+
+            $response = Http::withHeaders($this->headers())
+                ->withOptions(['timeout' => $remaining, 'connect_timeout' => min(3, $remaining)])
+                ->get($this->baseUrl.$path, $params);
+            if ($response->failed()) {
+                throw new RuntimeException('Bounded WordPress read failed (HTTP '.$response->status().').');
+            }
+
+            return $response;
+        }
 
         $timeout ??= $this->defaultTimeout;
         $attempt = 0;

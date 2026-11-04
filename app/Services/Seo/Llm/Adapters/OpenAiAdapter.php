@@ -4,6 +4,7 @@ namespace App\Services\Seo\Llm\Adapters;
 
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
+use App\Services\Seo\Llm\LlmTransport;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -50,12 +51,10 @@ class OpenAiAdapter implements LlmClient
             ],
         ];
 
-        $response = Http::withHeaders([
+        $response = LlmTransport::post(Http::withHeaders([
             'Authorization' => 'Bearer '.$this->apiKey,
             'Content-Type' => 'application/json',
-        ])
-            ->timeout(30)
-            ->post('https://api.openai.com/v1/chat/completions', $payload);
+        ]), 'https://api.openai.com/v1/chat/completions', $payload, $opts, $this->name(), $model, $this->apiKey, 30);
 
         if ($response->failed()) {
             throw new RuntimeException('OpenAI API error: '.$response->status().' '.$response->body());
@@ -69,6 +68,7 @@ class OpenAiAdapter implements LlmClient
         }
 
         return new LlmResponse(
+            model: $model,
             text: $text,
             inputTokens: (int) ($json['usage']['prompt_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['completion_tokens'] ?? 0),

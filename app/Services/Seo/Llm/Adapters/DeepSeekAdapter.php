@@ -2,8 +2,10 @@
 
 namespace App\Services\Seo\Llm\Adapters;
 
+use App\Services\Seo\Llm\BioGenerationRun;
 use App\Services\Seo\Llm\LlmClient;
 use App\Services\Seo\Llm\LlmResponse;
+use App\Services\Seo\Llm\LlmTransport;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -44,14 +46,25 @@ class DeepSeekAdapter implements LlmClient
         }
 
         $failures = [];
-        foreach ($this->modelsToTry($opts['model'] ?? null) as $model) {
+        $run = $opts['_bio_run'] ?? null;
+        $models = $this->modelsToTry($opts['model'] ?? null);
+        if ($run instanceof BioGenerationRun && ! empty($opts['model'])) {
+            $models = array_slice($models, 0, 1);
+        }
+        foreach ($models as $model) {
+            if ($run instanceof BioGenerationRun && ! $run->canAttempt()) {
+                break;
+            }
             try {
                 return $this->generateWithModel($model, $system, $user, $opts);
             } catch (\Throwable $e) {
-                $failures[$model] = $e->getMessage();
+                $message = $run instanceof BioGenerationRun
+                    ? ($e instanceof \App\Services\Seo\Llm\ProviderRequestException || $e instanceof \App\Services\Seo\Llm\GenerationBudgetExceededException ? $e->getMessage() : 'AI provider response failed.')
+                    : $e->getMessage();
+                $failures[$model] = $message;
                 Log::warning('seo.deepseek_model_failed', [
                     'model' => $model,
-                    'error' => $e->getMessage(),
+                    'error' => $message,
                 ]);
             }
         }
@@ -75,12 +88,14 @@ class DeepSeekAdapter implements LlmClient
             ],
         ];
 
-        $response = Http::withHeaders([
+        if (($opts['_bio_run'] ?? null) instanceof BioGenerationRun) {
+            $payload['thinking'] = ['type' => 'disabled'];
+        }
+
+        $response = LlmTransport::post(Http::withHeaders([
             'Authorization' => 'Bearer '.$this->apiKey,
             'Content-Type' => 'application/json',
-        ])
-            ->timeout(30)
-            ->post('https://api.deepseek.com/chat/completions', $payload);
+        ]), 'https://api.deepseek.com/chat/completions', $payload, $opts, $this->name(), $model, $this->apiKey, 30);
 
         if ($response->failed()) {
             throw new RuntimeException('DeepSeek API error for '.$model.': '.$response->status().' '.$response->body());
@@ -94,6 +109,7 @@ class DeepSeekAdapter implements LlmClient
         }
 
         return new LlmResponse(
+            model: $model,
             text: $text,
             inputTokens: (int) ($json['usage']['prompt_tokens'] ?? 0),
             outputTokens: (int) ($json['usage']['completion_tokens'] ?? 0),

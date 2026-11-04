@@ -41,6 +41,9 @@ export default function BioPreviewModal({
     language = 'en',           // language the bio was generated in
     loading = false,
     regenerating = false,
+    elapsedSeconds = 0,
+    onCancel,
+    rewriteSkippedReason = null,
     error = null,
     providerOptions = [],
     providerOptionsLoading = false,
@@ -234,7 +237,7 @@ export default function BioPreviewModal({
                             <p className="mt-1 text-sm text-slate-500">
                                 {hasDraft
                                     ? 'Accepting only fills the form. Give feedback so the AI learns your taste.'
-                                    : 'The first draft starts with the default waterfall. Use the picker here for the next draft.'}
+                                    : 'Your draft uses the saved AI route. You can choose another route here.'}
                             </p>
                         </div>
                         {hasDraft ? (
@@ -278,6 +281,18 @@ export default function BioPreviewModal({
                         />
                     ) : null}
 
+                    {updatingDraft ? (
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+                            <span role="status">{elapsedSeconds >= 15 ? 'Taking a little longer. You can cancel and try another route.' : 'Preparing your draft. You can cancel at any time.'}</span>
+                            <span className="tabular-nums" aria-hidden="true">{elapsedSeconds}s elapsed</span>
+                        </div>
+                    ) : null}
+                    {hasDraft && rewriteSkippedReason ? (
+                        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            This draft still has quality flags. Review it before use, or generate another version.
+                        </p>
+                    ) : null}
+
                     {error ? (
                         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-800" role="alert">
                             {error}
@@ -288,7 +303,7 @@ export default function BioPreviewModal({
                         <div className="rounded-xl border border-dashed border-teal-200 bg-teal-50/50 px-4 py-5">
                             <div className="flex items-start gap-3">
                                 {loading ? (
-                                    <span className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-teal-700 ring-1 ring-teal-200">
+                                    <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-teal-700 ring-1 ring-teal-200">
                                         <Spinner />
                                     </span>
                                 ) : null}
@@ -603,8 +618,8 @@ export default function BioPreviewModal({
                             : 'Tip: you can edit the copy before saving.'}
                     </p>
                     <div className="flex items-center gap-2">
-                        <button type="button" className="crm-btn-secondary" onClick={onDiscard} disabled={loading || regenerating}>
-                            {hasDraft ? 'Discard' : 'Close'}
+                        <button type="button" className="crm-btn-secondary" onClick={updatingDraft ? onCancel : onDiscard} disabled={updatingDraft && !onCancel}>
+                            {updatingDraft ? 'Cancel' : hasDraft ? 'Discard' : 'Close'}
                         </button>
                         {hasDraft ? (
                             <button

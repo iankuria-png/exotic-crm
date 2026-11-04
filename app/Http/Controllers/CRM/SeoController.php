@@ -112,6 +112,7 @@ class SeoController extends Controller
         try {
             $result = $this->generator->generate(array_merge($data, [
                 'platform_id' => $platformId,
+                '_interactive' => true,
             ]));
         } catch (\Throwable $e) {
             $eventId = (string) Str::uuid();

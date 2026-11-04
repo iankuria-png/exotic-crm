@@ -2,6 +2,7 @@
 
 namespace App\Services\Seo;
 
+use App\Services\Seo\Llm\BioGenerationRun;
 use App\Services\WpSyncService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -28,14 +29,14 @@ class LinkCatalogService
      * a fallback; Phase 2 sources the authoritative slugs live from WP.
      */
     private const SERVICE_PAGES = [
-        'BDSM'       => 'bdsm-escorts',
-        'Couples'    => 'couples-escorts',
+        'BDSM' => 'bdsm-escorts',
+        'Couples' => 'couples-escorts',
         'Domination' => 'domination-escorts',
-        'Massage'    => 'massage-escorts',
-        'Fetish'     => 'fetish-escorts',
-        'GFE'        => 'gfe-escorts',
-        'Incall'     => 'incall-escorts',
-        'Outcall'    => 'outcall-escorts',
+        'Massage' => 'massage-escorts',
+        'Fetish' => 'fetish-escorts',
+        'GFE' => 'gfe-escorts',
+        'Incall' => 'incall-escorts',
+        'Outcall' => 'outcall-escorts',
     ];
 
     /**
@@ -50,43 +51,53 @@ class LinkCatalogService
         'black',
     ];
 
-    public function forPlatform(int $platformId): array
+    public function forPlatform(int $platformId, ?BioGenerationRun $run = null): array
     {
-        return Cache::remember(
-            "seo_link_catalog_platform_{$platformId}",
-            now()->addMinutes(self::CACHE_TTL_MINUTES),
-            fn() => $this->buildCatalog($platformId),
-        );
+        $key = "seo_link_catalog_platform_{$platformId}";
+        $cached = Cache::get($key);
+        if (is_array($cached)) {
+            return $cached;
+        }
+        $fallback = Cache::get($key.'_last_good') ?? $this->buildCatalog([]);
+        if (Cache::get($key.'_unavailable') || ($run !== null && $run->readTimeout() <= 0)) {
+            return $fallback;
+        }
+
+        try {
+            $sync = WpSyncService::forPlatform($platformId);
+            if ($run !== null) {
+                $sync = $sync->withReadBudget(fn (): float => $run->readTimeout());
+            }
+            $data = $sync->getLinkCatalog();
+            if (! is_array($data['locations'] ?? null) || ! is_array($data['attribute_pages'] ?? null)) {
+                throw new \RuntimeException('Incomplete link catalogue.');
+            }
+            $catalog = $this->buildCatalog($data);
+            Cache::put($key, $catalog, now()->addMinutes(self::CACHE_TTL_MINUTES));
+            Cache::put($key.'_last_good', $catalog, now()->addDay());
+            Cache::forget($key.'_unavailable');
+
+            return $catalog;
+        } catch (\Throwable) {
+            Cache::put($key.'_unavailable', true, 15);
+            Log::warning('LinkCatalogService: catalogue unavailable', ['platform_id' => $platformId]);
+
+            return $fallback;
+        }
     }
 
     public function invalidate(int $platformId): void
     {
-        Cache::forget("seo_link_catalog_platform_{$platformId}");
+        foreach (['', '_last_good', '_unavailable'] as $suffix) {
+            Cache::forget("seo_link_catalog_platform_{$platformId}".$suffix);
+        }
     }
 
-    // -------------------------------------------------------------------------
-
-    private function buildCatalog(int $platformId): array
+    private function buildCatalog(array $data): array
     {
-        $catalog = [];
-
-        // Standard service pages are market-relative, e.g. /bdsm/, /couples/.
-        // Give each service its own category so the per-category cap does not
-        // prevent multiple selected services from being linked in a concise bio.
-        $catalog = array_merge($catalog, $this->servicePageEntries());
-
-        // Canonical attribute pages, e.g. /black/, /curvy/.
-        $catalog = array_merge($catalog, $this->attributePageEntries());
-
-        // City/neighborhood terms fetched from WP
-        $catalog = array_merge($catalog, $this->fetchLocationEntries($platformId));
-
-        // Curated attribute pages from WP option (set by admin)
-        $catalog = array_merge($catalog, $this->fetchAttributeEntries($platformId));
-
-        return $catalog;
+        return array_merge($this->servicePageEntries(), $this->attributePageEntries(),
+            $this->fetchLocationEntries($data), $this->fetchAttributeEntries($data));
     }
-
 
     private function servicePageEntries(): array
     {
@@ -94,8 +105,8 @@ class LinkCatalogService
 
         foreach (self::SERVICE_PAGES as $keyword => $slug) {
             $entries[] = [
-                'keyword'  => $keyword,
-                'url'      => "/{$slug}/",
+                'keyword' => $keyword,
+                'url' => "/{$slug}/",
                 'category' => "service:{$slug}",
                 'priority' => 8,
             ];
@@ -110,8 +121,8 @@ class LinkCatalogService
 
         foreach (self::ATTRIBUTE_PAGES as $keyword => $slug) {
             $entries[] = [
-                'keyword'  => $keyword,
-                'url'      => "/{$slug}/",
+                'keyword' => $keyword,
+                'url' => "/{$slug}/",
                 'category' => "attribute:{$slug}",
                 'priority' => 7,
             ];
@@ -120,72 +131,34 @@ class LinkCatalogService
         return $entries;
     }
 
-    private function fetchLocationEntries(int $platformId): array
+    private function fetchLocationEntries(array $data): array
     {
-        try {
-            $wpSync = WpSyncService::forPlatform($platformId);
-            $data   = $wpSync->getLinkCatalog();
-            $entries = [];
-
-            foreach (($data['locations'] ?? []) as $item) {
-                $keyword = (string) ($item['name'] ?? '');
-                $url     = (string) ($item['url'] ?? '');
-                if ($keyword === '' || $url === '') {
-                    continue;
-                }
-                if (in_array(strtolower(trim($keyword)), self::BLOCKED_ATTRIBUTE_KEYWORDS, true)) {
-                    continue;
-                }
-
-                $entries[] = [
-                    'keyword'  => $keyword,
-                    'url'      => $url,
-                    'category' => 'location',
-                    'priority' => 10,
-                ];
+        $entries = [];
+        foreach (($data['locations'] ?? []) as $item) {
+            $keyword = (string) ($item['name'] ?? '');
+            $url = (string) ($item['url'] ?? '');
+            if ($keyword === '' || $url === '' || in_array(strtolower(trim($keyword)), self::BLOCKED_ATTRIBUTE_KEYWORDS, true)) {
+                continue;
             }
-
-            return $entries;
-        } catch (\Throwable $e) {
-            Log::warning('LinkCatalogService: failed to fetch location terms', [
-                'platform_id' => $platformId,
-                'error'       => $e->getMessage(),
-            ]);
-
-            return [];
+            $entries[] = ['keyword' => $keyword, 'url' => $url, 'category' => 'location', 'priority' => 10];
         }
+
+        return $entries;
     }
 
-    private function fetchAttributeEntries(int $platformId): array
+    private function fetchAttributeEntries(array $data): array
     {
-        try {
-            $wpSync = WpSyncService::forPlatform($platformId);
-            $data   = $wpSync->getLinkCatalog();
-            $entries = [];
-
-            foreach (($data['attribute_pages'] ?? []) as $item) {
-                $keyword = (string) ($item['keyword'] ?? '');
-                $url     = (string) ($item['url'] ?? '');
-                if ($keyword === '' || $url === '') {
-                    continue;
-                }
-
-                $entries[] = [
-                    'keyword'  => $keyword,
-                    'url'      => $url,
-                    'category' => (string) ($item['category'] ?? 'attribute'),
-                    'priority' => (int) ($item['priority'] ?? 5),
-                ];
+        $entries = [];
+        foreach (($data['attribute_pages'] ?? []) as $item) {
+            $keyword = (string) ($item['keyword'] ?? '');
+            $url = (string) ($item['url'] ?? '');
+            if ($keyword === '' || $url === '') {
+                continue;
             }
-
-            return $entries;
-        } catch (\Throwable $e) {
-            Log::warning('LinkCatalogService: failed to fetch attribute pages', [
-                'platform_id' => $platformId,
-                'error'       => $e->getMessage(),
-            ]);
-
-            return [];
+            $entries[] = ['keyword' => $keyword, 'url' => $url,
+                'category' => (string) ($item['category'] ?? 'attribute'), 'priority' => (int) ($item['priority'] ?? 5)];
         }
+
+        return $entries;
     }
 }

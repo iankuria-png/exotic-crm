@@ -51,6 +51,13 @@ return [
     */
 
     'channels' => [
+        'seo_performance' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/seo-performance.log'),
+            'level' => 'info',
+            'days' => 14,
+        ],
+
         'stack' => [
             'driver' => 'stack',
             'channels' => ['single'],

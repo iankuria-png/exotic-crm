@@ -45,6 +45,18 @@ export default function GenerateBioButton({
         creativity: '',
     });
     const [lastFeedback, setLastFeedback] = useState(null);
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
+    const activeRequest = React.useRef(null);
+
+    React.useEffect(() => () => {
+        const request = activeRequest.current;
+        activeRequest.current = null;
+        request?.controller.abort();
+        if (request) {
+            window.clearTimeout(request.timeout);
+            window.clearInterval(request.ticker);
+        }
+    }, []);
 
     React.useEffect(() => {
         let cancelled = false;
@@ -84,7 +96,7 @@ export default function GenerateBioButton({
         Object.entries(generationOptions).filter(([, v]) => v !== '' && v !== null && v !== undefined),
     );
 
-    const callGenerate = async ({ refinements = [], previousBio = '', feedbackContext = null } = {}) => {
+    const callGenerate = async ({ refinements = [], previousBio = '', feedbackContext = null, signal } = {}) => {
         const body = {
             profile_snapshot: snapshot,
             save: false,
@@ -110,6 +122,7 @@ export default function GenerateBioButton({
             headers: authHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify(body),
+            signal,
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
@@ -118,38 +131,72 @@ export default function GenerateBioButton({
         return data;
     };
 
-    const handleGenerate = async () => {
-        setModalOpen(true);
-        setLoading(true);
+    const runGeneration = async ({ isRegeneration = false, ...options } = {}) => {
+        if (activeRequest.current) return;
+        const request = { controller: new AbortController(), timedOut: false };
+        activeRequest.current = request;
+        const started = Date.now();
+        setElapsedSeconds(0);
         setError(null);
+        if (isRegeneration) setRegenerating(true);
+        else setLoading(true);
+        request.ticker = window.setInterval(() => {
+            if (activeRequest.current === request) setElapsedSeconds(Math.floor((Date.now() - started) / 1000));
+        }, 1000);
+        request.timeout = window.setTimeout(() => {
+            request.timedOut = true;
+            request.controller.abort();
+        }, 40_000);
         try {
-            const data = await callGenerate();
+            const data = await callGenerate({ ...options, signal: request.controller.signal });
+            if (activeRequest.current !== request) return;
+            if (request.controller.signal.aborted) throw new DOMException('Generation cancelled.', 'AbortError');
             setPreview(data);
-            setLastFeedback(null);
+            if (!isRegeneration) setLastFeedback(null);
         } catch (e) {
-            setError(e.message || 'Failed to generate bio.');
+            if (activeRequest.current !== request) return;
+            setError(request.timedOut
+                ? 'This draft took too long. Try again or choose another AI route.'
+                : e.name === 'AbortError' ? 'Generation cancelled.' : e.message || 'Failed to generate bio.');
         } finally {
-            setLoading(false);
+            window.clearTimeout(request.timeout);
+            window.clearInterval(request.ticker);
+            if (activeRequest.current === request) {
+                activeRequest.current = null;
+                setLoading(false);
+                setRegenerating(false);
+            }
         }
     };
 
-    const handleRegenerate = async (refinements, feedbackContext = null, previousBioHtml = '') => {
-        if (!preview) return;
-        setRegenerating(true);
-        setError(null);
-        try {
-            const data = await callGenerate({
-                refinements,
-                previousBio: previousBioHtml || preview.bio_html || '',
-                feedbackContext: feedbackContext || lastFeedback,
-            });
-            // Preserve the modal — just swap the content.
-            setPreview(data);
-        } catch (e) {
-            setError(e.message || 'Failed to regenerate bio.');
-        } finally {
-            setRegenerating(false);
+    const cancelGeneration = () => {
+        const request = activeRequest.current;
+        activeRequest.current = null;
+        request?.controller.abort();
+        if (request) {
+            window.clearTimeout(request.timeout);
+            window.clearInterval(request.ticker);
         }
+        setLoading(false);
+        setRegenerating(false);
+        setError(null);
+        if (!preview) setModalOpen(false);
+    };
+
+    const handleGenerate = () => {
+        if (activeRequest.current) return;
+        setModalOpen(true);
+        return runGeneration();
+    };
+
+    const handleRegenerate = (refinements, feedbackContext = null, previousBioHtml = '') => {
+        if (!preview) return;
+        return runGeneration({
+            isRegeneration: true,
+            refinements,
+            previousBio: previousBioHtml || preview.bio_html || '',
+            feedbackContext: feedbackContext || lastFeedback,
+        });
     };
 
     const requestTranslation = async (bioHtml) => {
@@ -340,6 +387,9 @@ export default function GenerateBioButton({
                 language={preview?.generation_options?.language || generationOptions.language || 'en'}
                 loading={loading}
                 regenerating={regenerating}
+                elapsedSeconds={elapsedSeconds}
+                onCancel={cancelGeneration}
+                rewriteSkippedReason={preview?.rewrite_skipped_reason ?? null}
                 error={error}
                 providerOptions={providerOptions}
                 providerOptionsLoading={providerOptionsLoading}
@@ -353,6 +403,7 @@ export default function GenerateBioButton({
                 onGenerateDraft={handleGenerate}
                 onAccept={handleAccept}
                 onDiscard={() => {
+                    cancelGeneration();
                     // Treat discard as soft negative signal (no rating, no tag) only if we never recorded anything.
                     setPreview(null);
                     setError(null);

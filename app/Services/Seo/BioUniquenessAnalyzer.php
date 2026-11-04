@@ -5,6 +5,7 @@ namespace App\Services\Seo;
 use App\Models\AutoOptimizeItem;
 use App\Models\SeoBioBatchRow;
 use App\Models\SeoBioFeedback;
+use App\Services\Seo\Llm\BioGenerationRun;
 use Illuminate\Support\Collection;
 
 class BioUniquenessAnalyzer
@@ -96,14 +97,15 @@ class BioUniquenessAnalyzer
         ],
     ];
 
-    public function analyze(string $bioHtml, int $platformId, array $options = []): array
+    public function analyze(string $bioHtml, int $platformId, array $options = [], ?BioGenerationRun $run = null): array
     {
         $text = $this->plainText($bioHtml);
         $ignored = $this->ignoredTerms($options['ignored_overuse_terms'] ?? []);
         $lookbackDays = $this->lookbackDays($options['overuse_lookback_days'] ?? null);
         $sensitivity = $this->sensitivity((string) ($options['overuse_sensitivity'] ?? 'medium'));
 
-        $corpus = $this->corpus($platformId, $lookbackDays);
+        $load = fn () => $this->corpus($platformId, $lookbackDays);
+        $corpus = $run !== null ? $run->remember("corpus.{$platformId}.{$lookbackDays}", $load) : $load();
         $overuse = $this->overuseScore($text, $corpus, $ignored, $sensitivity);
         $slop = $this->aiSlopScore($text);
 

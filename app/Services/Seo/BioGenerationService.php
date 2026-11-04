@@ -4,6 +4,7 @@ namespace App\Services\Seo;
 
 use App\Models\Platform;
 use App\Services\Seo\Exceptions\AllProvidersFailedException;
+use App\Services\Seo\Llm\BioGenerationRun;
 use App\Services\Seo\Llm\ProviderWaterfall;
 use App\Support\BioTextIntegrity;
 use Illuminate\Support\Facades\Log;
@@ -144,7 +145,37 @@ TEXT;
      * @param  array  $params  {client_id, wp_post_id, platform_id, profile_snapshot, force_provider, generation_options}
      * @return array  {bio_html, score, breakdown, provider_used, usage}
      */
-    public function generate(array $params): array
+    public function generate(array $params, ?BioGenerationRun $run = null): array
+    {
+        $run = ($params['_interactive'] ?? false) === true ? ($run ?? BioGenerationRun::fromConfig()) : null;
+        $status = 'failed';
+        try {
+            $result = $this->generateDraft($params, $run);
+            $status = $result['fallback_used'] ? 'template_fallback' : 'success';
+            if ($run !== null) {
+                $result['performance'] = $run->summary($status);
+                $successful = array_values(array_filter($result['performance']['attempts'], fn ($attempt) => $attempt['status'] === 'success'));
+                $last = $successful === [] ? [] : $successful[array_key_last($successful)];
+                $result['model_used'] = $result['fallback_used'] ? null : (($last['actual_model'] ?? '') ?: ($last['model'] ?? null));
+            }
+
+            return $result;
+        } catch (\Throwable $error) {
+            if ($run !== null) {
+                throw new \RuntimeException('Bio generation could not finish. Reference '.$run->id.'.');
+            }
+            throw $error;
+        } finally {
+            $run?->finish($status);
+        }
+    }
+
+    private function measure(?BioGenerationRun $run, string $stage, callable $work): mixed
+    {
+        return $run !== null ? $run->stage($stage, $work) : $work();
+    }
+
+    private function generateDraft(array $params, ?BioGenerationRun $run): array
     {
         $clientId = isset($params['client_id']) ? (int) $params['client_id'] : null;
         $wpPostId = isset($params['wp_post_id']) ? (int) $params['wp_post_id'] : null;
@@ -161,14 +192,10 @@ TEXT;
         $rawOverrides = $this->applyRefinements($rawOverrides, $refinements);
         $generationOptions = $this->generationOptions($rawOverrides);
 
-        // Build normalized snapshot
-        if ($clientId !== null || $wpPostId !== null) {
-            $snapshot = $this->snapshotBuilder->fromRequest($clientId, $wpPostId, $platformId, $overlay);
-            $platformId = $snapshot->platformId; // use resolved platform
-        } else {
-            // Preview-only: no persisted entity
-            $snapshot = $this->snapshotBuilder->fromOverlayOnly($overlay ?? [], $platformId);
-        }
+        $snapshot = $this->measure($run, 'snapshot', fn () => ($clientId !== null || $wpPostId !== null)
+            ? $this->snapshotBuilder->fromRequest($clientId, $wpPostId, $platformId, $overlay, $run)
+            : $this->snapshotBuilder->fromOverlayOnly($overlay ?? [], $platformId));
+        $platformId = $snapshot->platformId;
 
         $generationOptions['resolved_bio_format'] = $this->resolveBioFormat(
             (string) ($generationOptions['bio_format'] ?? 'auto'),
@@ -178,13 +205,15 @@ TEXT;
             $snapshot->existingBio,
             $snapshot->platformId,
             $generationOptions,
-            'Existing bio'
+            'Existing bio',
+            $run,
         );
         $generationOptions['previous_draft_reference'] = $this->referenceBioContext(
             $previousBio,
             $snapshot->platformId,
             $generationOptions,
-            'Previous draft'
+            'Previous draft',
+            $run,
         );
         if ($feedbackContext !== []) {
             $generationOptions['feedback_context'] = $this->normalizeFeedbackContext($feedbackContext);
@@ -198,38 +227,45 @@ TEXT;
             ? $generationOptions['scorer_weights']
             : null;
 
-        [$rawText, $providerUsed, $usage, $fallbackUsed] = $this->generateText(
+        [$rawText, $providerUsed, $usage, $fallbackUsed] = $this->measure($run, 'generation', fn () => $this->generateText(
             $snapshot,
             $forceProvider,
             $forceModel,
             $generationOptions,
             $overlay ?? [],
             $providersOrder,
-        );
+            $run,
+        ));
         $rawText = $this->sanitizeOutput($rawText);
         $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
 
-        $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
+        $analysis = $this->measure($run, 'quality', fn () => $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions, $run));
         $rewrittenForUniqueness = false;
+        $needsRewrite = ! $fallbackUsed && $this->uniqueness->shouldRewrite($analysis, $generationOptions);
+        $rewriteSkipped = $needsRewrite && $run !== null && ! $run->canRewrite() ? 'request_budget' : null;
 
-        if (! $fallbackUsed && $this->uniqueness->shouldRewrite($analysis, $generationOptions)) {
+        if ($needsRewrite && $rewriteSkipped === null) {
             $rewriteOptions = $generationOptions;
             $rewriteOptions['rewrite_draft'] = $rawText;
             $rewriteOptions['rewrite_instruction'] = $this->uniqueness->rewriteInstruction($analysis);
 
-            [$rewriteText, $rewriteProvider, $rewriteUsage, $rewriteFallback] = $this->generateText(
+            [$rewriteText, $rewriteProvider, $rewriteUsage, $rewriteFallback] = $this->measure($run, 'rewrite', fn () => $this->generateText(
                 $snapshot,
                 $forceProvider,
                 $forceModel,
                 $rewriteOptions,
                 $overlay ?? [],
                 $providersOrder,
-            );
+                $run,
+            ));
+            if ($rewriteFallback) {
+                $rewriteSkipped = 'provider_unavailable';
+            }
 
             if (! $rewriteFallback) {
                 $rawText = $this->sanitizeOutput($rewriteText);
                 $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
-                $analysis = $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions);
+                $analysis = $this->measure($run, 'quality', fn () => $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions, $run));
                 $providerUsed = $rewriteProvider;
                 $usage = [
                     'input_tokens' => (int) ($usage['input_tokens'] ?? 0) + (int) ($rewriteUsage['input_tokens'] ?? 0),
@@ -248,19 +284,19 @@ TEXT;
         // dependency for generation; if the WP catalog or DOM parser fails in prod,
         // still return a generated bio and log the skipped enhancement.
         try {
-            $catalog = $this->catalogService->forPlatform($snapshot->platformId);
+            $catalog = $this->measure($run, 'catalogue', fn () => $this->catalogService->forPlatform($snapshot->platformId, $run));
             $bioHtml = $this->injector->inject($bioHtml, $catalog);
         } catch (\Throwable $e) {
             Log::warning('seo.link_injection_failed', [
                 'client_id' => $clientId,
                 'wp_post_id' => $wpPostId,
                 'platform_id' => $snapshot->platformId,
-                'error' => $e->getMessage(),
+                'error' => $run !== null ? 'Link enhancement unavailable.' : $e->getMessage(),
             ]);
         }
 
         // Score
-        $scoreResult = $this->scorer->score($bioHtml, $snapshot, $scorerWeights);
+        $scoreResult = $this->measure($run, 'scoring', fn () => $this->scorer->score($bioHtml, $snapshot, $scorerWeights));
         $usage = $this->withCostEstimate($providerUsed, $usage);
 
         Log::info('seo.bio_generated', [
@@ -288,6 +324,7 @@ TEXT;
             'ai_slop_flags' => $analysis['ai_slop_flags'],
             'bio_uniqueness_score' => $analysis['bio_uniqueness_score'],
             'rewritten_for_uniqueness' => $rewrittenForUniqueness,
+            'rewrite_skipped_reason' => $rewriteSkipped,
             'existing_bio_reference_used' => (bool) ($generationOptions['existing_bio_reference']['use'] ?? false),
             'existing_bio_reference_score' => $generationOptions['existing_bio_reference']['score'] ?? null,
             'previous_bio_reference_used' => (bool) ($generationOptions['previous_draft_reference']['use'] ?? false),
@@ -305,6 +342,7 @@ TEXT;
         array $options,
         array $overlay,
         ?array $providersOrder = null,
+        ?BioGenerationRun $run = null,
     ): array {
         $waterfall = ProviderWaterfall::fromConfig($forceProvider, $providersOrder);
 
@@ -313,7 +351,9 @@ TEXT;
                 $this->buildSystemPrompt($snapshot, $options),
                 $this->buildUserPrompt($snapshot, $options, $overlay),
                 [
-                    'max_tokens' => $this->maxTokensForOptions($options),
+                    'max_tokens' => $this->maxTokensForOptions($options, $run !== null),
+                    '_bio_run' => $run,
+                    'provider_sort' => $run !== null ? config('services.seo_engine.interactive.provider_sort', 'latency') : null,
                     'temperature' => (float) ($options['creativity'] ?? self::DEFAULT_GENERATION['creativity']),
                     'model' => $forceModel,
                 ],
@@ -547,7 +587,7 @@ PROMPT;
         return $options;
     }
 
-    private function referenceBioContext(string $bioHtml, int $platformId, array $options, string $label): array
+    private function referenceBioContext(string $bioHtml, int $platformId, array $options, string $label, ?BioGenerationRun $run = null): array
     {
         $text = trim(strip_tags($bioHtml));
         if ($text === '') {
@@ -560,7 +600,7 @@ PROMPT;
             ];
         }
 
-        $analysis = $this->uniqueness->analyze($bioHtml, $platformId, $options);
+        $analysis = $this->measure($run, 'reference_quality', fn () => $this->uniqueness->analyze($bioHtml, $platformId, $options, $run));
         $threshold = (int) ($options['previous_bio_reference_min_uniqueness_score'] ?? self::DEFAULT_GENERATION['previous_bio_reference_min_uniqueness_score']);
         $score = (int) ($analysis['bio_uniqueness_score'] ?? 0);
         $flags = collect(array_merge(
@@ -708,8 +748,12 @@ PROMPT;
         return '';
     }
 
-    private function maxTokensForOptions(array $options): int
+    private function maxTokensForOptions(array $options, bool $interactive = false): int
     {
+        if ($interactive) {
+            return max(384, min(2048, (int) ceil(((int) $options['max_words']) * 2.5) + 96));
+        }
+
         return max(96, min(1200, (int) ceil(((int) $options['max_words']) * 1.8) + 48));
     }
 

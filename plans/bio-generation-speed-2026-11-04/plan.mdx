@@ -1,0 +1,84 @@
+---
+title: Return short CRM bio drafts without repeated model waits
+objective: Disable unnecessary reasoning, bound interactive provider attempts, measure real timings and prepare a tested faster default.
+status: authorized implementation direction; audit READY, round 2
+owner: Ian K
+date: 2026-11-04
+scope: CRM interactive bio generation, provider comparison, loading state and delivery artifacts
+non_goals:
+  - payment, profile publishing and WordPress theme changes
+  - changing bulk or general AI inference budgets
+  - streaming unvalidated drafts
+---
+
+## Outcome and authorization
+
+The CRM currently waits 45 seconds for OpenRouter DeepSeek V3.2 to time out, then Qwen often spends its entire 183-token allowance on reasoning. The production audit recorded 32 timeouts and 30 empty Qwen responses across 3–4 November. Short drafts should use their tokens for the bio and finish within a bounded sequence of attempts.
+
+Ian's 4 November instruction, “Go ahead with your reccomendations”, authorizes the evaluated reasoning controls, timing, bounded fallback and small candidate comparison. This plan makes that approved direction concrete; it introduces no new product choice. Code, tests, build and review artifacts proceed under that authorization. Commit/push/production rollout and settings promotion are separate delivery actions requiring their applicable authorization after a concrete release is ready.
+
+<Wireframe title="Existing bio modal while a draft is running" surface="panel" caption="Keep the existing teal/slate modal, model picker and editor. Add elapsed time and an available Cancel action; a cancelled or late request cannot replace the current draft." html="<div style='padding:18px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);background:var(--wf-paper);color:var(--wf-ink)'><p style='color:var(--wf-accent);font-size:12px'>SEO BIO DRAFT</p><strong>Generating SEO bio</strong><div style='margin-top:16px;padding:14px;background:var(--wf-accent-soft);border:1px solid var(--wf-line);border-radius:var(--wf-radius)'>Preparing your draft · 6 seconds<br/><span style='color:var(--wf-muted)'>You can cancel while the draft is being prepared.</span></div><button style='margin-top:16px;background:var(--wf-card);border:1px solid var(--wf-line);padding:8px 14px;color:var(--wf-ink)'>Cancel</button></div>" />
+
+## Execution contract
+
+Create a per-request BioGenerationRun only when the CRM controller passes a server-owned interactive flag. Existing WordPress service callers, bulk jobs, PBN jobs, translation and AiGateway keep their existing budgets and reasoning behavior. Extend LlmResponse with optional model/provider/finish/reasoning metadata, preserving its existing constructor defaults. Interactive visible output uses max(384,min(2048,ceil(max_words*2.5)+96)) tokens; the 75-word benchmark therefore uses the same 384-token allowance. Export synthetic prompts through the actual BioGenerationService prompt builder with empty synthetic feedback so route comparison uses the real house/language/length constraints; retain each payload hash.
+
+The run uses monotonic time:30-second cooperative outbound-I/O deadline,12-second maximum per AI attempt,3-second connection timeout,2 actual AI attempts total including an optional rewrite, and 2 seconds reserved for finalization. Snapshot and cold catalogue reads receive a bounded single-read clone of WpSyncService: timeout=min(3-seconds, shared remaining minus finalization reserve), with no read started after exhaustion and no minimum-one-second clamp. A rewrite is allowed only with an unused attempt and at least 8 seconds plus the finalization reserve remaining. Exhaustion keeps the existing quality flags/draft or existing template fallback; response explicitly reports why an optional rewrite was skipped.
+
+This deadline bounds network operations cooperatively; it is not a process-kill guarantee for arbitrary PHP/DB/CPU work. No Axios timeout assumption: the modal uses raw fetch.
+
+<DataModel name="BioGenerationRun (new, request-local; no migration)" fields={[
+{"name":"request_id","type":"UUID string","note":"correlates safe attempt/stage timings; no contact or profile text"},
+{"name":"deadline","type":"monotonic float seconds","note":"shared by snapshot, model attempts, rewrite and catalogue"},
+{"name":"attempts","type":"array of safe metadata","note":"provider/model/status/elapsed/status-code/finish/reasoning and visible-token counts"},
+{"name":"stage_ms","type":"map<string,int>","note":"snapshot, reference analysis, generation, rewrite, catalogue, scoring and total"},
+{"name":"remaining_attempts","type":"int","note":"two actual HTTP attempts across the entire interactive request"}
+]} />
+
+## Provider controls and privacy
+
+OpenRouter receives `reasoning.enabled=false` for the benchmarked optional-reasoning families and interactive bios; Mistral requests omit unsupported reasoning parameters. Route selection continues using configured models, preserving data_collection=deny. Direct DeepSeek uses thinking.type=disabled. Other configured providers honor shared timeouts/attempt metadata when invoked by interactive bios, without globally changing their parameters. Interactive exact-model selections do not silently try a different model. Legacy unscoped callers retain their existing fallback behavior.
+
+Reject empty, refused or explicitly truncated interactive responses instead of presenting them as complete bios. A short cache circuit keyed by credential fingerprint/provider/model/mode opens after two transport/HTTP429/HTTP5xx infrastructure failures for 60 seconds and resets on success; cache failures fail open. Content refusals, truncation, empty outputs, local deadline exhaustion and programming errors do not poison a shared provider circuit. The circuit key also distinguishes routing and reasoning settings. Circuit skips do not consume HTTP attempts. No raw response/error bodies, prompts, contacts or bios enter the performance log. Emit exactly one safe terminal timing summary from a finally path, including snapshot/scoring exceptions; missing/unwritable logging fails open. Sanitize scoped errors before they reach existing adapter/waterfall/controller logs, with tests injecting credentials/prompts/bios into exception messages. Successful and failed timing summaries go to a dedicated daily INFO channel with 14-day retention and no incident-ingestion tap; general production LOG_LEVEL stays unchanged.
+
+WordPress ownership and HMAC/Basic headers remain in WpSyncService. Add only an opt-in read budget on a cloned service instance, reusing its health gate, header builder and decoder; unscoped retry paths stay unchanged. The live WpSyncService hash differs from local, so production delivery must merge only the owned additive hunks against fresh live source instead of overwriting unrelated live differences.
+
+The link catalogue caches a fully successful fetch for 60 minutes and retains a last-good copy for 24 hours. A failed budgeted fetch returns last-good entries (or static service entries when none exist), opens only a 15-second failure backoff and never stores that partial result under the normal one-hour key. Test cold failure followed by recovery and preservation of valid location/attribute links.
+
+## Bounded candidate comparison
+
+Register an Ops read diagnostic with inert default and an explicit --sample option. Preview resolves exact CRM identity, credential presence, 16 fixed synthetic requests and payload hashes; it makes no provider calls. Sampling is covered by the approved candidate comparison; its only external side effect is billed synthetic inference, with at most 16 candidate requests (or exactly 8 for --phase=baseline), 384 output tokens each,12-second per-call/240-second process admission, and no retries or application/WordPress writes. Validate the exact expected fixture hash on execution; leave the dirty-repository apply guard unchanged. Keys decrypt in server memory and never leave the server. Use synthetic adult profile facts without real names, phones or customer content. Keep generated synthetic responses private for quality review.
+
+Compare four routes in counterbalanced order across English, French, Portuguese and Swahili: direct deepseek-flash without thinking, OpenRouter deepseek/deepseek-v4.1-flash-1017 default routing, the same snapshot with latency sorting, and existing mistralai/mistral-medium-3.1. Preserve deny-data-collection on OpenRouter. Store status, finish reason, total time, reported reasoning tokens, visible text length, token costs when returned and the synthetic output. After output/transport loss inspect the retained ledger before replaying any billed batch. Pass the synthetic responses through the actual sanitizer/length/uniqueness pipeline before promoting a production default; otherwise label results API-only. Review language, factuality,60–75 words,900-character limit and existing uniqueness/sanitization/SEO behavior. Four samples per route support a small comparison, not fleet p95 or a guaranteed SLA.
+
+The initial16-request comparison completed with16HTTP200/stop/zero-reasoning results, but several non-English outputs were in English and Mistral was consistently shorter than requested. No global model promotion is justified. Extend the already approved small comparison by exactly8 synthetic requests: the saved DeepSeekV3.2 model with reasoning disabled, default and latency sorting, across the same four frozen language fixtures. Total inference calls for this task are capped at24 (16completed plus8targeted), with the same12second/384token limits and no customer/settings writes. The second phase is separately pinned as --phase=baseline; no automatic replay or open-ended tuning batch. This validates the combined reasoning-off/384-token payload on the existing primary instead of assuming a new snapshot is better.
+
+Prepare an exact settings diff for the observed winner and one tested fallback; preserve encrypted keys and all unrelated settings. Migration of the saved legacy direct DeepSeek alias and candidate/default promotion belong in that artifact, not a hidden code override. If no route meets quality/reliability, retain the current default and report the blocker rather than promote on speed alone.
+
+<Steps items={[
+{"title":"Add scoped execution control and response metadata","reuses":"LlmClient options, ProviderWaterfall and existing provider adapters","adds":"new BioGenerationRun and budget exception/helper, scoped deadlines/reasoning/circuit/metadata, exact interactive model choice","files":"app/Services/Seo/Llm/; config/logging.php; config/services.php","verify":"focused adapter and waterfall tests with fake HTTP, deterministic clock, timeouts, circuit reset, shared two-attempt cap and unscoped compatibility"},
+{"title":"Integrate stages, quality budget and bounded WP reads","reuses":"BioGenerationService, existing fallback/scoring/uniqueness and WpSyncService auth/health methods","adds":"server-owned interactive flag, safe performance summary, budgeted optional rewrite, one cold catalogue fetch and per-request corpus reuse","files":"app/Http/Controllers/CRM/SeoController.php; app/Services/Seo/BioGenerationService.php; app/Services/Seo/ProfileSnapshotBuilder.php; app/Services/Seo/LinkCatalogService.php; app/Services/Seo/BioUniquenessAnalyzer.php; app/Services/WpSyncService.php","verify":"existing SEO feature suite plus deadline/rewrite/link/auth regression cases; no quality or profile publication bypass"},
+{"title":"Keep the modal responsive and discard stale results","reuses":"GenerateBioButton request lifecycle and BioPreviewModal states/buttons","adds":"abort controller, elapsed/progress, timeout handling and cancellation on close/unmount; preserve existing draft when regeneration fails","files":"resources/js/components/seo/GenerateBioButton.jsx; resources/js/components/seo/BioPreviewModal.jsx; tests/browser/","verify":"browser journeys for success, hung request, cancel/reopen, late completion, regeneration failure and disabled duplicate submits at desktop/phone widths"},
+{"title":"Run the bounded synthetic provider comparison","reuses":"Ops bin/mkt registry and read diagnostic evidence and production encrypted provider settings","adds":"new fixed synthetic benchmark check and private sanitized result comparison","files":"Ops remote/checks.json; new Ops remote/php/crm-bio-benchmark.php; plans/bio-generation-speed-2026-11-04/benchmark-results.md","verify":"lint, no-call preview, inspect exact payload/fixture hashes, sample max 16 candidate or exactly 8 baseline requests; report phase-specific max_calls and reject any other phase, examine each response and preserve raw private evidence; no customer or settings writes"},
+{"title":"Package and verify a concrete release","reuses":"PHP8.2/Pint, existing PHPUnit/Playwright scripts and Vite build","adds":"scoped tests, reviewable settings/promotion/rollback artifacts, matching frontend package and updated task/state","files":"tests/Unit/Seo/; tests/Feature/Seo/; public/build/; docs/agent/tasks/bio-generation-speed.md","verify":"PHP/Pint/scoped SEO+AI compatibility tests, real mocked CRM browser journey, build/manifest checks and independent diff review; deployment and actual affected URL acceptance remain separately authorized delivery"}
+]} />
+
+<Risks items={[
+{"risk":"Shared adapters affect AI briefings or bulk jobs","impact":"high","mitigation":"new controls require the server-owned interactive run option; regression-test existing unscoped waterfall/adapters and AiGateway"},
+{"risk":"A speed cap prevents an optional quality rewrite","impact":"medium","mitigation":"retain original analysis/flags and disclose rewrite_skipped_reason; no blank or template overwrite of an already usable draft"},
+{"risk":"Production WpSyncService has unrelated differences","impact":"high","mitigation":"fresh live-source read and owned-hunk merge before any release; no blanket replacement or production deploy in this implementation step"},
+{"risk":"A tiny benchmark produces a misleading winner","impact":"medium","mitigation":"all four supported languages, exact same prompts, strict empty/refusal/truncation/quality review; publish sample size and no p95 claim; retain easy settings rollback"},
+{"risk":"Cancellation does not stop an already running server request","impact":"medium","mitigation":"client abort prevents stale display and duplicate UI ownership; server cooperative deadline/attempt cap bounds remaining upstream work; never claim an HTTP abort cancels vendor billing"}
+]} />
+
+## Verification and rollback
+
+Use PHP 8.2 artisan tests filtered to the changed SEO control, generation and WpSync cases; run existing adapter/waterfall coverage and tests/Feature/AiFoundationTest.php (provider-attempt persistence and prompt logging). HTTP fakes assert actual provider payloads, no forbidden logs and maximum attempts. Use deterministic clocks to advance through snapshot/first attempt/rewrite/catalogue under one deadline. Run existing and new Playwright mocked API journeys through Client Detail → Edit Profile → Generate Bio at desktop/mobile, cancel a hanging draft and verify it cannot replace a new result. Snapshot task-owned preimages before editing, including the already dirty WpSyncService. Existing public/build assets/manifest and staging contain unrelated work: build an isolated temporary source copy from current clean Git HEAD plus only task-owned frontend changes, using the existing node_modules without installing dependencies. Run npm run build in that copy; package its complete manifest/assets separately under this plan release directory and preserve the original public/build tree and index byte-for-byte. Record the scoped source/artifact hashes. Check no payment/Ads routes or WP source changed.
+
+Rollback consists of task-owned source/assets and the exact saved SEO settings preimage; no migration or customer data repair. A production release requires fresh source/asset/config baselines, private backups and independent live verification. Do not infer deployment from a local build or commit.
+
+## Audit record
+
+Round 1: NOT READY. Corrected token/prompt parity, last-good catalogue caching, infrastructure-only circuits, exact shared remaining time, fail-open finally telemetry and supported no-write benchmark execution. Fresh audit READY, round 2. Existing authorization covers implementation; no new direction approval requested.
+
+<Questions items={[]} />

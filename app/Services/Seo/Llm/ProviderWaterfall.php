@@ -32,7 +32,11 @@ class ProviderWaterfall
         $failures = [];
         $this->lastAttempts = [];
 
+        $run = $opts['_bio_run'] ?? null;
         foreach ($this->adapters as $adapter) {
+            if ($run instanceof BioGenerationRun && ! $run->canAttempt()) {
+                break;
+            }
             $provider = $adapter->name();
 
             try {
@@ -42,13 +46,13 @@ class ProviderWaterfall
 
                 return $resp;
             } catch (\Throwable $e) {
-                $message = $this->summarizeProviderError($e->getMessage());
+                $message = $run instanceof BioGenerationRun ? 'Interactive provider attempts failed.' : $this->summarizeProviderError($e->getMessage());
                 $failures[$provider] = $message;
                 $this->lastAttempts[] = ['provider' => $provider, 'status' => 'failed', 'error' => $message];
 
                 Log::warning('seo.provider_failed', [
                     'provider' => $provider,
-                    'error' => $e->getMessage(),
+                    'error' => $run instanceof BioGenerationRun ? $message : $e->getMessage(),
                 ]);
             }
         }

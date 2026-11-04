@@ -1,0 +1,7 @@
+{
+  "base_head": "8c64050968e97a432adf5c3f6afd3ec035735192",
+  "overlays": {
+    "resources/js/components/seo/GenerateBioButton.jsx": "147410bd1c671dafd71877cea07b9b3e660316d2230f52a09aee3e73aa092ddd",
+    "resources/js/components/seo/BioPreviewModal.jsx": "b90273dbd22ccb8d2157024ee6d1da325b9fcc131cf7b1e7d718f8b48f2264d7"
+  }
+}
