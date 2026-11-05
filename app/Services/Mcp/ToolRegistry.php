@@ -17,7 +17,27 @@ class ToolRegistry
         'exotic_error_digest_live' => ['title' => 'Error digest', 'description' => 'Read bounded recent error fingerprints without messages or paths.', 'roles' => ['admin'], 'domain' => 'operations', 'properties' => ['limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 20]]],
     ];
 
+    private const SUBSCRIPTION_AUDIT_PROPERTIES = [
+        'purpose' => ['type' => 'string', 'minLength' => 3, 'maxLength' => 160],
+        'run_ref' => ['type' => 'string', 'maxLength' => 36],
+        'from' => ['type' => 'string', 'maxLength' => 40],
+        'to' => ['type' => 'string', 'maxLength' => 40],
+        'platform_id' => ['type' => 'integer', 'minimum' => 1],
+        'country' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 80],
+        'staff_handle' => ['type' => 'string', 'pattern' => '^staff_[a-f0-9]{32}$'],
+        'event_type' => ['type' => 'string', 'enum' => ['activation', 'renewal', 'extension', 'observation']],
+        'exceptions_only' => ['type' => 'boolean'],
+        'population' => ['type' => 'string', 'enum' => ['live', 'test', 'all']],
+        'page_size' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100],
+        'cursor' => ['type' => 'string', 'maxLength' => 4096],
+        'event_ref' => ['type' => 'string', 'pattern' => '^evt_[a-f0-9]{64}$'],
+    ];
+
     private const TOOLS = [
+        'exotic_subscription_audit_summary' => ['title' => 'Subscription audit summary', 'description' => 'Summarize subscription actions, payment exceptions and potential exposure by currency, website and staff. CRM evidence only; missing records are not evidence of wrongdoing.', 'min_role' => 'admin', 'domain' => 'subscription_audit', 'properties' => self::SUBSCRIPTION_AUDIT_PROPERTIES, 'required' => ['purpose']],
+        'exotic_subscription_audit_events' => ['title' => 'Subscription audit events', 'description' => 'Read a complete pageable list of subscription activations, renewals and extensions with CRM payment and staff evidence.', 'min_role' => 'admin', 'domain' => 'subscription_audit', 'properties' => self::SUBSCRIPTION_AUDIT_PROPERTIES, 'required' => ['purpose']],
+        'exotic_subscription_audit_trace' => ['title' => 'Subscription audit evidence trace', 'description' => 'Read one subscription event with safe action-specific payment, expiry and staff/approval provenance using its opaque event reference.', 'min_role' => 'admin', 'domain' => 'subscription_audit', 'properties' => self::SUBSCRIPTION_AUDIT_PROPERTIES, 'required' => ['purpose', 'event_ref']],
+        'exotic_subscription_audit_coverage' => ['title' => 'Subscription audit coverage', 'description' => 'Read per-website historical audit coverage, snapshot freshness and explicitly missing or unreliable sources.', 'min_role' => 'admin', 'domain' => 'subscription_audit', 'properties' => self::SUBSCRIPTION_AUDIT_PROPERTIES, 'required' => ['purpose']],
         'exotic_catalog' => ['title' => 'CRM catalog', 'description' => 'List enabled MCP tools, markets and reporting coverage.', 'min_role' => 'sales', 'domain' => 'catalog', 'properties' => []],
         'exotic_revenue_summary' => ['title' => 'Revenue summary', 'description' => 'Return CEO-dashboard revenue and customer-mix metrics for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'platform_id' => ['type' => 'integer'], 'reporting_currency' => ['type' => 'string']]],
         'exotic_revenue_trend' => ['title' => 'Revenue trend', 'description' => 'Return dashboard revenue buckets for a window.', 'min_role' => 'sub_admin', 'domain' => 'revenue', 'properties' => ['window' => ['type' => 'string'], 'bucket' => ['type' => 'string'], 'platform_id' => ['type' => 'integer']]],
@@ -191,11 +211,13 @@ class ToolRegistry
                     'configured_role' => (string) data_get($configured, 'min_role', $minimumRole),
                     'enabled' => $enabled,
                     'management_mode' => $modern ? 'rollout' : 'registry',
-                    'scope_required' => $modern,
+                    'scope_required' => $modern || $this->isSubscriptionAudit($name),
                     'ui_resource' => $meta['ui_resource'] ?? null,
-                    'status_detail' => $modern
+                    'status_detail' => $this->isSubscriptionAudit($name)
+                        ? ($enabled ? 'Requires an explicit administrator subscription-audit grant.' : 'Disabled in the organisation registry.')
+                        : ($modern
                         ? ($enabled ? 'Live for tokens with this permission.' : 'Unavailable until its rollout is enabled.')
-                        : ($enabled ? 'Enabled in the organisation registry.' : 'Disabled in the organisation registry.'),
+                        : ($enabled ? 'Enabled in the organisation registry.' : 'Disabled in the organisation registry.')),
                     'inputSchema' => ['type' => 'object', 'properties' => $this->schemaProperties($meta['properties']), 'additionalProperties' => false],
                     'backing_service' => $meta['backing_service'] ?? 'Curated CRM service',
                     'views' => $meta['views'] ?? [],
@@ -211,6 +233,7 @@ class ToolRegistry
     {
         return collect($this->managementDefinitions($user, $settings))
             ->where('enabled', true)
+            ->reject(fn (array $tool): bool => $this->isSubscriptionAudit($tool['name']))
             ->pluck('name')
             ->values()
             ->all();
@@ -226,12 +249,32 @@ class ToolRegistry
         return array_key_exists($name, self::MODERN_TOOLS);
     }
 
+    public function isSubscriptionAudit(string $name): bool
+    {
+        return str_starts_with($name, 'exotic_subscription_audit_') && isset(self::TOOLS[$name]);
+    }
+
+    /** Audit access is opt-in, including for administrator-owned legacy tokens. */
+    public function subscriptionAuditToolNames(User $user, McpSettingsService $settings): array
+    {
+        return collect($this->managementDefinitions($user, $settings))
+            ->where('enabled', true)
+            ->filter(fn (array $tool): bool => $this->isSubscriptionAudit($tool['name']))
+            ->pluck('name')->values()->all();
+    }
+
     public function available(string $name, User $user, McpSettingsService $settings, ?array $abilities = null): bool
     {
         $meta = self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
         $modernTool = array_key_exists($name, self::MODERN_TOOLS);
         if (! $meta || ($modernTool && ! $this->modernToolEnabled($name)) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {
             return false;
+        }
+
+        if ($this->isSubscriptionAudit($name)) {
+            return $user->role === 'admin' && $user->isActive()
+                && in_array('mcp:subscription-audit', (array) $abilities, true)
+                && in_array('mcp:tool:'.$name, (array) $abilities, true);
         }
 
         if ($modernTool) {

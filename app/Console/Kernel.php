@@ -693,6 +693,15 @@ class Kernel extends ConsoleKernel
                 ->sendOutputTo(storage_path('logs/queue_worker_heavy.log'));
         }
 
+        // Reporting projections only; keep the shared host's scheduler responsive.
+        $schedule->command('crm:subscription-audit-build --days=90')
+            ->hourlyAt(13)
+            ->withoutOverlapping(90)
+            ->onOneServer()
+            ->runInBackground()
+            ->skip(fn () => ! $allows('heavy_queue_worker'))
+            ->sendOutputTo(storage_path('logs/subscription_audit_build.log'));
+
         $this->recordHeartbeat($schedule, $tickStartedAt);
     }
 

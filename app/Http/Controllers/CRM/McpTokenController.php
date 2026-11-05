@@ -76,6 +76,7 @@ class McpTokenController extends Controller
         $data = $request->validate([
             'label' => ['required', 'string', 'max:80'],
             'ttl_days' => ['nullable', 'integer', 'min:1', 'max:365'],
+            'subscription_audit' => ['nullable', 'boolean'],
             'tools' => ['nullable', 'array'],
             'tools.*' => ['string', 'max:64'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
@@ -91,7 +92,23 @@ class McpTokenController extends Controller
         if ($requestedTools === []) {
             $requestedTools = $this->registry->defaultToolNames($owner, $this->settings);
         }
-        $abilities = ['mcp:read'];
+        $auditOptIn = (bool) ($data['subscription_audit'] ?? false);
+        if (! $auditOptIn) {
+            // The existing mint UI submits every enabled tool by default. That
+            // broad selection is not consent to this new financial-audit scope.
+            $requestedTools = array_values(array_filter($requestedTools, fn (string $tool): bool => ! $this->registry->isSubscriptionAudit($tool)));
+        } else {
+            abort_unless($owner->role === 'admin', 422, 'Subscription-audit grants require an administrator owner.');
+            if (empty($data['tools'])) {
+                $requestedTools = array_merge($requestedTools, $this->registry->subscriptionAuditToolNames($owner, $this->settings));
+            }
+        }
+        $auditTools = array_values(array_filter($requestedTools, fn (string $tool): bool => $this->registry->isSubscriptionAudit($tool)));
+        if ($auditTools !== []) {
+            abort_unless($owner->role === 'admin', 422, 'Subscription-audit grants require an administrator owner.');
+            abort_unless(array_diff($auditTools, $this->registry->subscriptionAuditToolNames($owner, $this->settings)) === [], 422, 'A requested subscription-audit tool is disabled.');
+        }
+        $abilities = $auditTools === [] ? ['mcp:read'] : ['mcp:read', 'mcp:subscription-audit'];
         foreach ($requestedTools as $tool) {
             abort_unless($this->registry->metadata($tool) !== null, 422, 'Unknown MCP tool.');
             $abilities[] = 'mcp:tool:'.$tool;
@@ -127,7 +144,9 @@ class McpTokenController extends Controller
     public function destroy(PersonalAccessToken $token)
     {
         abort_unless(str_starts_with((string) $token->name, 'mcp:'), 404);
-        $token->delete();
+        DB::transaction(function () use ($token): void {
+            PersonalAccessToken::query()->whereKey($token->id)->lockForUpdate()->firstOrFail()->delete();
+        });
 
         return response()->json(['status' => 'revoked']);
     }

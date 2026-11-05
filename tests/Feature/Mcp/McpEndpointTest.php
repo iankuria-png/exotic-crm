@@ -267,12 +267,14 @@ class McpEndpointTest extends TestCase
         $user = User::factory()->create(['role' => 'admin']);
         Sanctum::actingAs($user);
 
-        $this->getJson('/api/crm/settings/mcp')
+        $registry = $this->getJson('/api/crm/settings/mcp')
             ->assertOk()
-            ->assertJsonCount(30, 'tools')
-            ->assertJsonPath('tools.24.name', 'exotic_search_knowledge')
-            ->assertJsonPath('tools.24.management_mode', 'rollout')
-            ->assertJsonPath('tools.24.scope_required', true);
+            ->assertJsonCount(34, 'tools');
+        $knowledge = collect($registry->json('tools'))->firstWhere('name', 'exotic_search_knowledge');
+        $this->assertSame('rollout', $knowledge['management_mode']);
+        $this->assertTrue($knowledge['scope_required']);
+        $audit = collect($registry->json('tools'))->firstWhere('name', 'exotic_subscription_audit_summary');
+        $this->assertTrue($audit['scope_required']);
 
         $minted = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'full access'])
             ->assertCreated()

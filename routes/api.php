@@ -230,6 +230,8 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 
 // CRM Protected Routes (Sanctum token required)
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
+    Route::get('/reports/subscription-audit/{kind}', [\App\Http\Controllers\CRM\SubscriptionAuditController::class, 'show'])
+        ->where('kind', 'summary|events|trace|coverage')->middleware('role:admin');
     Route::get('/settings/send-love/{platform}', [\App\Http\Controllers\CRM\SendLoveController::class, 'settings']);
     Route::put('/settings/send-love/{platform}', [\App\Http\Controllers\CRM\SendLoveController::class, 'save']);
     Route::post('/settings/send-love/{platform}/sync', [\App\Http\Controllers\CRM\SendLoveController::class, 'sync']);

@@ -12,6 +12,7 @@ use App\Services\Mcp\ToolRegistry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class McpOAuthController extends Controller
 {
@@ -62,7 +63,7 @@ class McpOAuthController extends Controller
     public function consent(Request $request)
     {
         abort_unless((bool) config('mcp.oauth.enabled'), 404);
-        $data = $request->validate(['response_type' => ['required', 'in:code'], 'client_id' => ['required', 'string'], 'redirect_uri' => ['required', 'string'], 'code_challenge' => ['required', 'string', 'min:43', 'max:128'], 'code_challenge_method' => ['required', 'in:S256'], 'state' => ['nullable', 'string', 'max:1024'], 'scope' => ['nullable', 'string'], 'approved' => ['nullable', 'boolean']]);
+        $data = $request->validate(['response_type' => ['required', 'in:code'], 'client_id' => ['required', 'string'], 'redirect_uri' => ['required', 'string'], 'code_challenge' => ['required', 'string', 'min:43', 'max:128'], 'code_challenge_method' => ['required', 'in:S256'], 'state' => ['nullable', 'string', 'max:1024'], 'scope' => ['nullable', 'string'], 'approved' => ['nullable', 'boolean'], 'subscription_audit' => ['nullable', 'boolean']]);
         $client = McpOAuthClient::query()->where('client_id', $data['client_id'])->where('active', true)->firstOrFail();
         abort_unless(in_array($data['redirect_uri'], $client->redirect_uris, true), 422, 'The redirect URI is not registered for this connector.');
         /** @var User $user */
@@ -73,8 +74,13 @@ class McpOAuthController extends Controller
         if (! ($data['approved'] ?? false)) {
             return response($this->consentPage($request, $client), 200)->header('Content-Type', 'text/html; charset=UTF-8');
         }
+        $subscriptionAudit = (bool) ($data['subscription_audit'] ?? false);
+        // New sensitive consent is a same-origin CSRF-protected browser POST.
+        // Retain legacy GET approval only for the existing non-audit capability set.
+        abort_if($subscriptionAudit && ! $request->isMethod('POST'), 422, 'Subscription-audit access requires the consent form POST.');
+        abort_if($subscriptionAudit && $user->role !== 'admin', 403, 'Subscription-audit access requires an administrator.');
         $code = Str::random(64);
-        McpOAuthAuthorizationCode::query()->create(['code_hash' => hash('sha256', $code), 'client_id' => $client->id, 'user_id' => $user->id, 'redirect_uri' => $data['redirect_uri'], 'code_challenge' => $data['code_challenge'], 'code_challenge_method' => 'S256', 'abilities' => $this->abilitiesFor($user), 'expires_at' => now()->addMinutes((int) config('mcp.oauth.authorization_code_minutes'))]);
+        McpOAuthAuthorizationCode::query()->create(['code_hash' => hash('sha256', $code), 'client_id' => $client->id, 'user_id' => $user->id, 'redirect_uri' => $data['redirect_uri'], 'code_challenge' => $data['code_challenge'], 'code_challenge_method' => 'S256', 'abilities' => $this->abilitiesFor($user, $subscriptionAudit), 'expires_at' => now()->addMinutes((int) config('mcp.oauth.authorization_code_minutes'))]);
         $query = array_filter(['code' => $code, 'state' => $data['state'] ?? null], fn ($value) => $value !== null && $value !== '');
 
         return redirect()->away($data['redirect_uri'].(str_contains($data['redirect_uri'], '?') ? '&' : '?').http_build_query($query));
@@ -88,12 +94,19 @@ class McpOAuthController extends Controller
         if ($data['grant_type'] === 'refresh_token') {
             return response()->json(DB::transaction(function () use ($data, $client) {
                 $refresh = McpOAuthRefreshToken::query()->where('token_hash', hash('sha256', $data['refresh_token']))->where('client_id', $client->id)->whereNull('revoked_at')->where('expires_at', '>', now())->lockForUpdate()->firstOrFail();
+                $owner = User::query()->findOrFail($refresh->user_id);
+                abort_unless($owner->isActive(), 403, 'The MCP grant owner is inactive.');
+                $backing = PersonalAccessToken::query()->whereKey($refresh->personal_access_token_id)
+                    ->where('tokenable_type', $owner->getMorphClass())->where('tokenable_id', $owner->id)
+                    ->where('name', 'mcp:oauth:'.$client->client_id)->lockForUpdate()->firstOrFail();
+                // The parent token may have expired normally, but must still exist.
+                // Managed grant removal is authoritative over the refresh snapshot.
+                $abilities = array_values(array_intersect((array) $refresh->abilities, (array) $backing->abilities));
+                abort_unless(in_array('mcp:read', $abilities, true), 403, 'The MCP grant has been revoked.');
                 $refresh->update(['revoked_at' => now()]);
-                if ($refresh->personal_access_token_id) {
-                    DB::table('personal_access_tokens')->where('id', $refresh->personal_access_token_id)->delete();
-                }
+                $backing->delete();
 
-                return $this->issue(User::query()->findOrFail($refresh->user_id), $client, $refresh->abilities);
+                return $this->issue($owner, $client, $abilities);
             }));
         }
 
@@ -121,6 +134,10 @@ class McpOAuthController extends Controller
 
     private function issue(User $user, McpOAuthClient $client, array $abilities): array
     {
+        abort_unless($user->isActive(), 403, 'The MCP grant owner is inactive.');
+        if ($user->role !== 'admin') {
+            $abilities = array_values(array_filter($abilities, fn (string $ability): bool => $ability !== 'mcp:subscription-audit' && ! str_starts_with($ability, 'mcp:tool:exotic_subscription_audit_')));
+        }
         $access = $user->createToken('mcp:oauth:'.$client->client_id, $abilities, now()->addMinutes((int) config('mcp.oauth.access_token_minutes')));
         $refreshToken = Str::random(80);
         McpOAuthRefreshToken::query()->create(['token_hash' => hash('sha256', $refreshToken), 'client_id' => $client->id, 'user_id' => $user->id, 'personal_access_token_id' => $access->accessToken->id, 'abilities' => $abilities, 'expires_at' => now()->addDays((int) config('mcp.oauth.refresh_token_days'))]);
@@ -128,9 +145,19 @@ class McpOAuthController extends Controller
         return ['access_token' => $access->plainTextToken, 'token_type' => 'Bearer', 'expires_in' => (int) config('mcp.oauth.access_token_minutes') * 60, 'refresh_token' => $refreshToken, 'scope' => 'mcp:read'];
     }
 
-    private function abilitiesFor(User $user): array
+    private function abilitiesFor(User $user, bool $subscriptionAudit = false): array
     {
-        return array_merge(['mcp:read'], array_map(fn ($tool) => 'mcp:tool:'.$tool, $this->tools->defaultToolNames($user, $this->settings)));
+        $tools = $this->tools->defaultToolNames($user, $this->settings);
+        $abilities = ['mcp:read'];
+        if ($subscriptionAudit && $user->role === 'admin') {
+            $auditTools = $this->tools->subscriptionAuditToolNames($user, $this->settings);
+            if ($auditTools !== []) {
+                $tools = array_merge($tools, $auditTools);
+                $abilities[] = 'mcp:subscription-audit';
+            }
+        }
+
+        return array_merge($abilities, array_map(fn ($tool) => 'mcp:tool:'.$tool, $tools));
     }
 
     private function safeRedirect(string $uri): bool
@@ -144,12 +171,16 @@ class McpOAuthController extends Controller
     {
         $fields = '';
         foreach ($request->query() as $key => $value) {
-            if (in_array($key, ['approved', 'password'], true) || is_array($value)) {
+            if (in_array($key, ['approved', 'password', 'subscription_audit', '_token'], true) || is_array($value)) {
                 continue;
             }
             $fields .= '<input type="hidden" name="'.e($key).'" value="'.e((string) $value).'">';
         }
 
-        return '<!doctype html><html><body style="font-family:system-ui;max-width:42rem;margin:12vh auto;color:#0f172a"><p style="color:#0f766e;font-weight:700;letter-spacing:.08em">EXOTIC CRM · READ-ONLY MCP</p><h1>Connect '.e($client->client_name).'</h1><p>This connector can read only the MCP capabilities available to your CRM role and market scope. It cannot edit clients, settle payments, send messages, or access Support Board content.</p><form method="get">'.$fields.'<input type="hidden" name="approved" value="1"><button style="background:#0f766e;color:white;border:0;border-radius:.5rem;padding:.75rem 1rem;font-weight:700">Approve read-only connection</button></form><p style="color:#64748b;font-size:.875rem">You can revoke this connection from Settings → MCP at any time.</p></body></html>';
+        $auditOption = $request->user()?->role === 'admin' && $this->tools->subscriptionAuditToolNames($request->user(), $this->settings) !== []
+            ? '<label style="display:block;margin:1rem 0"><input type="checkbox" name="subscription_audit" value="1"> Include subscription audit reports (read-only payment exceptions and staff accountability).</label>'
+            : '';
+
+        return '<!doctype html><html><body style="font-family:system-ui;max-width:42rem;margin:12vh auto;color:#0f172a"><p style="color:#0f766e;font-weight:700;letter-spacing:.08em">EXOTIC CRM · READ-ONLY MCP</p><h1>Connect '.e($client->client_name).'</h1><p>This connector can read only the MCP capabilities available to your CRM role and market scope. It cannot edit clients, settle payments, send messages, or access Support Board content.</p><form method="post" action="'.e(url('/mcp/oauth/authorize')).'">'.csrf_field().$fields.$auditOption.'<input type="hidden" name="approved" value="1"><button style="background:#0f766e;color:white;border:0;border-radius:.5rem;padding:.75rem 1rem;font-weight:700">Approve read-only connection</button></form><p style="color:#64748b;font-size:.875rem">You can revoke this connection from Settings → MCP at any time.</p></body></html>';
     }
 }

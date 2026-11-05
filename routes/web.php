@@ -70,6 +70,7 @@ Route::post('/crm/auth/exchange', [CrmAuthController::class, 'exchangeSessionTok
 Route::get('/.well-known/oauth-protected-resource', [McpOAuthController::class, 'protectedResource']);
 Route::get('/.well-known/oauth-authorization-server', [McpOAuthController::class, 'metadata']);
 Route::get('/mcp/oauth/authorize', [McpOAuthController::class, 'consent'])->middleware('auth');
+Route::post('/mcp/oauth/authorize', [McpOAuthController::class, 'consent'])->middleware('auth');
 Route::get('/crm/impersonation/{bridge}', [CrmAuthController::class, 'consumeImpersonationBridge'])
     ->middleware('signed')
     ->name('crm.impersonation.consume');

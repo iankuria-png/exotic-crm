@@ -35,6 +35,10 @@ return [
         explode(',', (string) env('MCP_ALLOWED_ORIGINS', ''))
     ))),
     'tools' => [
+        'exotic_subscription_audit_summary' => ['enabled' => true, 'min_role' => 'admin'],
+        'exotic_subscription_audit_events' => ['enabled' => true, 'min_role' => 'admin'],
+        'exotic_subscription_audit_trace' => ['enabled' => true, 'min_role' => 'admin'],
+        'exotic_subscription_audit_coverage' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_catalog' => ['enabled' => true, 'min_role' => 'sales'],
         'exotic_revenue_summary' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_revenue_trend' => ['enabled' => true, 'min_role' => 'sub_admin'],

@@ -48,7 +48,16 @@ class McpTokenGrantService
             abort(422, 'Only an administrator-owned grant can receive identified-client access.');
         }
 
-        return DB::transaction(function () use ($token, $actor, $input, $tools, $resources, $prompts, $identifiedClients): array {
+        $subscriptionAudit = count(array_filter($tools, fn (string $tool): bool => $this->tools->isSubscriptionAudit($tool))) > 0
+            && (array_key_exists('tools', $input) || in_array('mcp:subscription-audit', $currentAbilities, true));
+        if ($subscriptionAudit && $owner->role !== 'admin') {
+            abort(422, 'Only an administrator-owned grant can receive subscription-audit access.');
+        }
+
+        return DB::transaction(function () use ($token, $actor, $input, $tools, $resources, $prompts, $identifiedClients, $subscriptionAudit, $currentAbilities): array {
+            // Serialize grant changes with OAuth rotation; a stale edit must not restore removed permissions.
+            $locked = PersonalAccessToken::query()->whereKey($token->id)->lockForUpdate()->firstOrFail();
+            abort_unless($locked->abilities === $currentAbilities, 409, 'The MCP grant changed; reload it before saving.');
             $before = ['abilities' => $token->abilities, 'expires_at' => optional($token->expires_at)->toIso8601String()];
             $abilities = ['mcp:read'];
             foreach ($tools as $tool) {
@@ -63,6 +72,9 @@ class McpTokenGrantService
             if ($identifiedClients) {
                 $abilities[] = 'mcp:identified-clients';
             }
+            if ($subscriptionAudit) {
+                $abilities[] = 'mcp:subscription-audit';
+            }
             $token->forceFill(['abilities' => $abilities, 'expires_at' => $input['expires_at'] ?? $token->expires_at])->save();
             $grant = DB::table('mcp_token_grants')->where('token_id', $token->id)->first();
             $version = ((int) ($grant->grant_version ?? 0)) + 1;
@@ -70,9 +82,9 @@ class McpTokenGrantService
             if (isset($input['daily_rows']) || isset($input['daily_bytes'])) {
                 McpTokenLimit::query()->updateOrCreate(['token_id' => $token->id], ['daily_rows' => max(1, (int) ($input['daily_rows'] ?? $this->settings->effectiveLimits($token->id)['token_rows'])), 'daily_bytes' => max(1, (int) ($input['daily_bytes'] ?? $this->settings->effectiveLimits($token->id)['token_bytes']))]);
             }
-            AuditLog::query()->create(['actor_id' => $actor->id, 'action' => 'mcp_token_grant_update', 'entity_type' => 'mcp_token_grant', 'entity_id' => $token->id, 'before_state' => ['tool_count' => count(array_filter($before['abilities'], fn ($ability) => str_starts_with($ability, 'mcp:tool:'))), 'expires_at' => $before['expires_at']], 'after_state' => ['tool_count' => count($tools), 'resource_count' => count($resources), 'prompt_count' => count($prompts), 'identified_clients' => in_array('mcp:identified-clients', $abilities, true), 'grant_version' => $version, 'secret_rotated' => false], 'created_at' => now()]);
+            AuditLog::query()->create(['actor_id' => $actor->id, 'action' => 'mcp_token_grant_update', 'entity_type' => 'mcp_token_grant', 'entity_id' => $token->id, 'before_state' => ['tool_count' => count(array_filter($before['abilities'], fn ($ability) => str_starts_with($ability, 'mcp:tool:'))), 'expires_at' => $before['expires_at']], 'after_state' => ['tool_count' => count($tools), 'resource_count' => count($resources), 'prompt_count' => count($prompts), 'identified_clients' => in_array('mcp:identified-clients', $abilities, true), 'subscription_audit' => $subscriptionAudit, 'grant_version' => $version, 'secret_rotated' => false], 'created_at' => now()]);
 
-            return ['id' => $token->id, 'capabilities' => ['tools' => $tools, 'resources' => $resources, 'prompts' => $prompts, 'identified_clients' => in_array('mcp:identified-clients', $abilities, true)], 'limits' => $this->settings->effectiveLimits($token->id), 'grant_version' => $version, 'secret_rotated' => false];
+            return ['id' => $token->id, 'capabilities' => ['tools' => $tools, 'resources' => $resources, 'prompts' => $prompts, 'identified_clients' => in_array('mcp:identified-clients', $abilities, true), 'subscription_audit' => $subscriptionAudit], 'limits' => $this->settings->effectiveLimits($token->id), 'grant_version' => $version, 'secret_rotated' => false];
         });
     }
 

@@ -18,6 +18,8 @@ use App\Services\Mcp\Presenters\AgentPerformancePresenter;
 use App\Services\Mcp\Protocol\McpProtocolContext;
 use App\Services\Mcp\Results\ToolResult;
 use App\Services\Ops\VitalsSampler;
+use App\Services\SubscriptionAudit\SubscriptionAuditException;
+use App\Services\SubscriptionAudit\SubscriptionAuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -25,6 +27,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\PersonalAccessToken;
 use Throwable;
 
 class McpServer
@@ -96,6 +99,17 @@ class McpServer
     public function previewTool(Request $request, string $name, array $arguments, User $user): array
     {
         $abilities = array_merge(['mcp:read'], array_map(fn (string $tool) => 'mcp:tool:'.$tool, $this->registry->defaultToolNames($user, $this->settings)));
+        if ($this->registry->isSubscriptionAudit($name)) {
+            // A Settings session is not permission to synthesize a connector grant.
+            $grant = PersonalAccessToken::query()
+                ->where('tokenable_type', $user->getMorphClass())
+                ->where('tokenable_id', $user->id)->where('name', 'like', 'mcp:%')
+                ->whereJsonContains('abilities', 'mcp:subscription-audit')
+                ->whereJsonContains('abilities', 'mcp:tool:'.$name)
+                ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
+                ->latest('id')->first();
+            $abilities = $grant ? (array) $grant->abilities : [];
+        }
         if (! $this->registry->available($name, $user, $this->settings, $abilities)) {
             throw McpProtocolException::rpc(-32601, 'Tool is unknown, disabled, or unavailable to this account.', 'tool_disabled', 403);
         }
@@ -183,6 +197,9 @@ class McpServer
             throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404);
         }
         $this->validateModernArguments($name, $arguments);
+        if ($this->registry->isSubscriptionAudit($name)) {
+            return $this->subscriptionAuditTool($name, $arguments, $auth);
+        }
         $data = match ($name) {
             'exotic_catalog' => $this->catalog($auth->user, $auth->abilities, true),
             'exotic_search_knowledge' => ['hits' => app(KnowledgeSearch::class)->search((string) $arguments['query'], $auth, $arguments['audience'] ?? null)],
@@ -214,6 +231,9 @@ class McpServer
         }
 
         $arguments = is_array($params['arguments'] ?? null) ? $params['arguments'] : [];
+        if ($this->registry->isSubscriptionAudit($name)) {
+            return $this->subscriptionAuditTool($name, $arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth));
+        }
         $data = match ($name) {
             'exotic_catalog' => $this->catalog($user, $abilities),
             'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
@@ -251,6 +271,33 @@ class McpServer
                 'exotic/resultType' => 'complete',
                 'exotic/rowCount' => is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0,
             ],
+        ];
+    }
+
+    /** Keep identical data and coverage semantics in ChatGPT and Claude adapters. */
+    private function subscriptionAuditTool(string $name, array $arguments, McpAuthorizationContext $auth): array
+    {
+        $this->validateModernArguments($name, $arguments);
+        try {
+            $data = app(SubscriptionAuditService::class)->report(substr($name, strlen('exotic_subscription_audit_')), $arguments, $auth);
+        } catch (SubscriptionAuditException $exception) {
+            throw McpProtocolException::rpc($exception->rpcCode, $exception->getMessage(), $exception->reason, $exception->httpStatus);
+        }
+        $metadata = array_intersect_key((array) ($data['_report_meta'] ?? []), array_flip(['result_state', 'coverage', 'caveats', 'row_count', 'filters', 'citations']));
+        unset($data['_report_meta']);
+        $safe = $this->sanitizer->sanitize($this->projector->project($data));
+        $rowCount = max(0, (int) ($metadata['row_count'] ?? $this->rowCount($safe)));
+        $envelope = $this->sanitizer->sanitize(ToolResult::envelope($safe, [], array_merge([
+            'filters' => $this->resultFilters($arguments),
+            'row_count' => $rowCount,
+            'result_state' => 'partial',
+        ], $metadata)));
+
+        return [
+            'content' => [['type' => 'text', 'text' => $this->serializer->encode($envelope)]],
+            'structuredContent' => $envelope,
+            'isError' => false,
+            '_meta' => ['exotic/resultType' => $envelope['meta']['result_state'], 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000],
         ];
     }
 
