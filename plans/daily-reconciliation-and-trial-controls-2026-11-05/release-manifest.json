@@ -1,0 +1,223 @@
+{
+  "base_commit": "b2800a64dd763ef17c4f8bb6f02fe26b0f12358c",
+  "date": "2026-11-05",
+  "source": "Plain archive of base commit plus only owned source delta; compiled with npm run build",
+  "validation": {
+    "php_syntax_files": 31,
+    "mysql_tests": 27,
+    "mysql_assertions": 253,
+    "browser_journeys": 5,
+    "broader_backend_passed": 76,
+    "broader_backend_known_baseline_failure": 1
+  },
+  "files": [
+    {
+      "path": "app/Http/Controllers/CRM/FreeTrialApprovalController.php",
+      "sha256": "3164f2d0e96e1e10c4a406bb4d2500154728ba2abb875c20ca1934bebc3bc5eb"
+    },
+    {
+      "path": "app/Http/Controllers/CRM/PaymentReviewController.php",
+      "sha256": "df8fb1f6824c3dd2242ed75347e6382cf276b8a166175fd185e39d15b3d4597d"
+    },
+    {
+      "path": "app/Http/Middleware/TrialApprovalMiddleware.php",
+      "sha256": "ef901ebacfc3132cbe7f380c36f31ed66ab8e255b40ac0557cd5ff1cb0341515"
+    },
+    {
+      "path": "app/Models/DailyPaymentReview.php",
+      "sha256": "6d8b39148403bc019acb42b5ec17b3583189f1f37ab47e9d1e0911416db0fe25"
+    },
+    {
+      "path": "app/Models/FreeTrialRequest.php",
+      "sha256": "3861b4a43a58d4edee5c7781f2c6fb4a1b0b518e1163c7d14a228bceb7fa0f31"
+    },
+    {
+      "path": "app/Models/MarketTrialApprovalPolicy.php",
+      "sha256": "9dd751ee712386470803255844e3c9641192e372aa26f7f9d74f85347ca8573e"
+    },
+    {
+      "path": "app/Models/PaymentCorrectionRequest.php",
+      "sha256": "65112b1053c7b77094f700be0e94b1ab71460b4df9cbce2c10769c76019c0338"
+    },
+    {
+      "path": "app/Models/PaymentReviewAttachment.php",
+      "sha256": "a213f3a53447b6c607e1e66e25d9b0444994ae717c91615fd6a9a139c901e6bb"
+    },
+    {
+      "path": "app/Models/PaymentReviewOperation.php",
+      "sha256": "c74dc5d1972acaa9f6dea65c91dda6a6ba99068ecf51e8a6ac2203e934b7d5ad"
+    },
+    {
+      "path": "app/Models/TrialActivationOperation.php",
+      "sha256": "45464d701e7f1fbfc1751df00827a4af61e76c942a91dea312647a21a155825a"
+    },
+    {
+      "path": "app/Services/Reconciliation/DailyPaymentReviewService.php",
+      "sha256": "10a0673aa8dd13aa6e499a661a01a40105180d7a4cd31d4b0477673b611602f2"
+    },
+    {
+      "path": "app/Services/Reconciliation/ReviewAccess.php",
+      "sha256": "1e724bfc8c2cfe3a2495df270c8af63ad5bf54f69d021e53c033ae208154e142"
+    },
+    {
+      "path": "app/Services/Trials/TrialActivationService.php",
+      "sha256": "f5c8a0c4e2815baa93efae02a0615e86911d637974ef869033a20d3acc800fb7"
+    },
+    {
+      "path": "app/Services/Trials/TrialApprovalService.php",
+      "sha256": "c5a26614c8b13700f7442baf1ceb51d18871e3fa4bc6cdc2aca2c133bbac746f"
+    },
+    {
+      "path": "config/reconciliation.php",
+      "sha256": "0bd8a0a3e217b69fd2c518bf2936e6e1353ab6b2c16ad3bcb49ded6d712759e4"
+    },
+    {
+      "path": "database/migrations/2026_11_05_140000_create_daily_review_and_trial_approval_tables.php",
+      "sha256": "438f6040cfab67ea123d26105a7d40323f696b4e23b92336548ba7e90dfa44fb"
+    },
+    {
+      "path": "resources/js/components/reconciliation/ReviewDialog.jsx",
+      "sha256": "1735d86a78f63138e5f4cc1107809d7043523603f771f26f97406d8ae4616e83"
+    },
+    {
+      "path": "resources/js/components/reconciliation/reconciliation.css",
+      "sha256": "9c33ce4c9c843b32f27a9e86cef4304dcd6182be8b65166d67ccce4ae4d423ea"
+    },
+    {
+      "path": "resources/js/components/trials/MarketTrialApprovalPolicy.jsx",
+      "sha256": "04009f6014dc38ee027554c00428b5a92d84efeb4faeaebfc2939a803c88cfe2"
+    },
+    {
+      "path": "resources/js/components/trials/TrialAuthorizationControl.jsx",
+      "sha256": "4dd03602c6b0d5cbb9e412a938e8b8472e81fc4b690b812538a14368e66bda0d"
+    },
+    {
+      "path": "resources/js/components/trials/TrialWorkspace.jsx",
+      "sha256": "73871a27c1332d92bf8d5303155e93c8f5c8fb8951ccd7dea6e5f6ec33650b9d"
+    },
+    {
+      "path": "resources/js/pages/Reconciliations.jsx",
+      "sha256": "bc74edc08021ab86a33f05609dbd1fac12ca6275c4ecb41cc6a813f6ef061ae5"
+    },
+    {
+      "path": "routes/reconciliation.php",
+      "sha256": "b8a8b974afe41138135af74c0a4290dd1a91312357c687fbdce4fddec06ba6fe"
+    },
+    {
+      "path": "tests/Feature/Reconciliation/DailyPaymentReviewTest.php",
+      "sha256": "433400a9b4262474ccdad972e0398f7e038fe880b993a92e6afa491ef09b6a16"
+    },
+    {
+      "path": "tests/Feature/Reconciliation/WorkflowConcurrencyTest.php",
+      "sha256": "063cc79f5a6bc5e77b753623d4d6903774bfefa7b9b31a731267ad970c783c73"
+    },
+    {
+      "path": "tests/Feature/Trials/TrialAuthorizationTest.php",
+      "sha256": "1bdb1c7f1c83cec4fa8f4177a7934fd8efbef4dbbc8e3716285b945b63d496f2"
+    },
+    {
+      "path": "tests/Support/WorkflowTestDatabase.php",
+      "sha256": "2f4942bfbea92d2e0aff37520b54362592532c443c3319b292a527de6ccef651"
+    },
+    {
+      "path": "tests/Support/workflow-race-worker.php",
+      "sha256": "c83630de7ad73967f193f4b602c38b426a311d5de4de22927b41ec17b4801a2c"
+    },
+    {
+      "path": "tests/browser/daily-reconciliation.spec.js",
+      "sha256": "68141c3575bb4988bafd826f5b6315266f7c9ca91eb14b2335d8bb098e65e12c"
+    },
+    {
+      "path": "app/Http/Controllers/CRM/DealController.php",
+      "sha256": "b2665f0509cb3825d1282b6de09e4a2e251e0cca0e23f0da0f3e40a1d23695bb"
+    },
+    {
+      "path": "app/Services/PaymentQueueQueryBuilder.php",
+      "sha256": "81fc72fcf99b02d5eed17a44d6b41486b63488be8a74ddaeae441b0ce0b1e7ed"
+    },
+    {
+      "path": "app/Services/SeoBoostService.php",
+      "sha256": "5fa858f33d711feb64b674e3d2de7a1ce870ef9ff57e07a234d65b3e00aa7fb4"
+    },
+    {
+      "path": "app/Services/SubscriptionProvisioningService.php",
+      "sha256": "3424c34cb85be4fdaf07e1f6673867e51f5532ffc17dee7d051b295a84dd21da"
+    },
+    {
+      "path": "app/Services/SubsidiaryTrialService.php",
+      "sha256": "6cdde5abe0b7f25f0f2324a2e5175da050e79d682a0fd12820078635f2cdf4cb"
+    },
+    {
+      "path": "app/Services/WalletSettingsService.php",
+      "sha256": "6d43cc39e8c2e49adb3b8d8c6a543a58a4827e8f1e9f8081763336f594461855"
+    },
+    {
+      "path": "resources/js/components/Sidebar.jsx",
+      "sha256": "7b8ed6e91c5230004b247302e6ee91475d5ebd172535fd267729def9aefad840"
+    },
+    {
+      "path": "resources/js/components/clients/SeoBoostWizard.jsx",
+      "sha256": "04861bdd79090b30b811e41377894224d5823706331f9498a45614eeaeef8c93"
+    },
+    {
+      "path": "resources/js/components/clients/SubsidiaryTrialSection.jsx",
+      "sha256": "47036284f17719ae0f29ce0197bd2404f107d99f9ec37dfbf0bcff46792e99d7"
+    },
+    {
+      "path": "resources/js/pages/ClientDetail.jsx",
+      "sha256": "2e9d38573341a4722f9ccc05075eb816162dcb4e074a7bda5ddc48044ea1cc0e"
+    },
+    {
+      "path": "resources/js/pages/Deals.jsx",
+      "sha256": "e05fe809644997adee1081e484a18eaa62db343181f761090add44da7ddaa953"
+    },
+    {
+      "path": "resources/js/pages/Field/FieldHome.jsx",
+      "sha256": "4a152e48201a3cf8509497e825091f7615c7de3b1bcad3b8c6b82e7366f8552e"
+    },
+    {
+      "path": "resources/js/pages/Settings.jsx",
+      "sha256": "b564deb8276d527bceb4f05896f8e3458427eaf39a1d040aa92743c081563530"
+    },
+    {
+      "path": "resources/js/router.jsx",
+      "sha256": "066bdad41dfe661b5698a923375fc76c258a1b40ffbaff52496607055d3ff6da"
+    },
+    {
+      "path": "routes/api.php",
+      "sha256": "d17af67048d14117f3f995b17a8b1d0780e002aaaf272a4cf709325f9bf6fbfb"
+    },
+    {
+      "path": "tests/Feature/SeoBoostBatchTest.php",
+      "sha256": "b9f584d1efd5f347c42a80c7b27eaf1a486b28bc54f70b85d71bebaad5cee543"
+    },
+    {
+      "path": "tests/Feature/SubsidiaryTrialActivationTest.php",
+      "sha256": "355139892688d43708d7c840f7099b5529cb35762d9e5fb973ad15b819da125b"
+    },
+    {
+      "path": "public/build/assets/app-CUvoNJMp.css",
+      "sha256": "595f7b6a3d8855f61a0f807df5dd412ad861feeb7cac2ab1cab8c5a2def059a2"
+    },
+    {
+      "path": "public/build/assets/app-rO24MCgl.js",
+      "sha256": "a938da72326dfcd5491700055bf2b94553ad464a520918f1269637f495471fed"
+    },
+    {
+      "path": "public/build/assets/layers-2x-Bpkbi35X.png",
+      "sha256": "066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf"
+    },
+    {
+      "path": "public/build/assets/layers-BWBAp2CZ.png",
+      "sha256": "1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6"
+    },
+    {
+      "path": "public/build/assets/marker-icon-hN30_KVU.png",
+      "sha256": "574c3a5cca85f4114085b6841596d62f00d7c892c7b03f28cbfa301deb1dc437"
+    },
+    {
+      "path": "public/build/manifest.json",
+      "sha256": "02a5a30133540e7a5f930e53f9289e4c3ccdc1a759154c51f1fe8256535a372d"
+    }
+  ]
+}

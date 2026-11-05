@@ -96,7 +96,7 @@ class SubsidiaryTrialActivationTest extends TestCase
             ->assertJsonValidationErrors('subsidiary_trial.create_confirmed');
     }
 
-    public function test_pending_intent_creates_linked_subsidiary_trial_deal_and_payment(): void
+    public function test_historical_pending_intent_cannot_activate_without_durable_authorization(): void
     {
         [, $targetPlatform, $deal, $user] = $this->fixture();
         $targetProduct = Product::factory()->create([
@@ -151,25 +151,11 @@ class SubsidiaryTrialActivationTest extends TestCase
 
         $subsidiaryDeal = app(SubsidiaryTrialService::class)->activateIfPending($deal);
 
-        $this->assertNotNull($subsidiaryDeal);
-        $this->assertSame((int) $targetPlatform->id, (int) $subsidiaryDeal->platform_id);
-        $this->assertSame((int) $targetClient->id, (int) $subsidiaryDeal->client_id);
-        $this->assertSame((int) $targetProduct->id, (int) $subsidiaryDeal->product_id);
-        $this->assertSame('active', (string) $subsidiaryDeal->status);
-        $this->assertTrue((bool) $subsidiaryDeal->is_free_trial);
-        $this->assertSame(10, (int) $subsidiaryDeal->duration_days);
-
-        $main = $deal->fresh();
-        $this->assertSame((int) $subsidiaryDeal->id, (int) $main->linked_deal_id);
-        $this->assertNull($main->pending_subsidiary_trial);
-        $this->assertSame((int) $main->id, (int) $subsidiaryDeal->fresh()->linked_deal_id);
-
-        $payment = Payment::query()->where('deal_id', (int) $subsidiaryDeal->id)->first();
-        $this->assertNotNull($payment);
-        $this->assertSame('completed', (string) $payment->status);
-        $this->assertSame(0.0, (float) $payment->amount);
-        $this->assertSame((int) $main->id, (int) data_get($payment->raw_payload, 'main_deal_id'));
-        $this->assertSame((int) $payment->id, (int) $subsidiaryDeal->payment_id);
+        $this->assertNull($subsidiaryDeal);
+        $this->assertNull($deal->fresh()->linked_deal_id);
+        $this->assertDatabaseMissing('deals', ['client_id' => $targetClient->id, 'is_free_trial' => true]);
+        $this->assertDatabaseMissing('payments', ['client_id' => $targetClient->id]);
+        Http::assertNothingSent();
     }
 
     private function fixture(): array

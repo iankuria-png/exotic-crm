@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-05",
+  "crm_head": "b2800a64",
+  "production_read_run": "20261105T102213Z-d4792-d9410-read-crm-mcp-audit-coverage-read-1a42",
+  "production_read_status": "exit 0; SELECT-only; no provider or Laravel boot",
+  "sources": {
+    "app/Models/Payment.php": "c5fa922b3336ce30fa95072d006c3bba9f63aca26fe03c412dcf8091b0299ad2",
+    "app/Models/User.php": "344e378bc232f429926b8a4552165db12e93732dbb66c3f26b4b383f5f18efbb",
+    "app/Models/ManualPaymentBundle.php": "0dc0c1e7280dff80a87917cc298cb4c21cc7a8a72e68025879a307e92e14e824",
+    "app/Http/Controllers/CRM/PaymentQueueController.php": "b809eb458181ec3ef033ee08b9ecb06124be934ca7bbac5fb5522d93ab4a2ce5",
+    "app/Http/Controllers/CRM/PaymentReconciliationController.php": "c5aa15bef88da62780237bea414c0a64258bff4c02bbdf7ae27fea7c62098067",
+    "app/Http/Controllers/CRM/DealController.php": "1571e9fb62c7a42fc67ae8309b0511714c5da7d1372534d589937fa474106501",
+    "app/Http/Controllers/CRM/FieldSalesController.php": "9b9b4f0f27da9bbaa8b6c9df4436bd9cfe2e1162fc1efca7c583db9256ba4d6c",
+    "app/Services/SubscriptionProvisioningService.php": "c7810639ecd043e737ec9b66d11303ab143705f980d97b251950ea59b8d35c56",
+    "app/Services/SubsidiaryTrialService.php": "3b0f3fad60bdb890f59f9f227d8a9fb442e0b227e00b532f7f6a88659766efc4",
+    "app/Services/WalletSettingsService.php": "d4f1f6ce18cea28296d4ca17f21f5035013696f7a2b20d353870c41657deb1fb",
+    "app/Services/MarketAuthorizationService.php": "f8696a0b2911f0108fdbf3490f3763930d5ef6901b59f8919d407ba09793570c",
+    "resources/js/pages/Payments.jsx": "49e813dc66cfd083f6b0d9c56e755c134e46c3408d6a9cc49357e34a552b7443",
+    "resources/js/pages/Settings.jsx": "6f3b8fd8230f3560bfe96fa7993bbb8b68488e2db95380c48b7b465fa42f7a55",
+    "resources/js/components/Sidebar.jsx": "98cc904facc6effa6259c0cf66ac711d790ca4e7b4c8ab350ba7094b9fbaa25f",
+    "resources/js/router.jsx": "ff18543c029c03066d5cf49a7db09f6786e7f157103da7366927034e98d1175f",
+    "routes/api.php": "3d3a8f6b2ae72dd21aac5ea25233de2118bad7e521f4859b1c65475791e6cc21",
+    "app/Http/Controllers/CRM/SeoBoostController.php": "c27c4340c437a4c1c1297beb2eb4c3a261fa47a5d8595e7df5fe879dc239ef2a",
+    "app/Services/SeoBoostService.php": "c65b4b34d1171a87b91d0bfce0cda4930afe090697f2e4257e2b2c8e6b874574",
+    "resources/js/components/clients/SeoBoostWizard.jsx": "87d7ee0527e78134e3cf8c0f45b9cf8adbffb47105254b7140778149df984516",
+    "resources/js/pages/Field/FieldHome.jsx": "fa3bfcc39756134cd3aa9496d1336b7249c5c35d5317d9300868a93af7ade460",
+    "app/Services/WpSyncService.php": "c448da123d2f41a38b0a444b653c25c5bc3413ab6c410846ea1c752f6e1c259d",
+    "app/Services/PaymentRecoveryEvidencePolicy.php": "89760e1bba4392fc8f857cd4dd793bf0d723e900894da7f2d03439c1853e1c89",
+    "app/Services/PaymentFulfillmentRecoveryService.php": "f7dde65afa91666871d3e600ed9957fd2cd3cc0b856169b3d2808d8f37ef022c"
+  },
+  "ui_reference": "Retained synthetic desktop/mobile screenshots from output/manual-payment-automation-2026-10-30; source shell inspected, no current production browser claimed.",
+  "visual_check": "Playwright CLI attempted file URL; blocked by browser file protocol restriction. Session closed. No preview server started; no visual browser pass claimed.",
+  "audit": {
+    "rounds": 3,
+    "final_verdict": "READY",
+    "remaining_blockers": 0,
+    "remaining_should_fix": 0
+  },
+  "validation": {
+    "typed_blocks": 36,
+    "static_wireframes": 8,
+    "external_load_dependencies": 0,
+    "existing_filemap_paths": "verified",
+    "browser_visual_pass": false
+  }
+}

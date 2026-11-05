@@ -409,7 +409,7 @@ class PaymentQueueQueryBuilder
         };
     }
 
-    private function whereManualChannel(Builder $query): void
+    public function whereManualChannel(Builder $query): void
     {
         $query->where(function (Builder $builder) {
             $builder->whereHas('manualSubmission')

@@ -1,3 +1,4 @@
+import TrialAuthorizationControl from '../components/trials/TrialAuthorizationControl';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -341,7 +342,7 @@ export default function Deals() {
         [selectedClientData?.platform],
     );
     const paymentRequiresReference = paymentMethod === 'manual';
-    const paymentRequiresFreeTrialPin = paymentMethod === 'free_trial';
+    const paymentRequiresFreeTrialPin = false; // Market PIN is optional; approval is enforced by the server.
     const paymentRequiresProvider = paymentMethod === 'link';
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(user?.role || ''));
 
@@ -366,7 +367,7 @@ export default function Deals() {
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
@@ -377,7 +378,7 @@ export default function Deals() {
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
-            toast.success('Subscription activated successfully.');
+            toast.success(payload?.message || 'Subscription activated successfully.');
         },
         onError: (error) => {
             if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
@@ -427,7 +428,7 @@ export default function Deals() {
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
@@ -439,7 +440,7 @@ export default function Deals() {
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
-            toast.success('Subscription extension saved.');
+            toast.success(payload?.message || 'Subscription extension saved.');
         },
         onError: (error) => {
             if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
@@ -462,7 +463,7 @@ export default function Deals() {
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
@@ -474,7 +475,7 @@ export default function Deals() {
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
-            toast.success('Subscription renewed successfully.');
+            toast.success(payload?.message || 'Subscription renewed successfully.');
         },
         onError: (error) => {
             if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
@@ -1748,26 +1749,7 @@ export default function Deals() {
                                         </div>
                                     ) : null}
 
-                                    {paymentMethod === 'free_trial' ? (
-                                        <div className="space-y-2">
-                                            <label htmlFor="free-trial-pin" className="mb-1 block text-sm font-medium text-slate-700">
-                                                Free-trial PIN
-                                            </label>
-                                            <input
-                                                id="free-trial-pin"
-                                                type="password"
-                                                inputMode="numeric"
-                                                maxLength={6}
-                                                value={freeTrialPin}
-                                                onChange={(event) => setFreeTrialPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                                                className="crm-input"
-                                                placeholder="Enter configured PIN"
-                                            />
-                                            <p className="text-xs text-slate-500">
-                                                Redeem the configured global PIN. Approver names are deprecated for this flow.
-                                            </p>
-                                        </div>
-                                    ) : null}
+                                    {paymentMethod === 'free_trial' ? <TrialAuthorizationControl marketId={dialog.deal?.platform_id || selectedClientData?.platform_id} value={freeTrialPin} onChange={setFreeTrialPin} /> : null}
 
                                     {(paymentMethod === 'stk' || paymentMethod === 'link') ? (
                                         <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -2021,7 +2003,7 @@ export default function Deals() {
                                     disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || !paymentReady || extendMutation.isPending || (subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) && !subscriptionLifecycleReason.trim())}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {extendMutation.isPending ? 'Extending...' : 'Confirm extension'}
+                                    {extendMutation.isPending ? 'Saving...' : paymentMethod === 'free_trial' ? (user?.role === 'admin' ? 'Approve trial extension' : 'Request trial extension') : 'Confirm extension'}
                                 </button>
                             ) : null}
 
@@ -2044,7 +2026,7 @@ export default function Deals() {
                                     disabled={!Number.isInteger(Number(renewDays)) || Number(renewDays) < 1 || !renewReason.trim() || !paymentReady || renewMutation.isPending || (subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) && !subscriptionLifecycleReason.trim())}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {renewMutation.isPending ? 'Renewing...' : 'Confirm renewal'}
+                                    {renewMutation.isPending ? 'Saving...' : paymentMethod === 'free_trial' ? (user?.role === 'admin' ? 'Approve trial renewal' : 'Request trial renewal') : 'Confirm renewal'}
                                 </button>
                             ) : null}
 

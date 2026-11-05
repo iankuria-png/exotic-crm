@@ -3,8 +3,6 @@
 namespace App\Services;
 
 use App\Models\Client;
-use App\Models\Deal;
-use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
@@ -15,21 +13,18 @@ use App\Support\CityNormalizer;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
-use Throwable;
 
 class SeoBoostService
 {
     public function __construct(
         private readonly DealPaymentService $dealPaymentService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
-    ) {
-    }
+    ) {}
 
     /**
-     * @param array<int, array<string, mixed>> $targets
-     * @param array<int, int> $preferredClientIds
+     * @param  array<int, array<string, mixed>>  $targets
+     * @param  array<int, int>  $preferredClientIds
      * @return array<string, mixed>
      */
     public function preview(int $platformId, array $targets, int $limit = 80, array $preferredClientIds = []): array
@@ -92,8 +87,8 @@ class SeoBoostService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $targets
-     * @param array<int, int> $selectedClientIds
+     * @param  array<int, array<string, mixed>>  $targets
+     * @param  array<int, int>  $selectedClientIds
      * @return array<string, mixed>
      */
     public function createBatch(
@@ -104,8 +99,13 @@ class SeoBoostService
         int $durationDays,
         array $targets,
         array $selectedClientIds,
-        ?string $notes = null
+        ?string $notes = null,
+        ?int $trialRequestId = null
     ): array {
+        abort_unless($trialRequestId, 409, 'SEO Boost requires a durable market trial authorization.');
+        $authorization = \App\Models\FreeTrialRequest::findOrFail($trialRequestId);
+        abort_unless($authorization->action === 'seo_boost' && (int) $authorization->platform_id === $platformId && $authorization->requester_id === $actorId, 403);
+        \Illuminate\Support\Facades\DB::transaction(fn () => app(\App\Services\Trials\TrialApprovalService::class)->assertDispatch($authorization));
         $platform = Platform::query()->findOrFail($platformId);
         $product = $this->resolveProduct($platformId, $productId);
         $price = $productPriceId ? $this->resolvePrice($product, $productPriceId) : null;
@@ -136,8 +136,14 @@ class SeoBoostService
             $orderedIds,
             $candidateMap,
             $targetByKey,
-            $notes
+            $notes,
+            $trialRequestId
         ): SeoBoostBatch {
+            $lockedAuthorization = \App\Models\FreeTrialRequest::whereKey($trialRequestId)->lockForUpdate()->firstOrFail();
+            app(\App\Services\Trials\TrialApprovalService::class)->assertDispatch($lockedAuthorization);
+            if (! empty($lockedAuthorization->activation_result_json['batch_id'])) {
+                return SeoBoostBatch::findOrFail($lockedAuthorization->activation_result_json['batch_id']);
+            }
             $batch = SeoBoostBatch::create([
                 'platform_id' => (int) $platform->id,
                 'created_by' => $actorId,
@@ -151,6 +157,7 @@ class SeoBoostService
                 'selected_count' => count($orderedIds),
                 'notes' => $notes,
                 'settings' => [
+                    'trial_request_id' => $trialRequestId,
                     'ranking' => ['seo_score', 'verified', 'display_image', 'last_online_at'],
                     'relocate_mode' => false,
                 ],
@@ -170,7 +177,7 @@ class SeoBoostService
 
             foreach ($orderedIds as $index => $clientId) {
                 $candidate = $candidateMap->get($clientId);
-                if (!$candidate) {
+                if (! $candidate) {
                     continue;
                 }
 
@@ -194,9 +201,12 @@ class SeoBoostService
 
             $this->refreshBatchCounts($batch);
 
+            $lockedAuthorization->update(['activation_result_json' => ['batch_id' => $batch->id]]);
+
             return $batch->fresh(['items.client', 'targets', 'product', 'productPrice']);
         });
 
+        $authorization->update(['activation_result_json' => ['batch_id' => $batch->id]]);
         $this->activateBatchItems($batch, $actorId, $price);
 
         return $this->show($batch->fresh()->id);
@@ -223,7 +233,7 @@ class SeoBoostService
     }
 
     /**
-     * @param array<int, int> $dealIds
+     * @param  array<int, int>  $dealIds
      */
     public function markExpiredDeals(array $dealIds): void
     {
@@ -256,89 +266,26 @@ class SeoBoostService
         }
     }
 
+    public function resumeApprovedBatch(int $batchId, \App\Models\FreeTrialRequest $request): void
+    {
+        $batch = SeoBoostBatch::findOrFail($batchId);
+        abort_unless((int) ($batch->settings['trial_request_id'] ?? 0) === (int) $request->id, 403);
+        $this->activateBatchItems($batch, $request->requester_id, $batch->productPrice);
+    }
+
     private function activateBatchItems(SeoBoostBatch $batch, int $actorId, ?ProductPrice $price): void
     {
-        $batch->loadMissing(['items.client.platform', 'product', 'productPrice']);
-
+        $request = \App\Models\FreeTrialRequest::findOrFail($batch->settings['trial_request_id'] ?? 0);
         foreach ($batch->items()->with('client.platform')->orderBy('rank')->get() as $item) {
-            $item->forceFill(['status' => 'activating'])->save();
-
             try {
-                $client = $item->client;
-                if (!$client) {
-                    throw new \RuntimeException('Client no longer exists.');
+                $deal = app(\App\Services\Trials\TrialActivationService::class)->runItem($request, $item->client, 'seo-item:'.$item->id, $item->id);
+                if (! $deal) {
+                    $item->update(['status' => 'activating', 'failure_reason' => 'Activation outcome is being checked. Do not submit a replacement.']);
                 }
-
-                $deal = $this->dealPaymentService->createPendingDealFromCatalog(
-                    $client,
-                    (int) $batch->product_id,
-                    $price?->id,
-                    null,
-                    $actorId,
-                    null
-                );
-
-                $catalogAmount = (float) $deal->amount;
-                $deal->forceFill([
-                    'origin' => 'seo_boost',
-                    'seo_boost_batch_id' => (int) $batch->id,
-                    'amount' => 0,
-                    'original_amount' => $catalogAmount,
-                    'discount_source' => 'seo_boost',
-                    'duration_days' => (int) $batch->duration_days,
-                ])->save();
-
-                $payment = Payment::create([
-                    'platform_id' => (int) $deal->platform_id,
-                    'product_id' => (int) $deal->product_id,
-                    'deal_id' => (int) $deal->id,
-                    'client_id' => (int) $client->id,
-                    'phone' => $client->phone_normalized,
-                    'amount' => 0,
-                    'currency' => $deal->currency ?: ($client->platform?->currency_code ?: 'KES'),
-                    'transaction_uuid' => sprintf('seo_boost_%d_%d_%s', $batch->id, $item->id, Str::lower(Str::random(8))),
-                    'transaction_reference' => sprintf('SEO-BOOST-%d-%d', $batch->id, $item->id),
-                    'status' => 'completed',
-                    'duration' => $deal->duration,
-                    'raw_payload' => [
-                        'source' => 'seo_boost',
-                        'batch_id' => (int) $batch->id,
-                        'item_id' => (int) $item->id,
-                    ],
-                    'match_confidence' => 'manual',
-                    'confirmed_by' => $actorId,
-                    'confirmed_at' => now(),
-                ]);
-
-                $activated = $this->subscriptionProvisioningService->activateDeal($deal, [
-                    'payment' => $payment,
-                    'payment_method' => 'free_trial',
-                    'duration_days' => (int) $batch->duration_days,
-                    'payment_reference' => $payment->transaction_reference,
-                    'is_free_trial' => true,
-                    'free_trial_approved_by' => 'SEO Boost',
-                    'actor_id' => $actorId,
-                    'timeline_context' => [
-                        'seo_boost_batch_id' => (int) $batch->id,
-                        'seo_boost_item_id' => (int) $item->id,
-                    ],
-                ]);
-
-                $item->forceFill([
-                    'deal_id' => (int) $activated->id,
-                    'status' => 'active',
-                    'activated_at' => $activated->activated_at ?: now(),
-                    'expires_at' => $activated->expires_at,
-                    'failure_reason' => null,
-                ])->save();
-            } catch (Throwable $exception) {
-                $item->forceFill([
-                    'status' => 'failed',
-                    'failure_reason' => Str::limit($exception->getMessage(), 1000, ''),
-                ])->save();
+            } catch (\Throwable $exception) {
+                $item->update(['status' => 'failed', 'failure_reason' => 'Trial authorization or eligibility changed; review this item.']);
             }
         }
-
         $this->refreshBatchCounts($batch->fresh());
     }
 
@@ -390,7 +337,7 @@ class SeoBoostService
             $reasons[] = 'Has image';
         }
         if ($lastOnline) {
-            $reasons[] = 'Recently seen ' . $lastOnline->diffForHumans(null, true) . ' ago';
+            $reasons[] = 'Recently seen '.$lastOnline->diffForHumans(null, true).' ago';
         }
 
         return [
@@ -443,7 +390,7 @@ class SeoBoostService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $targets
+     * @param  array<int, array<string, mixed>>  $targets
      * @return array<int, array{canonical_key: string, display_city: string, target_count: int}>
      */
     private function normalizeTargets(array $targets): array
@@ -454,11 +401,11 @@ class SeoBoostService
             $canonical = CityNormalizer::canonicalKey($target['canonical_key'] ?? $displayCity, 160);
             $targetCount = max(1, min(100, (int) ($target['target_count'] ?? 1)));
 
-            if (!$canonical || !$displayCity) {
+            if (! $canonical || ! $displayCity) {
                 continue;
             }
 
-            if (!isset($normalized[$canonical])) {
+            if (! isset($normalized[$canonical])) {
                 $normalized[$canonical] = [
                     'canonical_key' => $canonical,
                     'display_city' => $displayCity,
@@ -510,7 +457,7 @@ class SeoBoostService
 
     private function refreshBatchCounts(?SeoBoostBatch $batch): void
     {
-        if (!$batch) {
+        if (! $batch) {
             return;
         }
 

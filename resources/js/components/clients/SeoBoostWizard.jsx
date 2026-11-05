@@ -1,3 +1,4 @@
+import TrialAuthorizationControl from '../trials/TrialAuthorizationControl';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
@@ -220,7 +221,6 @@ export default function SeoBoostWizard({
     const canCreate = selectedClientIds.length > 0
         && productId
         && durationDays
-        && pin.trim().length >= 4
         && !createMutation.isPending;
 
     const resetCandidatePreview = () => {
@@ -679,15 +679,7 @@ export default function SeoBoostWizard({
                                     ))}
                                 </div>
 
-                                <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-slate-500">Free-trial PIN</label>
-                                <input
-                                    type="password"
-                                    inputMode="numeric"
-                                    value={pin}
-                                    onChange={(event) => setPin(event.target.value)}
-                                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
-                                    placeholder="Enter PIN"
-                                />
+                                <TrialAuthorizationControl marketId={platformId} value={pin} onChange={setPin} disabled={createMutation.isPending} />
 
                                 <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</label>
                                 <textarea
@@ -703,7 +695,7 @@ export default function SeoBoostWizard({
                                     disabled={!canCreate}
                                     className="mt-4 w-full rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                    {createMutation.isPending ? 'Activating...' : `Activate ${selectedClientIds.length} profiles`}
+                                    {createMutation.isPending ? 'Saving...' : `Submit ${selectedClientIds.length} profiles for authorization`}
                                 </button>
                                 <p className="mt-2 text-xs text-slate-500">
                                     Expiry will be handled by the existing subscription reconciliation after {durationDays || '-'} days.

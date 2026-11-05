@@ -70,7 +70,7 @@ class SeoBoostBatchTest extends TestCase
         $this->assertSame($second->id, $response->json('candidates.1.client_id'));
     }
 
-    public function test_create_requires_valid_free_trial_pin_before_creating_batch(): void
+    public function test_global_pin_cannot_bypass_an_admin_only_market(): void
     {
         $platform = Platform::factory()->create();
         $product = Product::factory()->create(['platform_id' => $platform->id]);
@@ -90,7 +90,7 @@ class SeoBoostBatchTest extends TestCase
             ]],
             'selected_client_ids' => [$client->id],
             'free_trial_pin' => '1111',
-        ])->assertStatus(422);
+        ])->assertStatus(403);
 
         $this->assertDatabaseCount('seo_boost_batches', 0);
         $this->assertDatabaseMissing('deals', [
@@ -99,7 +99,7 @@ class SeoBoostBatchTest extends TestCase
         ]);
     }
 
-    public function test_create_batch_activates_selected_clients_and_tracks_deals(): void
+    public function test_sales_batch_waits_for_admin_before_creating_deals_or_activating(): void
     {
         $platform = Platform::factory()->create();
         $product = Product::factory()->create(['platform_id' => $platform->id, 'name' => 'Premium']);
@@ -129,33 +129,14 @@ class SeoBoostBatchTest extends TestCase
                 'target_count' => 1,
             ]],
             'selected_client_ids' => [$client->id],
-            'free_trial_pin' => '4821',
             'notes' => 'Fill weak city coverage',
-        ])->assertCreated();
+        ])->assertAccepted()->assertJsonPath('trial_request.status', 'pending');
 
-        $batchId = $response->json('batch.id');
-        $this->assertDatabaseHas('seo_boost_batches', [
-            'id' => $batchId,
-            'status' => 'active',
-            'selected_count' => 1,
-            'activated_count' => 1,
-            'failed_count' => 0,
-        ]);
-        $this->assertDatabaseHas('seo_boost_items', [
-            'batch_id' => $batchId,
-            'client_id' => $client->id,
-            'status' => 'active',
-            'quality_score' => 92,
-        ]);
-        $this->assertDatabaseHas('deals', [
-            'client_id' => $client->id,
-            'origin' => 'seo_boost',
-            'seo_boost_batch_id' => $batchId,
-            'is_free_trial' => true,
-            'amount' => 0,
-            'status' => 'active',
-        ]);
-        $this->assertSame('publish', $client->fresh()->profile_status);
+        $this->assertSame([$client->id], $response->json('trial_request.terms_json.client_ids'));
+        $this->assertDatabaseCount('seo_boost_batches', 0);
+        $this->assertDatabaseCount('trial_activation_operations', 0);
+        $this->assertDatabaseMissing('deals', ['client_id' => $client->id, 'origin' => 'seo_boost']);
+        Http::assertNothingSent();
     }
 
     public function test_existing_expiry_reconciliation_marks_seo_boost_items_completed(): void

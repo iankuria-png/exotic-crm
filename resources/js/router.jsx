@@ -8,6 +8,7 @@ import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Deals from './pages/Deals';
 import Payments from './pages/Payments';
+import Reconciliations from './pages/Reconciliations';
 import Monetization from './pages/Monetization';
 import WebVisitors from './pages/WebVisitors';
 import SendLove from './pages/SendLove';
@@ -143,6 +144,7 @@ export default function AppRouter() {
                 <Route path="clients/:id" element={<ClientDetail />} />
                 <Route path="deals" element={<Deals />} />
                 <Route path="payments" element={<Payments />} />
+                <Route path="payments/reconciliations" element={<Reconciliations />} />
                 <Route path="visitors" element={<WebVisitors />} />
                 <Route path="monetization" element={<Monetization />} />
                 <Route path="send-love" element={<SendLove />} />

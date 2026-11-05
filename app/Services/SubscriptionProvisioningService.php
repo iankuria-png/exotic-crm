@@ -44,6 +44,9 @@ class SubscriptionProvisioningService
 
     public function activateDeal(Deal $deal, array $options = []): Deal
     {
+        if (($options['payment_method'] ?? '') === 'free_trial' || ($options['is_free_trial'] ?? false)) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['free_trial' => 'Discretionary free trials must use the market approval workflow.']);
+        }
         $clientId = (int) ($deal->client_id ?: $deal->client()->value('id'));
         if ($clientId <= 0) {
             throw new InvalidArgumentException('Deal has no associated client.');

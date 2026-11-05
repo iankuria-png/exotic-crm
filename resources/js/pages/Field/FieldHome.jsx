@@ -1,3 +1,4 @@
+import TrialAuthorizationControl from '../../components/trials/TrialAuthorizationControl';
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -26,6 +27,7 @@ export default function FieldHome() {
     const queryClient = useQueryClient();
     const [createOpen, setCreateOpen] = useState(false);
     const [activeClient, setActiveClient] = useState(null);
+    const [trialPin, setTrialPin] = useState('');
 
     const homeQuery = useQuery({
         queryKey: ['field-home'],
@@ -80,12 +82,14 @@ export default function FieldHome() {
     const activateTrialMutation = useMutation({
         mutationFn: (client) => api.post(`/crm/field/clients/${client.id}/activate-trial`, {
             reason: 'Field sales free trial activation after deposit',
+            free_trial_pin: trialPin || undefined,
         }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['field-home'] });
             queryClient.invalidateQueries({ queryKey: ['field-client-deposit-status', activeClient?.id] });
             queryClient.invalidateQueries({ queryKey: ['clients'] });
-            toast.success('Free trial activated.');
+            setTrialPin('');
+            toast.success(payload?.message || 'Free-trial request saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Free trial activation failed.');
@@ -227,13 +231,14 @@ export default function FieldHome() {
                                 >
                                     {depositQuery.isFetching ? 'Checking...' : 'Check deposit'}
                                 </button>
+                                <TrialAuthorizationControl marketId={activeClient?.platform_id || activeClient?.platform?.id} value={trialPin} onChange={setTrialPin} disabled={activateTrialMutation.isPending} />
                                 <button
                                     type="button"
                                     className="crm-btn-primary w-full justify-center disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={!deposit.received || activateTrialMutation.isPending}
                                     onClick={() => activateTrialMutation.mutate(activeClient)}
                                 >
-                                    {activateTrialMutation.isPending ? 'Activating...' : 'Activate free trial'}
+                                    {activateTrialMutation.isPending ? 'Saving...' : 'Request free trial'}
                                 </button>
                                 <button
                                     type="button"

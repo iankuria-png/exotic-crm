@@ -272,6 +272,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/monetization/assets/{asset}/staff-grant', [\App\Http\Controllers\CRM\MonetizationController::class, 'staffGrant']);
 
     // Auth
+    require __DIR__.'/reconciliation.php';
+
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
     Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
@@ -287,7 +289,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('/home', [FieldSalesController::class, 'home']);
         Route::get('/commissions', [FieldSalesController::class, 'commissions']);
         Route::get('/clients/{client}/deposit-status', [FieldSalesController::class, 'depositStatus']);
-        Route::post('/clients/{client}/activate-trial', [FieldSalesController::class, 'activateTrial']);
+        Route::post('/clients/{client}/activate-trial', [FieldSalesController::class, 'activateTrial'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':field_trial');
     });
 
     Route::middleware('role:admin,sub_admin')->group(function () {
@@ -532,7 +534,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::middleware('role:admin,sub_admin,sales,field_sales')->prefix('seo-boost')->group(function () {
         Route::get('/batches', [SeoBoostController::class, 'index']);
         Route::post('/preview', [SeoBoostController::class, 'preview']);
-        Route::post('/batches', [SeoBoostController::class, 'store']);
+        Route::post('/batches', [SeoBoostController::class, 'store'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':seo_boost');
         Route::get('/batches/{batch}', [SeoBoostController::class, 'show']);
     });
     // SEO Recovery — republishes profiles the legacy sweep took offline.
@@ -688,11 +690,11 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
         Route::get('/deals/{deal}/subsidiary-trial-targets', [DealController::class, 'subsidiaryTrialTargets']);
         Route::get('/deals/{deal}/subsidiary-trial-preview', [DealController::class, 'subsidiaryTrialPreview']);
-        Route::post('/deals/{deal}/subsidiary-trial-retry', [DealController::class, 'retrySubsidiaryTrial']);
-        Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
+        Route::post('/deals/{deal}/subsidiary-trial-retry', [DealController::class, 'retrySubsidiaryTrial'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':subsidiary_retry');
+        Route::post('/deals/{deal}/activate', [DealController::class, 'activate'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':activate');
         Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
-        Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);
-        Route::post('/deals/{deal}/renew', [DealController::class, 'renew']);
+        Route::post('/deals/{deal}/extend', [DealController::class, 'extend'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':extend');
+        Route::post('/deals/{deal}/renew', [DealController::class, 'renew'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':renew');
 
         // Leads
         Route::get('/leads', [LeadController::class, 'index']);

@@ -75,137 +75,24 @@ class SubsidiaryTrialService
 
     public function activateIfPending(Deal $main): ?Deal
     {
-        $main = $main->fresh(['client.platform', 'linkedDeal']);
-        if (!$main) {
-            return null;
-        }
-
+        $main = $main->fresh(['linkedDeal']);
+        if (!$main) return null;
+        if ($main->linked_deal_id) return $main->linkedDeal;
         $intent = $this->intent($main);
-        if (($intent['status'] ?? null) !== 'pending' || (int) ($main->linked_deal_id ?? 0) > 0) {
-            return $main->linkedDeal;
-        }
-
-        $target = Platform::query()->find((int) ($intent['platform_id'] ?? 0));
-        if (!$target) {
-            return $this->fail($main, $intent, 'target_missing', 'Subsidiary market no longer exists.');
-        }
-
-        try {
-            $main->loadMissing('product');
-            $errors = $this->configErrors($target, $main);
-            if (in_array('free_trial_disabled', $errors, true)) {
-                return $this->fail($main, $intent, 'free_trial_disabled', 'Free trials are not enabled for the subsidiary market.');
+        if (($intent['status'] ?? '') !== 'pending') return null;
+        // Historical intents cannot borrow the global PIN or an unrelated approval.
+        $request = \App\Models\FreeTrialRequest::find($intent['trial_request_id'] ?? 0);
+        if (!$request || $request->action !== 'subsidiary' || (int) ($request->terms_json['source_deal_id'] ?? 0) !== (int) $main->id) return null;
+        if ($request->status !== 'approved' || $main->status !== 'active') return null;
+        $execute = function () use ($request) {
+            try { app(\App\Services\Trials\TrialActivationService::class)->execute($request); }
+            catch (\Throwable $exception) {
+                // Optional subsidiary failures must never roll back the primary paid activation.
+                Log::warning('Subsidiary approval remains queued for review.', ['trial_request_id' => $request->id]);
             }
-            if (in_array('missing_matching_product', $errors, true)) {
-                return $this->fail($main, $intent, 'no_matching_product', 'No matching subscription package is available in the subsidiary market.');
-            }
-            if (in_array('missing_wp_api_credentials', $errors, true)) {
-                return $this->fail($main, $intent, 'missing_wp_api_credentials', 'Subsidiary WordPress API credentials are incomplete.');
-            }
-
-            $client = $this->resolveClientForIntent($main, $target, $intent);
-            if ((int) ($client->wp_post_id ?? 0) <= 0) {
-                return $this->fail($main, $intent, 'client_not_wp_linked', 'Subsidiary client is not linked to a WordPress profile.');
-            }
-
-            $activeTrial = Deal::query()
-                ->where('client_id', (int) $client->id)
-                ->where('is_free_trial', true)
-                ->where('status', 'active')
-                ->latest('id')
-                ->first();
-            if ($activeTrial) {
-                $this->linkDeals($main, $activeTrial, $intent);
-                $this->auditService->record([
-                    'platform_id' => (int) $target->id,
-                    'actor_id' => (int) ($intent['requested_by_user_id'] ?? 0) ?: null,
-                    'action' => CrmAuditAction::DEAL_SUBSIDIARY_TRIAL_REUSED,
-                    'entity_type' => 'deal',
-                    'entity_id' => (int) $activeTrial->id,
-                    'before_state' => null,
-                    'after_state' => [
-                        'main_deal_id' => (int) $main->id,
-                        'subsidiary_deal_id' => (int) $activeTrial->id,
-                    ],
-                    'reason' => 'Linked existing active subsidiary free trial',
-                ]);
-
-                return $activeTrial->fresh(['client', 'product', 'platform']);
-            }
-
-            $product = $this->resolveTrialProduct($target, $main);
-            if (!$product) {
-                return $this->fail($main, $intent, 'no_matching_product', 'No matching subscription package is available in the subsidiary market.');
-            }
-
-            $durationDays = max(1, min(90, (int) ($intent['duration_days'] ?? $target->field_trial_duration_days ?? 7)));
-            $actorId = (int) ($intent['requested_by_user_id'] ?? 0);
-
-            return DB::transaction(function () use ($main, $client, $product, $durationDays, $actorId, $intent, $target): Deal {
-                $trial = Deal::query()
-                    ->where('client_id', (int) $client->id)
-                    ->where('product_id', (int) $product->id)
-                    ->where('status', 'pending')
-                    ->whereNull('activated_at')
-                    ->latest('id')
-                    ->first();
-
-                if (!$trial) {
-                    $trial = $this->dealPaymentService->createPendingDealFromCatalog(
-                        $client,
-                        (int) $product->id,
-                        null,
-                        'weekly',
-                        $actorId,
-                        null
-                    );
-                }
-
-                $payment = $this->subsidiaryTrialPayment($main, $trial, $client, $product, $durationDays, $actorId);
-
-                $activated = $this->subscriptionProvisioningService->activateDeal($trial, [
-                    'payment' => $payment,
-                    'payment_method' => 'free_trial',
-                    'duration_days' => $durationDays,
-                    'is_free_trial' => true,
-                    'free_trial_approved_by' => 'subsidiary_trial',
-                    'actor_id' => $actorId,
-                    'payment_reference' => $payment->transaction_reference,
-                    'timeline_context' => [
-                        'source' => 'subsidiary_trial_from_deal',
-                        'main_deal_id' => (int) $main->id,
-                    ],
-                ]);
-
-                $this->linkDeals($main, $activated, $intent);
-
-                $this->auditService->record([
-                    'platform_id' => (int) $target->id,
-                    'actor_id' => $actorId ?: null,
-                    'action' => CrmAuditAction::DEAL_SUBSIDIARY_TRIAL_ACTIVATE,
-                    'entity_type' => 'deal',
-                    'entity_id' => (int) $activated->id,
-                    'before_state' => null,
-                    'after_state' => [
-                        'main_deal_id' => (int) $main->id,
-                        'subsidiary_deal_id' => (int) $activated->id,
-                        'duration_days' => $durationDays,
-                    ],
-                    'reason' => 'Activated subsidiary free trial from main deal',
-                ]);
-
-                return $activated->fresh(['client', 'product', 'platform']);
-            });
-        } catch (SubsidiaryProvisioningException $exception) {
-            return $this->fail($main, $intent, $exception->errorCode(), $exception->getMessage());
-        } catch (\Throwable $exception) {
-            Log::error('Subsidiary trial activation failed', [
-                'main_deal_id' => $main->id,
-                'error' => $exception->getMessage(),
-            ]);
-
-            return $this->fail($main, $intent, 'activation_failed', $exception->getMessage());
-        }
+        };
+        if (DB::transactionLevel() > 0) DB::afterCommit($execute); else $execute();
+        return $main->fresh()->linkedDeal;
     }
 
     public function resetForRetry(Deal $main, int $actorId): Deal

@@ -1,3 +1,4 @@
+import MarketTrialApprovalPolicy from '../components/trials/MarketTrialApprovalPolicy';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
@@ -4008,7 +4009,7 @@ function IntegrationsWorkspace({
 
                                 {!canManageWalletSystem ? (
                                     <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                        Only admin can rotate the free-trial PIN. Sales and sub-admin users will redeem the configured PIN during free-trial subscription actions.
+                                        Only admin can rotate the free-trial PIN. Each market separately controls whether PIN approval is allowed. Other trials require admin approval.
                                     </p>
                                 ) : null}
 
@@ -4455,6 +4456,8 @@ function IntegrationsWorkspace({
                                     </>
                                 )}
                             </section>
+
+                            {selectedPlatformId ? <MarketTrialApprovalPolicy marketId={selectedPlatformId} /> : null}
 
                             {selectedPlatform ? (
                                 <>

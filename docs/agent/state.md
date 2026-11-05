@@ -1,3 +1,5 @@
+- Daily reconciliation / trial controls (5 Nov): [task](tasks/daily-reconciliation-and-trial-controls.md) — IMPLEMENTED / VALIDATED, scoped ship underway. Exact release MySQL27/253 +5browser+31PHP+build pass; broader76pass/1known base failure reproduced. Admin-only trial defaults; grants/PIN exceptions explicit. cPanel pull/migration/live acceptance pending.
+
 - Reporting FX refresh (22 Oct): [task](tasks/reporting-fx-refresh.md) — 30-day CRM USD +0.16% (+USD101) vs transaction-date rates, no market material; intraday captures drive the bias. Daily close pull/freshness card/Error Logs alert built and tested LOCALLY (22 pass); uncommitted, not deployed. Report `output/fx-reporting-review-2026-10-22/`.
 
 - Renew 30-day default (18 Oct): [task](tasks/renew-days-default.md) — root cause found; fleet audit 48 default-30 renewals. LIVE CRM-only correction of 19 deals (Ops 28735cc, audits 597475–597493, private backup); 28018/28047 left per Ian, trials excluded, WordPress untouched. Renew dialog default + Renew WP-expiry recording pushed to origin/main with matching build; cPanel pull pending.

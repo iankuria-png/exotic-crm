@@ -1,3 +1,4 @@
+import TrialAuthorizationControl from '../trials/TrialAuthorizationControl';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
@@ -57,7 +58,6 @@ export default function SubsidiaryTrialSection({
     const ready = Boolean(value.enabled
         && value.platform_id
         && value.duration_days
-        && String(value.pin || '').trim().length >= 4
         && preview
         && !configError
         && (preview.match || value.client_id || (needsCreate && value.create_confirmed)));
@@ -168,19 +168,7 @@ export default function SubsidiaryTrialSection({
                                 className="crm-input"
                             />
                         </div>
-                        <div>
-                            <label htmlFor="subsidiary-pin" className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN</label>
-                            <input
-                                id="subsidiary-pin"
-                                type="password"
-                                inputMode="numeric"
-                                maxLength={6}
-                                value={value.pin || ''}
-                                onChange={(event) => onChange({ pin: event.target.value.replace(/\D/g, '').slice(0, 6) })}
-                                className="crm-input"
-                                placeholder="Enter PIN"
-                            />
-                        </div>
+                        <TrialAuthorizationControl marketId={value.platform_id} value={value.pin || ''} onChange={(pin) => onChange({ pin })} />
                     </div>
                 </div>
             ) : null}

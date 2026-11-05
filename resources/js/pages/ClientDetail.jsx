@@ -1,3 +1,4 @@
+import TrialAuthorizationControl from '../components/trials/TrialAuthorizationControl';
 import Monetization from './Monetization';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -2404,7 +2405,7 @@ export default function ClientDetail() {
                 toast.warning('Subsidiary trial still needs attention.');
             } else {
                 setSubsidiaryTrialBanner(null);
-                toast.success('Subsidiary trial activated.');
+                toast.success(payload?.message || 'Subsidiary trial update saved.');
             }
             setSubsidiaryRetryDialog({ open: false, dealId: null, pin: '' });
         },
@@ -2537,7 +2538,7 @@ export default function ClientDetail() {
                     }
                     : {}),
             }).then((r) => r.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setDealActionDialog({ type: null, deal: null });
@@ -2553,7 +2554,7 @@ export default function ClientDetail() {
             setDealDiscountPercentage('');
             setDealDiscountPayableAmount('');
             setDealDiscountPin('');
-            toast.success('Subscription extension saved.');
+            toast.success(payload?.message || 'Subscription extension saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription extension failed.');
@@ -2579,7 +2580,7 @@ export default function ClientDetail() {
                     }
                     : {}),
             }).then((r) => r.data),
-        onSuccess: () => {
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setDealActionDialog({ type: null, deal: null });
@@ -2595,7 +2596,7 @@ export default function ClientDetail() {
             setDealDiscountPercentage('');
             setDealDiscountPayableAmount('');
             setDealDiscountPin('');
-            toast.success('Subscription renewed successfully.');
+            toast.success(payload?.message || 'Subscription renewed successfully.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription renewal failed.');
@@ -3205,12 +3206,12 @@ export default function ClientDetail() {
     const walletSummary = walletData?.wallet || null;
     const walletTransactions = walletSummary?.transactions || [];
     const activationRequiresReference = activationPaymentMethod === 'manual';
-    const activationRequiresFreeTrialPin = activationPaymentMethod === 'free_trial';
+    const activationRequiresFreeTrialPin = false; // Optional PIN; server policy requires authorization.
     const activationRequiresProvider = activationPaymentMethod === 'link';
     const activationDiscountAllowed = activationPaymentMethod !== 'free_trial';
     const activationRequiresPhone = activationPaymentMethod === 'stk' || activationPaymentMethod === 'link';
     const dealPaymentRequiresReference = dealPaymentMethod === 'manual';
-    const dealPaymentRequiresFreeTrialPin = dealPaymentMethod === 'free_trial';
+    const dealPaymentRequiresFreeTrialPin = false;
     const dealPaymentRequiresProvider = dealPaymentMethod === 'link';
     const dealDiscountAllowed = dealPaymentMethod !== 'free_trial';
     const activationBaseAmount = Number(activationDeal?.original_amount ?? activationDeal?.amount ?? 0);
@@ -5075,23 +5076,7 @@ export default function ClientDetail() {
                                             </p>
                                         </div>
                                     ) : null}
-                                    {dealPaymentMethod === 'free_trial' ? (
-                                        <div className="space-y-2">
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN</label>
-                                            <input
-                                                type="password"
-                                                inputMode="numeric"
-                                                maxLength={6}
-                                                value={dealFreeTrialPin}
-                                                onChange={(e) => setDealFreeTrialPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                                                className="crm-input"
-                                                placeholder="Enter free-trial PIN"
-                                            />
-                                            <p className="text-xs text-slate-500">
-                                                Enter the free-trial PIN from Settings.
-                                            </p>
-                                        </div>
-                                    ) : null}
+                                    {dealPaymentMethod === 'free_trial' ? <TrialAuthorizationControl marketId={clientPlatformId} value={dealFreeTrialPin} onChange={setDealFreeTrialPin} /> : null}
                                     {dealDiscountAllowed ? (
                                         <DiscountPricingEditor
                                             idPrefix="client-deal-action"
@@ -6853,26 +6838,7 @@ export default function ClientDetail() {
                                     </div>
                                 ) : null}
 
-                                {activationPaymentMethod === 'free_trial' ? (
-                                    <div className="space-y-2">
-                                        <label htmlFor="client-detail-free-trial-pin" className="mb-1 block text-sm font-medium text-slate-700">
-                                            Free-trial PIN
-                                        </label>
-                                        <input
-                                            id="client-detail-free-trial-pin"
-                                            type="password"
-                                            inputMode="numeric"
-                                            maxLength={6}
-                                            value={activationFreeTrialPin}
-                                            onChange={(event) => setActivationFreeTrialPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                                            className="crm-input"
-                                            placeholder="Enter free-trial PIN"
-                                        />
-                                        <p className="text-xs text-slate-500">
-                                            Enter the free-trial PIN from Settings.
-                                        </p>
-                                    </div>
-                                ) : null}
+                                {activationPaymentMethod === 'free_trial' ? <TrialAuthorizationControl marketId={clientPlatformId} value={activationFreeTrialPin} onChange={setActivationFreeTrialPin} /> : null}
 
                                 {(activationPaymentMethod === 'stk' || activationPaymentMethod === 'link') ? (
                                     <div className="space-y-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -7090,11 +7056,11 @@ export default function ClientDetail() {
                         <header className="crm-panel-header">
                             <div>
                                 <h3 className="crm-panel-title">Retry Subsidiary Trial</h3>
-                                <p className="crm-panel-subtitle">Enter the free-trial PIN to retry.</p>
+                                <p className="crm-panel-subtitle">Recheck the saved approval and activation outcome. A grant is never sent twice.</p>
                             </div>
                         </header>
                         <div className="space-y-3 p-4">
-                            <label htmlFor="subsidiary-retry-pin" className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN</label>
+                            <label htmlFor="subsidiary-retry-pin" className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN (optional)</label>
                             <input
                                 id="subsidiary-retry-pin"
                                 type="password"
@@ -7117,7 +7083,7 @@ export default function ClientDetail() {
                             <button
                                 type="button"
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-                                disabled={retrySubsidiaryTrialMutation.isPending || subsidiaryRetryDialog.pin.trim().length < 4}
+                                disabled={retrySubsidiaryTrialMutation.isPending}
                                 onClick={() => retrySubsidiaryTrialMutation.mutate({
                                     dealId: subsidiaryRetryDialog.dealId,
                                     pin: subsidiaryRetryDialog.pin.trim(),

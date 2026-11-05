@@ -10,18 +10,22 @@ use App\Models\BillingSystemSetting;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 class WalletSettingsService
 {
     public const SYSTEM_SETTINGS_KEY = 'wallet_system_config';
+
     public const PLATFORM_CREDENTIALS_KEY_PREFIX = 'wallet_platform_credentials_';
+
     public const KILL_SWITCHES_KEY = 'billing_kill_switches';
+
     public const MODES = ['disabled', 'sandbox', 'production'];
+
     public const ENVIRONMENTS = ['sandbox', 'production'];
 
     public function __construct(
@@ -29,8 +33,7 @@ class WalletSettingsService
         private readonly LegacyBillingConfigProjector $legacyBillingConfigProjector,
         private readonly LegacyBillingSystemProjector $legacyBillingSystemProjector,
         private readonly KopokopoConfigService $kopokopoConfigService
-    ) {
-    }
+    ) {}
 
     /**
      * @return list<string>
@@ -44,35 +47,29 @@ class WalletSettingsService
     {
         $config = $this->resolveSystemConfig();
 
-        if (!$masked) {
+        if (! $masked) {
             return $config;
         }
 
         $maskedConfig = $config;
-        $maskedConfig['smtp']['password_configured'] = !empty($config['smtp']['password']);
+        $maskedConfig['smtp']['password_configured'] = ! empty($config['smtp']['password']);
         $maskedConfig['smtp']['password'] = '';
         $maskedConfig['pin_hash'] = '';
-        $maskedConfig['pin_set'] = !empty($config['pin_hash']);
+        $maskedConfig['pin_set'] = ! empty($config['pin_hash']);
         $maskedConfig['free_trial_pin_hash'] = '';
-        $maskedConfig['free_trial_pin_set'] = !empty($config['free_trial_pin_hash']);
+        $maskedConfig['free_trial_pin_set'] = ! empty($config['free_trial_pin_hash']);
         $maskedConfig['discount_pin_hash'] = '';
-        $maskedConfig['discount_pin_set'] = !empty($config['discount_pin_hash']);
+        $maskedConfig['discount_pin_set'] = ! empty($config['discount_pin_hash']);
 
         return $maskedConfig;
     }
 
     public function saveSystemConfig(array $payload, ?int $updatedBy = null): array
     {
-        $current = $this->resolveSystemConfig();
-        $merged = $this->mergeSystemConfig($current, $payload);
-
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => self::SYSTEM_SETTINGS_KEY],
-            [
-                'value' => $this->systemConfigForStorage($merged),
-                'updated_by' => $updatedBy,
-            ]
-        );
+        foreach (['pin_hash', 'pin_last_updated_at', 'free_trial_pin_hash', 'free_trial_pin_last_updated_at', 'free_trial_pin_generation', 'discount_pin_hash', 'discount_pin_last_updated_at'] as $key) {
+            unset($payload[$key]);
+        }
+        $this->mutateSystemConfig(fn (array $current) => $this->mergeSystemConfig($current, $payload), $updatedBy);
 
         return $this->currentSystemConfig(masked: true);
     }
@@ -80,28 +77,23 @@ class WalletSettingsService
     public function updateOperatorPin(string $pin, ?int $updatedBy = null): array
     {
         $pin = trim($pin);
-        if (!preg_match('/^\d{4,6}$/', $pin)) {
+        if (! preg_match('/^\d{4,6}$/', $pin)) {
             throw new InvalidArgumentException('Wallet PIN must be 4 to 6 digits.');
         }
+        $hash = Hash::make($pin);
+        $this->mutateSystemConfig(function (array $current) use ($hash) {
+            $current['pin_hash'] = $hash;
+            $current['pin_last_updated_at'] = now()->toIso8601String();
 
-        $current = $this->resolveSystemConfig();
-        $current['pin_hash'] = Hash::make($pin);
-        $current['pin_last_updated_at'] = now()->toIso8601String();
-
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => self::SYSTEM_SETTINGS_KEY],
-            [
-                'value' => $this->systemConfigForStorage($current),
-                'updated_by' => $updatedBy,
-            ]
-        );
+            return $current;
+        }, $updatedBy);
 
         return $this->currentSystemConfig(masked: true);
     }
 
     public function operatorPinIsConfigured(): bool
     {
-        return !empty($this->resolveSystemConfig()['pin_hash'] ?? '');
+        return ! empty($this->resolveSystemConfig()['pin_hash'] ?? '');
     }
 
     public function verifyOperatorPin(string $pin): bool
@@ -114,28 +106,24 @@ class WalletSettingsService
     public function updateFreeTrialPin(string $pin, ?int $updatedBy = null): array
     {
         $pin = trim($pin);
-        if (!preg_match('/^\d{4,6}$/', $pin)) {
+        if (! preg_match('/^\d{4,6}$/', $pin)) {
             throw new InvalidArgumentException('Free-trial PIN must be 4 to 6 digits.');
         }
+        $hash = Hash::make($pin);
+        $this->mutateSystemConfig(function (array $current) use ($hash) {
+            $current['free_trial_pin_hash'] = $hash;
+            $current['free_trial_pin_last_updated_at'] = now()->toIso8601String();
+            $current['free_trial_pin_generation'] = (int) ($current['free_trial_pin_generation'] ?? 0) + 1;
 
-        $current = $this->resolveSystemConfig();
-        $current['free_trial_pin_hash'] = Hash::make($pin);
-        $current['free_trial_pin_last_updated_at'] = now()->toIso8601String();
-
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => self::SYSTEM_SETTINGS_KEY],
-            [
-                'value' => $this->systemConfigForStorage($current),
-                'updated_by' => $updatedBy,
-            ]
-        );
+            return $current;
+        }, $updatedBy);
 
         return $this->currentSystemConfig(masked: true);
     }
 
     public function freeTrialPinIsConfigured(): bool
     {
-        return !empty($this->resolveSystemConfig()['free_trial_pin_hash'] ?? '');
+        return ! empty($this->resolveSystemConfig()['free_trial_pin_hash'] ?? '');
     }
 
     public function verifyFreeTrialPin(string $pin): bool
@@ -148,28 +136,23 @@ class WalletSettingsService
     public function updateDiscountPin(string $pin, ?int $updatedBy = null): array
     {
         $pin = trim($pin);
-        if (!preg_match('/^\d{4,6}$/', $pin)) {
+        if (! preg_match('/^\d{4,6}$/', $pin)) {
             throw new InvalidArgumentException('Discount PIN must be 4 to 6 digits.');
         }
+        $hash = Hash::make($pin);
+        $this->mutateSystemConfig(function (array $current) use ($hash) {
+            $current['discount_pin_hash'] = $hash;
+            $current['discount_pin_last_updated_at'] = now()->toIso8601String();
 
-        $current = $this->resolveSystemConfig();
-        $current['discount_pin_hash'] = Hash::make($pin);
-        $current['discount_pin_last_updated_at'] = now()->toIso8601String();
-
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => self::SYSTEM_SETTINGS_KEY],
-            [
-                'value' => $this->systemConfigForStorage($current),
-                'updated_by' => $updatedBy,
-            ]
-        );
+            return $current;
+        }, $updatedBy);
 
         return $this->currentSystemConfig(masked: true);
     }
 
     public function discountPinIsConfigured(): bool
     {
-        return !empty($this->resolveSystemConfig()['discount_pin_hash'] ?? '');
+        return ! empty($this->resolveSystemConfig()['discount_pin_hash'] ?? '');
     }
 
     public function verifyDiscountPin(string $pin): bool
@@ -181,16 +164,11 @@ class WalletSettingsService
 
     public function updateDiscountConfig(array $config, ?int $updatedBy = null): array
     {
-        $current = $this->resolveSystemConfig();
-        $current['discount_config'] = $this->normalizeDiscountConfig($config);
+        $this->mutateSystemConfig(function (array $current) use ($config) {
+            $current['discount_config'] = $this->normalizeDiscountConfig($config);
 
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => self::SYSTEM_SETTINGS_KEY],
-            [
-                'value' => $this->systemConfigForStorage($current),
-                'updated_by' => $updatedBy,
-            ]
-        );
+            return $current;
+        }, $updatedBy);
 
         return $this->currentSystemConfig(masked: true);
     }
@@ -232,7 +210,7 @@ class WalletSettingsService
 
     public function runtimeRecentTransactionsLimit(?Platform $platform, int $default = 10): int
     {
-        if (!$platform) {
+        if (! $platform) {
             return max(1, min(50, $default));
         }
 
@@ -248,7 +226,7 @@ class WalletSettingsService
     public function runtimeWalletCurrencyCode(?Platform $platform, string $default = 'KES'): string
     {
         $fallback = strtoupper(trim($default)) !== '' ? strtoupper(trim($default)) : 'KES';
-        if (!$platform) {
+        if (! $platform) {
             return $fallback;
         }
 
@@ -263,7 +241,7 @@ class WalletSettingsService
             ? $platform->payment_link_providers
             : null;
 
-        if (!$this->shadowReadEnabled() && $legacy !== null) {
+        if (! $this->shadowReadEnabled() && $legacy !== null) {
             return $legacy;
         }
 
@@ -322,7 +300,7 @@ class WalletSettingsService
     ): array {
         $environment = $this->normalizeEnvironment($environment);
         $credential = strtolower(trim($credential));
-        if (!in_array($credential, ['bearer', 'hmac', 'both'], true)) {
+        if (! in_array($credential, ['bearer', 'hmac', 'both'], true)) {
             throw new InvalidArgumentException('Credential rotation target must be bearer, hmac, or both.');
         }
 
@@ -330,7 +308,7 @@ class WalletSettingsService
         $revealed = [];
 
         if (in_array($credential, ['bearer', 'both'], true)) {
-            $plainBearer = 'ew_' . Str::random(48);
+            $plainBearer = 'ew_'.Str::random(48);
             $current['wp_to_crm'][$environment]['bearer_key_hash'] = Hash::make($plainBearer);
             $current['wp_to_crm'][$environment]['bearer_key_encrypted'] = Crypt::encryptString($plainBearer);
             $current['wp_to_crm'][$environment]['bearer_last_rotated_at'] = now()->toIso8601String();
@@ -411,7 +389,7 @@ class WalletSettingsService
         }
 
         $host = parse_url($url, PHP_URL_HOST);
-        if (!is_string($host) || $host === '') {
+        if (! is_string($host) || $host === '') {
             throw new InvalidArgumentException('Configured billing domain is invalid.');
         }
 
@@ -426,10 +404,10 @@ class WalletSettingsService
             'environment' => $environment,
             'url' => $url,
             'host' => $host,
-            'resolved' => !empty($resolved),
+            'resolved' => ! empty($resolved),
             'records' => $resolved,
-            'status' => !empty($resolved) ? 'success' : 'failed',
-            'message' => !empty($resolved)
+            'status' => ! empty($resolved) ? 'success' : 'failed',
+            'message' => ! empty($resolved)
                 ? 'Billing domain resolves in DNS.'
                 : 'Billing domain did not resolve in DNS.',
         ];
@@ -473,7 +451,7 @@ class WalletSettingsService
             throw new InvalidArgumentException("No {$environment} billing domain is configured.");
         }
 
-        $healthUrl = rtrim($url, '/') . '/api/billing/health';
+        $healthUrl = rtrim($url, '/').'/api/billing/health';
         $response = Http::timeout(10)->get($healthUrl);
         $payload = $response->json();
 
@@ -552,6 +530,47 @@ class WalletSettingsService
         ];
     }
 
+    /** All writers of wallet_system_config must share this fresh-read transaction. */
+    private function mutateSystemConfig(callable $mutate, ?int $updatedBy): void
+    {
+        DB::transaction(function () use ($mutate, $updatedBy) {
+            $row = $this->lockedSystemSetting();
+            $current = $this->resolveSystemConfig();
+            // Billing projections cannot restore an obsolete security snapshot.
+            foreach (['free_trial_pin_hash', 'free_trial_pin_generation', 'free_trial_pin_last_updated_at'] as $key) {
+                $current[$key] = ($row->value ?? [])[$key] ?? ($key === 'free_trial_pin_generation' ? 0 : null);
+            }
+            $row->update(['value' => $this->systemConfigForStorage($mutate($current)), 'updated_by' => $updatedBy]);
+        });
+    }
+
+    private function lockedSystemSetting(): IntegrationSetting
+    {
+        DB::table('integration_settings')->insertOrIgnore(['key' => self::SYSTEM_SETTINGS_KEY,
+            'value' => json_encode($this->systemConfigForStorage($this->defaultSystemConfig())), 'created_at' => now(), 'updated_at' => now()]);
+
+        return IntegrationSetting::where('key', self::SYSTEM_SETTINGS_KEY)->lockForUpdate()->firstOrFail();
+    }
+
+    /** Verify and capture the PIN generation under the same authoritative lock. Never retain the PIN. */
+    public function authorizeFreeTrialPin(string $pin, callable $authorized): mixed
+    {
+        return DB::transaction(function () use ($pin, $authorized) {
+            $value = $this->lockedSystemSetting()->value ?? [];
+            $hash = (string) ($value['free_trial_pin_hash'] ?? '');
+            abort_if($hash === '', 409, 'Free-trial PIN is not configured. Ask an admin.');
+            abort_unless(Hash::check(trim($pin), $hash), 422, 'Free-trial PIN is invalid.');
+
+            return $authorized((int) ($value['free_trial_pin_generation'] ?? 0));
+        });
+    }
+
+    public function assertFreeTrialPinGeneration(int $generation): void
+    {
+        $value = $this->lockedSystemSetting()->value ?? [];
+        abort_unless(! empty($value['free_trial_pin_hash']) && (int) ($value['free_trial_pin_generation'] ?? 0) === $generation, 409, 'The free-trial PIN changed. Request authorization again.');
+    }
+
     private function resolveSystemConfig(): array
     {
         $default = $this->defaultSystemConfig();
@@ -563,7 +582,7 @@ class WalletSettingsService
             ? $this->mergeSystemConfig($default, $this->systemConfigFromStorage($stored))
             : $default;
 
-        if (!(bool) config('billing.billing_system_live_read.enabled', false)) {
+        if (! (bool) config('billing.billing_system_live_read.enabled', false)) {
             return $legacy;
         }
 
@@ -604,6 +623,7 @@ class WalletSettingsService
             'pin_hash' => '',
             'pin_last_updated_at' => null,
             'free_trial_pin_hash' => '',
+            'free_trial_pin_generation' => 0,
             'free_trial_pin_last_updated_at' => null,
             'discount_pin_hash' => '',
             'discount_pin_last_updated_at' => null,
@@ -628,7 +648,7 @@ class WalletSettingsService
         $current = is_array($platform->wallet_settings) ? $platform->wallet_settings : [];
         $legacy = $this->mergePlatformSettings($platform, $this->defaultPlatformSettings($platform), $current);
 
-        if (!$this->shadowReadEnabled()
+        if (! $this->shadowReadEnabled()
             || $this->isMarketKilled((int) $platform->id)
             || $this->isSurfaceKilled('wallet_funding')) {
             return $this->normalizeRuntimeWalletSettings($platform, $legacy);
@@ -771,7 +791,7 @@ class WalletSettingsService
             ? $this->mergePlatformCredentials($default, $stored)
             : $default;
 
-        if (!$this->shadowReadEnabled()) {
+        if (! $this->shadowReadEnabled()) {
             return $legacy;
         }
 
@@ -849,6 +869,7 @@ class WalletSettingsService
     private function mergeSystemConfig(array $base, array $incoming): array
     {
         $merged = $base;
+        $merged['free_trial_pin_generation'] = (int) ($incoming['free_trial_pin_generation'] ?? $base['free_trial_pin_generation'] ?? 0);
 
         if (array_key_exists('mode', $incoming)) {
             $mode = strtolower(trim((string) $incoming['mode']));
@@ -858,9 +879,9 @@ class WalletSettingsService
             }
         }
 
-        if (array_key_exists('enabled', $incoming) && !array_key_exists('mode', $incoming)) {
+        if (array_key_exists('enabled', $incoming) && ! array_key_exists('mode', $incoming)) {
             $merged['enabled'] = (bool) $incoming['enabled'];
-            if (!$merged['enabled']) {
+            if (! $merged['enabled']) {
                 $merged['mode'] = 'disabled';
             } elseif ($merged['mode'] === 'disabled') {
                 $merged['mode'] = 'sandbox';
@@ -1016,7 +1037,7 @@ class WalletSettingsService
                 ->values()
                 ->all();
 
-            if (!empty($presets)) {
+            if (! empty($presets)) {
                 $merged['topup_presets'] = $presets;
             }
         }
@@ -1024,7 +1045,7 @@ class WalletSettingsService
         if (array_key_exists('topup_presets_by_currency', $incoming) && is_array($incoming['topup_presets_by_currency'])) {
             $presetsByCurrency = collect($incoming['topup_presets_by_currency'])
                 ->mapWithKeys(function ($values, $currency) {
-                    if (!is_array($values)) {
+                    if (! is_array($values)) {
                         return [];
                     }
 
@@ -1049,7 +1070,7 @@ class WalletSettingsService
         if (array_key_exists('limits_by_currency', $incoming) && is_array($incoming['limits_by_currency'])) {
             $limitsByCurrency = collect($incoming['limits_by_currency'])
                 ->mapWithKeys(function ($values, $currency) {
-                    if (!is_array($values)) {
+                    if (! is_array($values)) {
                         return [];
                     }
 
@@ -1079,7 +1100,7 @@ class WalletSettingsService
         if (is_array($incomingProviders)) {
             foreach ($this->providerKeys() as $provider) {
                 $providerInput = $incomingProviders[$provider] ?? null;
-                if (!is_array($providerInput)) {
+                if (! is_array($providerInput)) {
                     continue;
                 }
 
@@ -1209,6 +1230,7 @@ class WalletSettingsService
     private function systemConfigForStorage(array $config): array
     {
         $stored = $config;
+        $stored['free_trial_pin_generation'] = (int) ($config['free_trial_pin_generation'] ?? 0);
         $stored['pin_hash'] = (string) ($config['pin_hash'] ?? '');
         $stored['pin_last_updated_at'] = $config['pin_last_updated_at'] ?? null;
         $stored['free_trial_pin_hash'] = (string) ($config['free_trial_pin_hash'] ?? '');
@@ -1223,7 +1245,7 @@ class WalletSettingsService
             'host' => (string) ($config['smtp']['host'] ?? ''),
             'port' => (int) ($config['smtp']['port'] ?? 587),
             'username' => (string) ($config['smtp']['username'] ?? ''),
-            'password_encrypted' => !empty($config['smtp']['password'])
+            'password_encrypted' => ! empty($config['smtp']['password'])
                 ? Crypt::encryptString((string) $config['smtp']['password'])
                 : '',
             'encryption' => (string) ($config['smtp']['encryption'] ?? 'tls'),
@@ -1239,6 +1261,7 @@ class WalletSettingsService
         $config = $stored;
         $config['pin_hash'] = (string) ($stored['pin_hash'] ?? '');
         $config['pin_last_updated_at'] = $stored['pin_last_updated_at'] ?? null;
+        $config['free_trial_pin_generation'] = (int) ($stored['free_trial_pin_generation'] ?? 0);
         $config['free_trial_pin_hash'] = (string) ($stored['free_trial_pin_hash'] ?? '');
         $config['free_trial_pin_last_updated_at'] = $stored['free_trial_pin_last_updated_at'] ?? null;
         $config['discount_pin_hash'] = (string) ($stored['discount_pin_hash'] ?? '');
@@ -1252,7 +1275,7 @@ class WalletSettingsService
             'host' => (string) ($smtp['host'] ?? ''),
             'port' => (int) ($smtp['port'] ?? 587),
             'username' => (string) ($smtp['username'] ?? ''),
-            'password' => !empty($smtp['password_encrypted'])
+            'password' => ! empty($smtp['password_encrypted'])
                 ? $this->decryptOrEmpty((string) $smtp['password_encrypted'])
                 : '',
             'encryption' => (string) ($smtp['encryption'] ?? 'tls'),
@@ -1274,7 +1297,7 @@ class WalletSettingsService
             : [];
 
         foreach ($rawMaxes as $platformId => $value) {
-            if (!is_numeric((string) $platformId)) {
+            if (! is_numeric((string) $platformId)) {
                 continue;
             }
 
@@ -1299,9 +1322,9 @@ class WalletSettingsService
 
         foreach (self::ENVIRONMENTS as $environment) {
             $masked['wp_to_crm'][$environment] = [
-                'bearer_key_configured' => !empty($credentials['wp_to_crm'][$environment]['bearer_key_hash']),
+                'bearer_key_configured' => ! empty($credentials['wp_to_crm'][$environment]['bearer_key_hash']),
                 'bearer_last_rotated_at' => $credentials['wp_to_crm'][$environment]['bearer_last_rotated_at'] ?? null,
-                'hmac_configured' => !empty($credentials['wp_to_crm'][$environment]['hmac_secret_encrypted']),
+                'hmac_configured' => ! empty($credentials['wp_to_crm'][$environment]['hmac_secret_encrypted']),
                 'hmac_last_rotated_at' => $credentials['wp_to_crm'][$environment]['hmac_last_rotated_at'] ?? null,
                 'sync' => $this->normalizeWpCredentialSyncState(
                     (array) ($credentials['wp_to_crm'][$environment]['sync'] ?? [])
@@ -1309,18 +1332,18 @@ class WalletSettingsService
             ];
 
             $masked['pesapal'][$environment] = [
-                'consumer_key_configured' => !empty($credentials['pesapal'][$environment]['consumer_key_encrypted']),
-                'consumer_secret_configured' => !empty($credentials['pesapal'][$environment]['consumer_secret_encrypted']),
+                'consumer_key_configured' => ! empty($credentials['pesapal'][$environment]['consumer_key_encrypted']),
+                'consumer_secret_configured' => ! empty($credentials['pesapal'][$environment]['consumer_secret_encrypted']),
                 'ipn_id' => $credentials['pesapal'][$environment]['ipn_id'] ?? '',
             ];
 
             $masked['paystack'][$environment] = [
-                'public_key_configured' => !empty($credentials['paystack'][$environment]['public_key_encrypted']),
-                'secret_key_configured' => !empty($credentials['paystack'][$environment]['secret_key_encrypted']),
+                'public_key_configured' => ! empty($credentials['paystack'][$environment]['public_key_encrypted']),
+                'secret_key_configured' => ! empty($credentials['paystack'][$environment]['secret_key_encrypted']),
             ];
 
             $masked['pawapay'][$environment] = [
-                'api_key_configured' => !empty($credentials['pawapay'][$environment]['api_key_encrypted']),
+                'api_key_configured' => ! empty($credentials['pawapay'][$environment]['api_key_encrypted']),
             ];
 
             $masked['mpesa_stk'][$environment] = [
@@ -1395,7 +1418,7 @@ class WalletSettingsService
             return 'disabled';
         }
 
-        if (!(bool) ($platformConfig['enabled'] ?? false)) {
+        if (! (bool) ($platformConfig['enabled'] ?? false)) {
             return 'disabled';
         }
 
@@ -1412,7 +1435,7 @@ class WalletSettingsService
      */
     public function computeWalletSettingsDiff(Platform $platform): ?array
     {
-        if (!$this->shadowReadEnabled()) {
+        if (! $this->shadowReadEnabled()) {
             return null;
         }
 
@@ -1466,6 +1489,7 @@ class WalletSettingsService
 
             if (is_array($aVal) && is_array($bVal)) {
                 $result = array_merge($result, $this->flatConfigDiff($aVal, $bVal, $path, $depth + 1));
+
                 continue;
             }
 
@@ -1496,7 +1520,7 @@ class WalletSettingsService
             ['key' => self::KILL_SWITCHES_KEY],
             ['value' => [
                 'market_ids' => array_values(array_unique($marketIds)),
-                'surfaces'   => array_values(array_unique($surfaces)),
+                'surfaces' => array_values(array_unique($surfaces)),
             ]]
         );
     }
@@ -1661,7 +1685,7 @@ class WalletSettingsService
             ];
         }
 
-        $ok = $response->successful() && !$isSuspended;
+        $ok = $response->successful() && ! $isSuspended;
 
         return [
             'provider' => 'mpesa_stk',
@@ -1709,13 +1733,13 @@ class WalletSettingsService
 
     private function platformCredentialsKey(int $platformId): string
     {
-        return self::PLATFORM_CREDENTIALS_KEY_PREFIX . $platformId;
+        return self::PLATFORM_CREDENTIALS_KEY_PREFIX.$platformId;
     }
 
     private function normalizeProvider(string $provider): string
     {
         $normalized = strtolower(trim($provider));
-        if (!in_array($normalized, $this->providerKeys(), true)) {
+        if (! in_array($normalized, $this->providerKeys(), true)) {
             throw new InvalidArgumentException('Provider must be pesapal, paystack, or mpesa_stk.');
         }
 
@@ -1725,7 +1749,7 @@ class WalletSettingsService
     private function normalizeEnvironment(string $environment): string
     {
         $normalized = strtolower(trim($environment));
-        if (!in_array($normalized, self::ENVIRONMENTS, true)) {
+        if (! in_array($normalized, self::ENVIRONMENTS, true)) {
             throw new InvalidArgumentException('Environment must be sandbox or production.');
         }
 

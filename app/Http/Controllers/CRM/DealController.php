@@ -1650,24 +1650,7 @@ class DealController extends Controller
             ]);
         }
 
-        $pin = trim((string) ($input['pin'] ?? ''));
-        if ($pin === '' || ! preg_match('/^\d{4,6}$/', $pin)) {
-            throw ValidationException::withMessages([
-                'subsidiary_trial.pin' => 'Enter the configured free-trial PIN.',
-            ]);
-        }
-
-        if (! $this->walletSettingsService->freeTrialPinIsConfigured()) {
-            throw ValidationException::withMessages([
-                'subsidiary_trial.pin' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
-            ]);
-        }
-
-        if (! $this->walletSettingsService->verifyFreeTrialPin($pin)) {
-            throw ValidationException::withMessages([
-                'subsidiary_trial.pin' => 'Free-trial PIN is invalid.',
-            ]);
-        }
+        $trialRequest = app(FreeTrialApprovalController::class)->createForSubsidiary($request, $deal, $input);
 
         $targetPhone = app(CrossPlatformPhoneResolver::class)->resolve(
             $client->phone_normalized,
@@ -1686,8 +1669,7 @@ class DealController extends Controller
                 'email' => $client->email,
                 'city' => $client->city,
             ],
-            'pin_verified_at' => now()->toDateTimeString(),
-            'pin_verified_by_user_id' => (int) $request->user()->id,
+            'trial_request_id' => $trialRequest->id,
             'requested_by_user_id' => (int) $request->user()->id,
             'requested_at' => now()->toDateTimeString(),
             'attempt_count' => 0,
