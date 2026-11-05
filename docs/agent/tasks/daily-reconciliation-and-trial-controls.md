@@ -1,6 +1,6 @@
 # Daily reconciliation and market free-trial approval
 
-5 November 2026 (EAT). Status: implementation complete and isolated release validated; scoped commit/push underway. Deployment remains Ian’s manual cPanel pull/migration. No production business mutation has been performed.
+5 November 2026 (EAT). Status: implementation complete and pushed to origin/main as 7e63eea9 (remote exact SHA verified). Deployment remains Ian’s manual cPanel pull/migration. No production business mutation has been performed.
 
 ## Request and confirmed decisions
 
@@ -22,7 +22,7 @@ Trial entry points include Deal activation/extension/renewal, field-sales trial 
 
 Fresh registered Ops SELECT-only read, no Laravel boot/provider calls: `20261105T102213Z-d4792-d9410-read-crm-mcp-audit-coverage-read-1a42`, exit 0, 5 November 13:22 EAT. Reconciliation tables present; zero batches created in the assessed 7 August–4 November UTC window. This is bounded aggregate evidence, not a whole-fleet or bank-settlement verification. Raw run output stays in Ops private var; source hashes are retained locally.
 
-## Validation and next action
+## Planning validation (historical; implementation authorized below)
 
 Typed renderer passes; 8 static wireframes and no external HTML load dependencies. Browser file-URL access was blocked; no preview server or visual browser pass claimed. No application tests were run for a planning-only task.
 
@@ -49,3 +49,10 @@ Implementation complete. Exact plain archived release from HEAD b2800a64 plus ow
 Reviewed desktop/mobile screenshots. Includes review history for reclassified records without inflating cash totals, assignment-revocation proof access, optimistic grant versions, canonical financial correction requirement, stale-source/idempotency/scope protections, rotation-safe PIN config writes, durable SEO batch and subsidiary identity claims, verified trial effect before zero-cash finalization. No real provider call, trial, financial correction, named grant or policy/PIN assignment was made by tests.
 
 [Delivery and cPanel instructions](../../../plans/daily-reconciliation-and-trial-controls-2026-11-05/delivery.md). [Tested release manifest](../../../plans/daily-reconciliation-and-trial-controls-2026-11-05/release-manifest.json). Local evidence:release-backend.txt,release-browser.txt,release-build.txt,release-lint.json,baseline-bundle.txt and release/output/daily-reconciliation-2026-11-05/mysql-tests-final.txt. Browser APIs synthetic/intercepted; local tests do not prove live acceptance. Unrelated dirty source/assets are excluded through before-to-now task patches and an isolated build. Next: scoped main commit/push, separate WP changelog commit, record exact SHAs; Ian cPanel pull/migration/config cache, explicit grants/PIN exceptions, live acceptance. Do not mark live from push.
+
+
+## Shipment
+
+Runtime/source/assets commit `7e63eea9212ba50e6d986e1e6dca8b847ca060a1` pushed to origin/main; git ls-remote returned the exact same SHA. All57committed paths match the isolated tested package; all52pinned runtime/test/asset files match release-manifest.json. Old committed hashed assets retained for in-flight pages. Protected unrelated files have zero before-task hash differences; mixed-file unrelated hunks and the prior local manifest remain unstaged. Owned Vite server stopped and temporary hot files removed. No WP runtime change/push or production deployment/business mutation.
+
+The production next action is Ian’s cPanel pull, workflow migration, config clear/cache, explicit reviewer/export grants/PIN-exception configuration and live acceptance per delivery.md. Local checks do not establish deployment. The separate WP changelog records this release as pushed, waiting for deployment.

@@ -1,6 +1,6 @@
 # Daily reconciliation and trial approvals — delivery
 
-5 November 2026. Release validated locally for the authorized main commit/push. A push is not a production deployment. Ian deploys the CRM through cPanel; no WordPress upload, npm command or dependency update is needed on the server.
+5 November 2026. Release committed and pushed to CRM origin/main as `7e63eea9212ba50e6d986e1e6dca8b847ca060a1`; exact remote SHA verified. A push is not a production deployment. Ian deploys the CRM through cPanel; no WordPress upload, npm command or dependency update is needed on the server.
 
 ## Included behavior
 

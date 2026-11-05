@@ -1,4 +1,4 @@
-- Daily reconciliation / trial controls (5 Nov): [task](tasks/daily-reconciliation-and-trial-controls.md) — IMPLEMENTED / VALIDATED, scoped ship underway. Exact release MySQL27/253 +5browser+31PHP+build pass; broader76pass/1known base failure reproduced. Admin-only trial defaults; grants/PIN exceptions explicit. cPanel pull/migration/live acceptance pending.
+- Daily reconciliation / trial controls (5 Nov): [task](tasks/daily-reconciliation-and-trial-controls.md) — PUSHED `7e63eea9`, exact remote/source/assets verified. MySQL27/253+5browser+31PHP+build pass; broader76pass/1known base failure reproduced. cPanel pull/migration/live acceptance pending; admin configures actual review/export grants and PIN exceptions. No WP upload or live business change.
 
 - Reporting FX refresh (22 Oct): [task](tasks/reporting-fx-refresh.md) — 30-day CRM USD +0.16% (+USD101) vs transaction-date rates, no market material; intraday captures drive the bias. Daily close pull/freshness card/Error Logs alert built and tested LOCALLY (22 pass); uncommitted, not deployed. Report `output/fx-reporting-review-2026-10-22/`.
 
