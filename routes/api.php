@@ -692,6 +692,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('/deals/{deal}', [DealController::class, 'show']);
         Route::patch('/deals/{deal}', [DealController::class, 'update']);
         Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
+        Route::get('/deals/{deal}/activation-summary', [DealController::class, 'activationSummary']);
         Route::get('/deals/{deal}/subsidiary-trial-targets', [DealController::class, 'subsidiaryTrialTargets']);
         Route::get('/deals/{deal}/subsidiary-trial-preview', [DealController::class, 'subsidiaryTrialPreview']);
         Route::post('/deals/{deal}/subsidiary-trial-retry', [DealController::class, 'retrySubsidiaryTrial'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':subsidiary_retry');

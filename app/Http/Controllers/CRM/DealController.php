@@ -179,6 +179,8 @@ class DealController extends Controller
         $this->authorizeDealAccess($request, $deal);
         $validated = $request->validate([
             'platform_id' => 'required|integer|exists:platforms,id',
+            'client_id' => 'nullable|integer',
+            'duration_days' => 'nullable|integer|min:1|max:90',
         ]);
 
         $targetId = (int) $validated['platform_id'];
@@ -194,9 +196,18 @@ class DealController extends Controller
             'You do not have access to this subsidiary market.'
         );
 
-        return response()->json(
-            $this->subsidiaryTrialService->previewForDeal($deal, Platform::query()->findOrFail($targetId))
-        );
+        $selected = ! empty($validated['client_id']) ? (int) $validated['client_id'] : null;
+        $preview = $this->subsidiaryTrialService->previewForDeal($deal, Platform::findOrFail($targetId), $selected);
+        $days = (int) ($validated['duration_days'] ?? $preview['default_duration_days']);
+        $preview['preview_token'] = app(\App\Services\SubsidiaryActivationPreviewService::class)->issue($request->user(), $deal, $preview, $selected, $days);
+        unset($preview['resolution']['identity']);
+        return response()->json($preview);
+    }
+
+    public function activationSummary(Request $request, Deal $deal)
+    {
+        $this->authorizeDealAccess($request, $deal);
+        return response()->json(app(\App\Services\SubsidiaryActivationSummaryService::class)->read($deal, $request->user()));
     }
 
     public function retrySubsidiaryTrial(Request $request, Deal $deal)
@@ -409,6 +420,8 @@ class DealController extends Controller
             'subsidiary_trial.client_id' => 'nullable|integer|exists:clients,id',
             'subsidiary_trial.create_confirmed' => 'nullable',
             'subsidiary_trial.duration_days' => 'nullable|integer|min:1|max:90',
+            'subsidiary_trial.preview_token' => 'nullable|string|max:15000',
+            'subsidiary_trial.request_key' => 'nullable|uuid',
             'subsidiary_trial.pin' => ['nullable', 'regex:/^\d{4,6}$/'],
         ]);
 
@@ -425,7 +438,7 @@ class DealController extends Controller
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
-        $subsidiaryIntent = $this->buildSubsidiaryTrialIntent($request, $deal, $client, $validated);
+        $subsidiaryIntent = null; // Created and attached atomically after all deterministic validation.
 
         $paymentMethod = (string) $validated['payment_method'];
         if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'activation', $paymentMethod)) {
@@ -486,6 +499,10 @@ class DealController extends Controller
 
         DB::beginTransaction();
         try {
+            $deal = Deal::lockForUpdate()->findOrFail($deal->id);
+            abort_if(in_array($deal->status, ['active', 'paid']), 409, 'This sale already has an activation outcome. Check its status.');
+            app(\App\Services\SubsidiaryTrialWorkflow::class)->supersede($deal, $request->user(), $validated['subsidiary_trial']['request_key'] ?? null);
+            $subsidiaryIntent = $this->buildSubsidiaryTrialIntent($request, $deal, $client, $validated);
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $payment = null;
             $discountAudit = null;
@@ -498,7 +515,7 @@ class DealController extends Controller
             $deal->forceFill(
                 array_merge(
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle),
-                    $subsidiaryIntent ? ['pending_subsidiary_trial' => $subsidiaryIntent] : []
+                    ['pending_subsidiary_trial' => $subsidiaryIntent]
                 )
             )->save();
 
@@ -1650,6 +1667,10 @@ class DealController extends Controller
             ]);
         }
 
+        $preview = $this->subsidiaryTrialService->previewForDeal($deal, $target, $clientId ?: null);
+        app(\App\Services\SubsidiaryActivationPreviewService::class)->validate($request->user(), $deal, $input, $preview);
+        abort_unless(empty($preview['config_errors']) && in_array($preview['resolution']['kind'], ['existing', 'create_if_needed', 'already_active']), 409, 'Resolve the target profile before including this trial.');
+        if ($preview['resolution']['kind'] === 'already_active') return ['status' => 'already_active', 'platform_id' => $targetId, 'subsidiary_client_id' => $preview['resolution']['client_id'], 'coverage_id' => $preview['resolution']['coverage_id']];
         $trialRequest = app(FreeTrialApprovalController::class)->createForSubsidiary($request, $deal, $input);
 
         $targetPhone = app(CrossPlatformPhoneResolver::class)->resolve(

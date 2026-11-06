@@ -3,13 +3,14 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../hooks/useAuth';
 import api from '../../services/api';
 
-export default function TrialAuthorizationControl({ marketId, value = '', onChange, disabled = false }) {
+export default function TrialAuthorizationControl({ marketId, value = '', onChange, disabled = false, compact = false }) {
     const { user } = useAuth();
     useEffect(() => { onChange?.(''); }, [marketId]);
     const policy = useQuery({ queryKey: ['trial-policy', user?.id, marketId], queryFn: () => api.get(`/crm/markets/${marketId}/trial-approval-policy`).then(r => r.data), enabled: Boolean(marketId), staleTime: 15000 });
     if (policy.isError) return <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="alert">Trial policy could not be loaded. The server will require current authorization before activation.</div>;
     const admin = user?.role === 'admin';
     const allowPin = !admin && policy.data?.approval_mode === 'admin_or_pin';
+    if (compact && admin) return <p className="text-xs text-teal-800" role="status">Your admin approval will be recorded with the trial.</p>;
     return <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-4 text-sm text-slate-700">
         <p className="font-semibold text-teal-900">{policy.isLoading ? 'Checking market trial policy…' : admin ? 'Admin approval' : allowPin ? 'Admin or market PIN approval' : 'Admin approval required'}</p>
         <p className="mt-1 text-xs leading-5 text-slate-600">{admin ? 'Your approval is recorded before activation. A PIN is not required.' : allowPin ? 'Leave the PIN blank to request admin approval, or enter it to authorize this trial now.' : 'Submit the trial details for review. Service activates only after an admin approves.'}</p>

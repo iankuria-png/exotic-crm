@@ -37,6 +37,22 @@ class SubsidiaryClientResolver
         return $this->provisionNewClient($target, $seed, $phone, $email);
     }
 
+    public function frozenPayload(array $seed, string $requestId): array
+    {
+        return ['name' => trim((string) $seed['name']) ?: 'Client', 'email' => (string) ($seed['email'] ?? ''),
+            'phone' => $seed['phone_normalized'], 'whatsapp' => $seed['phone_normalized'], 'city' => (string) ($seed['city'] ?? ''),
+            'post_status' => 'private', 'provision_request_id' => $requestId];
+    }
+
+    public function resolveFrozen(Platform $target, array $seed, string $requestId): Client
+    {
+        $lookup = app(SubsidiaryWpIdentityLookup::class);
+        $match = $lookup->find($target, $seed); // Exceptions hold the durable claim; never fall through.
+        if ($match) return (new ClientSyncService($target))->syncOne($match['wp_post_id']);
+        $result = (new WpDirectProvisioningService($target))->provisionEscort($this->frozenPayload($seed, $requestId));
+        return (new ClientSyncService($target))->syncOne((int) $result['wp_post_id']);
+    }
+
     public function targetPhone(Client $mainClient, Platform $target, array $seed = []): ?string
     {
         $sourcePrefix = (string) ($mainClient->platform?->phone_prefix ?: '');

@@ -31,43 +31,11 @@ class TrialActivationService
         }
         abort_if(DB::transactionLevel() > 0, 409, 'Commit the trial authorization before activation.');
         if ($r->action === 'subsidiary') {
-            $main = Deal::findOrFail($r->terms_json['source_deal_id']);
-            if ($main->status !== 'active') {
-                return $r;
-            } // An optional trial never delays the paid primary.
-            $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal($main, Platform::findOrFail($r->platform_id));
+            $r = app(\App\Services\SubsidiaryTrialWorkflow::class)->prepare($r);
+            $primary = Deal::findOrFail($r->terms_json['source_deal_id']);
+            if ($r->status === 'uncertain' || ! $r->client_id || $primary->status !== 'active' || ($primary->expires_at && $primary->expires_at->isPast())) return $r;
+            $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal(Deal::findOrFail($r->terms_json['source_deal_id']), Platform::findOrFail($r->platform_id), $r->client_id);
             abort_if((bool) $preview['config_errors'], 409, 'Subsidiary trial configuration changed.');
-            if (! $r->client_id) {
-                $resolve = DB::transaction(function () use (&$r) {
-                    $r = FreeTrialRequest::lockForUpdate()->findOrFail($r->id);
-                    $this->approvals->assertDispatch($r);
-                    if ($r->client_id) {
-                        return false;
-                    }
-                    abort_if(($r->activation_result_json['profile_resolution'] ?? '') === 'resolving', 409, 'Subsidiary profile creation is being checked. Do not submit a replacement.');
-                    $r->update(['activation_result_json' => array_merge($r->activation_result_json ?? [], ['profile_resolution' => 'resolving'])]);
-
-                    return true;
-                });
-                if ($resolve) {
-                    try {
-                        $resolved = app(\App\Services\SubsidiaryClientResolver::class)->resolve($main->client, Platform::findOrFail($r->platform_id), $r->terms_json['subsidiary_seed']);
-                    } catch (\Throwable $e) {
-                        $r->update(['status' => 'uncertain', 'activation_result_json' => array_merge($r->activation_result_json ?? [], ['profile_resolution' => 'unknown'])]);
-
-                        return $r->fresh();
-                    }
-                    DB::transaction(function () use (&$r, $resolved) {
-                        $r = FreeTrialRequest::lockForUpdate()->findOrFail($r->id);
-                        $terms = $r->terms_json;
-                        $terms['client_ids'] = [$resolved->id];
-                        $r->update(['client_id' => $resolved->id, 'terms_json' => $terms, 'source_version' => $this->approvals->source($terms), 'version' => $r->version + 1,
-                            'activation_result_json' => array_merge($r->activation_result_json ?? [], ['profile_resolution' => 'resolved'])]);
-                        $this->approvals->event($r, User::find($r->authorized_actor_id), 'subsidiary_identity_resolved', ['client_id' => $resolved->id], 'Resolved the exact approved subsidiary seed to its WordPress profile.');
-                    });
-                }
-            }
-
         }
         if ($r->action === 'seo_boost') {
             $terms = $r->terms_json;
@@ -107,9 +75,15 @@ class TrialActivationService
 
                 return null;
             }
-            $this->eligibility($r, $client);
             $sync = WpSyncService::forPlatform($r->platform_id);
-            $baseline = $this->safeProfile($sync->getClient((int) $client->wp_post_id));
+            $profile = null;
+            if ($r->action === 'subsidiary') {
+                $profile = $sync->getClient((int) $client->wp_post_id);
+                app(\App\Services\SubsidiaryTrialWorkflow::class)->assertSiteIdentity($r, $client, $profile);
+                if (DB::transaction(fn () => app(\App\Services\SubsidiaryTrialWorkflow::class)->noGrant($r, $client))) return null;
+            }
+            $this->eligibility($r, $client);
+            $baseline = $this->safeProfile($profile ?? $sync->getClient((int) $client->wp_post_id));
             abort_unless($baseline['wp_post_id'] === (int) $client->wp_post_id && $baseline['wp_user_id'] === (int) $client->wp_user_id, 409, 'The site profile identity changed.');
             $op = DB::transaction(function () use ($r, $client, $itemKey, $baseline, $seoItem) {
                 $r = FreeTrialRequest::lockForUpdate()->findOrFail($r->id);
@@ -186,6 +160,8 @@ class TrialActivationService
 
     public function recover(FreeTrialRequest $r): FreeTrialRequest
     {
+        if ($r->action === 'subsidiary' && in_array($r->activation_result_json['profile_resolution'] ?? '', ['resolving', 'unknown'])) return app(\App\Services\SubsidiaryTrialWorkflow::class)->recoverProfile($r);
+        if ($r->status === 'canceled') return $r;
         // Recovery reads the already-sent operation and may replay local bookkeeping only.
         foreach (TrialActivationOperation::where('request_id', $r->id)->whereIn('state', ['dispatching', 'uncertain'])->get() as $op) {
             if (! $op->response_json) {
@@ -208,7 +184,12 @@ class TrialActivationService
         if ($expiry <= now()->timestamp || $expiry > now()->addYears(3)->timestamp || ($response['success'] ?? true) === false) {
             return $this->hold($op);
         }
-        $profile = $this->safeProfile(WpSyncService::forPlatform($op->platform_id)->getClient((int) $op->command_json['post_id']));
+        $rawProfile = WpSyncService::forPlatform($op->platform_id)->getClient((int) $op->command_json['post_id']);
+        if ($r->action === 'subsidiary') {
+            try { app(\App\Services\SubsidiaryTrialWorkflow::class)->assertSiteIdentity($r, $c, $rawProfile); }
+            catch (\Throwable $e) { return $this->hold($op); }
+        }
+        $profile = $this->safeProfile($rawProfile);
         if ($profile['wp_post_id'] !== (int) $op->command_json['post_id'] || $profile['wp_user_id'] !== (int) $op->command_json['wp_user_id'] || $profile['escort_expire'] !== $expiry || $profile['post_status'] !== 'publish') {
             return $this->hold($op);
         }
@@ -254,6 +235,8 @@ class TrialActivationService
 
     public function summarize(FreeTrialRequest $r): FreeTrialRequest
     {
+        $r->refresh();
+        if (in_array($r->status, ['canceled', 'denied', 'expired']) || ($r->action === 'subsidiary' && in_array($r->activation_result_json['profile_resolution'] ?? '', ['resolving', 'unknown']))) return $r;
         $ops = TrialActivationOperation::where('request_id', $r->id)->get();
         $expected = count($r->terms_json['client_ids']);
         $status = $ops->contains(fn ($o) => in_array($o->state, ['dispatching', 'uncertain'])) ? 'uncertain' : ($expected > 0 && $ops->count() === $expected && $ops->every(fn ($o) => $o->state === 'succeeded') ? 'active' : ($ops->isNotEmpty() ? 'activating' : $r->fresh()->status));

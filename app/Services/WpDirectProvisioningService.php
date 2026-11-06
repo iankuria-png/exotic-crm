@@ -968,6 +968,11 @@ class WpDirectProvisioningService
         return substr($requestId, 0, 64);
     }
 
+    public function payloadFingerprint(array $payload): string
+    {
+        return $this->computePayloadHash($payload);
+    }
+
     private function computePayloadHash(array $payload): string
     {
         $allowedKeys = array_unique(array_merge(

@@ -18,7 +18,7 @@ const actionLabels = { approve: 'Approve records', request_correction: 'Request 
 
 export default function Reconciliations() {
     const { user } = useAuth(); const toast = useToast(); const cache = useQueryClient();
-    const [tab, setTab] = useState('daily'); const [filters, setFilters] = useState({ date: today(), platform_id: '', channel: 'manual', status: '', search: '', page: 1, earlier_unresolved: false });
+    const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'trials' ? 'trials' : 'daily'); const [filters, setFilters] = useState({ date: today(), platform_id: '', channel: 'manual', status: '', search: '', page: 1, earlier_unresolved: false });
     const [selected, setSelected] = useState([]); const [detail, setDetail] = useState(null); const [action, setAction] = useState(null); const [busy, setBusy] = useState(false); const [announcement, setAnnouncement] = useState('');
     const opts = useQuery({ queryKey: ['reconciliation-options', user?.id], queryFn: () => api.get('/crm/reconciliations/options').then(r => r.data) });
     const options = opts.data || {}; const reviewer = (options.review_market_ids || []).length > 0;

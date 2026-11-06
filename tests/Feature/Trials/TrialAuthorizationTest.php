@@ -48,11 +48,11 @@ class TrialAuthorizationTest extends TestCase
         return [$m, $admin, $sales, $c, $d];
     }
 
-    private function site(bool $loseResponse = false): void
+    private function site(bool $loseResponse = false, array $contacts = []): void
     {
         $expiry = now()->addDays(7)->timestamp;
         $sent = false;
-        Http::fake(['https://trials.example.test/*' => function ($req) use (&$sent, $expiry, $loseResponse) {
+        Http::fake(['https://trials.example.test/*' => function ($req) use (&$sent, $expiry, $loseResponse, $contacts) {
             if ($req->method() === 'POST') {
                 $this->assertSame(0, DB::transactionLevel(), 'No database transaction may surround the site mutation.');
                 $sent = true;
@@ -63,7 +63,7 @@ class TrialAuthorizationTest extends TestCase
                 return Http::response(['success' => true, 'escort_expire' => $expiry]);
             }
 
-            return Http::response(['wp_post_id' => 77, 'wp_user_id' => 55, 'post_status' => $sent ? 'publish' : 'private', 'escort_expire' => $sent ? $expiry : 0]);
+            return Http::response(['wp_post_id' => 77, 'wp_user_id' => 55, 'post_status' => $sent ? 'publish' : 'private', 'escort_expire' => $sent ? $expiry : 0] + $contacts);
         }]);
     }
 
@@ -173,9 +173,9 @@ class TrialAuthorizationTest extends TestCase
         $main->update(['status' => 'active', 'activated_at' => now(), 'expires_at' => now()->addDays(7)]);
         $target = Platform::factory()->create(['wp_api_url' => 'https://trials.example.test/wp-json/exotic-crm-sync/v1', 'wp_api_user' => 'fixture', 'wp_api_password' => 'fixture', 'phone_prefix' => '255']);
         $p = Product::factory()->create(['platform_id' => $target->id, 'tier' => 'vip', 'is_active' => true]);
-        $targetClient = Client::factory()->create(['platform_id' => $target->id, 'wp_post_id' => 77, 'wp_user_id' => 55, 'profile_status' => 'private', 'profile_removal_requested_at' => null, 'profile_reverted_at' => null]);
+        $targetClient = Client::factory()->create(['platform_id' => $target->id, 'wp_post_id' => 77, 'wp_user_id' => 55, 'phone_normalized' => '255712345678', 'profile_status' => 'private', 'profile_removal_requested_at' => null, 'profile_reverted_at' => null]);
         \App\Models\BillingSubscriptionRule::create(['market_id' => $target->id, 'free_trial_json' => ['enabled' => true, 'duration_days' => 7]]);
-        $this->site();
+        $this->site(false, ['phone' => $targetClient->phone_normalized, 'email' => $targetClient->email]);
         Sanctum::actingAs($admin);
         $this->postJson('/api/crm/free-trials/requests', ['action' => 'subsidiary', 'deal_id' => $main->id, 'platform_id' => $target->id, 'client_id' => $targetClient->id, 'duration_days' => 7, 'reason' => 'Approved target-market introduction.'])->assertOk()->assertJsonPath('trial_request.status', 'active');
         $this->assertNotNull($main->fresh()->linked_deal_id);

@@ -41,42 +41,27 @@ class SubsidiaryTrialService
 
         $this->marketAuthorizationService->applyPlatformScope($query, $user, 'id');
 
-        return [
-            'targets' => $query->get()->map(fn (Platform $platform) => $this->targetPayload($platform, $main))->values()->all(),
-        ];
+        $targets = $query->get()->map(fn (Platform $platform) => $this->targetPayload($platform, $main))->values();
+        $pair = (int) config('subsidiary_trials.pairs.'.$main->platform_id, 0);
+        $recommended = $targets->first(fn ($t) => $t['id'] === $pair && empty($t['config_errors']));
+        return ['targets' => $targets->all(), 'recommended_platform_id' => $recommended['id'] ?? null,
+            'paired_platform_id' => $pair ?: null, 'pair_unavailable' => $pair > 0 && ! $recommended];
     }
 
-    public function previewForDeal(Deal $main, Platform $target): array
+    public function previewForDeal(Deal $main, Platform $target, ?int $selected = null): array
     {
         $main->loadMissing(['client.platform', 'product']);
-        $client = $main->client;
-        if (!$client) {
-            throw new \InvalidArgumentException('Deal has no associated client.');
-        }
-
-        $phone = $this->clientResolver->targetPhone($client, $target, []);
-        $match = null;
-        if ($phone) {
-            $matchClient = Client::query()
-                ->where('platform_id', (int) $target->id)
-                ->where('phone_normalized', $phone)
-                ->latest('id')
-                ->first();
-            $match = $matchClient ? $this->matchPayload($matchClient) : null;
-        }
-
-        return [
-            'target_platform' => $this->targetPayload($target, $main),
-            'config_errors' => $this->configErrors($target, $main),
-            'match' => $match,
-            'will_create' => $match ? null : [
-                'name' => $client->name,
-                'phone_normalized' => $phone,
-                'email' => $client->email,
-                'city' => $client->city,
-            ],
-            'default_duration_days' => $this->freeTrialDurationDays($target),
-        ];
+        abort_unless($main->client, 422, 'Deal has no associated client.');
+        $helper = app(SubsidiaryActivationPreviewService::class);
+        $resolution = $helper->resolve($main, $target, $selected);
+        $client = $resolution['client_id'] ? Client::find($resolution['client_id']) : null;
+        $errors = $this->configErrors($target, $main);
+        if ($client && $client->wp_post_id) $errors = array_values(array_diff($errors, ['missing_wp_db_credentials']));
+        if ($resolution['kind'] === 'already_active') $errors = array_values(array_intersect($errors, ['inactive_market']));
+        return ['target_platform' => $this->targetPayload($target, $main), 'config_errors' => $errors,
+            'match' => $client ? $this->matchPayload($client) : null, 'resolution' => $resolution,
+            'will_create' => $client ? null : $helper->seed($main, $target),
+            'default_duration_days' => $this->freeTrialDurationDays($target)];
     }
 
     public function activateIfPending(Deal $main): ?Deal
@@ -297,6 +282,7 @@ class SubsidiaryTrialService
     private function configErrors(Platform $platform, Deal $main): array
     {
         $errors = [];
+        if (! $platform->is_active) $errors[] = 'inactive_market';
         if (!$this->freeTrialEnabled($platform)) {
             $errors[] = 'free_trial_disabled';
         }

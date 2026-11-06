@@ -47,7 +47,9 @@ class TrialApprovalService
         $fields = ($terms['action'] ?? '') === 'subsidiary' ? ['id', 'platform_id', 'client_id', 'product_id'] : ['id', 'platform_id', 'client_id', 'product_id', 'status', 'duration_days', 'expires_at', 'activated_at'];
         $product = Product::find($terms['product_id'] ?? 0);
 
-        return hash('sha256', json_encode(['clients' => $clients, 'deal' => $deal?->only($fields), 'product' => $product?->only(['id', 'platform_id', 'tier', 'is_active', 'is_archived'])], JSON_THROW_ON_ERROR));
+        $payload = ['clients' => $clients, 'deal' => $deal?->only($fields), 'product' => $product?->only(['id', 'platform_id', 'tier', 'is_active', 'is_archived'])];
+        if (! empty($terms['subsidiary_identity'])) $payload['subsidiary_identity'] = app(\App\Services\SubsidiaryActivationPreviewService::class)->currentIdentity($terms);
+        return hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
     }
 
     public function create(User $actor, array $terms, ?string $pin = null, ?string $requestKey = null): FreeTrialRequest
@@ -67,6 +69,7 @@ class TrialApprovalService
         $days = (int) ($terms['duration_days'] ?? 0);
         abort_if($days < 1 || $days > 365 || (in_array($terms['action'], ['subsidiary', 'seo_boost']) && $days > 90), 422, 'Trial duration is outside the allowed range.');
         $key = $requestKey ?: (string) Str::uuid();
+        if (! empty($terms['subsidiary_identity'])) abort_unless(app(\App\Services\SubsidiaryActivationPreviewService::class)->same($terms['subsidiary_identity'], app(\App\Services\SubsidiaryActivationPreviewService::class)->currentIdentity($terms)), 409, 'Customer identity changed. Refresh the preview.');
         $source = $this->source($terms);
         $save = function (?int $generation = null) use ($actor, $terms, $market, $reason, $key, $source) {
             return DB::transaction(function () use ($actor, $terms, $market, $reason, $key, $source, $generation) {
@@ -78,17 +81,22 @@ class TrialApprovalService
                 if ($generation !== null) {
                     abort_unless($policy->approval_mode === 'admin_or_pin', 403, 'This market requires admin approval.');
                 }
-                FreeTrialRequest::where('platform_id', $market)->where('status', 'approved')->where('expires_at', '<', now())->update(['status' => 'expired', 'active_identity' => null]);
+                foreach (FreeTrialRequest::where('platform_id', $market)->where('status', 'approved')->where('expires_at', '<', now())->get() as $expired) {
+                    if (! in_array($expired->activation_result_json['profile_resolution'] ?? '', ['resolving', 'unknown']) && ! \App\Models\TrialActivationOperation::where('request_id', $expired->id)->whereNotNull('dispatched_at')->exists()) {
+                        $expired->update(['status' => 'expired', 'active_identity' => null]);
+                    }
+                }
                 $prior = FreeTrialRequest::where('request_key', $key)->first();
                 if ($prior) {
-                    abort_unless($prior->requester_id === $actor->id && $prior->terms_json === $terms, 409, 'This request key belongs to different terms.');
+                    abort_unless($prior->requester_id === $actor->id && ($terms['action'] === 'subsidiary' ? app(\App\Services\SubsidiaryActivationPreviewService::class)->same($prior->terms_json, $terms) : $prior->terms_json === $terms), 409, 'This request key belongs to different terms.');
 
                     return $prior;
                 }
+                if ($terms['action'] === 'subsidiary') app(\App\Services\SubsidiaryTrialWorkflow::class)->reserve($terms);
                 $duplicate = FreeTrialRequest::where('platform_id', $market)->where('action', $terms['action'])->whereIn('status', ['pending', 'approved', 'activating', 'uncertain'])->where('source_version', $source)->get()->first(fn ($r) => $r->terms_json['client_ids'] === $terms['client_ids']);
                 abort_if((bool) $duplicate, 409, 'An unresolved request already exists for these trial terms. Open it in Reconciliations.');
                 $approved = $actor->role === 'admin' || $generation !== null;
-                $r = FreeTrialRequest::create(['request_key' => $key, 'active_identity' => hash('sha256', json_encode([$market, $terms['action'], $terms['client_ids'], $terms['source_deal_id'] ?? null])), 'requester_id' => $actor->id, 'platform_id' => $market, 'client_id' => count($terms['client_ids']) === 1 ? $terms['client_ids'][0] : null,
+                $r = FreeTrialRequest::create(['request_key' => $key, 'active_identity' => $terms['action'] === 'subsidiary' ? app(\App\Services\SubsidiaryTrialWorkflow::class)->identityKey($terms) : hash('sha256', json_encode([$market, $terms['action'], $terms['client_ids'], $terms['source_deal_id'] ?? null])), 'requester_id' => $actor->id, 'platform_id' => $market, 'client_id' => count($terms['client_ids']) === 1 ? $terms['client_ids'][0] : null,
                     'deal_id' => $terms['source_deal_id'] ?? null, 'action' => $terms['action'], 'terms_json' => $terms, 'source_version' => $source, 'policy_version' => $policy->version,
                     'status' => $approved ? 'approved' : 'pending', 'approved_via' => $approved ? ($actor->role === 'admin' ? 'admin' : 'pin') : null, 'approver_id' => $actor->role === 'admin' ? $actor->id : null,
                     'authorized_actor_id' => $approved ? $actor->id : null, 'pin_generation' => $generation, 'reason' => $reason, 'authorized_at' => $approved ? now() : null, 'expires_at' => $approved ? now()->addHours(24) : null]);
@@ -141,6 +149,10 @@ class TrialApprovalService
 
     public function assertDispatch(FreeTrialRequest $r): void
     {
+        if ($r->action === 'subsidiary') {
+            $primary = app(\App\Services\SubsidiaryTrialWorkflow::class)->assertAttached($r);
+            abort_unless($primary->status === 'active' && (! $primary->expires_at || $primary->expires_at->isFuture()), 409, 'Primary coverage must be current before a new subsidiary trial.');
+        }
         abort_unless(in_array($r->status, ['approved', 'activating']), 409, 'This trial is not authorized for activation.');
         $actor = User::findOrFail($r->authorized_actor_id);
         $this->access($actor, $r->platform_id);

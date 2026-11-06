@@ -69,8 +69,18 @@ class FreeTrialApprovalController extends Controller
     {
         $v = $request->validate(['action' => 'required|in:activate,extend,renew,field_trial,subsidiary,seo_boost', 'deal_id' => 'nullable|integer', 'client_id' => 'nullable|integer', 'platform_id' => 'nullable|integer', 'product_id' => 'nullable|integer', 'duration_days' => 'nullable|integer|min:1|max:365', 'additional_days' => 'nullable|integer|min:1|max:365', 'reason' => 'required|string|max:1000', 'free_trial_pin' => ['nullable', 'regex:/^\d{4,6}$/'], 'request_key' => 'nullable|uuid',
             'selected_client_ids' => 'nullable|array|min:1|max:200', 'selected_client_ids.*' => 'integer|exists:clients,id', 'targets' => 'nullable|array', 'product_price_id' => 'nullable|integer', 'create_confirmed' => 'nullable|boolean']);
-        $terms = $this->terms($request, $v['action'], $v);
-        $trial = $this->approvals->create($request->user(), $terms, $v['free_trial_pin'] ?? null, $v['request_key'] ?? null);
+        $trial = DB::transaction(function () use ($request, $v) {
+            $main = null;
+            if ($v['action'] === 'subsidiary') {
+                $main = Deal::lockForUpdate()->findOrFail($v['deal_id'] ?? 0);
+                $this->approvals->access($request->user(), (int) $main->platform_id);
+                app(\App\Services\SubsidiaryTrialWorkflow::class)->supersede($main, $request->user(), $v['request_key'] ?? null);
+            }
+            $terms = $this->terms($request, $v['action'], $v);
+            $trial = $this->approvals->create($request->user(), $terms, $v['free_trial_pin'] ?? null, $v['request_key'] ?? null);
+            if ($main) $main->update(['pending_subsidiary_trial' => ['status' => 'pending', 'platform_id' => $trial->platform_id, 'trial_request_id' => $trial->id, 'subsidiary_client_id' => $trial->client_id]]);
+            return $trial;
+        });
         if ($trial->status === 'approved') {
             $trial = $this->activation->execute($trial);
         }
@@ -95,6 +105,7 @@ class FreeTrialApprovalController extends Controller
                 $trial = FreeTrialRequest::findOrFail($intent['trial_request_id']);
                 $this->view($request, $trial);
                 if (in_array($trial->status, ['uncertain', 'activating'])) {
+                    abort_unless($request->user()->role === 'admin', 403, 'Only an admin can recover a held trial.');
                     $trial = $this->activation->recover($trial);
                 } elseif ($trial->status === 'approved') {
                     $trial = $this->activation->execute($trial);
@@ -102,8 +113,7 @@ class FreeTrialApprovalController extends Controller
 
                 return $this->outcome($trial);
             }
-            $input = array_merge($input, ['platform_id' => $intent['platform_id'] ?? 0, 'duration_days' => $intent['duration_days'] ?? 7, 'client_id' => $intent['subsidiary_client_id'] ?? null, 'create_confirmed' => ! empty($intent['subsidiary_client_seed']), 'free_trial_pin' => $input['pin'] ?? null]);
-            $action = 'subsidiary';
+            abort(409, 'This historical trial has no saved approval. Review and submit fresh trial details instead of retrying it.');
         }
         $input['reason'] = trim((string) ($input['reason'] ?? $input['notes'] ?? '')) ?: 'Requested '.$action.' free-trial authorization.';
         $terms = $this->terms($request, $action, $input);
@@ -120,7 +130,7 @@ class FreeTrialApprovalController extends Controller
         $data = ['deal_id' => $main->id, 'platform_id' => $input['platform_id'], 'client_id' => $input['client_id'] ?? null, 'duration_days' => $input['duration_days'] ?? 7, 'create_confirmed' => filter_var($input['create_confirmed'] ?? false, FILTER_VALIDATE_BOOLEAN), 'reason' => 'Optional subsidiary trial linked to subscription '.$main->id];
         $terms = $this->terms($request, 'subsidiary', $data);
 
-        return $this->approvals->create($request->user(), $terms, $input['pin'] ?? null);
+        return $this->approvals->create($request->user(), $terms, $input['pin'] ?? null, $input['request_key'] ?? null);
     }
 
     public function decision(Request $request, FreeTrialRequest $trial)
@@ -163,6 +173,7 @@ class FreeTrialApprovalController extends Controller
 
         return DB::transaction(function () use ($request, $trial, $v) {
             $trial = FreeTrialRequest::lockForUpdate()->findOrFail($trial->id);
+            if ($trial->action === 'subsidiary') app(\App\Services\SubsidiaryTrialWorkflow::class)->assertCancelable($trial);
             abort_unless($trial->version === (int) $v['version'] && in_array($trial->status, ['pending', 'approved']) && ! TrialActivationOperation::where('request_id', $trial->id)->whereNotNull('dispatched_at')->exists(), 409, 'This trial changed or has already been dispatched.');
             $trial->update(['status' => 'canceled', 'active_identity' => null, 'version' => $trial->version + 1]);
             $this->approvals->event($trial, $request->user(), 'canceled', [], $v['reason']);
@@ -228,8 +239,11 @@ class FreeTrialApprovalController extends Controller
             abort_unless(! empty($deposit['received']), 422, 'Activation deposit has not been received yet.');
         } elseif ($action === 'subsidiary') {
             abort_unless($deal && $deal->platform_id !== $market, 422, 'Choose a separate subsidiary market.');
-            $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal($deal, Platform::findOrFail($market));
+            $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal($deal, Platform::findOrFail($market), ! empty($input['client_id']) ? (int) $input['client_id'] : null);
             abort_if((bool) $preview['config_errors'], 422, implode('; ', $preview['config_errors']));
+            abort_unless(in_array($preview['resolution']['kind'], ['existing', 'create_if_needed']), 409, 'Resolve the target profile or existing coverage before requesting a trial.');
+            $input['subsidiary_identity'] = $preview['resolution']['identity'];
+            $input['subsidiary_manual'] = ! empty($input['client_id']);
             $product = (int) $preview['target_platform']['trial_product_id'];
             $target = ! empty($input['client_id']) ? Client::where('platform_id', $market)->findOrFail($input['client_id']) : null;
             $clientIds = $target ? [$target->id] : [];
@@ -245,6 +259,8 @@ class FreeTrialApprovalController extends Controller
 
         return array_filter(['action' => $action, 'platform_id' => $market, 'source_deal_id' => $deal?->id, 'client_ids' => $clientIds, 'product_id' => $product, 'duration_days' => $days,
             'product_price_id' => $input['product_price_id'] ?? $deal?->product_price_id, 'targets' => $action === 'seo_boost' ? $input['targets'] : null,
+            'subsidiary_basis' => $action === 'subsidiary' ? app(\App\Services\SubsidiaryTrialWorkflow::class)->basis(['source_deal_id' => $deal->id, 'product_id' => $product]) : null,
+            'subsidiary_identity' => $action === 'subsidiary' ? ($input['subsidiary_identity'] ?? null) : null, 'subsidiary_manual' => $action === 'subsidiary' ? ($input['subsidiary_manual'] ?? false) : null,
             'subsidiary_seed' => $action === 'subsidiary' ? ($input['subsidiary_seed'] ?? null) : null, 'create_confirmed' => $action === 'subsidiary' ? ! empty($input['create_confirmed']) : null,
             'reason' => trim((string) ($input['reason'] ?? '')) ?: 'Requested '.$action.' free-trial authorization.'], fn ($v) => $v !== null);
     }
