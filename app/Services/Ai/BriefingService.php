@@ -453,6 +453,7 @@ PROMPT;
                 'period' => $snapshot['period'] ?? [],
                 'scope' => $snapshot['scope'] ?? [],
                 'scorecards' => $snapshot['scorecards'] ?? [],
+                'native_reporting' => $snapshot['native_reporting'] ?? null,
                 'executive_summary' => [
                     'what_changed' => (array) ($focus['what_changed'] ?? []),
                     'why_it_matters' => (array) ($focus['why_it_matters'] ?? []),

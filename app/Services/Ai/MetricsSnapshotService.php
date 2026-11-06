@@ -36,6 +36,7 @@ class MetricsSnapshotService
         private readonly RenewalService $renewalService,
         private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService,
         private readonly ChurnAggregatorService $churnAggregatorService,
+        private readonly NativeScorecardService $nativeScorecardService,
     ) {}
 
     /**
@@ -75,6 +76,7 @@ class MetricsSnapshotService
                 'platform_names' => $this->platformNames($platformIds),
             ],
             'period' => $period,
+            'native_reporting' => $this->nativeScorecardService->build($platformIds, $period),
             'window' => [
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),

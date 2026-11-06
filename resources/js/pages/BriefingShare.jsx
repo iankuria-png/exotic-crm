@@ -6,6 +6,7 @@ import AiStateBlock from '../components/ai/AiStateBlock';
 import WeeklyPrioritiesPanel from '../components/dashboard/WeeklyPrioritiesPanel';
 import { useToast } from '../components/ToastProvider';
 import { copyToClipboard } from '../utils/clipboard';
+import { CurrencyViewControls, NativeAmounts, nativeAmountText, sourceCurrencyMoney, nativeMoney } from '../components/ai/NativeCurrencyReport';
 
 /**
  * Recipient-facing weekly briefing at /b/:token.
@@ -95,7 +96,24 @@ function ExecutiveBriefing({ data, token, user }) {
     const decisionSeed = body.executive_summary?.decision_points?.[0] || '';
     const fallbackMarkets = useMemo(() => briefingMarketOptions(body), [body]);
     const [marketOptions, setMarketOptions] = useState(fallbackMarkets);
-    const markdown = useMemo(() => buildBriefingMarkdown(data), [data]);
+    const [currencyMode, setCurrencyMode] = useState('reporting');
+    const [currencyKey, setCurrencyKey] = useState('');
+    const native = body.native_reporting;
+    const nativeMode = currencyMode === 'native' && native?.status === 'ready';
+    const selected = native?.currencies?.find((row) => row.key === currencyKey) || native?.currencies?.[0];
+    const reportingCurrency = body.scorecards?.find((card) => card.key === 'revenue')?.currency || 'USD';
+    const scorecards = (body.scorecards || []).flatMap((card) => {
+        if (!nativeMode) return [card];
+        if (['revenue', 'average_daily_revenue'].includes(card.key)) {
+            if (!selected) return [];
+            const daily = card.key === 'average_daily_revenue';
+            return [{ ...card, label: `${selected.currency} ${daily ? 'daily average' : 'revenue'}`, currency: selected.currency,
+                current: selected[daily ? 'daily' : 'current'], prior: selected[daily ? 'prior_daily' : 'prior'],
+                delta_percent: selected.delta_percent, native: true, status: selected.delta_percent === null ? 'neutral' : selected.delta_percent >= 0 ? 'good' : 'watch' }];
+        }
+        return [{ ...card, label: card.key === 'lost_value_to_churn' ? 'Lost to churn · estimate' : card.label }];
+    });
+    const markdown = useMemo(() => buildBriefingMarkdown(data, { nativeMode, selected, scorecards, reportingCurrency }), [data, nativeMode, selected, scorecards, reportingCurrency]);
 
     useEffect(() => {
         let cancelled = false;
@@ -209,21 +227,23 @@ function ExecutiveBriefing({ data, token, user }) {
                 ))}
             </nav>
 
-            <ScorecardGrid scorecards={body.scorecards || []} />
+            <CurrencyViewControls mode={nativeMode ? 'native' : 'reporting'} onModeChange={setCurrencyMode}
+                native={native} selectedKey={selected?.key || ''} onCurrencyChange={setCurrencyKey} reportingCurrency={reportingCurrency} />
+            <ScorecardGrid scorecards={scorecards} />
 
             <div id="readout" className="mt-6 grid scroll-mt-6 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
                 <ExecutiveSummary summary={body.executive_summary} narrative={body.narrative} />
-                <div id="movement" className="scroll-mt-6">
-                    <CustomerMovement movement={body.customer_movement} />
+                <div id="movement" className="min-w-0 scroll-mt-6">
+                    <CustomerMovement movement={body.customer_movement} nativeMode={nativeMode} />
                 </div>
             </div>
 
             <div className="mt-6 grid gap-6 xl:grid-cols-2">
-                <div id="markets" className="scroll-mt-6">
-                    <MarketMovement movement={body.market_movement} />
+                <div id="markets" className="min-w-0 scroll-mt-6">
+                    <MarketMovement movement={body.market_movement} native={nativeMode ? native : null} />
                 </div>
-                <div id="recovery" className="scroll-mt-6">
-                    <PaymentRecovery recovery={body.payment_recovery} />
+                <div id="recovery" className="min-w-0 scroll-mt-6">
+                    <PaymentRecovery recovery={body.payment_recovery} nativeMode={nativeMode} />
                 </div>
             </div>
 
@@ -240,7 +260,7 @@ function ExecutiveBriefing({ data, token, user }) {
             </div>
 
             <div id="quality" className="mt-6 grid scroll-mt-6 gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
-                <TeamExecution execution={body.team_execution} />
+                <TeamExecution execution={body.team_execution} native={nativeMode ? native : null} />
                 <DataQuality quality={body.data_quality} generatedAt={data.generated_at} />
             </div>
         </article>
@@ -273,7 +293,7 @@ function briefingMarketOptions(body = {}) {
     return Array.from(seen.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
-function buildBriefingMarkdown(data = {}) {
+function buildBriefingMarkdown(data = {}, view = {}) {
     const body = data.body || {};
     const period = body.period || data.period || {};
     const scopeLabel = data.scope?.org_wide === false && data.scope?.platform_ids?.length
@@ -292,6 +312,14 @@ function buildBriefingMarkdown(data = {}) {
         lines.push(`- Comparison: ${markdownText([period.prior_label, period.prior_display].filter(Boolean).join(' - '))}`);
     }
     lines.push(`- Generated: ${formatDateTime(data.generated_at)}`);
+    lines.push(`- Currency view: ${view.nativeMode ? `Native currencies · revenue cards: ${view.selected?.currency || 'No payments'}` : `Reporting ${view.reportingCurrency || 'USD'}`}`);
+    if (view.nativeMode) {
+        const native = body.native_reporting;
+        lines.push(`- Commentary, portfolio ranking and churn estimates remain in ${view.reportingCurrency}.`);
+        lines.push(`- Native amounts: ${native.source === 'historical_read' ? 'historical payments read; may differ from original publication' : 'captured with scorecard'} · ${formatDateTime(native.captured_at)}`);
+        lines.push('', '## Native Revenue by Currency', '| Currency | Revenue | Previous | Daily average | Change |', '| --- | ---: | ---: | ---: | ---: |');
+        (native.currencies || []).forEach((row) => lines.push(`| ${markdownTableCell(row.currency)} | ${markdownTableCell(nativeMoney(row.current, row.currency))} | ${markdownTableCell(nativeMoney(row.prior, row.currency))} | ${markdownTableCell(nativeMoney(row.daily, row.currency))} | ${row.delta_percent === null ? 'No prior baseline' : `${row.delta_percent > 0 ? '+' : ''}${row.delta_percent}%`} |`));
+    }
 
     if (data.summary_sms) {
         lines.push('');
@@ -304,7 +332,7 @@ function buildBriefingMarkdown(data = {}) {
         lines.push('## Scorecard');
         lines.push('| Metric | Current | Previous | Change |');
         lines.push('| --- | ---: | ---: | ---: |');
-        body.scorecards.forEach((card) => {
+        (view.scorecards || body.scorecards).forEach((card) => {
             const previous = card.prior === null || card.prior === undefined ? 'No baseline' : formatMetric(card.prior, card);
             const delta = card.delta_percent === null || card.delta_percent === undefined ? 'New' : `${card.delta_percent > 0 ? '+' : ''}${formatCompact(card.delta_percent)}%`;
             lines.push(`| ${markdownTableCell(card.label)} | ${markdownTableCell(formatMetric(card.current, card))} | ${markdownTableCell(previous)} | ${markdownTableCell(delta)} |`);
@@ -330,7 +358,7 @@ function buildBriefingMarkdown(data = {}) {
         ['New paid customers', movement.new_paid_customers],
         ['Renewed profiles', movement.renewed_profiles],
         ['Churned profiles', movement.churned_profiles],
-        ['Lost to churn', movement.lost_value_to_churn_display || formatMoneyValue(movement.lost_value_to_churn, movement.lost_value_to_churn_currency)],
+        [view.nativeMode ? 'Lost to churn · estimate' : 'Lost to churn', movement.lost_value_to_churn_display || formatMoneyValue(movement.lost_value_to_churn, movement.lost_value_to_churn_currency)],
         ['User snapshot', `${formatNumber(snapshot.current)} current vs ${formatNumber(snapshot.prior)} prior`],
         ['Renewals due', movement.renewals_due],
         ['Renewal payments', movement.renewal_payments],
@@ -340,8 +368,8 @@ function buildBriefingMarkdown(data = {}) {
     const markets = body.market_movement || {};
     lines.push('');
     lines.push('## Markets');
-    appendMarketRows(lines, 'Growing', markets.growing || []);
-    appendMarketRows(lines, 'Declining', markets.declining || []);
+    appendMarketRows(lines, 'Growing', markets.growing || [], view.nativeMode ? body.native_reporting : null);
+    appendMarketRows(lines, 'Declining', markets.declining || [], view.nativeMode ? body.native_reporting : null);
     if (markets.concentration?.top_market) {
         lines.push(`- Largest market: ${markdownText(markets.concentration.top_market.name)} at ${formatPercent(markets.concentration.top_market_share_percent)} of revenue`);
     }
@@ -349,11 +377,12 @@ function buildBriefingMarkdown(data = {}) {
     const recovery = body.payment_recovery || {};
     lines.push('');
     lines.push('## Payment Recovery');
+    if (view.nativeMode) lines.push('- Amounts retain recorded source-currency labels; CFA is not relabelled without market context.');
     lines.push(`- Recovery rate: ${formatPercent(recovery.payment_recovery_rate)}`);
     lines.push(`- Recovered payments: ${formatNumber(recovery.recovered_payments)}`);
     lines.push(`- Failed payments: ${formatNumber(recovery.failed_payments)}`);
-    lines.push(`- Recovered value: ${markdownText(formatRecoveryMoney(recovery, 'recovered_value'))}`);
-    lines.push(`- Unrecovered value: ${markdownText(formatRecoveryMoney(recovery, 'lost_value'))}`);
+    lines.push(`- Recovered value: ${markdownText(view.nativeMode ? sourceCurrencyMoney(recovery, 'recovered_value') : formatRecoveryMoney(recovery, 'recovered_value'))}`);
+    lines.push(`- Unrecovered value: ${markdownText(view.nativeMode ? sourceCurrencyMoney(recovery, 'lost_value') : formatRecoveryMoney(recovery, 'lost_value'))}`);
     lines.push(`- Customers affected: ${formatNumber(recovery.failed_customers)}`);
     lines.push(`- Week-over-week movement: ${signedNumber(recovery.payment_recovery_rate_delta)} percentage points`);
 
@@ -371,7 +400,7 @@ function buildBriefingMarkdown(data = {}) {
         lines.push('| Person | Revenue | Hours | Actions |');
         lines.push('| --- | ---: | ---: | ---: |');
         execution.members.forEach((member) => {
-            lines.push(`| ${markdownTableCell(member.name)} | ${markdownTableCell(`${member.currency} ${formatCompact(member.revenue)} (${signedMoney(member.revenue_delta, member.currency)})`)} | ${markdownTableCell(`${formatCompact(member.active_hours)}h (${deltaText(member.active_hours_delta_percent)})`)} | ${markdownTableCell(`${formatNumber(member.actions)} (${deltaText(member.actions_delta_percent)})`)} |`);
+            lines.push(`| ${markdownTableCell(member.name)} | ${markdownTableCell(view.nativeMode ? `${nativeAmountText(body.native_reporting.members?.find((row) => row.user_id === member.user_id)?.amounts)} (${nativeAmountText(body.native_reporting.members?.find((row) => row.user_id === member.user_id)?.amounts, 'delta')})` : `${member.currency} ${formatCompact(member.revenue)} (${signedMoney(member.revenue_delta, member.currency)})`)} | ${markdownTableCell(`${formatCompact(member.active_hours)}h (${deltaText(member.active_hours_delta_percent)})`)} | ${markdownTableCell(`${formatNumber(member.actions)} (${deltaText(member.actions_delta_percent)})`)} |`);
         });
     }
 
@@ -396,7 +425,7 @@ function appendMarkdownBullets(lines, title, items) {
     items.forEach((item) => lines.push(`- ${markdownText(item)}`));
 }
 
-function appendMarketRows(lines, title, rows) {
+function appendMarketRows(lines, title, rows, native = null) {
     if (!Array.isArray(rows) || !rows.length) {
         return;
     }
@@ -404,6 +433,11 @@ function appendMarketRows(lines, title, rows) {
     lines.push('');
     lines.push(`### ${title}`);
     rows.slice(0, 8).forEach((row) => {
+        if (native) {
+            const amounts = native.markets?.find((market) => market.platform_id === row.platform_id)?.amounts;
+            lines.push(`- ${markdownText(row.name)}: ${nativeAmountText(amounts)}; previous: ${nativeAmountText(amounts, 'prior')}; change: ${nativeAmountText(amounts, 'delta')}`);
+            return;
+        }
         const delta = `${row.delta >= 0 ? '+' : '-'}${row.currency || ''} ${formatCompact(Math.abs(row.delta || 0))}`.trim();
         lines.push(`- ${markdownText(row.name)}: ${row.currency || ''} ${formatCompact(row.current)} (${delta})`.trim());
     });
@@ -434,7 +468,7 @@ function ScorecardGrid({ scorecards }) {
                         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{card.label}</p>
                         <DeltaBadge card={card} />
                     </div>
-                    <p className="mt-3 font-mono text-2xl font-semibold tracking-normal text-slate-950">
+                    <p className="mt-3 break-words font-mono text-2xl font-semibold tracking-normal text-slate-950">
                         {formatMetric(card.current, card)}
                     </p>
                     <p className="mt-2 text-xs text-slate-500">
@@ -460,7 +494,7 @@ function ExecutiveSummary({ summary = {}, narrative }) {
     }
 
     return (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="CEO readout" title="The week in operating terms" />
             {narrative ? (
                 <div className="mt-3 max-w-4xl space-y-2 text-sm leading-6 text-slate-700">
@@ -488,25 +522,25 @@ function ExecutiveSummary({ summary = {}, narrative }) {
     );
 }
 
-function CustomerMovement({ movement = {} }) {
+function CustomerMovement({ movement = {}, nativeMode = false }) {
     const snapshot = movement.active_subscribers_snapshot || {};
     const rows = [
         ['Created profiles', movement.created_profiles, movement.created_profiles_comparison],
         ['New paid customers', movement.new_paid_customers, movement.new_paid_customers_comparison],
         ['Renewed profiles', movement.renewed_profiles, movement.renewed_profiles_comparison],
         ['Churned profiles', movement.churned_profiles, movement.churned_profiles_comparison],
-        ['Lost to churn', movement.lost_value_to_churn_display || formatMoneyValue(movement.lost_value_to_churn, movement.lost_value_to_churn_currency), null],
+        [nativeMode ? 'Lost to churn · estimate' : 'Lost to churn', movement.lost_value_to_churn_display || formatMoneyValue(movement.lost_value_to_churn, movement.lost_value_to_churn_currency), null],
         ['User snapshot', formatNumber(snapshot.current), { delta_percent: snapshot.delta_percent }],
         ['Renewals due', movement.renewals_due, null],
         ['Renewal payments', movement.renewal_payments, null],
     ];
 
     return (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="Customer movement" title="Weekly profile flow" />
             <div className="mt-4 grid grid-cols-2 gap-3">
                 {rows.map(([label, value, comparison]) => (
-                    <MetricCell key={label} label={label} value={formatNumber(value)} comparison={comparison} />
+                    <MetricCell key={label} label={label} value={typeof value === 'string' ? value : formatNumber(value)} comparison={comparison} />
                 ))}
             </div>
             <div className="mt-4 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -522,13 +556,13 @@ function CustomerMovement({ movement = {} }) {
     );
 }
 
-function MarketMovement({ movement = {} }) {
+function MarketMovement({ movement = {}, native }) {
     return (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="Market portfolio" title="Growth and decline" />
             <div className="mt-4 grid gap-5 lg:grid-cols-2">
-                <MarketTable title="Growing" rows={movement.growing || []} empty="No growing markets in this window." />
-                <MarketTable title="Declining" rows={movement.declining || []} empty="No declining markets in this window." />
+                <MarketTable native={native} title="Growing" rows={movement.growing || []} empty="No growing markets in this window." />
+                <MarketTable native={native} title="Declining" rows={movement.declining || []} empty="No declining markets in this window." />
             </div>
             {movement.concentration?.top_market ? (
                 <p className="mt-4 text-sm text-slate-600">
@@ -540,7 +574,7 @@ function MarketMovement({ movement = {} }) {
     );
 }
 
-function MarketTable({ title, rows, empty }) {
+function MarketTable({ title, rows, empty, native }) {
     return (
         <div>
             <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
@@ -558,9 +592,9 @@ function MarketTable({ title, rows, empty }) {
                             {rows.slice(0, 5).map((row) => (
                                 <tr key={`${title}-${row.platform_id || row.name}`}>
                                     <td className="py-2 pr-3 font-medium text-slate-900">{row.name}</td>
-                                    <td className="py-2 pr-3 font-mono text-slate-700">{row.currency} {formatCompact(row.current)}</td>
+                                    <td className="py-2 pr-3 font-mono text-slate-700">{native ? <NativeAmounts amounts={native.markets?.find((market) => market.platform_id === row.platform_id)?.amounts} /> : <>{row.currency} {formatCompact(row.current)}</>}</td>
                                     <td className={`py-2 pr-3 font-mono ${row.delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                        {row.delta >= 0 ? '+' : '-'}{row.currency} {formatCompact(Math.abs(row.delta || 0))}
+                                        {native ? <NativeAmounts field="delta" amounts={native.markets?.find((market) => market.platform_id === row.platform_id)?.amounts} /> : <>{row.delta >= 0 ? '+' : '-'}{row.currency} {formatCompact(Math.abs(row.delta || 0))}</>}
                                     </td>
                                 </tr>
                             ))}
@@ -574,19 +608,20 @@ function MarketTable({ title, rows, empty }) {
     );
 }
 
-function PaymentRecovery({ recovery = {} }) {
+function PaymentRecovery({ recovery = {}, nativeMode = false }) {
     return (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="Payment recovery" title="Failed payment follow-through" />
             <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
                 <MetricCell label="Recovery rate" value={formatPercent(recovery.payment_recovery_rate)} />
                 <MetricCell label="Recovered payments" value={formatNumber(recovery.recovered_payments)} />
                 <MetricCell label="Failed payments" value={formatNumber(recovery.failed_payments)} />
-                <MetricCell label="Recovered value" value={formatRecoveryMoney(recovery, 'recovered_value')} />
-                <MetricCell label="Unrecovered value" value={formatRecoveryMoney(recovery, 'lost_value')} />
+                <MetricCell label="Recovered value" value={nativeMode ? sourceCurrencyMoney(recovery, 'recovered_value') : formatRecoveryMoney(recovery, 'recovered_value')} />
+                <MetricCell label="Unrecovered value" value={nativeMode ? sourceCurrencyMoney(recovery, 'lost_value') : formatRecoveryMoney(recovery, 'lost_value')} />
                 <MetricCell label="Customers affected" value={formatNumber(recovery.failed_customers)} />
             </div>
             <p className="mt-4 text-sm text-slate-600">
+                {nativeMode ? 'Amounts retain recorded source-currency labels; CFA is shown as recorded. ' : ''}
                 Recovery moved {signedNumber(recovery.payment_recovery_rate_delta)} percentage points versus the prior week.
                 {recovery.normalization_partial ? ' Some values are shown from native currency breakdowns because FX was partial.' : ''}
             </p>
@@ -594,11 +629,11 @@ function PaymentRecovery({ recovery = {} }) {
     );
 }
 
-function TeamExecution({ execution = {} }) {
+function TeamExecution({ execution = {}, native }) {
     const members = Array.isArray(execution.members) ? execution.members : [];
 
     return (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle kicker="Team execution" title="Work rhythm" />
             <div className="mt-4 space-y-3">
                 <MetricCell label="Active time" value={`${formatCompact(execution.active_hours)}h`} />
@@ -628,10 +663,10 @@ function TeamExecution({ execution = {} }) {
                                         <p className="text-xs text-slate-500">{member.role}</p>
                                     </td>
                                     <td className="px-3 py-3 font-mono text-slate-800">
-                                        {member.currency} {formatCompact(member.revenue)}
-                                        <span className={`ml-2 text-xs ${Number(member.revenue_delta || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                        {native ? <><NativeAmounts amounts={native.members?.find((row) => row.user_id === member.user_id)?.amounts} /><NativeAmounts field="delta" amounts={native.members?.find((row) => row.user_id === member.user_id)?.amounts} /></> : <>{member.currency} {formatCompact(member.revenue)}</>}
+                                        {!native ? <span className={`ml-2 text-xs ${Number(member.revenue_delta || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                                             {signedMoney(member.revenue_delta, member.currency)}
-                                        </span>
+                                        </span> : null}
                                     </td>
                                     <td className="px-3 py-3 text-slate-700">
                                         {formatCompact(member.active_hours)}h
@@ -740,7 +775,7 @@ function MetricCell({ label, value, comparison, muted = false }) {
     return (
         <div className={`rounded-md px-3 py-2 ${muted ? 'bg-white' : 'bg-slate-50'}`}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
-            <p className="mt-1 font-mono text-lg font-semibold text-slate-950">{value ?? '0'}</p>
+            <p className="mt-1 break-words font-mono text-lg font-semibold text-slate-950">{value ?? '0'}</p>
             {comparison?.delta_percent !== null && comparison?.delta_percent !== undefined ? (
                 <p className="mt-1 text-xs text-slate-500">{deltaText(comparison.delta_percent)} vs prior week</p>
             ) : null}
@@ -775,6 +810,7 @@ function Shell({ children }) {
 }
 
 function formatMetric(value, card) {
+    if (card.native) return nativeMoney(value, card.currency);
     if (card.unit === 'money') {
         return `${card.currency || ''} ${formatCompact(value)}`.trim();
     }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\BriefingRecipient;
 use App\Services\Ai\AiBriefingSettingsService;
+use App\Services\Ai\NativeScorecardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -47,6 +48,20 @@ class AiBriefingShareController extends Controller
 
         $briefing = $recipient->briefing;
         $body = $briefing->decodedBody();
+
+        if (! isset($body['native_reporting']) && isset($body['scorecards'])) {
+            try {
+                $body['native_reporting'] = app(NativeScorecardService::class)->build(
+                    $briefing->scope_platform_ids,
+                    (array) ($body['period'] ?? []),
+                    'historical_read',
+                );
+            } catch (\Throwable $e) {
+                // Original archives remain usable if native enrichment fails.
+                report($e);
+                $body['native_reporting'] = ['status' => 'unavailable'];
+            }
+        }
 
         return response()->json([
             'audience' => $briefing->audience,

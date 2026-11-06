@@ -357,6 +357,7 @@ class AiBriefingTest extends TestCase
 
         $result = app(BriefingService::class)->run('ceo', false);
         $body = $result['briefings'][0]['full_body'];
+        $this->assertSame('snapshot', $body['native_reporting']['source']);
 
         $this->assertSame('executive_scorecard_v3', $body['version']);
         $this->assertSame('Week 33', $body['period']['label']);
@@ -448,6 +449,51 @@ class AiBriefingTest extends TestCase
         $this->assertLessThanOrEqual(GsmSmsLimiter::SEGMENT_UNITS, $fit['char_count']);
         $this->assertSame(1, $fit['segments']);
         $this->assertStringContainsString($link, $fit['text']);
+    }
+
+    public function test_archived_native_enrichment_preserves_published_body_and_uses_wall_clock_period(): void
+    {
+        $recipient = $this->seedBriefingRecipient();
+        [$market, $product] = $this->market(['currency_code' => 'KES']);
+        [$other, $otherProduct] = $this->market(['currency_code' => 'GHS']);
+        $body = ['version' => 'executive_scorecard_v3', 'headline' => 'Published headline', 'scorecards' => [],
+            'period' => ['from' => '2026-10-26', 'to' => '2026-11-01', 'prior_from' => '2026-10-19', 'prior_to' => '2026-10-25']];
+        $recipient->briefing->update(['body_full' => json_encode($body), 'scope_platform_ids' => [$market->id],
+            'period_start' => '2026-10-25 21:00:00', 'period_end' => '2026-11-01 20:59:59']);
+        $this->payment($market, $product, ['currency' => 'KES', 'amount' => 100, 'completed_at' => '2026-10-26 00:00:00']);
+        $this->payment($market, $product, ['currency' => 'KES', 'amount' => 50, 'completed_at' => '2026-10-25 23:59:59']);
+        $this->payment($market, $product, ['currency' => 'KES', 'amount' => 25, 'completed_at' => '2026-11-01 23:59:59']);
+        $this->payment($other, $otherProduct, ['currency' => 'GHS', 'amount' => 99999, 'completed_at' => '2026-10-28 12:00:00']);
+        $before = $recipient->briefing->fresh()->body_full;
+        Sanctum::actingAs($recipient->user);
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)->assertOk()
+            ->assertJsonPath('body.headline', 'Published headline')
+            ->assertJsonPath('body.native_reporting.source', 'historical_read')
+            ->assertJsonPath('body.native_reporting.currencies.0.currency', 'KES')
+            ->assertJsonPath('body.native_reporting.currencies.0.current', 125)
+            ->assertJsonPath('body.native_reporting.currencies.0.prior', 50);
+        $this->assertSame($before, $recipient->briefing->fresh()->body_full);
+        $this->assertSame(0, SmsLog::count());
+    }
+
+    public function test_persisted_native_snapshot_is_served_without_recomputing(): void
+    {
+        $recipient = $this->seedBriefingRecipient();
+        $native = ['version' => 1, 'status' => 'ready', 'source' => 'snapshot', 'currencies' => []];
+        $recipient->briefing->update(['body_full' => json_encode(['scorecards' => [], 'native_reporting' => $native])]);
+        $this->mock(\App\Services\Ai\NativeScorecardService::class)->shouldNotReceive('build');
+        Sanctum::actingAs($recipient->user);
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)->assertOk()
+            ->assertJsonPath('body.native_reporting.source', 'snapshot');
+    }
+
+    public function test_invalid_archived_period_keeps_original_report_available(): void
+    {
+        $recipient = $this->seedBriefingRecipient();
+        $recipient->briefing->update(['body_full' => json_encode(['headline' => 'Published report', 'scorecards' => []])]);
+        Sanctum::actingAs($recipient->user);
+        $this->getJson('/api/crm/briefings/shared/'.$recipient->share_token)->assertOk()
+            ->assertJsonPath('body.headline', 'Published report')->assertJsonPath('body.native_reporting.status', 'unavailable');
     }
 
     public function test_recipient_can_open_their_own_briefing_link(): void

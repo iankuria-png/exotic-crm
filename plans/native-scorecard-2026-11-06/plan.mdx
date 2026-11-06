@@ -1,0 +1,36 @@
+---
+title: Native currencies in weekly executive scorecards
+objective: Let recipients inspect original payment currencies and week comparisons in the existing scorecard and exports, then deploy the isolated release.
+status: authorized for implementation and shipping by Ian
+owner: Ian Kuria
+date: 2026-11-06
+scope: weekly shared scorecard, native payment aggregates, PDF and Markdown
+non_goals:
+  - payment or exchange-rate policy changes
+  - regenerating reports or sending messages
+---
+
+The compact currency control sits between navigation and metrics. Reporting USD stays the initial view; Native currencies reveals a currency picker and original revenue, daily averages and comparisons. Market and staff revenue retains every original currency separately. Counts remain the same. Archived recovery amounts keep their source-currency labels; globally combined CFA source breakdowns are shown as recorded and never relabelled XOF/XAF without context. Commentary, portfolio rankings and churn estimates retain their explicit reporting basis. Switching is immediate, with restrained color transitions, stable focus and reduced-motion support.
+
+<Wireframe title="Weekly scorecard — native currencies" surface="panel" caption="Illustrative amounts; existing report shell and export actions remain." html="<div style='padding:16px;border:1px solid var(--wf-line);border-radius:12px'><div>Executive scorecard · Week 44</div><h2>Weekly performance</h2><div>Readout · Customers · Markets · Recovery</div><hr/><div>Currency view　[Reporting USD]　[Native currencies ✓]</div><p>Original payment amounts. Commentary and portfolio ranking use USD.</p><div>Revenue currency　[KES ▾]</div><h3>KES 120,000</h3><div>KES revenue · Previous KES 100,000 · +20%</div></div>" />
+
+<Callout tone="decision" body="Ian explicitly authorized implementation and shipping in this conversation. Carry that authorization through local checks, private backup, exact preview, deployment and live verification; do not add another approval gate. No migrations or business-data writes." />
+
+<DataModel name="native_reporting (additive scorecard field)" fields={[{"name":"version","type":"integer","note":"1"},{"name":"captured_at","type":"ISO timestamp","note":"Native data capture time; archived reports rebuilt on read are explicitly identified."},{"name":"source","type":"snapshot | historical_read","note":"Never change the stored archive during an authenticated read."},{"name":"currencies","type":"array of {currency, current, prior, delta, delta_percent, daily, prior_daily}","note":"Each comparison has a stable key distinct from display currency. Canonicalized with CurrencyCanonicalizer and market context; unresolved currencies have market-specific keys, never invented USD."},{"name":"markets","type":"array of {platform_id, name, amounts: comparison[]}","note":"Current and prior-only groups retained."},{"name":"members","type":"array of {user_id, amounts: comparison[]}","note":"Same deal attribution as existing staff revenue."}]} />
+
+<Endpoint method="GET" path="/api/crm/briefings/shared/{token}" auth="Existing authenticated recipient or configured admin/CEO override; expiry and authorization run before native data access." response="Existing payload plus body.native_reporting; archived v2/v3 reports gain read-only native aggregates using their exact stored scope and validated body.period.from/to and prior_from/prior_to wall-clock dates. Stored UTC period_start/end are not SQL date boundaries. Invalid archived dates produce unavailable native data." errors="Existing 403/404/410 unchanged; native enrichment failure returns report with explicit unavailable state." />
+
+<Steps items={[{"title":"Build scoped native aggregates","reuses":"Payment reportableSuccessful/excludingWalletTopups, COALESCE event time, deal attribution and CurrencyCanonicalizer","adds":"NativeScorecardService with a grouped query for both periods; snapshots persist native_reporting, archived reads enrich after authorization","files":"app/Services/Ai/NativeScorecardService.php (new), MetricsSnapshotService.php, BriefingService.php, AiBriefingShareController.php","verify":"Focused PHP regressions for scope, local wall-clock boundary regressions, aliases, zero/prior-only currencies, preserved archives, authorization and no sends"},{"title":"Add the reporting control and exports","reuses":"BriefingShare shell, ScorecardGrid, market/recovery/team panels and Markdown/print export","adds":"Accessible pressed buttons, currency picker, native comparisons, explicit estimate/commentary labels and unavailable states; exports use selected mode","files":"resources/js/pages/BriefingShare.jsx, resources/js/components/ai/NativeCurrencyReport.jsx (new)","verify":"Browser fixture journeys at 320/390/1440px; keyboard, mode changes, print and clipboard; no overflow"},{"title":"Ship an isolated release","reuses":"CRM ship conventions and real Ops bin/mkt with registered guarded runner","adds":"Clean source/build package, pinned file manifest, verified private original backup and restore preview; only authorized scorecard files delivered","files":"public/build artifacts, Ops registered deployment check and task evidence","verify":"PHP lint/Pint, focused tests, isolated build, source hashes, served assets, authenticated native payload and bounded logs"}]} />
+
+<Risks items={[{"risk":"Archived report source records may have changed since generation","impact":"medium","likelihood":"likely","mitigation":"Explicit historical_read capture time; preserve original report body, commentary and USD figures."},{"risk":"Churn is an estimated normalized value without a native reconstruction contract","impact":"medium","likelihood":"likely","mitigation":"Label it as a reporting-currency estimate in native mode; do not reverse-convert it."},{"risk":"Shared working changes contaminate source or frontend artifact","impact":"high","likelihood":"likely","mitigation":"Build from clean committed source plus task-owned files, review included manifest and deploy pinned files; preserve unrelated source/index/assets."}]} />
+
+## Verification
+Run AiBriefingTest and NativeScorecardTest with the configured SQLite test database, PHP lint/Pint for affected files, browser journeys using mocked CRM APIs and isolated built assets, then a production read through the real harness. Verify native counts and amounts using an independent read-only query, archive preservation, no message dispatch, exact file/asset hashes and recovery preview.
+
+
+## Audit record
+Round 1: NOT READY; clarified wall-clock archive boundaries, market-specific stable keys for unresolved currency labels, and archived recovery source-label handling.
+
+Round 2: READY. All three clarifications verified against repository code.
+
+<Questions items={[]} />
