@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "independent_xml_credit_messages": 46323,
+  "independent_unique_credit_references": 30923,
+  "independent_exact_single_crm_links": 3018,
+  "declared_backup_count_reconciles_sms_plus_mms": true,
+  "synthetic_layout_fixtures": 4,
+  "negative_direction_sender_reversal_fixtures": 3,
+  "scope": "Independent aggregate/reference joins and synthetic extraction checks; not validation of every raw message or customer intention."
+}

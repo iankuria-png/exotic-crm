@@ -1,0 +1,29 @@
+{
+  "generated_utc": "2026-10-30T10:28:18+00:00",
+  "rows": [
+    {
+      "path": "app/Services/PaymentClientIdentityService.php",
+      "live_sha256": "83cdab07eb691b79a4c22f8b5eb95d9a8c1c8a3298fc4d1bb159e6746da225e7",
+      "local_sha256": "83cdab07eb691b79a4c22f8b5eb95d9a8c1c8a3298fc4d1bb159e6746da225e7",
+      "match": true
+    },
+    {
+      "path": "app/Services/PaymentMatchingService.php",
+      "live_sha256": "c45f2749ef7ee58c3108a4e9a871a26ae8105e51da632e9c57a9e03b97ffec85",
+      "local_sha256": "684c14c212abce7847d54ff8354150d6231d463c3fd157ae0558d80319bee332",
+      "match": false
+    },
+    {
+      "path": "app/Services/SubscriptionProvisioningService.php",
+      "live_sha256": "167b9b38f26f32d74775bfd0e6f50585a08632b3a5d0b91913c7043719fc2e64",
+      "local_sha256": "886bdb74ba882cf238b509d2689b1fa8601ad3bf5906f3e47e40198f36e78014",
+      "match": false
+    },
+    {
+      "path": "app/Services/PaymentImportParserService.php",
+      "live_sha256": "15a585da46990f6367c9bf088ff1daf1bd51d53fc8ccbfa03b6dde4d8989c001",
+      "local_sha256": "15a585da46990f6367c9bf088ff1daf1bd51d53fc8ccbfa03b6dde4d8989c001",
+      "match": true
+    }
+  ]
+}

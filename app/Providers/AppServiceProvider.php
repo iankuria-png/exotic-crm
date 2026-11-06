@@ -34,6 +34,7 @@ class AppServiceProvider extends ServiceProvider
         // The recorder carries a small in-process exception marker used to
         // coordinate Laravel's exception handler with the Monolog tap.
         $this->app->singleton(ErrorLogRecorder::class);
+        $this->app->scoped(\App\Services\Collections\CollectionWriterGuard::class);
 
         $this->app->singleton(BillingProviderRegistryContract::class, static fn (): ProviderRegistry => new ProviderRegistry(
             ProviderCatalog::adapters()
@@ -88,6 +89,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        \App\Models\Payment::creating(fn ($payment) => app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment));
+        \App\Models\Payment::updating(function ($payment) {
+            if ($payment->isDirty(['amount', 'currency', 'client_id', 'deal_id', 'product_id', 'status', 'transaction_reference', 'reference_root', 'provider_environment', 'payment_data'])) {
+                app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
+            }
+        });
+        \App\Models\Payment::deleting(fn ($payment) => app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment));
+
         Gate::define('viewPulse', function (?User $user): bool {
             if (app()->environment('local')) {
                 return true;

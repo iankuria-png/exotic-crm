@@ -1,0 +1,89 @@
+{
+  "source_path": "/Users/ian/Downloads/sms-20261030121225.xml",
+  "source_sha256": "c423dd1cdd03a420959bc06cc2d6aa156a9555e02ee3298aaca534b242ec4c57",
+  "backup_declared_count": "62137",
+  "tags": {
+    "sms": 61544,
+    "parts": 593,
+    "addr": 1696,
+    "addrs": 593,
+    "mms": 593,
+    "part": 556,
+    "smses": 1
+  },
+  "sms_total": 61544,
+  "sms_from_utc": "2024-01-04T13:54:01.075000+00:00",
+  "sms_to_utc": "2026-10-30T09:08:12.856000+00:00",
+  "categories": {
+    "other_sender": 14315,
+    "credit_candidate": 46323,
+    "reversal_completed": 296,
+    "reversal_or_hold_notice": 422,
+    "debit_or_airtime": 26,
+    "sent_sms": 90,
+    "other_mpesa": 72
+  },
+  "families": {
+    "en_date_first": {
+      "messages": 5934,
+      "cleanly_parsed": 5934,
+      "with_full_payer_phone": 0,
+      "from_utc": "2024-01-06T09:56:10.482000+00:00",
+      "to_utc": "2026-10-30T07:50:41.075000+00:00",
+      "issues": {}
+    },
+    "en_payment": {
+      "messages": 15400,
+      "cleanly_parsed": 15400,
+      "with_full_payer_phone": 0,
+      "from_utc": "2024-01-04T22:33:20.290000+00:00",
+      "to_utc": "2026-10-30T08:22:43.620000+00:00",
+      "issues": {}
+    },
+    "en_received": {
+      "messages": 11343,
+      "cleanly_parsed": 11343,
+      "with_full_payer_phone": 11209,
+      "from_utc": "2024-01-04T22:33:32.314000+00:00",
+      "to_utc": "2026-10-30T09:08:12.856000+00:00",
+      "issues": {}
+    },
+    "sw_received": {
+      "messages": 13646,
+      "cleanly_parsed": 13646,
+      "with_full_payer_phone": 12697,
+      "from_utc": "2024-09-06T08:08:24.303000+00:00",
+      "to_utc": "2026-10-30T08:22:56.287000+00:00",
+      "issues": {}
+    }
+  },
+  "unique_credit_references": 30923,
+  "additional_credit_notifications_beyond_unique_refs": 15400,
+  "backup_count_matches_sms_plus_mms": true,
+  "amount_conflict_groups": 0,
+  "full_payer_phone_conflict_groups": 0,
+  "credits_with_completed_reversal_reference": 276,
+  "recent_2026_10": {
+    "en_date_first": {
+      "messages": 256,
+      "full_payer_phone_messages": 0
+    },
+    "en_payment": {
+      "messages": 871,
+      "full_payer_phone_messages": 0
+    },
+    "en_received": {
+      "messages": 523,
+      "full_payer_phone_messages": 521
+    },
+    "sw_received": {
+      "messages": 868,
+      "full_payer_phone_messages": 777
+    }
+  },
+  "limitations": [
+    "Exploratory parser and format coverage; not proof of provider authenticity, independent settlement, customer ownership or automatic activation accuracy.",
+    "Backup can be edited or omit messages; account/receipt identity not established solely from handset sender labels.",
+    "Credit deduplication is within this one dump and uses a candidate provider reference; conflicts are held."
+  ]
+}

@@ -108,6 +108,10 @@ use App\Http\Controllers\Wp\WpSeoController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
+Route::post('/collection-events/v1/devices/{deviceId}', [\App\Http\Controllers\API\CollectionEventController::class, 'store'])->middleware('throttle:120,1');
+
+require __DIR__.'/collection.php';
+
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
 });

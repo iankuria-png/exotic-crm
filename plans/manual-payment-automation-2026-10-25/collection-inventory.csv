@@ -1,0 +1,34 @@
+platform_id,market,method_id,method,enabled,provider_label,destination_configured,auto_activate_on_submission,recipient_sms_sample
+3,Ghana,1,collector,1,MTN,True,1,NOT YET COLLECTED
+3,Ghana,2,paybill,0,,False,0,NOT YET COLLECTED
+3,Ghana,3,bank,0,,False,0,NOT YET COLLECTED
+4,Nigeria,4,collector,0,,False,0,NOT YET COLLECTED
+4,Nigeria,5,paybill,0,,False,0,NOT YET COLLECTED
+4,Nigeria,6,bank,1,United Bank For Africa,True,1,NOT YET COLLECTED
+8,Ethiopia,7,collector,0,,False,0,NOT YET COLLECTED
+8,Ethiopia,8,paybill,0,,False,0,NOT YET COLLECTED
+8,Ethiopia,9,bank,1,Awash Bank,True,1,NOT YET COLLECTED
+1,Kenya,10,collector,0,,False,0,NOT YET COLLECTED
+1,Kenya,11,paybill,0,TMK,True,0,NOT YET COLLECTED
+1,Kenya,12,bank,0,,False,0,NOT YET COLLECTED
+17,Botswana,13,collector,0,,False,0,NOT YET COLLECTED
+17,Botswana,14,paybill,0,,False,0,NOT YET COLLECTED
+17,Botswana,15,bank,1,Western Union/MoneyGram,True,1,NOT YET COLLECTED
+2,Tanzania,16,collector,1,VODACOM,True,1,NOT YET COLLECTED
+2,Tanzania,17,paybill,0,,False,0,NOT YET COLLECTED
+2,Tanzania,18,bank,0,,False,0,NOT YET COLLECTED
+14,Zimbabwe,19,collector,1,EcoCash,True,1,NOT YET COLLECTED
+14,Zimbabwe,20,paybill,0,,False,0,NOT YET COLLECTED
+14,Zimbabwe,21,bank,0,,False,0,NOT YET COLLECTED
+15,South Sudan,22,collector,1,,True,1,NOT YET COLLECTED
+15,South Sudan,23,paybill,0,,False,0,NOT YET COLLECTED
+15,South Sudan,24,bank,0,,False,0,NOT YET COLLECTED
+18,Angola,25,collector,1,,True,1,NOT YET COLLECTED
+18,Angola,26,paybill,0,,False,0,NOT YET COLLECTED
+18,Angola,27,bank,0,,False,0,NOT YET COLLECTED
+19,Malawi,28,collector,1,,True,1,NOT YET COLLECTED
+19,Malawi,29,paybill,0,,False,0,NOT YET COLLECTED
+19,Malawi,30,bank,0,,False,0,NOT YET COLLECTED
+20,Mozambique,31,collector,1,,True,0,NOT YET COLLECTED
+20,Mozambique,32,paybill,0,,False,0,NOT YET COLLECTED
+20,Mozambique,33,bank,0,,False,0,NOT YET COLLECTED

@@ -1,0 +1,1320 @@
+{
+  "generated_utc": "2026-10-25T08:45:44+00:00",
+  "read_only": true,
+  "schema_missing": [],
+  "platforms": [
+    {
+      "id": 1,
+      "name": "Kenya",
+      "country": "Kenya",
+      "domain": "https://www.exotickenya.com/",
+      "currency_code": "KES",
+      "supported_currencies": "[\"KES\"]"
+    },
+    {
+      "id": 2,
+      "name": "Tanzania",
+      "country": "Tanzania",
+      "domain": "https://www.exotictanzania.com/",
+      "currency_code": "TZS",
+      "supported_currencies": "[\"TZS\"]"
+    },
+    {
+      "id": 3,
+      "name": "Ghana",
+      "country": "Ghana",
+      "domain": "https://www.exoticghana.com/",
+      "currency_code": "GHS",
+      "supported_currencies": "[\"GHS\"]"
+    },
+    {
+      "id": 4,
+      "name": "Nigeria",
+      "country": "Nigeria",
+      "domain": "https://www.exoticnigeria.com/",
+      "currency_code": "NGN",
+      "supported_currencies": "[\"NGN\"]"
+    },
+    {
+      "id": 5,
+      "name": "Uganda",
+      "country": "Uganda",
+      "domain": "https://www.exoticuganda.com",
+      "currency_code": "UGX",
+      "supported_currencies": "[\"UGX\"]"
+    },
+    {
+      "id": 6,
+      "name": "TZ",
+      "country": "Tanzania",
+      "domain": "https://www.exotic-tz.net/",
+      "currency_code": "TZS",
+      "supported_currencies": "[\"TZS\"]"
+    },
+    {
+      "id": 7,
+      "name": "Benin",
+      "country": "Benin",
+      "domain": "https://exoticbenin.com/",
+      "currency_code": "CFA",
+      "supported_currencies": "[\"CFA\"]"
+    },
+    {
+      "id": 8,
+      "name": "Ethiopia",
+      "country": "Ethiopia",
+      "domain": "https://www.exoticethiopia.com/",
+      "currency_code": "BIR",
+      "supported_currencies": "[\"BIR\"]"
+    },
+    {
+      "id": 9,
+      "name": "Rwanda",
+      "country": "Rwanda",
+      "domain": "https://www.exoticrwanda.com/",
+      "currency_code": "RWF",
+      "supported_currencies": "[\"RWF\"]"
+    },
+    {
+      "id": 10,
+      "name": "Senegal",
+      "country": "Senegal",
+      "domain": "https://www.exoticsenegal.com/",
+      "currency_code": "CFA",
+      "supported_currencies": "[\"CFA\"]"
+    },
+    {
+      "id": 11,
+      "name": "DRC",
+      "country": "DRC",
+      "domain": "https://www.exoticdrc.com/",
+      "currency_code": "CDF",
+      "supported_currencies": "[\"CDF\",\"USD\"]"
+    },
+    {
+      "id": 12,
+      "name": "Zambia",
+      "country": "Zambia",
+      "domain": "https://www.exoticzambia.com/",
+      "currency_code": "ZMW",
+      "supported_currencies": "[\"ZMW\"]"
+    },
+    {
+      "id": 13,
+      "name": "C\u00f4te d'Ivoire",
+      "country": "C\u00f4te d'Ivoire",
+      "domain": "https://www.exoticivoire.com/",
+      "currency_code": "CFA",
+      "supported_currencies": "[\"CFA\"]"
+    },
+    {
+      "id": 14,
+      "name": "Zimbabwe",
+      "country": "Zimbabwe",
+      "domain": "https://www.exoticzimbabwe.com/",
+      "currency_code": "USD",
+      "supported_currencies": "[\"USD\"]"
+    },
+    {
+      "id": 15,
+      "name": "South Sudan",
+      "country": "South Sudan",
+      "domain": "https://www.exoticssudan.com/",
+      "currency_code": "USD",
+      "supported_currencies": "[\"USD\"]"
+    },
+    {
+      "id": 16,
+      "name": "UG",
+      "country": "Uganda",
+      "domain": "https://www.exoticug.com/",
+      "currency_code": "UGX",
+      "supported_currencies": "[\"UGX\"]"
+    },
+    {
+      "id": 17,
+      "name": "Botswana",
+      "country": "Botswana",
+      "domain": "https://www.exoticbotswana.com/",
+      "currency_code": "BWP",
+      "supported_currencies": "[\"BWP\"]"
+    },
+    {
+      "id": 18,
+      "name": "Angola",
+      "country": "Angola",
+      "domain": "https://www.exoticangola.com/",
+      "currency_code": "AOA",
+      "supported_currencies": "[\"AOA\"]"
+    },
+    {
+      "id": 19,
+      "name": "Malawi",
+      "country": "Malawi",
+      "domain": "https://www.exoticmalawi.com/",
+      "currency_code": "MWK",
+      "supported_currencies": "[\"MWK\"]"
+    },
+    {
+      "id": 20,
+      "name": "Mozambique",
+      "country": "Mozambique",
+      "domain": "https://www.exoticmozambique.com/",
+      "currency_code": "MZN",
+      "supported_currencies": "[\"MZN\",\"USD\"]"
+    },
+    {
+      "id": 21,
+      "name": "Cameroon",
+      "country": "Cameroon",
+      "domain": "https://www.exoticcameroon.com/",
+      "currency_code": "XAF",
+      "supported_currencies": "[\"XAF\"]"
+    },
+    {
+      "id": 22,
+      "name": "Morocco",
+      "country": "Morocco",
+      "domain": "https://www.exoticmaroc.com/",
+      "currency_code": "USD",
+      "supported_currencies": "[\"MAD\"]"
+    },
+    {
+      "id": 23,
+      "name": "Tunisia",
+      "country": "Tunisia",
+      "domain": "https://www.exotictunisia.com/",
+      "currency_code": "TND",
+      "supported_currencies": "[\"TND\"]"
+    },
+    {
+      "id": 24,
+      "name": "Algeria",
+      "country": "Algeria",
+      "domain": "https://www.exoticalgeria.com/",
+      "currency_code": "DZD",
+      "supported_currencies": "[\"DZD\"]"
+    },
+    {
+      "id": 25,
+      "name": "Sudan",
+      "country": "Sudan",
+      "domain": "https://www.exoticsudan.com/",
+      "currency_code": "SDG",
+      "supported_currencies": "[\"SDG\"]"
+    },
+    {
+      "id": 26,
+      "name": "Togo",
+      "country": "Togo",
+      "domain": "https://www.exotictogo.com/",
+      "currency_code": "CFA",
+      "supported_currencies": "[\"XOF\"]"
+    },
+    {
+      "id": 27,
+      "name": "RW",
+      "country": "RW",
+      "domain": "https://www.exoticrw.com/",
+      "currency_code": "RWF",
+      "supported_currencies": "[\"RWF\"]"
+    },
+    {
+      "id": 28,
+      "name": "Sierra Leone",
+      "country": "Sierra Leone",
+      "domain": "https://www.exoticleone.com/",
+      "currency_code": "SLE",
+      "supported_currencies": "[\"SLE\"]"
+    },
+    {
+      "id": 29,
+      "name": "Gabon",
+      "country": "Gabon",
+      "domain": "https://exoticgabon.com",
+      "currency_code": "CFA",
+      "supported_currencies": "[\"CFA\"]"
+    },
+    {
+      "id": 30,
+      "name": "Africa",
+      "country": "Africa",
+      "domain": "https://www.exotic-africa.com/",
+      "currency_code": "USD",
+      "supported_currencies": null
+    },
+    {
+      "id": 31,
+      "name": "South Africa",
+      "country": "South Africa",
+      "domain": "https://www.exoticsouthafrica.com/",
+      "currency_code": "USD",
+      "supported_currencies": null
+    },
+    {
+      "id": 32,
+      "name": "Burundi",
+      "country": "Burundi",
+      "domain": "https://www.exoticburundi.com/",
+      "currency_code": "BIF",
+      "supported_currencies": null
+    },
+    {
+      "id": 33,
+      "name": "Congo",
+      "country": "Congo",
+      "domain": "https://www.exoticcongo.com/",
+      "currency_code": "XAF",
+      "supported_currencies": null
+    },
+    {
+      "id": 34,
+      "name": "Cape Verde",
+      "country": "Cape Verde",
+      "domain": "https://www.exoticverde.com/",
+      "currency_code": "CVE",
+      "supported_currencies": null
+    },
+    {
+      "id": 35,
+      "name": "Western Sahara",
+      "country": "Western Sahara",
+      "domain": "https://www.exoticsadr.com/",
+      "currency_code": "MAD",
+      "supported_currencies": null
+    },
+    {
+      "id": 36,
+      "name": "Chad",
+      "country": "Chad",
+      "domain": "https://www.exoticchad.com/",
+      "currency_code": "XAF",
+      "supported_currencies": null
+    },
+    {
+      "id": 37,
+      "name": "Comoros",
+      "country": "Comoros",
+      "domain": "https://www.exoticcomoros.com/",
+      "currency_code": "KMF",
+      "supported_currencies": null
+    },
+    {
+      "id": 38,
+      "name": "Djibouti",
+      "country": "Djibouti",
+      "domain": "https://www.exoticdjibouti.com/",
+      "currency_code": "DJF",
+      "supported_currencies": null
+    },
+    {
+      "id": 39,
+      "name": "Eritrea",
+      "country": "Eritrea",
+      "domain": "https://www.exoticeritrea.com/",
+      "currency_code": "ERN",
+      "supported_currencies": null
+    },
+    {
+      "id": 40,
+      "name": "Guinea Bissau",
+      "country": "Guinea Bissau",
+      "domain": "https://www.exoticbissau.com/",
+      "currency_code": "XOF",
+      "supported_currencies": null
+    },
+    {
+      "id": 41,
+      "name": "Liberia",
+      "country": "Liberia",
+      "domain": "https://www.exoticliberia.com/",
+      "currency_code": "LRD",
+      "supported_currencies": null
+    },
+    {
+      "id": 42,
+      "name": "Mali",
+      "country": "Mali",
+      "domain": "https://www.exoticmali.com/",
+      "currency_code": "CFA",
+      "supported_currencies": null
+    },
+    {
+      "id": 43,
+      "name": "Somalia",
+      "country": "Somalia",
+      "domain": "https://www.exoticsomalia.com/",
+      "currency_code": "SOS",
+      "supported_currencies": null
+    },
+    {
+      "id": 44,
+      "name": "Somaliland",
+      "country": "Somaliland",
+      "domain": "https://www.exoticsomaliland.com/",
+      "currency_code": "USD",
+      "supported_currencies": null
+    },
+    {
+      "id": 45,
+      "name": "Mauritania",
+      "country": "Mauritania",
+      "domain": "https://www.exoticmauritania.com/",
+      "currency_code": "MRU",
+      "supported_currencies": null
+    },
+    {
+      "id": 46,
+      "name": "Maurice",
+      "country": "Maurice",
+      "domain": "https://www.exoticmaurice.com/",
+      "currency_code": "MUR",
+      "supported_currencies": null
+    },
+    {
+      "id": 47,
+      "name": "Sao Tome and Principe",
+      "country": "Sao Tome and Principe",
+      "domain": "https://www.exoticsaotome.com/",
+      "currency_code": "STN",
+      "supported_currencies": null
+    },
+    {
+      "id": 48,
+      "name": "Madagascar",
+      "country": "Madagascar",
+      "domain": "https://www.exoticmadagascar.com/",
+      "currency_code": "MGA",
+      "supported_currencies": null
+    },
+    {
+      "id": 49,
+      "name": "Seychelles",
+      "country": "Seychelles",
+      "domain": "https://www.exoticseyx.com/",
+      "currency_code": "SCR",
+      "supported_currencies": null
+    },
+    {
+      "id": 50,
+      "name": "Gambia",
+      "country": "Gambia",
+      "domain": "https://www.exoticgambia.com/",
+      "currency_code": "GMD",
+      "supported_currencies": "[\"GMD\",\"CFA\"]"
+    },
+    {
+      "id": 51,
+      "name": "Namibia",
+      "country": "Namibia",
+      "domain": "https://www.exoticnamibia.com/",
+      "currency_code": "USD",
+      "supported_currencies": null
+    },
+    {
+      "id": 52,
+      "name": "Exotic Escorts Oman",
+      "country": "Exotic Escorts Oman",
+      "domain": "https://asia.exotic-escorts.com/",
+      "currency_code": "USD",
+      "supported_currencies": null
+    },
+    {
+      "id": 53,
+      "name": "Egypt",
+      "country": "Egypt",
+      "domain": "https://www.exoticegypt.com/",
+      "currency_code": "EGP",
+      "supported_currencies": "[\"EGP\",\"USD\"]"
+    },
+    {
+      "id": 54,
+      "name": "Burkina Faso",
+      "country": "Burkina Faso",
+      "domain": "https://www.exoticfaso.com/",
+      "currency_code": "XOF",
+      "supported_currencies": null
+    }
+  ],
+  "manual_methods": [
+    {
+      "id": 1,
+      "market_id": 3,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": "MTN"
+      },
+      "destination_alias": "destination-1",
+      "destination_configured": true
+    },
+    {
+      "id": 2,
+      "market_id": 3,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 3,
+      "market_id": 3,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 4,
+      "market_id": 4,
+      "method_key": "collector",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 5,
+      "market_id": 4,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 6,
+      "market_id": 4,
+      "method_key": "bank",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": "United Bank For Africa"
+      },
+      "destination_alias": "destination-2",
+      "destination_configured": true
+    },
+    {
+      "id": 7,
+      "market_id": 8,
+      "method_key": "collector",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 8,
+      "market_id": 8,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 9,
+      "market_id": 8,
+      "method_key": "bank",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": "Awash Bank"
+      },
+      "destination_alias": "destination-3",
+      "destination_configured": true
+    },
+    {
+      "id": 10,
+      "market_id": 1,
+      "method_key": "collector",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 11,
+      "market_id": 1,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": "TMK"
+      },
+      "destination_alias": "destination-4",
+      "destination_configured": true
+    },
+    {
+      "id": 12,
+      "market_id": 1,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 13,
+      "market_id": 17,
+      "method_key": "collector",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 14,
+      "market_id": 17,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 15,
+      "market_id": 17,
+      "method_key": "bank",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": "Western Union/MoneyGram"
+      },
+      "destination_alias": "destination-5",
+      "destination_configured": true
+    },
+    {
+      "id": 16,
+      "market_id": 2,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": "VODACOM"
+      },
+      "destination_alias": "destination-6",
+      "destination_configured": true
+    },
+    {
+      "id": 17,
+      "market_id": 2,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 18,
+      "market_id": 2,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 19,
+      "market_id": 14,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": "EcoCash"
+      },
+      "destination_alias": "destination-7",
+      "destination_configured": true
+    },
+    {
+      "id": 20,
+      "market_id": 14,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 21,
+      "market_id": 14,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 22,
+      "market_id": 15,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": "destination-8",
+      "destination_configured": true
+    },
+    {
+      "id": 23,
+      "market_id": 15,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 24,
+      "market_id": 15,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 25,
+      "market_id": 18,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": "destination-9",
+      "destination_configured": true
+    },
+    {
+      "id": 26,
+      "market_id": 18,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 27,
+      "market_id": 18,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 28,
+      "market_id": 19,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 1,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": "destination-10",
+      "destination_configured": true
+    },
+    {
+      "id": 29,
+      "market_id": 19,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 30,
+      "market_id": 19,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 31,
+      "market_id": 20,
+      "method_key": "collector",
+      "enabled": 1,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "network",
+        "phone_number",
+        "recipient_name",
+        "collector_label"
+      ],
+      "provider_labels": {
+        "network": ""
+      },
+      "destination_alias": "destination-11",
+      "destination_configured": true
+    },
+    {
+      "id": 32,
+      "market_id": 20,
+      "method_key": "paybill",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "provider_name",
+        "business_number",
+        "account_reference_hint",
+        "recipient_name"
+      ],
+      "provider_labels": {
+        "provider_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    },
+    {
+      "id": 33,
+      "market_id": 20,
+      "method_key": "bank",
+      "enabled": 0,
+      "proof_required": 1,
+      "sender_name_required": 1,
+      "transaction_id_required": 1,
+      "auto_activate_on_submission": 0,
+      "details_keys": [
+        "bank_name",
+        "account_number",
+        "account_name",
+        "branch"
+      ],
+      "provider_labels": {
+        "bank_name": ""
+      },
+      "destination_alias": null,
+      "destination_configured": false
+    }
+  ],
+  "manual_submission_summary": [
+    {
+      "platform_id": 2,
+      "manual_method_key": "collector",
+      "activated_on_submit": 0,
+      "review_decision": "approved",
+      "records": 2,
+      "proof_files": "2",
+      "oldest": "2026-05-27 12:56:32",
+      "newest": "2026-05-28 17:33:58"
+    },
+    {
+      "platform_id": 2,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": null,
+      "records": 1,
+      "proof_files": "1",
+      "oldest": "2026-09-25 05:55:29",
+      "newest": "2026-09-25 05:55:29"
+    },
+    {
+      "platform_id": 2,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": "approved",
+      "records": 2,
+      "proof_files": "2",
+      "oldest": "2026-06-03 19:09:26",
+      "newest": "2026-06-21 01:05:46"
+    },
+    {
+      "platform_id": 3,
+      "manual_method_key": "collector",
+      "activated_on_submit": 0,
+      "review_decision": "rejected",
+      "records": 1,
+      "proof_files": "1",
+      "oldest": "2026-04-08 09:21:30",
+      "newest": "2026-04-08 09:21:30"
+    },
+    {
+      "platform_id": 3,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": null,
+      "records": 2,
+      "proof_files": "2",
+      "oldest": "2026-10-06 17:37:59",
+      "newest": "2026-10-24 20:47:53"
+    },
+    {
+      "platform_id": 3,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": "approved",
+      "records": 80,
+      "proof_files": "80",
+      "oldest": "2026-04-18 19:20:47",
+      "newest": "2026-10-24 14:23:14"
+    },
+    {
+      "platform_id": 3,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": "rejected",
+      "records": 13,
+      "proof_files": "13",
+      "oldest": "2026-04-08 08:38:13",
+      "newest": "2026-09-21 16:32:59"
+    },
+    {
+      "platform_id": 4,
+      "manual_method_key": "bank",
+      "activated_on_submit": 0,
+      "review_decision": "approved",
+      "records": 1,
+      "proof_files": "1",
+      "oldest": "2026-04-16 11:03:12",
+      "newest": "2026-04-16 11:03:12"
+    },
+    {
+      "platform_id": 4,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": null,
+      "records": 2,
+      "proof_files": "2",
+      "oldest": "2026-10-23 17:44:34",
+      "newest": "2026-10-24 22:21:48"
+    },
+    {
+      "platform_id": 4,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": "approved",
+      "records": 106,
+      "proof_files": "106",
+      "oldest": "2026-04-24 09:44:20",
+      "newest": "2026-10-24 10:04:01"
+    },
+    {
+      "platform_id": 4,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": "rejected",
+      "records": 12,
+      "proof_files": "12",
+      "oldest": "2026-04-16 09:05:47",
+      "newest": "2026-10-13 11:00:02"
+    },
+    {
+      "platform_id": 8,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": null,
+      "records": 1,
+      "proof_files": "1",
+      "oldest": "2026-07-13 14:29:37",
+      "newest": "2026-07-13 14:29:37"
+    },
+    {
+      "platform_id": 8,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": "approved",
+      "records": 2,
+      "proof_files": "2",
+      "oldest": "2026-06-09 18:39:45",
+      "newest": "2026-08-06 05:56:55"
+    },
+    {
+      "platform_id": 8,
+      "manual_method_key": "bank",
+      "activated_on_submit": 1,
+      "review_decision": "rejected",
+      "records": 8,
+      "proof_files": "8",
+      "oldest": "2026-05-27 13:26:03",
+      "newest": "2026-08-08 09:11:07"
+    },
+    {
+      "platform_id": 14,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": null,
+      "records": 1,
+      "proof_files": "1",
+      "oldest": "2026-06-25 16:53:24",
+      "newest": "2026-06-25 16:53:24"
+    },
+    {
+      "platform_id": 14,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": "approved",
+      "records": 25,
+      "proof_files": "25",
+      "oldest": "2026-06-11 17:59:28",
+      "newest": "2026-10-19 08:13:33"
+    },
+    {
+      "platform_id": 14,
+      "manual_method_key": "collector",
+      "activated_on_submit": 1,
+      "review_decision": "rejected",
+      "records": 4,
+      "proof_files": "4",
+      "oldest": "2026-06-21 14:10:31",
+      "newest": "2026-08-25 04:31:02"
+    }
+  ],
+  "possible_inbound_sms_tables": [
+    "sms_logs",
+    "sms_messages"
+  ],
+  "source_sha256": {
+    "app/Services/ManualPaymentSubmissionService.php": "24dd2d5ea242444b84c11e18e1689fe8285ebf8f1ec44fdd68fd419108539139",
+    "app/Http/Controllers/CRM/PaymentQueueController.php": "52d1c1338f50de5a36c4c3ddd965f390d81f286ca6fcba271e5ccc950a040102",
+    "app/Services/SubscriptionProvisioningService.php": "167b9b38f26f32d74775bfd0e6f50585a08632b3a5d0b91913c7043719fc2e64",
+    "app/Services/PaymentCompletionService.php": "4104d332439f087252111dad26c0e1e2452b17c39bbfc63da0479ddd6d8cfac0",
+    "app/Services/DealPaymentService.php": "2addad333bb460f9766f22eb60bfb903211ef1486c30d7f219da9ba16e193266",
+    "app/Services/ManualPaymentBundleService.php": "947a85c216c36df75117819bc400410cb6557528ad27d9359fcec6001ecba6d1",
+    "app/Services/ClientLifecycleMutationLock.php": "8dcabdb5c69b35c997c2809623fc50d24684b523b3249d9f500d0fd542544603",
+    "routes/api.php": "52eecebc8c219e3ddc1a58ec6fab70a5bce63b12705ceb2b1e156fec1ddf2646"
+  }
+}

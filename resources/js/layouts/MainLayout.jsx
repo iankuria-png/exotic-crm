@@ -8,6 +8,7 @@ import HelpButton from '../components/faq/HelpButton';
 import FeedbackButton from '../components/faq/FeedbackButton';
 import Walkthrough from '../components/faq/Walkthrough';
 import { useMediaUploads } from '../components/MediaUploadProvider';
+import { CollectionArrivalBadge } from '../components/collections/CollectionWorkspace';
 
 function WorkspaceActionIcon({ children, className = '' }) {
     return (
@@ -66,6 +67,7 @@ export default function MainLayout() {
                     <p className="hidden text-sm font-medium text-slate-500 lg:block">Customer service workspace</p>
 
                     <div className="flex items-center gap-2">
+                        <CollectionArrivalBadge />
                         <div className="hidden items-center gap-2 sm:flex">
                             {showUploadIndicator ? (
                                 <div className="relative">

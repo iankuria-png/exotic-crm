@@ -1,0 +1,32 @@
+{
+  "upstream": "https://github.com/capcom6/android-sms-gateway",
+  "version": "v1.78.1",
+  "archive_url": "https://api.github.com/repos/capcom6/android-sms-gateway/tarball/v1.78.1",
+  "archive_sha256": "b55dcea900a0032e095ee3b45182dafb71b841336bfc1d1924ded8fda7d10f08",
+  "source_files": {
+    "app/build.gradle": "2ac7da9c99709cab734d3e33746036dcc0ef07cc67c8aa5b3d4ca2d6fe880359",
+    "app/src/main/AndroidManifest.xml": "02e3a5e796732200c43b3e11d442b85faf6c652ddb1ebc3ebc5bb2ba5307927e",
+    "app/src/main/java/me/capcom/smsgateway/modules/receiver/ReceiverService.kt": "6b3acfe65144162b63a2ced097023d600cc054205e31e6adc967efaee7fa18fe",
+    "app/src/main/java/me/capcom/smsgateway/modules/receiver/SmsContentObserver.kt": "58c6a92dc291273bf263a8ca4a91e0ce5dfb6f9e671d7989eac8b627358723e2",
+    "app/src/main/java/me/capcom/smsgateway/modules/gateway/GatewaySettings.kt": "30f90c4281b353e303294bc4deefdce932a67553e15ea49e1a1dcbb0bb56abc3",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/EventsReceiver.kt": "1c738a543a8cdab3b75af0add22c0f5bafe8f94096a0672361fb5bcdee4ee716",
+    "app/src/main/java/me/capcom/smsgateway/modules/localserver/WebService.kt": "457da99fcb78fb689ac433b1f1291a1f661b6348bd5f3dc9f18c9bd5a353249f",
+    "app/src/main/res/values/strings.xml": "bc206afb2fbf4322edd4d13c78ee2c6c27630b690f58c66a0a6806e074cc7192",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/WebHooksService.kt": "39cfab99426da4fbeb2ed39198b057ab777e3cdd31777120ec1930eb1b407fd9",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/workers/SendWebhookWorker.kt": "350c59dc549daa13ba5a8c3c4dd2bc50e55df9bd6f650572d6133949478df949",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/db/WebhookQueueRepository.kt": "d5164fde3a0fbc0d1b9bc02a3e4958afbcd432e9e9c261852ef696916dbffdc4",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/db/WebhookQueueDao.kt": "24c1c20f7d53d240f8d5ce06512f9ce7379eee58ccc88538d2f593455155566d",
+    "app/src/main/java/me/capcom/smsgateway/modules/settings/SettingsService.kt": "04bdec36f5feab8deae2df2cc3d3c410f6c5a28d688514fd7e6b0435755812c9",
+    "app/src/main/java/me/capcom/smsgateway/modules/localserver/domain/SimCard.kt": "a3233b189532e1f0631ab7e59e3a9c8253dc36b3e83c392c0abe037015a9c499",
+    "app/src/main/java/me/capcom/smsgateway/helpers/SubscriptionsHelper.kt": "2938901ab2f830a63df2fbc88bc79fd859293cf06b457808aef90ad03bb884b1",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/payload/SmsEventPayload.kt": "27791bda8da7942b18087be49e4f2953e3c9dd6ab18d5e547f4c17feeea8c815",
+    "app/src/main/java/me/capcom/smsgateway/modules/orchestrator/OrchestratorService.kt": "e4b98471e4a441d2c07e4de5b74c8f01aa18d3f0f3f51f90ff61abad9111c84f",
+    "app/src/main/java/me/capcom/smsgateway/modules/webhooks/workers/WebhookQueueProcessorWorker.kt": "91914e330986233774f61557d518304f1b6beca8921f67c442515f51b03c88fd"
+  },
+  "package": "com.exotic.paymentcapture",
+  "version_name": "1.78.1-exotic.3",
+  "filter_version": "exotic-tz-v1",
+  "status": "candidate; not accepted for live capture",
+  "target_sdk": 34,
+  "version_code": 3
+}

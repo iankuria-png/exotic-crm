@@ -1219,8 +1219,22 @@ class WpSyncService
         return $response;
     }
 
+    private function guardCollectionMutation(string $path, array $body = []): void
+    {
+        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|deactivate|lifecycle|visibility|delete|subscription-operation|vvip-placement|update)$#', $path, $match)) {
+            if ($match[2] === 'update' && ! array_intersect(array_keys($body['fields'] ?? []), ['post_status', 'profile_status', 'status', 'post_author', '_current_paid_duration_key', 'package', 'package_id', 'current_package', 'current_duration', 'escort_expire', 'agency_expire', 'premium', 'premium_expire', 'featured', 'featured_expire', 'vvip', 'vvip_expire', 'needs_payment', 'notactive', 'crm_lifecycle_state', 'crm_deal_id', 'subscription_start', 'subscription_end'])) {
+                return;
+            }
+            $client = Client::where('platform_id', $this->platformId)->where('wp_post_id', (int) $match[1])->first();
+            if ($client) {
+                app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient((int) $client->id);
+            }
+        }
+    }
+
     private function post(string $path, array $body = []): array
     {
+        $this->guardCollectionMutation($path, $body);
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 
@@ -1233,6 +1247,7 @@ class WpSyncService
 
     private function patch(string $path, array $body = []): array
     {
+        $this->guardCollectionMutation($path, $body);
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 
@@ -1245,6 +1260,7 @@ class WpSyncService
 
     private function delete(string $path): array
     {
+        $this->guardCollectionMutation($path);
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 

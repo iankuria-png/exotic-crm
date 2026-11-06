@@ -1,6 +1,7 @@
 import TrialAuthorizationControl from '../components/trials/TrialAuthorizationControl';
 import Monetization from './Monetization';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CollectionWorkspace from '../components/collections/CollectionWorkspace';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -5623,6 +5624,7 @@ export default function ClientDetail() {
 
             {activeTab === 'payments' ? (
                 <div className="space-y-3">
+                    <CollectionWorkspace clientId={client.id} platformId={client.platform_id} />
                     {client.payments?.length > 0 ? client.payments.map((payment) => (
                         <section key={payment.id} className="crm-surface flex items-start justify-between gap-3 p-4">
                             <div>

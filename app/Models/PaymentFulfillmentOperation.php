@@ -22,4 +22,14 @@ class PaymentFulfillmentOperation extends Model
     {
         return $this->belongsTo(Payment::class);
     }
+
+    public function collectionEffects()
+    {
+        return $this->hasMany(\App\Models\Collections\CollectionBenefitEffect::class, 'parent_operation_id');
+    }
+
+    public function collectionAllocation()
+    {
+        return $this->hasOne(\App\Models\Collections\CollectionAllocation::class, 'operation_id');
+    }
 }

@@ -1,0 +1,86 @@
+[
+  {
+    "path": "app/Services/ManualPaymentSubmissionService.php",
+    "live_sha256": "24dd2d5ea242444b84c11e18e1689fe8285ebf8f1ec44fdd68fd419108539139",
+    "local_sha256": "24dd2d5ea242444b84c11e18e1689fe8285ebf8f1ec44fdd68fd419108539139",
+    "match": true
+  },
+  {
+    "path": "app/Http/Controllers/CRM/PaymentQueueController.php",
+    "live_sha256": "52d1c1338f50de5a36c4c3ddd965f390d81f286ca6fcba271e5ccc950a040102",
+    "local_sha256": "9743df1973ce578517f89388d10deae7c125aa96e187bf4831d006cd75630fb0",
+    "match": false
+  },
+  {
+    "path": "app/Services/SubscriptionProvisioningService.php",
+    "live_sha256": "167b9b38f26f32d74775bfd0e6f50585a08632b3a5d0b91913c7043719fc2e64",
+    "local_sha256": "886bdb74ba882cf238b509d2689b1fa8601ad3bf5906f3e47e40198f36e78014",
+    "match": false
+  },
+  {
+    "path": "app/Services/PaymentCompletionService.php",
+    "live_sha256": "4104d332439f087252111dad26c0e1e2452b17c39bbfc63da0479ddd6d8cfac0",
+    "local_sha256": "49f881cc3385d64f7021dc6136c32db7183dad7dce79c05ef5bb8c8b136f6c68",
+    "match": false
+  },
+  {
+    "path": "app/Services/DealPaymentService.php",
+    "live_sha256": "2addad333bb460f9766f22eb60bfb903211ef1486c30d7f219da9ba16e193266",
+    "local_sha256": "2addad333bb460f9766f22eb60bfb903211ef1486c30d7f219da9ba16e193266",
+    "match": true
+  },
+  {
+    "path": "app/Services/ManualPaymentBundleService.php",
+    "live_sha256": "947a85c216c36df75117819bc400410cb6557528ad27d9359fcec6001ecba6d1",
+    "local_sha256": "947a85c216c36df75117819bc400410cb6557528ad27d9359fcec6001ecba6d1",
+    "match": true
+  },
+  {
+    "path": "app/Services/ClientLifecycleMutationLock.php",
+    "live_sha256": "8dcabdb5c69b35c997c2809623fc50d24684b523b3249d9f500d0fd542544603",
+    "local_sha256": "40558b53684fdb38bdf7b5a5dc2b2d45437fd641ff533ee7d8a6b248b12f4a8d",
+    "match": false
+  },
+  {
+    "path": "routes/api.php",
+    "live_sha256": "52eecebc8c219e3ddc1a58ec6fab70a5bce63b12705ceb2b1e156fec1ddf2646",
+    "local_sha256": "36def0dd1618e4167b3893aa487c377003d1e11b69ef0a58bc6985389166891a",
+    "match": false
+  },
+  {
+    "path": "app/Services/SubsidiaryTrialService.php",
+    "live_sha256": "923b546f32b542237fd2d65fd332eff0e73a4b00478d48bc87ed5dd360289dd1",
+    "local_sha256": "923b546f32b542237fd2d65fd332eff0e73a4b00478d48bc87ed5dd360289dd1",
+    "match": true
+  },
+  {
+    "path": "app/Services/SubsidiaryClientResolver.php",
+    "live_sha256": "c0f69cae92f235259ed06ef20602d211fd1d8906a0d4b8747d47292d4d8a7004",
+    "local_sha256": "c0f69cae92f235259ed06ef20602d211fd1d8906a0d4b8747d47292d4d8a7004",
+    "match": true
+  },
+  {
+    "path": "app/Services/SubscriptionDeactivationService.php",
+    "live_sha256": "85b9312e1af347a5da1172c86a25184513b6b4dd2614bdec5f7c86afdb5e221c",
+    "local_sha256": "85b9312e1af347a5da1172c86a25184513b6b4dd2614bdec5f7c86afdb5e221c",
+    "match": true
+  },
+  {
+    "path": "app/Services/PaymentClientIdentityService.php",
+    "live_sha256": "55bc026143459faf5e348b0ae731a13444625d8280056bde2783ef2ec66dbf54",
+    "local_sha256": "55bc026143459faf5e348b0ae731a13444625d8280056bde2783ef2ec66dbf54",
+    "match": true
+  },
+  {
+    "path": "app/Services/PaymentMatchingService.php",
+    "live_sha256": "2167a7b0f98daa6026dc6ae704512dd88b32dc42f03c311e7d70bdc291257d3e",
+    "local_sha256": "b6f03f083a6ad4b52a4814c76b776c4f83cadf4ba6c16bc97768bab6642aba23",
+    "match": false
+  },
+  {
+    "path": "app/Services/PaymentImportParserService.php",
+    "live_sha256": "15a585da46990f6367c9bf088ff1daf1bd51d53fc8ccbfa03b6dde4d8989c001",
+    "local_sha256": "15a585da46990f6367c9bf088ff1daf1bd51d53fc8ccbfa03b6dde4d8989c001",
+    "match": true
+  }
+]

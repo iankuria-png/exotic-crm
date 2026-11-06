@@ -1,0 +1,199 @@
+{
+  "generated_utc": "2026-10-30T10:28:18+00:00",
+  "scope": {
+    "receipt_provider_time_from_eat": "2026-09-01 00:00:00",
+    "receipt_provider_time_to_eat": "2026-10-30 12:12:25",
+    "crm_payment_created_range": "2026-08-01 <= created_at < 2026-10-31",
+    "crm_timezone_assumption": "UTC independently verified in production cached config by metadata-only read a397",
+    "crm_rows": 8891,
+    "crm_deal_rows": 9006,
+    "crm_client_rows": 2008,
+    "window_note": "partial October30; some SMS may be received after provider time window; created-range join can miss older CRM records."
+  },
+  "receipt_reference_join": {
+    "unique_recent_receipts": 3413,
+    "recent_with_payer_phone": 2691,
+    "recent_with_completed_reversal": 25,
+    "any_crm_reference_link": 3222,
+    "primary_success_reference_link": 3184,
+    "primary_single_success_row": 3153,
+    "primary_multiple_success_rows": 31,
+    "subsidiary_reference_link": 51,
+    "primary_single_exact_amount_currency": 3018,
+    "single_link_has_payer_and_advert_phone": 2462,
+    "single_link_payer_equals_advert": 917,
+    "single_link_payer_differs_from_advert": 1545,
+    "exact_link_has_payer_and_advert_phone": 2355,
+    "exact_link_payer_equals_advert": 873,
+    "exact_link_payer_differs_from_advert": 1482,
+    "single_link_has_deal": 3148,
+    "multiple_primary_sum_equals_receipt": 6
+  },
+  "recent_multi_sms": {
+    "two_or_more_messages": 1766,
+    "time_spread_over_120_seconds": 0
+  },
+  "paired_sms_gap_seconds_all_history": {
+    "p50": 10.25,
+    "p90": 14.04,
+    "p95": 19.88,
+    "max": 21483.23
+  },
+  "paired_sms_gap_seconds_recent": {
+    "p50": 10.26,
+    "p90": 14.05,
+    "p95": 20.09,
+    "max": 3568.52
+  },
+  "activation_lag_minutes_descriptive_only": {
+    "eligible_exact_single_link_deals_nonnegative_under7days": 2928,
+    "quantiles": {
+      "p50": 53.52,
+      "p90": 248.89,
+      "p95": 479.66,
+      "max": 7228.61
+    },
+    "excluded": {
+      "over_7_days": 1,
+      "activation_before_sms": 85
+    },
+    "not_customer_latency": "Time difference between stored CRM activated_at and handset SMS receive; may include import/recovery timestamps. Not proven real first-live time."
+  },
+  "rolling_history_comparison": {
+    "evaluation_known_single_link_exact_amount_with_full_payer": 2360,
+    "has_prior_known_payer": 1763,
+    "three_prior_unique_profile_candidates": 671,
+    "candidate_agrees_with_recorded_client": 632,
+    "candidate_disagrees_with_recorded_client": 39,
+    "same_amount_one_historical_package": 239,
+    "historical_package_agrees_with_recorded_deal": 123,
+    "same_amount_one_historical_tier_duration_price": 534,
+    "historical_tier_duration_price_agrees": 509,
+    "prior_payer_multiple_profiles": 317
+  },
+  "observed_payers_linked_to_multiple_profiles": 189,
+  "observed_payer_identities_in_training": 1356,
+  "current_catalogue_ambiguity": {
+    "matched_exact_receipts": 3018,
+    "no_current_active_price": 183,
+    "one_current_active_price": 266,
+    "multiple_current_active_prices": 2569
+  },
+  "illustrative_replay_cases": [
+    {
+      "receipt_handle": "receipt-27512",
+      "recorded_profile": "profile-0001",
+      "proposed_profile": "profile-0001",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27516",
+      "recorded_profile": "profile-0002",
+      "proposed_profile": "profile-0002",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27540",
+      "recorded_profile": "profile-0003",
+      "proposed_profile": "profile-0003",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27552",
+      "recorded_profile": "profile-0004",
+      "proposed_profile": "profile-0004",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27566",
+      "recorded_profile": "profile-0005",
+      "proposed_profile": "profile-0005",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27584",
+      "recorded_profile": "profile-0006",
+      "proposed_profile": "profile-0006",
+      "prior_confirmed_by_crm_count": 4,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27593",
+      "recorded_profile": "profile-0007",
+      "proposed_profile": "profile-0007",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 2
+    },
+    {
+      "receipt_handle": "receipt-27603",
+      "recorded_profile": "profile-0008",
+      "proposed_profile": "profile-0008",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27605",
+      "recorded_profile": "profile-0009",
+      "proposed_profile": "profile-0009",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27611",
+      "recorded_profile": "profile-0010",
+      "proposed_profile": "profile-0010",
+      "prior_confirmed_by_crm_count": 4,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    },
+    {
+      "receipt_handle": "receipt-27617",
+      "recorded_profile": "profile-0011",
+      "proposed_profile": "profile-0011",
+      "prior_confirmed_by_crm_count": 4,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 2
+    },
+    {
+      "receipt_handle": "receipt-27634",
+      "recorded_profile": "profile-0012",
+      "proposed_profile": "profile-0012",
+      "prior_confirmed_by_crm_count": 3,
+      "matches_recorded_profile": true,
+      "principal_tzs": 35000.0,
+      "historical_same_amount_package_candidates": 1
+    }
+  ],
+  "limitations": [
+    "Test exclusion evaluates record_classification only; sandbox provider_environment and payment_data.test_mode were not extracted/evaluated. This is not the full businessVisible/reportable/settled cohort.",
+    "Receipt references compared against retained CRM rows; existing CRM client/deal assignments are not independent ground truth.",
+    "Replay uses earlier receipt, recorded activation/creation and full-payer-availability timestamps; completed reversals are excluded retrospectively from training and evaluation, not an as-of feature; current CRM corrections/deletions are not reconstructed as-of; current catalogue ambiguity is explicitly retrospective and not used as historical availability.",
+    "Replay is candidate generation from unreviewed historical outcomes, not production auto eligibility or measured autonomous accuracy.",
+    "Full SMS dump is private and must never be bulk imported to activate historical subscriptions."
+  ]
+}

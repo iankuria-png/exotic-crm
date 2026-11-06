@@ -331,7 +331,7 @@ class DealPaymentService
             'subscription_lifecycle_reason' => $overrides['subscription_lifecycle_reason'] ?? $deal->subscription_lifecycle_reason,
             'raw_payload' => $rawPayload,
             'match_confidence' => $overrides['match_confidence'] ?? 'manual',
-            'confirmed_by' => $overrides['confirmed_by'] ?? $actorId,
+            'confirmed_by' => array_key_exists('confirmed_by', $overrides) ? $overrides['confirmed_by'] : ($actorId > 0 ? $actorId : null),
             'confirmed_at' => $overrides['confirmed_at'] ?? now(),
             'reconciliation_state' => $overrides['reconciliation_state'] ?? 'open',
         ]);

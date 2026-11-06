@@ -11,6 +11,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
 import PaymentRecoveryCases from '../components/PaymentRecoveryCases';
 import ActivationResponsibility from '../components/payments/ActivationResponsibility';
+import CollectionWorkspace, { useCollectionCapabilities } from '../components/collections/CollectionWorkspace';
 import FraudAuditWorkspace from '../components/FraudAuditWorkspace';
 import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
@@ -1516,10 +1517,11 @@ export default function Payments() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const [workspaceTab, setWorkspaceTab] = useState(() => (
-        searchParams.get('recovery_tab') === 'recovered' ? 'recovery' : 'payments'
+        searchParams.get('workspace') === 'collections' ? 'collections' : searchParams.get('recovery_tab') === 'recovered' ? 'recovery' : 'payments'
     ));
     const toast = useToast();
     const { user, isLoading: authLoading } = useAuth();
+    const collectionCapabilities = useCollectionCapabilities();
     const canViewTests = user?.role === 'admin';
     const canManageBundleFinanceReview = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canAccessFraudAudit = ['admin', 'sub_admin'].includes(String(user?.role || ''));
@@ -3476,6 +3478,7 @@ export default function Payments() {
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                         {[
                             ['payments', 'Payment queue'],
+                            ...(collectionCapabilities.data?.enabled ? [['collections', 'Incoming office payments']] : []),
                             ['service', 'Paid customer recovery'],
                             ['recovery', 'Failed recovery'],
                             ...(canAccessFraudAudit ? [['fraud', 'Fraud audit']] : []),
@@ -3497,7 +3500,9 @@ export default function Payments() {
                 </div>
             </section>
 
-            {workspaceTab === 'service' ? (
+            {workspaceTab === 'collections' ? (
+                <CollectionWorkspace platformId={platformFilter} />
+            ) : workspaceTab === 'service' ? (
                 <PaymentRecoveryCases platformId={platformFilter} canManage={canManageBundleFinanceReview} staffId={user?.id} />
             ) : workspaceTab === 'recovery' ? (
                 <RecoveryLedger

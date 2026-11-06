@@ -1,0 +1,1843 @@
+[
+  {
+    "platform_id": 1,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "XXXXXXX9X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 4
+      },
+      {
+        "shape": "XXXXX://XXX.XXXXXXXX.XXX/XXX/X9/XXXXXXXX_XXXXXXXX/999999XX-X9X9-99XX-99X9-XXXXXXX9999X",
+        "alphabetic_prefix": "",
+        "source": "website_private_content",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XXXXX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XXXX9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 2
+      },
+      {
+        "shape": "XXXXX99XXX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX9X9XX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXXX99#9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "X99X9X99-9X99-9999-X9X9-9XX99999XXXX",
+        "alphabetic_prefix": "",
+        "source": "website_private_content",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XX9XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "X9999XXX-X99X-9X99-X99X-9X999999X99X",
+        "alphabetic_prefix": "",
+        "source": "deal_payment_initiation",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX99XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX9XXXX99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "XXX9XXX9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX99X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXXX99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX99XXX9XX/",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX99XXX9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 4
+      },
+      {
+        "shape": "XXXXXXX9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXXXXX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "X99XXXX9-X99X-9X9X-X9X9-9XX99X99XXXX",
+        "alphabetic_prefix": "",
+        "source": "deal_payment_initiation",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9X9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XX999X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XX99XX  #9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XX99XX #9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXXXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXX9XX",
+        "alphabetic_prefix": "",
+        "source": "crm_activation",
+        "provider_key": "kopokopo",
+        "count": 2
+      },
+      {
+        "shape": "XXXXXX9X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXXXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 8
+      },
+      {
+        "shape": "XXXX9X99X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XX9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XX9XX/",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XX99X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "999X9XX9-9X99-99X9-XX99-XX999X99XX99",
+        "alphabetic_prefix": "",
+        "source": "deal_payment_initiation",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX99X9XXX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXX://XXX.XXXXXXXX.XXX/XXX/X9/XXXXXXXX_XXXXXXXX/X999XXX9-999X-99XX-999X-99999X99999X",
+        "alphabetic_prefix": "",
+        "source": "website_private_content",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "9X99X99X-XX99-99X9-99X9-999XX99XXXXX",
+        "alphabetic_prefix": "",
+        "source": "website_private_content",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX9XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXXXXX",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXX99X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX99XXXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX99XXX99",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX9XX9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXX99",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX99X99XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXXXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XXXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XX99X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXX9X9XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX99XXXXX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX99X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXX9X9",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX99XXX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9XX9XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXX99X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXX9X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXX9XX",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX99XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX999XX-999X-999X-X99X-99999999X9XX",
+        "alphabetic_prefix": "",
+        "source": "deal_payment_initiation",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X9XXXXX9X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9X9XX9",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXXX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX://XXX.XXXXXXXX.XXX/XXX/X9/XXXXXXXX_XXXXXXXX/9X99999X-9X9X-99XX-999X-999X9X999999",
+        "alphabetic_prefix": "",
+        "source": "website_private_content",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXX9X",
+        "alphabetic_prefix": "",
+        "source": "crm_activation",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "XXX9XXX9X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXX9XXXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXX999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXX99X",
+        "alphabetic_prefix": "",
+        "source": "crm_activation",
+        "provider_key": "kopokopo",
+        "count": 1
+      },
+      {
+        "shape": "99XX9X9X-9X99-99XX-X9XX-9XX9999XX999",
+        "alphabetic_prefix": "",
+        "source": "deal_payment_initiation",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXX9X99XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX99X9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX99X9X9X/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXX9XXX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 2,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "XXXXX999XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 5
+      },
+      {
+        "shape": "XXXXX9999X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 5
+      },
+      {
+        "shape": "XXXXX99XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "XXXXX99999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X99XX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXX9XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 10
+      },
+      {
+        "shape": "XXXX99XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX99X9X9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX9X99X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX9XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 4
+      },
+      {
+        "shape": "XX9XX9XX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 5
+      },
+      {
+        "shape": "XX9XX9XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XX9X99XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX99X9XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXX9XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 22
+      },
+      {
+        "shape": "XXX9X9XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX999XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X9XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX9X9XX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX9XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX99XX99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9X9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX9X9XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "XX9XX9XXXX/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9X99X9XX/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX9XX99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX9XX9X/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX: XX9XX9XXX9/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9X999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX99XXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "999999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX99X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9999XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9XX99XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX9X999XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9X9999XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX99X9999X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXX999XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX999X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX9X9X99X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9XX99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X99XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9XX9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX999XXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 3,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "99999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 86
+      },
+      {
+        "shape": "99999999999",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 4
+      },
+      {
+        "shape": "99999999999.",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99999999999#9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "99999999999/99999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "9999999999999999",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXXXXXX",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      },
+      {
+        "shape": "9999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 6,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "XXXXX99XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 30
+      },
+      {
+        "shape": "XXXXX99X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 10
+      },
+      {
+        "shape": "XXXX999XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXX999XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 12
+      },
+      {
+        "shape": "XXXXX99XX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 10
+      },
+      {
+        "shape": "XXXXXX99X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X999XX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X99XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 6
+      },
+      {
+        "shape": "XXXX999XX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX99X99",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 10
+      },
+      {
+        "shape": "XXXXX9999X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 4
+      },
+      {
+        "shape": "XXX9999XXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXX999X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 7
+      },
+      {
+        "shape": "XXX9X99X9X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX99XX9.",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXX9999X9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX9X99XX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 10,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "9X999999-X99X-9999-X9X9-9999X9999X99",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999X-X9XX99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXXXX9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X999X9XX-XX99-9X9X-XX99-9X9X999XX9XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XX9X9X9X9X",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXX9999XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXXX999XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X9X9X99XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXX9X9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X99X999X99",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXX9X9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX9999X9-9999-9X99-9XX9-99XXXXXX99XX",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999X9X9X99XX#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX-9999XXXX99X-X9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXX999XXX#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 7
+      },
+      {
+        "shape": "XXX-9999XXX9X9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999X9X9X9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99999X99-99XX-999X-999X-X99XX9999999",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X_XX9XXXXXXX9XXXXX",
+        "alphabetic_prefix": "T",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X9X99X99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99X99X9X-99X9-9X99-XX9X-XX9999999XX9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X99XX99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X99X9X9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXX9XX9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X9X9XX999X#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX-999XXXXX999X9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XX9X9X99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXX9X99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX-999XX9XX99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XX9XX99X9X",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X9X999X9-9X99-9X99-XX99-XX99X9XXXX99",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXX999XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXXXX9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999X99X99X9X",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "999X9XX9-9XXX-9XX9-9X99-X9999X99999X",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X9XX9X9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X99XXX9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXXXX9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X9X9X99X-9999-9XXX-X999-9X9X99X99999",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999X9X9X99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X_XXXXXXXXXXXXXX9X",
+        "alphabetic_prefix": "T",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XX999999XX#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "9999X9XX-9999-9999-99XX-XXXX99999X99",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-999XXXXX9999X",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99XXXX99-9XX9-9X99-XX99-999X99X9X99X",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "99999999-999X-9999-99X9-999XX9X9999X",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXX-X99X99",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999X99999XXX#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "XXX-9999X9X999XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99999XXXX99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXXXX99X9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-9999XXX9X99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXX-999999X9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99X9999X-99X9-9999-9999-9X999X99999X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XX999X99-XXXX-9999-X999-XX99X99XX9X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXX9X9X99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XX9XXXX99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X99XXXXX-9999-9999-X999-X99X99XXXXX9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "999999X9-9XX9-9999-X9XX-99999999X999",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "9XXXXX9X-X999-999X-9999-9X9999XX9X99",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXXX99XX-9999-9XX9-9999-9999999XX9X9",
+        "alphabetic_prefix": "",
+        "source": "self_checkout",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXXXX9X9XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "9XXX9999-9999-99X9-X9X9-X99XX9X999XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "9999XX9X-9999-9XX9-9999-99999XX9XX99",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXXX9X99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXX-99X99XXXX99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99X9XXXXX99XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXX99XX9XXX#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "X999XX9X-99X9-9999-9999-X99X9XX999X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XX9XXX99X9X",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XX9XX999X99#9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XX9XX999X99 #9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "9X999X99-X99X-999X-999X-9X9X9XX99999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXXXXX99XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99999X9X-9X9X-9XX9-X999-X999999999XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X9X99X99-99X9-999X-9X9X-9XX9999999X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "XXX-99X99XXX99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X_XX9XXXX9XXXX-XXXX",
+        "alphabetic_prefix": "T",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99X99XXX999XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99X999XX999XX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99X9XX99-9XX9-9X99-XX99-X9X9999999XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X_X999X9XXXXX99-XXX",
+        "alphabetic_prefix": "T",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99X9X99X99XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XXXX9XX9XX9",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "X_XX9XXXXXXXXXXXXX",
+        "alphabetic_prefix": "T",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXX-99XX9XXX99XXX",
+        "alphabetic_prefix": "xot",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 14,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "99999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XX999999.9999.X9999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 82
+      },
+      {
+        "shape": "XX999999.9999-9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XX999999.9999.X999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999.X9999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "9999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "XXXXXXXX XXXXXXXXXXXX: XXX 99.99 XXXX XX XXXXXXXXX XXXXXXX. XXXXXXXX XXXX: XX999999.9999.X9999999.",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      },
+      {
+        "shape": "XXXXXX",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      },
+      {
+        "shape": "9999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999.9999.X9999999.",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      },
+      {
+        "shape": "XX999999.9999.X9999999/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XXXXXXXXXXXX",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999.9999.X9999999(9)",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999.9999X9999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "XX999999.9999.X9999999",
+        "alphabetic_prefix": "",
+        "source": "manual_confirmation",
+        "provider_key": "manual_confirmation",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "platform_id": 27,
+    "scope": "latest 100 positive completed/expired rows; historical and all channels; shapes cannot authenticate provider",
+    "patterns": [
+      {
+        "shape": "99999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 85
+      },
+      {
+        "shape": "9XXX9999-X999-9999-999X-9X9XXX9999XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "99999999999/9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "99999999999#9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 3
+      },
+      {
+        "shape": "9999999999",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 2
+      },
+      {
+        "shape": "X9X999XX-9999-999X-9X99-99X9X99999XX",
+        "alphabetic_prefix": "",
+        "source": "website_send_love",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "9999X999-9XX9-99X9-X9X9-X9XX9X9999XX",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X99X9X99-X99X-9XXX-9X99-9X999999X99X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "X9999XXX-9X9X-9XXX-9XX9-99XXX9X9X9X9",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "9999999999#9",
+        "alphabetic_prefix": "",
+        "source": "gateway",
+        "provider_key": null,
+        "count": 1
+      },
+      {
+        "shape": "99999999-XXX9-9X9X-XXX9-999X9999XX9X",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      },
+      {
+        "shape": "99X99999-X999-99X9-9X9X-99X99X999999",
+        "alphabetic_prefix": "",
+        "source": "website_unlock",
+        "provider_key": "pawapay",
+        "count": 1
+      }
+    ]
+  }
+]

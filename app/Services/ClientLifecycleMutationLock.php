@@ -35,6 +35,7 @@ class ClientLifecycleMutationLock
         }
 
         try {
+            app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient($clientId);
             $result = $callback();
         } catch (\Throwable $exception) {
             $this->releaseAfterOutcome($lock, $key, false);

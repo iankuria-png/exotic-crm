@@ -58,6 +58,55 @@ class SubscriptionProvisioningService
         );
     }
 
+    /** Mirror only the subscription fields actually read back; a full profile sync remains separate. */
+    public function cacheVerifiedCollectionSnapshot(int $clientId, array $snapshot): void
+    {
+        $meta = $snapshot['meta'];
+        Client::whereKey($clientId)->update([
+            'profile_status' => $snapshot['post_status'],
+            'escort_expire' => max((int) ($meta['escort_expire'] ?? 0), (int) ($meta['agency_expire'] ?? 0)),
+            'premium' => ($meta['premium'] ?? '') === '1',
+            'premium_expire' => (int) ($meta['premium_expire'] ?? 0),
+            'featured' => ($meta['featured'] ?? '') === '1',
+            'featured_expire' => (int) ($meta['featured_expire'] ?? 0),
+            'needs_payment' => ($meta['needs_payment'] ?? '') === '1',
+            'notactive' => ($meta['notactive'] ?? '') === '1',
+            'lifecycle_state' => \App\Support\ClientLifecycleState::normalize($meta['crm_lifecycle_state'] ?? null),
+        ]);
+    }
+
+    /** Finalize a read-back-verified exact effect; external dispatch stays with the existing fulfillment owner. */
+    public function recordVerifiedCollectionEffect(
+        \App\Models\Collections\CollectionBenefitEffect $effect,
+        \App\Models\Collections\CollectionAllocation $allocation
+    ): void
+    {
+        if ($effect->state !== 'wp_verified' || ! $effect->verified_state || $effect->allocation_id !== $allocation->id) {
+            throw new \LogicException('A verified collection effect is required.');
+        }
+        $deal = Deal::lockForUpdate()->findOrFail($effect->deal_id);
+        $payment = Payment::lockForUpdate()->findOrFail($deal->payment_id);
+        $free = in_array($effect->effect_kind, ['subsidiary_free', 'target_subsidiary'], true);
+        $start = Carbon::createFromTimestamp($effect->contribution['start'], 'UTC');
+        $end = Carbon::createFromTimestamp($effect->contribution['end'], 'UTC');
+        $deal->update(['status' => 'active', 'activated_at' => now(), 'expires_at' => $end, 'is_free_trial' => $free]);
+        $payment->update(['status' => 'completed', 'start_date' => $start, 'end_date' => $end,
+            'completed_at' => $payment->completed_at ?? now(), 'reconciliation_state' => $free ? 'resolved' : 'manual_review',
+            'payment_data' => array_merge($payment->payment_data ?? [], ['collection_effect_id' => $effect->id])]);
+        app(SubscriptionActivationAuditService::class)->record($deal, $payment, null, 'manual', 'manual_collection_automation');
+        if (! $free) {
+            app(CommissionService::class)->recordActivationCommission($deal);
+            app(CommissionService::class)->recordRenewalCommission($deal);
+            app(\App\Services\Collections\CollectionIngestService::class)->outbox('benefits', $allocation->id, 'benefits:'.$effect->id);
+        }
+        TimelineEvent::create(['platform_id' => $effect->platform_id, 'entity_type' => 'client', 'entity_id' => $effect->client_id,
+            'event_type' => $free ? 'subsidiary_trial_linked' : 'profile_activated', 'actor_id' => null,
+            'content' => ['source' => 'manual_collection', 'operation_id' => $effect->parent_operation_id, 'effect_id' => $effect->id,
+                'deal_id' => $deal->id, 'payment_id' => $payment->id, 'expires_at' => $end->toIso8601String(), 'review_needed' => ! $free], 'created_at' => now()]);
+        app(\App\Services\Collections\CollectionPurchaseService::class)->audit($allocation->receipt, null, 'collection_effect_verified',
+            ['effect_id' => $effect->id, 'deal_id' => $deal->id, 'kind' => $effect->effect_kind], 'effect:'.$effect->id);
+    }
+
     private function activateDealUnlocked(Deal $deal, array $options = []): Deal
     {
         // Cleared per invocation so a reused service instance cannot report a

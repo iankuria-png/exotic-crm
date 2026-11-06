@@ -1,0 +1,322 @@
+{
+  "generated_at": "2026-10-25T08:41:14+00:00",
+  "window": {
+    "horizon": "30d",
+    "from": "2026-09-26",
+    "to": "2026-10-25",
+    "prior_from": "2026-08-27",
+    "prior_to": "2026-09-25",
+    "days": 30,
+    "bucket": "day",
+    "target_currency": "USD",
+    "is_single_day": false,
+    "is_today": false,
+    "timezone": null,
+    "day_date": null,
+    "prior_day_date": null
+  },
+  "total_usd": 59951.030000000006,
+  "fx_caveat": "Many market conversion metadata entries are stale; USD figures are dashboard reporting estimates, not settlement balances.",
+  "channels": [
+    {
+      "key": "manual",
+      "label": "Manual",
+      "description": "Agent-entered codes or customer-submitted proof.",
+      "source_breakdown": {
+        "TZS": 56169024,
+        "CFA": 4386345,
+        "RWF": 2395000,
+        "KES": 474350,
+        "GHS": 154182,
+        "UGX": 5978000,
+        "NGN": 2908000,
+        "USD": 2436,
+        "AOA": 161000,
+        "BWP": 970,
+        "GMD": 2877,
+        "MZN": 5651,
+        "ZMW": 1750,
+        "MWK": 40000,
+        "BIR": 71500,
+        "CDF": 35000,
+        "EGP": 0,
+        "XAF": 0,
+        "BIF": 0,
+        "DJF": 0,
+        "STN": 0
+      },
+      "normalized_total": 54462.47,
+      "normalized_currency": "USD",
+      "payments_count": 5039,
+      "share_percent": 90.8
+    },
+    {
+      "key": "self_service",
+      "label": "Self-service",
+      "description": "Provider-routed collection such as PawaPay, checkout, STK, or callbacks.",
+      "source_breakdown": {
+        "USD": 1365,
+        "ZMW": 54900,
+        "CFA": 366600,
+        "KES": 51711,
+        "RWF": 24000,
+        "UGX": 1093000,
+        "CDF": 112500
+      },
+      "normalized_total": 5488.56,
+      "normalized_currency": "USD",
+      "payments_count": 361,
+      "share_percent": 9.2
+    }
+  ],
+  "markets": [
+    {
+      "platform_id": 6,
+      "country": "Tanzania",
+      "total_usd": 21017.67,
+      "records": 1877,
+      "manual_usd": 21017.67,
+      "manual_records": 1877
+    },
+    {
+      "platform_id": 3,
+      "country": "Ghana",
+      "total_usd": 13196.33,
+      "records": 487,
+      "manual_usd": 13196.33,
+      "manual_records": 487
+    },
+    {
+      "platform_id": 10,
+      "country": "Senegal",
+      "total_usd": 5523.93,
+      "records": 269,
+      "manual_usd": 4980.99,
+      "manual_records": 254
+    },
+    {
+      "platform_id": 1,
+      "country": "Kenya",
+      "total_usd": 4057.73,
+      "records": 490,
+      "manual_usd": 3658.88,
+      "manual_records": 425
+    },
+    {
+      "platform_id": 12,
+      "country": "Zambia",
+      "total_usd": 2850.86,
+      "records": 217,
+      "manual_usd": 87.97,
+      "manual_records": 11
+    },
+    {
+      "platform_id": 4,
+      "country": "Nigeria",
+      "total_usd": 2184.68,
+      "records": 121,
+      "manual_usd": 2184.68,
+      "manual_records": 121
+    },
+    {
+      "platform_id": 14,
+      "country": "Zimbabwe",
+      "total_usd": 1866,
+      "records": 113,
+      "manual_usd": 1866,
+      "manual_records": 113
+    },
+    {
+      "platform_id": 5,
+      "country": "Uganda",
+      "total_usd": 1734.8,
+      "records": 121,
+      "manual_usd": 1478.34,
+      "manual_records": 106
+    },
+    {
+      "platform_id": 13,
+      "country": "Côte d'Ivoire",
+      "total_usd": 1664.81,
+      "records": 89,
+      "manual_usd": 1647.73,
+      "manual_records": 88
+    },
+    {
+      "platform_id": 27,
+      "country": "RW",
+      "total_usd": 1627.66,
+      "records": 241,
+      "manual_usd": 1611.37,
+      "manual_records": 240
+    },
+    {
+      "platform_id": 11,
+      "country": "DRC",
+      "total_usd": 1429.15,
+      "records": 58,
+      "manual_usd": 15.15,
+      "manual_records": 5
+    },
+    {
+      "platform_id": 26,
+      "country": "Togo",
+      "total_usd": 701.56,
+      "records": 35,
+      "manual_usd": 701.56,
+      "manual_records": 35
+    },
+    {
+      "platform_id": 15,
+      "country": "South Sudan",
+      "total_usd": 540,
+      "records": 28,
+      "manual_usd": 540,
+      "manual_records": 28
+    },
+    {
+      "platform_id": 8,
+      "country": "Ethiopia",
+      "total_usd": 444.08,
+      "records": 19,
+      "manual_usd": 444.08,
+      "manual_records": 19
+    },
+    {
+      "platform_id": 2,
+      "country": "Tanzania",
+      "total_usd": 390.93,
+      "records": 861,
+      "manual_usd": 390.93,
+      "manual_records": 861
+    },
+    {
+      "platform_id": 7,
+      "country": "Benin",
+      "total_usd": 249.37,
+      "records": 18,
+      "manual_usd": 181.67,
+      "manual_records": 14
+    },
+    {
+      "platform_id": 18,
+      "country": "Angola",
+      "total_usd": 176.33,
+      "records": 26,
+      "manual_usd": 176.33,
+      "manual_records": 26
+    },
+    {
+      "platform_id": 20,
+      "country": "Mozambique",
+      "total_usd": 88.93,
+      "records": 33,
+      "manual_usd": 88.93,
+      "manual_records": 33
+    },
+    {
+      "platform_id": 17,
+      "country": "Botswana",
+      "total_usd": 72.4,
+      "records": 18,
+      "manual_usd": 72.4,
+      "manual_records": 18
+    },
+    {
+      "platform_id": 50,
+      "country": "Gambia",
+      "total_usd": 55.56,
+      "records": 4,
+      "manual_usd": 55.56,
+      "manual_records": 4
+    },
+    {
+      "platform_id": 19,
+      "country": "Malawi",
+      "total_usd": 23.02,
+      "records": 5,
+      "manual_usd": 23.02,
+      "manual_records": 5
+    },
+    {
+      "platform_id": 51,
+      "country": "Namibia",
+      "total_usd": 20,
+      "records": 2,
+      "manual_usd": 20,
+      "manual_records": 2
+    },
+    {
+      "platform_id": 9,
+      "country": "Rwanda",
+      "total_usd": 12.88,
+      "records": 87,
+      "manual_usd": 12.88,
+      "manual_records": 87
+    },
+    {
+      "platform_id": 16,
+      "country": "Uganda",
+      "total_usd": 12.35,
+      "records": 4,
+      "manual_usd": 0,
+      "manual_records": 3
+    },
+    {
+      "platform_id": 30,
+      "country": "Africa",
+      "total_usd": 10,
+      "records": 125,
+      "manual_usd": 10,
+      "manual_records": 125
+    },
+    {
+      "platform_id": 31,
+      "country": "South Africa",
+      "total_usd": 0,
+      "records": 39,
+      "manual_usd": 0,
+      "manual_records": 39
+    },
+    {
+      "platform_id": 53,
+      "country": "Egypt",
+      "total_usd": 0,
+      "records": 3,
+      "manual_usd": 0,
+      "manual_records": 3
+    },
+    {
+      "platform_id": 21,
+      "country": "Cameroon",
+      "total_usd": 0,
+      "records": 6,
+      "manual_usd": 0,
+      "manual_records": 6
+    },
+    {
+      "platform_id": 32,
+      "country": "Burundi",
+      "total_usd": 0,
+      "records": 2,
+      "manual_usd": 0,
+      "manual_records": 2
+    },
+    {
+      "platform_id": 38,
+      "country": "Djibouti",
+      "total_usd": 0,
+      "records": 1,
+      "manual_usd": 0,
+      "manual_records": 1
+    },
+    {
+      "platform_id": 47,
+      "country": "Sao Tome and Principe",
+      "total_usd": 0,
+      "records": 1,
+      "manual_usd": 0,
+      "manual_records": 1
+    }
+  ]
+}

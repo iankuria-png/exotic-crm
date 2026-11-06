@@ -26,6 +26,12 @@ class SubsidiaryTrialService
     ) {
     }
 
+    /** Exact-period collection effects use the existing catalogue mapping, without trial reuse or duration clipping. */
+    public function collectionProduct(Platform $target, Deal $main): ?Product
+    {
+        return $this->resolveTrialProduct($target, $main);
+    }
+
     public function targetsForDeal(Deal $main, User $user): array
     {
         $main->loadMissing('client.platform', 'product');
