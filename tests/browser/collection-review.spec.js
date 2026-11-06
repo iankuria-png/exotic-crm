@@ -152,6 +152,17 @@ test('mobile review contains its fields, supports keyboard close and restores fo
     await expect(page.getByRole('button', { name: 'Review receipt', exact: true })).toBeFocused();
 });
 
+test('keyboard navigation wraps around visible controls while details are collapsed', async ({ page }) => {
+    await setup(page);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('95 / 100 · High')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).focus();
+    await page.keyboard.press('Shift+Tab');
+    await expect(dialog.locator('summary').filter({ hasText: 'Receipt reference and correction history' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeFocused();
+});
+
 test('assisted approval uses the newly saved intent and version exactly once', async ({ page }) => {
     const state = await setup(page);
     state.active = true;

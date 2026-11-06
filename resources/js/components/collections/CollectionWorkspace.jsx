@@ -104,7 +104,15 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
     const trapTab = event => {
         if (event.key !== 'Tab') return;
         const controls = Array.from(dialog.current?.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex="0"]') || [])
-            .filter(element => element.getClientRects().length > 0);
+            .filter(element => {
+                if (!element.getClientRects().length) return false;
+                // Chromium can retain layout boxes inside a closed details element.
+                // Only its summary participates in keyboard navigation until it opens.
+                for (let parent = element.parentElement; parent && parent !== dialog.current; parent = parent.parentElement) {
+                    if (parent.tagName === 'DETAILS' && !parent.open && !parent.querySelector(':scope > summary')?.contains(element)) return false;
+                }
+                return true;
+            });
         const first = controls[0];
         const last = controls[controls.length - 1];
         if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus(); }
