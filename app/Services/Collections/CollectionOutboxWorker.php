@@ -8,12 +8,15 @@ use Illuminate\Support\Facades\DB;
 
 class CollectionOutboxWorker
 {
-    public function run(int $limit = 100): array
+    public function run(int $limit = 100, ?int $deadline = null): array
     {
         $done = 0;
         $held = 0;
         $ids = DB::table('collection_outbox')->whereNull('completed_at')->where('available_at', '<=', now())->orderBy('id')->limit(min(1000, $limit))->pluck('id');
         foreach ($ids as $id) {
+            if ($deadline !== null && hrtime(true) >= $deadline) {
+                break;
+            }
             // Outbox tasks may replay. Financial dispatch is separately guarded by durable effect state.
             $lock = Cache::lock('collection-outbox:'.$id, 300);
             if (! $lock->get()) {
