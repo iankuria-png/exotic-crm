@@ -63,6 +63,30 @@ class TzMpesaParser
             'family' => $family, 'version' => self::VERSION];
     }
 
+    /** Display evidence only: never changes the financial parser or grants identity authority. */
+    public function payerDetails(string $sender, string $body): array
+    {
+        $credit = $this->parse($sender, $body);
+        $empty = ['name' => null, 'party' => null, 'reference' => null, 'phone' => null];
+        if (($credit['kind'] ?? '') !== 'credit'
+            || ! preg_match('/(?:from|kutoka)\s+(.+?)(?=\s+(?:on|tarehe)\s+|\s+and\s+(?:balance|charged)|\s+(?:New\s+)?(?:M-Pesa\s+)?balance\s|$)/iu', $body, $match)) {
+            return $empty;
+        }
+        $party = trim(preg_replace('/\s+/u', ' ', $match[1]), " \t\n\r\0\x0B.");
+        $name = $party;
+        // A bank-prefixed detail message supplies the person AFTER the full phone.
+        if ($credit['payer_phone']) {
+            $name = preg_replace('/^.*?(?:\+?255[67]\d{8}|0[67]\d{8})\s*[-:]?\s*/u', '', $party);
+        }
+        $name = trim($name, " \t\n\r\0\x0B.-:");
+        if (! preg_match('/^\p{L}[\p{L}\p{M}\s\x{2019}\x{0027}.\-]{1,179}$/uD', $name)
+            || preg_match('/\b(?:bank|benki|mpesa|m-pesa|wallet|crdb|nmb|nbc|equity|tigo|airtel)\b/iu', $name)) {
+            $name = null;
+        }
+
+        return ['name' => $name, 'party' => mb_substr($party, 0, 180), 'reference' => $credit['reference'], 'phone' => $credit['payer_phone']];
+    }
+
     public function minor(string $amount): int
     {
         $parts = explode('.', str_replace(',', '', $amount));

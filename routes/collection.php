@@ -8,6 +8,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('capabilities', [CollectionPaymentController::class, 'capabilities']);
         Route::get('receipts', [CollectionPaymentController::class, 'index']);
         Route::get('receipts/{receipt}', [CollectionPaymentController::class, 'show'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/review-context', [CollectionPaymentController::class, 'reviewContext'])->whereNumber('receipt');
         Route::get('receipts/{receipt}/candidates', [CollectionPaymentController::class, 'candidates'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/intents', [CollectionPaymentController::class, 'createIntent'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/payer-links', [CollectionPaymentController::class, 'reviewPayer'])->whereNumber('receipt');

@@ -39,6 +39,48 @@ class CollectionApprovalService
             fn () => $this->reserveLocked($receipt, $intentId, $expectedVersion, $actor, $automatic, $reservation->id, $ids)));
     }
 
+    /** Pure eligibility read. The reservation transaction repeats these checks under locks. */
+    public function eligibility(CollectionReceipt $r, CollectionPurchaseIntent $intent, ?User $actor, bool $automatic = false): array
+    {
+        $account = $r->account;
+        if ($actor) {
+            app(CollectionPurchaseService::class)->assertScope($account, Client::findOrFail($intent->client_id), $actor);
+        }
+        app(CollectionGate::class)->assertFunds($r);
+        $client = app(CollectionPurchaseService::class)->validate($intent, $r, $automatic);
+        $p = $intent->purchase_snapshot;
+        $platforms = [(int) $client->platform_id];
+        if (! empty($p['subsidiary'])) {
+            $platforms[] = (int) $p['subsidiary']['platform_id'];
+            if ($actor) {
+                app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $p['subsidiary']['platform_id']);
+            }
+            if (! data_get($account->policy, 'subsidiary_grant_approved_by') || ! data_get($account->policy, 'subsidiary_grant_valid_until')
+                || now()->gte(\Illuminate\Support\Carbon::parse($account->policy['subsidiary_grant_valid_until']))) {
+                throw new CollectionException('subsidiary_policy_grant_required');
+            }
+        } elseif (config('collection.subsidiary_platforms.'.$client->platform_id)) {
+            throw new CollectionException('linked_subsidiary_profile_required');
+        }
+        app(CollectionGate::class)->assertWrites($account, $platforms, $automatic);
+        $payment = app(CollectionDecisionService::class)->existingPayment($r, $intent);
+        if ($payment && PaymentFulfillmentOperation::where('payment_id', $payment->id)->exists()) {
+            throw new CollectionException('existing_fulfillment_owner_requires_review');
+        }
+        $ids = array_filter([$client->id, data_get($p, 'subsidiary.client_id')]);
+        foreach ($ids as $clientId) {
+            $profile = Client::findOrFail($clientId);
+            if (DB::table('collection_profile_holds')->where('client_id', $profile->id)->exists()) {
+                throw new CollectionException('collection_operation_owns_profile');
+            }
+            if (class_exists(\App\Services\WalletLifecycleGuard::class)) {
+                app(\App\Services\WalletLifecycleGuard::class)->assertDispatch($profile, null, $payment);
+            }
+        }
+
+        return ['client' => $client, 'payment' => $payment];
+    }
+
     private function reserveLocked(CollectionReceipt $receipt, string $intentId, int $expectedVersion, ?User $actor, bool $automatic, string $id, array $lockedIds): CollectionAllocation
     {
         return DB::transaction(function () use ($receipt, $intentId, $expectedVersion, $actor, $automatic, $id, $lockedIds) {
@@ -62,27 +104,10 @@ class CollectionApprovalService
             if ($r->version !== $expectedVersion) {
                 throw new CollectionException('receipt_version_changed');
             }
-            app(CollectionGate::class)->assertFunds($r);
-            $client = app(CollectionPurchaseService::class)->validate($intent, $r, $automatic);
+            $eligibility = $this->eligibility($r, $intent, $actor, $automatic);
+            $client = $eligibility['client'];
+            $payment = $eligibility['payment'];
             $p = $intent->purchase_snapshot;
-            $platforms = [(int) $client->platform_id];
-            if (! empty($p['subsidiary'])) {
-                $platforms[] = (int) $p['subsidiary']['platform_id'];
-                if ($actor) {
-                    app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $p['subsidiary']['platform_id']);
-                }
-                if (! data_get($account->policy, 'subsidiary_grant_approved_by') || ! data_get($account->policy, 'subsidiary_grant_valid_until')
-                    || now()->gte(\Illuminate\Support\Carbon::parse($account->policy['subsidiary_grant_valid_until']))) {
-                    throw new CollectionException('subsidiary_policy_grant_required');
-                }
-            } elseif (config('collection.subsidiary_platforms.'.$client->platform_id)) {
-                throw new CollectionException('linked_subsidiary_profile_required');
-            }
-            app(CollectionGate::class)->assertWrites($account, $platforms, $automatic);
-            $payment = app(CollectionDecisionService::class)->existingPayment($r, $intent);
-            if ($payment && PaymentFulfillmentOperation::where('payment_id', $payment->id)->exists()) {
-                throw new CollectionException('existing_fulfillment_owner_requires_review');
-            }
             $operationId = (string) Str::uuid();
             $ids = array_filter([$client->id, data_get($p, 'subsidiary.client_id')]);
             $ids = array_map('intval', $ids);
