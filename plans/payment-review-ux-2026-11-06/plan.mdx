@@ -1,7 +1,7 @@
 ---
 title: Review incoming payments with payer identity and explained suggestions
 objective: Show the SMS payer, count prior payments using their number, and preselect a supported client so staff can approve or change the purchase in one drawer.
-status: approved — implementation verified locally
+status: live — independently verified
 owner: Ian Kuria
 date: 2026-11-06
 scope: Tanzania receiving-payment workspace, read-only matching context, and reviewed purchase selection
@@ -70,6 +70,6 @@ Before any deployment, prepare the exact scoped build/source manifest, current t
 
 ## Plan audit
 
-Round 1 · NOT READY. The independent repository review required atomic receipt validation during shadow save, bundle-aware cash counting, explicit uncached recommendation freshness and partial-scan ordering, plus the exact fixture startup/browser command. These are incorporated above. Round 2 · READY. A fresh repository-grounded audit confirmed the blockers resolved. Two nits requested the purchase/approval service file-map entries and explicit shadow-save regression cases; both are now included. Ian approved end-to-end implementation. Local source and isolated build now pass77backend/707assertions and12browser checks; shipment and live verification follow.
+Round 1 · NOT READY. The independent repository review required atomic receipt validation during shadow save, bundle-aware cash counting, explicit uncached recommendation freshness and partial-scan ordering, plus the exact fixture startup/browser command. These are incorporated above. Round 2 · READY. A fresh repository-grounded audit confirmed the blockers resolved. Two nits requested the purchase/approval service file-map entries and explicit shadow-save regression cases; both are now included. Ian approved end-to-end implementation. Runtime6efb3140 is pushed/deployed and independently verified:21sourcehashes/FPM/assets/affectedURL/authboundary,15receipts/14names/13phones, ten read-only review contexts and zero financial effects.77backend/707assertions and13browser checks pass, including keyboard focus and200%textreflow. All activation gates remain unchanged. Handset signed capture is currently ready; unattended boot/overnight reliability remains open.
 
 <Questions items={[]} />

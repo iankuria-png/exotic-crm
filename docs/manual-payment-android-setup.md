@@ -2,7 +2,7 @@
 
 Preparation began30October; current checkpoint is6November2026. Start with the TZ office
 phone receiving M-PESA messages. The CRM code/schema are deployed and the wallet/SIM is
-enrolled in shadow; capture and activation gates remain disabled. The current status below
+enrolled in shadow; capture and the review workspace are enabled, while activation gates remain disabled. The current status below
 supersedes the dated stock-app preparation notes.
 
 ## Current setup — 6 November 2026
@@ -37,12 +37,13 @@ Replacement/reset/reinstallation requires reviewed enrollment and a fresh cutove
 Legacy ICCID enrollment remains strict and does not silently fall back.
 
 The handset binding and starting inbox cursor are configured. The cursor was obtained
-using an ID-only query; no historical message body was exported. No SMS webhook is
-connected yet. The local metadata API binds to handset loopback and is reachable only
+using an ID-only query; no historical message body was exported. Three filtered signed
+hooks are connected for receiving SMS, check-ins and app startup. The local metadata API binds to handset loopback and is reachable only
 through the paired ADB tunnel with a private credential. Stock SMSGate remains stopped.
-The new package still needs its own final HiOS background/reopen/retry checks and actual
-CRM signed heartbeat/receiving verification. Do not treat the earlier stock-app battery
-settings or heartbeat results as acceptance of this separate package.
+The filtered package has actual receiving/retry/catch-up and manual-reopen evidence.
+The later settings review independently confirms Android Unrestricted, HiOS No Restrictions
+and App Launch Allowed. Continuing unattended background and reboot reliability remain
+qualified by the stalls described below; earlier stock-app results are separate evidence.
 
 CRM code adds a persistent scoped phone-recovery card and global attention indicator.
 After five minutes without a fresh signed capture heartbeat, staff are shown steps to
@@ -79,14 +80,41 @@ Actual filtered-app acceptance now verifies:
 A final filtered-app reboot was issued after these tests. Initial signed startup events
 and one capture check-in arrived, but regular check-ins did not continue. Unattended
 startup is **not accepted**. After reboot, unlock the phone, open **Exotic Payment Capture**
-and tap **START SERVICE** if shown. A question is pending for this final manual recovery;
-CRM can verify it without restoring debugging. The proven CRM recovery card provides these steps after five minutes without a
+and tap **START SERVICE** if shown. Manual recovery has since been verified through wireless debugging and fresh signed CRM
+check-ins. CRM can verify recovery without restoring debugging. The proven CRM recovery card provides these steps after five minutes without a
 fresh signed capture check-in. Wireless debugging is a setup tool; direct HTTPS delivery
 runs independently of the Mac once the app is active.
 
 A changed debugging port caused the earlier disconnect. The user-supplied screenshot
 allowed reconnection to the paired phone without a new pairing. After reboot, obtain the
 new IP address & Port only if computer control is needed. Do not retain a screen passcode.
+
+### Payment review release and handset follow-up — 6 November, 17:17 EAT
+
+CRM **6efb3140** is live with full SMS payer name/phone where supplied, earlier payments
+using that number, and an explained client suggestion with a rule score. Staff can change
+the client, choose the exact service and save a reviewed purchase during shadow capture.
+Missing SMS identity remains explicit. Fifteen captured receipts were checked: fourteen
+names and thirteen full phone numbers. Ten production review contexts passed under an
+enforced read-only transaction, with no financial effects. Local verification covers
+77 backend checks/707 assertions, 13 browser checks, visible keyboard focus and 200% text reflow.
+
+Wireless debugging reconnected using the phone’s existing pairing and current IP:port.
+Android **Unrestricted**, HiOS Battery Lab **No Restrictions**, and Phone Master App Launch
+**Allowed** were independently reopened and verified for `com.exotic.paymentcapture`.
+Those settings were already correct; this session does not claim a new permanent fix.
+Foregrounding the app restored its authenticated local health API and fresh signed CRM
+check-ins. The final server check at 17:18 EAT still reported ready (latest signed check-in 17:17:29) with fifteen receipts,
+zero allocations and zero benefit effects. Debugging can disconnect during sleep while
+capture HTTPS remains independent. Samples found both awake and dozing states, so this
+is bounded recovery evidence, not continuous screen-off, unattended boot or overnight acceptance.
+
+Temporary diagnostic screen settings were restored and independently read back: charging
+stay-on `0` and screen timeout `300000` ms. Temporary ADB API forwards and UI-dump files
+were removed. No APK, hooks, keys, SIM binding, provider settings or activation gates were
+changed; optional Phone Master scanning/notification access was declined. Keep the office
+phone charged. After reboot, unlock and reopen Payment Capture if needed, then confirm
+**Receiving normally** in CRM. The underlying intermittent background stall remains open.
 
 Fresh read-only snapshots of both exact WordPress properties show active sync1.3.21 with
 102runtime files and **no subscription-operation/owner files**. Exact compensation-v2,
