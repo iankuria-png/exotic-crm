@@ -5,6 +5,7 @@ namespace App\Services\Ai;
 use App\Models\Payment;
 use App\Services\CurrencyCanonicalizer;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /** Original payment amounts; never fetches FX or changes a business record. */
@@ -37,7 +38,7 @@ class NativeScorecardService
         // UTC period_start/end instants stored on Briefing).
         $event = 'COALESCE(payments.completed_at, payments.created_at)';
         $split = $dates['from']->toDateTimeString();
-        $rows = Payment::query()->reportableSuccessful()->excludingWalletTopups()
+        $payments = Payment::query()->reportableSuccessful()->excludingWalletTopups()
             ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
             ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
             ->whereRaw("$event >= ?", [$dates['prior_from']->toDateTimeString()])
@@ -46,10 +47,14 @@ class NativeScorecardService
             ->selectRaw('payments.platform_id, platforms.name, platforms.country, platforms.currency_code, deals.assigned_to')
             ->selectRaw("COALESCE(NULLIF(TRIM(payments.currency), ''), platforms.currency_code) as source_currency")
             ->selectRaw("CASE WHEN $event >= ? THEN 'current' ELSE 'prior' END as period_key", [$split])
-            ->selectRaw('SUM(payments.amount) as amount')
-            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country', 'platforms.currency_code', 'deals.assigned_to')
-            ->groupByRaw("COALESCE(NULLIF(TRIM(payments.currency), ''), platforms.currency_code)")
-            ->groupByRaw("CASE WHEN $event >= ? THEN 'current' ELSE 'prior' END", [$split])
+            ->selectRaw('payments.amount');
+
+        // Group concrete derived columns. MariaDB's ONLY_FULL_GROUP_BY cannot
+        // reliably match repeated computed expressions with bound parameters.
+        $dimensions = ['platform_id', 'name', 'country', 'currency_code', 'assigned_to', 'source_currency', 'period_key'];
+        $rows = DB::query()->fromSub($payments, 'native_payments')
+            ->select($dimensions)->selectRaw('SUM(amount) as amount')
+            ->groupBy($dimensions)
             ->get();
 
         $totals = $markets = $members = [];
