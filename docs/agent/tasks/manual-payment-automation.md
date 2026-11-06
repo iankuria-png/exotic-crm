@@ -1,6 +1,6 @@
 # Manual payment capture, matching, activation and reconciliation
 
-Current status, 6 November 2026 (EAT): authorized full shipment in progress. Filtered Android release installed/42actual-device synthetic cases PASS; isolated CRM release46MySQLtests/508assertions and3browser journeys PASS. Source/build isolation preserves unrelated work. No commit/push/deployment or real payment/subscription mutation yet. Production capture/workspace/entitlement gates remain off. Current checkpoint below supersedes dated preparation notes.
+Current status, 6 November 2026 (EAT): code/schema deployed; feature remains disabled pending handset/network and acceptance. Core release a13985df plus bounded worker25384127; isolated49MySQLtests/521assertions and3browser journeys PASS. Source/build isolation preserves unrelated work. One Exotic-controlled mobile-wallet account/SIM enrolled in shadow with explicit configurable Unlimited policy. Zero collection events/receipts/allocations/benefit effects. Phone release installed/42actual-APK filter checks PASS, but debugging disconnected and current office-network CRM requests return403. All capture/workspace/entitlement gates remain off; no real payment/subscription change.
 
 ## User requirements and decisions
 
@@ -134,3 +134,66 @@ migration and shadow enrollment/capture+alerts verification. Then complete real 
 compensation-v2/all-writer acceptance. All entitlement/automatic/correction gates remain
 empty until genuine observation/reconciliation/device/site acceptance; do not manufacture
 seven days/100credits or treat shipping permission as a real-money canary authorization.
+
+
+## 6 November — deployed code/schema, shadow enrollment; connectivity hold
+
+User's full-shipment request authorized scoped CRM push/deploy and office-phone setup;
+no new approval is required for remaining work in this scope. Do not claim the feature
+fully usable: capture/workspace remain off and automatic/site acceptance is incomplete.
+
+- Core commit a13985df pushed and deployed through the committed isolated Ops runner
+  `var/mp6`, preserving three tracked scanner-test edits and27untracked server files.
+  Preview8046→apply8529, actual FPM8.2.35 verifies all gates off, exact source/generated
+  cache invalidation and route; served JS/CSS hashes match the tested isolated build.
+  Independent143path/hash readf193 and health0dd7 pass. Two release-runner audits fixed
+  cache/gate proof, metadata writes, failed-swap recovery and maintenance ownership;
+  final audit READY. Private code backup ends `collection-code-20261106-101209-2564f7`.
+- Full backup6e04f995 restored successfully on isolated network-none MariaDB11.4.13,
+  matching production:281tables/9views,39,946payments/34,613deals. Scheduler events OFF;
+  no application bootstrap/provider calls. Exact64DDL statements create20new collection
+  tables on the restored copy. Initial MySQL generated-column refusal is retained.
+  Scoped production migration previewd6d0→applye7b7:20empty tables, no existing record
+  change; private preview evidence ends `collection-migration-20261106-101421-512ff6`.
+- Dedicated stable fingerprint key provisioned privately (e3b4); only one env line appended,
+  private original/readback and actual FPM cache proof, all gates off. No key value in Git.
+  First native enrollment attempt refused missing key and rolled back; a console-output
+  parsing attempt also rolled back. Wrappers now check persisted identity and nonzero
+  refusal status instead of treating console/exit-zero output as acceptance.
+- Native shadow enrollment6b30: company-owned wallet, registered Amani Mollel, primary
+  platform6/exotic-tz.net; source/provenance from Ian's payment image and business-control
+  confirmation. Slot1/Subscription ID1, exact observed carrier, private receiving number,
+  signed APKde6f5bd4 and saved cursor. Server cutover6Nov10:25:42UTC. Native manager policy
+  saves all four caps as approved null Unlimited/version1. Independent READ ONLY2177
+  verifies account/device/SIM/policy/cutover;1account/1device/1binding/2audit rows,
+  zero events/receipts/allocations/effects and health awaiting_check_in. No SMS hook.
+- Bounded worker follow-up25384127 is pushed: scheduler runs capture-enabled45-second
+  background windows with overlap/server guards; monotonic budget stops further task
+  claims and an interrupted run can resume next tick.3new lifecycle tests/13assertions
+  PASS; full intended74source snapshot49tests/521assertions PASS. Initial isolated
+  harness lacked a fixture APP_KEY; invalid harness run retained and corrected before
+  acceptance. No frontend source/build change in this follow-up.
+
+Actual phone connection dropped during HiOS setup. ADB discovery briefly showed a changed
+private IP, then no connected device; the last advertised port refused connection. Pending
+question asks Ian to unlock/enable Wireless debugging and supply current IP:port. Never
+repeat/store the temporary screen passcode. The filtered app's SIM/cursor remains configured,
+but its final HiOS background settings/reboot/retry/live signed delivery remain unverified.
+Stock SMSGate stays stopped. No historical message was exported or XML imported.
+
+Office Internet now identifies as41.139.154.203/KE, WARPoff; normal anonymous `/api/ping`
+and disabled collection route both return empty403. This is a different public IP from
+5Nov105.163.2.178; do not claim the old address was unblocked or that the phone's current
+route was measured. Registered server health/root/billing200. Use hosting investigation or
+verified mobile-data/working-network fallback; no support message sent or firewall changed.
+
+Worker release preview1fca→apply3e6d is LIVE25384127. Independent final145source/build hashesb4ef, read-only enrollment9ef7 and health6ecd PASS; actual FPM gates off, root/billing200. Private worker backup ends `collection-code-20261106-102835-8ea3c4`. No further runtime source change is pending at this checkpoint.
+
+Next: regain phone/network,
+complete per-package HiOS/settings and real signed heartbeat/negative/retry/catch-up proof,
+then enable capture/workspace only and observe actual incoming credits in shadow. Complete
+exact TZ/Tanzania WordPress compensation-v2/complete-manifest/all-writer acceptance and
+reviewed payer/purchase/statement evidence before entitlement enablement. Genuine7days/
+100credits remain required; no synthetic acceptance, retrospective activation or real-money
+canary is inferred. Existing Local WP tracked deletions of operation/owner files are preserved.
+Private configs and run logs remain Opsvar/AndroidTools; no Ops/WP push or Netlify deploy.

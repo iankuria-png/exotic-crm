@@ -1,10 +1,9 @@
 # Office Android receiving-phone setup
 
-30 October 2026. Start with the TZ office phone that receives the M-PESA messages.
-The CRM implementation is local and its capture and activation gates are disabled.
-There is no production webhook URL or enrolled device key to enter yet. Preparing the
-phone does not require changing the receiving wallet, SIM, customer payment details or
-subscriptions.
+Preparation began30October; current checkpoint is6November2026. Start with the TZ office
+phone receiving M-PESA messages. The CRM code/schema are deployed and the wallet/SIM is
+enrolled in shadow; capture and activation gates remain disabled. The current status below
+supersedes the dated stock-app preparation notes.
 
 ## Current setup — 6 November 2026
 
@@ -52,11 +51,22 @@ validated capture heartbeat confirms recovery; a manual checkbox cannot clear th
 If the UI cannot load health, it reports that separately. Silence alone cannot identify
 whether the phone is off, disconnected or stopped.
 
-No production collection enrollment, endpoint connection, capture/workspace enablement
-or activation is claimed at this checkpoint. Collection entitlement/automatic/writer/
-correction gates remain disabled. Exact WordPress compensation/all-writer acceptance,
-independent reconciliation and seven genuine clean observation days/100credits still
-precede autonomous activation. Historical XML remains reconciliation-only.
+CRM code and the additive schema are deployed. The reviewed wallet/SIM is enrolled in
+**shadow** with a private signing key and explicit configurable Unlimited limits. Server
+cutover is6November10:25:42UTC. Independent verification finds zero events/receipts/
+allocations/benefit effects. The endpoint is still disabled and **no phone webhook is
+registered**. All capture/workspace/entitlement/automatic/writer/correction gates remain off.
+
+The debugging connection dropped during the new package's HiOS setup. Reconnect the
+paired phone by unlocking it, enabling **Wireless debugging**, and supplying its current
+**IP address & Port** from that screen. Do not send a new pairing code or screen passcode
+unless a fresh pairing is actually required. The office's current Internet path also gets
+CRM HTTP403, while registered server checks get200; resolve access with hosting or verify
+an available mobile-data/working-network fallback before enabling delivery.
+
+Exact WordPress compensation/all-writer acceptance, independent reconciliation and seven
+genuine clean observation days/100credits still precede autonomous activation. Historical
+XML remains reconciliation-only. Shipping code is not proof of live phone acceptance.
 
 The following sections retain the dated preparation and stock-app experiments. Current
 filtered-app status above supersedes their earlier candidate/no-install descriptions.

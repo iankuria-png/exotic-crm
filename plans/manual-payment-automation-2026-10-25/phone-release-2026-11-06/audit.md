@@ -7,3 +7,14 @@ Round2 READY: two implementation notes retained—consistent observation/ingest 
 User authorization: continue implementation and full shipping; configurable Unlimited exposure limits for now; full purchased duration from correction; manual app reopening after rare reboot is acceptable when CRM alerts staff. Earlier no-push/no-deploy constraint superseded for this feature's verified release. No real-money canary authorized. Existing seven-day/100-credit and exact-site acceptance remains.
 
 Android14 binding extension: independent audit READY; test every active SIM binding on a shared phone, unknown/missing identity modes, changed/blank IDs, swapped slots, measured/enrolled number provenance, queued old events and sticky account suspension. Subscription IDs are device-scoped as recommended by Android; no privileged ICCID bypass.
+
+
+Concrete production code-release audit: first review NOT READY for generated-cache/FPM
+gate proof, unchecked metadata writes and failed-swap recovery. Fresh review found a
+mode-aware rollback-probe issue and maintenance adoption race. All required changes
+fixed; final fresh review READY at Ops4c3e833. One nit retained: a shared cross-tool
+release lock would further reduce concurrent deployment races. The runner refuses other
+maintenance owners, pins source/config and preserves dirty scanner tests. Core8529 and
+worker3e6d actual FPM/served-asset verification pass; final independent145hash/read-only
+shadow-enrollment/gates/health readback passes. This is code/schema acceptance, not live
+phone delivery or autonomous activation acceptance.

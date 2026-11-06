@@ -164,3 +164,15 @@ Pint, PHP syntax and the isolated build passed. See the canonical task for exact
 boundaries and retained artifacts; these are local tests, not acceptance of the handsets
 or production WordPress endpoint. The source manifest records task inputs, not a clean
 release manifest. The [Android preparation guide](manual-payment-android-setup.md) is ready.
+
+
+## 6 November shipment checkpoint
+
+This30October implementation record is historical. Core a13985df and bounded-worker
+25384127 are pushed/deployed; source/build145hash/FPM proof, matching-engine full backup
+restore and scoped20table migration verified. One company-wallet/SIM shadow enrollment
+and explicit Unlimited policy are independently verified. Isolated49tests/521assertions,
+three browser journeys and42actual installed-APK filter cases pass. All production capture,
+workspace and entitlement gates remain off. Live handset/network acceptance and exact WP
+compensation/all-writer plus genuine observation gates remain open. See the current
+[task](agent/tasks/manual-payment-automation.md) and [phone guide](manual-payment-android-setup.md).
