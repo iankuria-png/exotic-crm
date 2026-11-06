@@ -51,22 +51,47 @@ validated capture heartbeat confirms recovery; a manual checkbox cannot clear th
 If the UI cannot load health, it reports that separately. Silence alone cannot identify
 whether the phone is off, disconnected or stopped.
 
-CRM code and the additive schema are deployed. The reviewed wallet/SIM is enrolled in
-**shadow** with a private signing key and explicit configurable Unlimited limits. Server
-cutover is6November10:25:42UTC. Independent verification finds zero events/receipts/
-allocations/benefit effects. The endpoint is still disabled and **no phone webhook is
-registered**. All capture/workspace/entitlement/automatic/writer/correction gates remain off.
+CRM code, the additive schema and bounded worker25384127 are deployed. The wallet/SIM
+is enrolled in **shadow** with explicit configurable Unlimited limits. Server cutover is
+6November10:25:42UTC. Capture and the staff workspace were enabled on6November11:40UTC
+through a pinned/private-backed configuration change. **All entitlement, automatic,
+writer and correction gates remain empty.** No subscriptions or cash payments changed.
 
-The debugging connection dropped during the new package's HiOS setup. Reconnect the
-paired phone by unlocking it, enabling **Wireless debugging**, and supplying its current
-**IP address & Port** from that screen. Do not send a new pairing code or screen passcode
-unless a fresh pairing is actually required. The office's current Internet path also gets
-CRM HTTP403, while registered server checks get200; resolve access with hosting or verify
-an available mobile-data/working-network fallback before enabling delivery.
+Actual filtered-app acceptance now verifies:
 
-Exact WordPress compensation/all-writer acceptance, independent reconciliation and seven
-genuine clean observation days/100credits still precede autonomous activation. Historical
-XML remains reconciliation-only. Shipping code is not proof of live phone acceptance.
+- Direct phone HTTPS to CRM returns200. The handset is connected to **ExoticOnline**;
+  it has a working path even while the laptop's other office path gets403.
+- HiOS App Launch **Allowed** and Battery Lab **No Restrictions** are verified for
+  `com.exotic.paymentcapture`; start-on-boot is on. Stock SMSGate remains stopped.
+- Three persistent signed hooks point directly to the private enrolled HTTPS endpoint:
+  `system:ping`, `app:started`, `sms:received`. Check-ins occur every30seconds.
+- Actual receiving produced4canonical receipts from9parsed SMS events: one complementary
+  body pair merged and4duplicate body events coalesced. Three pre-binding notices remain
+  quarantined. All4receipts await sales review; there are0allocations/benefit effects.
+- Screen-off signed delivery continued. Three deliberately failed metadata-only events
+  recovered from503to204 with identical bodies, valid signatures and0signature failures.
+  The temporary hook/receiver/tunnel were removed; no financial message went to the test target.
+- After deliberately stopping only the app, CRM changed to **No recent check-in** and
+  attention1after its300-second threshold. Opening the app restored **Receiving normally**,
+  attention0. Two genuine messages arriving during that pause were caught up on reopen;
+  the processing backlog drained with0errors.
+
+A final filtered-app reboot was issued after these tests. Initial signed startup events
+and one capture check-in arrived, but regular check-ins did not continue. Unattended
+startup is **not accepted**. After reboot, unlock the phone, open **Exotic Payment Capture**
+and tap **START SERVICE** if shown. A question is pending for this final manual recovery;
+CRM can verify it without restoring debugging. The proven CRM recovery card provides these steps after five minutes without a
+fresh signed capture check-in. Wireless debugging is a setup tool; direct HTTPS delivery
+runs independently of the Mac once the app is active.
+
+A changed debugging port caused the earlier disconnect. The user-supplied screenshot
+allowed reconnection to the paired phone without a new pairing. After reboot, obtain the
+new IP address & Port only if computer control is needed. Do not retain a screen passcode.
+
+Fresh read-only snapshots of both exact WordPress properties show active sync1.3.21 with
+102runtime files and **no subscription-operation/owner files**. Exact compensation-v2,
+complete-manifest/all-writer acceptance and genuine seven clean observation days/100credits
+still precede autonomous activation. Historical XML remains reconciliation-only.
 
 The following sections retain the dated preparation and stock-app experiments. Current
 filtered-app status above supersedes their earlier candidate/no-install descriptions.

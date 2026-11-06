@@ -1,6 +1,6 @@
 # Manual payment capture, matching, activation and reconciliation
 
-Current status, 6 November 2026 (EAT): code/schema deployed; feature remains disabled pending handset/network and acceptance. Core release a13985df plus bounded worker25384127; isolated49MySQLtests/521assertions and3browser journeys PASS. Source/build isolation preserves unrelated work. One Exotic-controlled mobile-wallet account/SIM enrolled in shadow with explicit configurable Unlimited policy. Zero collection events/receipts/allocations/benefit effects. Phone release installed/42actual-APK filter checks PASS, but debugging disconnected and current office-network CRM requests return403. All capture/workspace/entitlement gates remain off; no real payment/subscription change.
+Current status,6November2026(EAT): shadow capture/workspace LIVE with genuine signed phone delivery, merge, retry, stale-alert/recovery and catch-up acceptance.4canonical receipts/9parsed messages,3pre-binding notices quarantined,0allocations/effects. Code/schema/worker25384127;49MySQL/521 +3browser/build +42installed-APK filter checks pass. Final filtered-app reboot emitted initial startup/check-in events, then stalled; manual open/start confirmation is pending. All entitlement/automatic/writer/correction gates remain off. Fresh exact2site WordPress baselines are active1.3.21/102files and lack operation/owner contracts. No real cash/subscription mutation.
 
 ## User requirements and decisions
 
@@ -197,3 +197,65 @@ reviewed payer/purchase/statement evidence before entitlement enablement. Genuin
 100credits remain required; no synthetic acceptance, retrospective activation or real-money
 canary is inferred. Existing Local WP tracked deletions of operation/owner files are preserved.
 Private configs and run logs remain Opsvar/AndroidTools; no Ops/WP push or Netlify deploy.
+
+
+## 6November — actual filtered-phone shadow pilot LIVE
+
+User screenshot supplied the changed debug port; direct ADB reconnect reused the existing
+pairing. Phone network reaches public CRM200 (native Android HTTPS probe), while laptop
+route403 remains a separate access issue. Actual installed health reflection verifies SMS
+permission/filterexotic-tz-v1/SIMtrue/driftfalse. App Launch Allowed verified; Battery Lab
+Intelligent→No Restrictions selected and re-opened/radio-verified for the new package.
+Start-on-boot verifiedtrue, localservertrue/cloudfalse. Automatic UTC clock differs from
+Mac by~1second, timezoneAfrica/Nairobi, charging/battery rising. No passcode retained.
+
+Scoped config preview305e→applyf325 enables only COLLECTION_CAPTURE_ENABLED and
+COLLECTION_WORKSPACE_ENABLED, with exact env preimage/private original/readback/actual
+FPM verification. All4entitlement arrays remain empty; company wallet stays shadow.
+New env digest6b299a7c; guarded disable job retained separately. Old release/rollback env
+pins intentionally refuse drift and must be refreshed/repreviewed before later recovery.
+
+Native phone signing key matches enrolled device. Three direct-HTTPS hooks only: heartbeat,
+app-start and receivingSMS. Metadata handshake first succeeded6895; then SMS hook enabled
+with saved cursor intact. Native phonescreen-off source0f1d shows fresh ready check-ins;
+three current credits parsed initially and3pre-binding messages quarantined. Temporary
+loopback health-only503test:3failed event IDs all recover204with identical raw hashes/
+valid signatures,0signature failures. Test hook/receiver/reverse tunnel removed; real
+financial hooks never pointed at that target. Aggregate retry proof retained in output.
+
+Actual outage test: app force-stopped11:50:57UTC; native reada876 at11:56shows
+no_recent_contact/attention1/capture_readyfalse after300seconds. Opening app restores
+ready/attention0; native73df at12:00:36 shows no outbox backlog/errors. Independent
+READONLY349d proves9parsed events→4canonical receipts,1distinct complementary-body merge,
+4duplicate-body events coalesced,2distinct messages received during the stop and ingested
+on reopen.0financial effects. All4receipts need review. No XML import/historical activation,
+provider transaction, outgoing SMS, commission/pass grant or real subscription mutation.
+
+Final filtered-app reboot issued around12:03UTC with autostart/local true/cloud false;
+pending first unlock and actual startup verification. Android encrypted app storage requires
+first unlock. Do not assume unattended startup from settings/service presence; if needed,
+manual open/start recovery is already accepted by Ian and verified by the actual stale test.
+No extra permission is needed for remaining authorized setup. Pending question asks Ian to
+unlock/restore debugging while leaving the app closed initially. Avoid repeating/storing PIN.
+
+Fresh exact WordPress source snapshots: primarya3ef /subsidiary80bd, both active sync1.3.21
+with102runtime files and no class-subscription-operation or recovery-owner file. Primary
+root/site/database pin checked; secondary fresh discover98c3 and inventory discovery pin
+checked. Initial root syntax refusal before valid reads retained. Source snapshots are
+private Opsvar/manual-payment-release-2026-11-06/wordpress-{primary,secondary}-baseline;
+summary alongside them. No WP bootstrap/source/DB changes. The77-line operationv1 in WP
+HEAD is a Local source baseline, not deployed capability. Preserve Local tracked deletions.
+
+Next: complete final reboot/unlock check and retain final healthy pilot; refresh live/source
+notes. Continue exact WP compensation-v2 and all-writer reconciliation from verified live
+baselines, not the mixed Local checkout. Genuine observation/reconciliation/reviewed payer
+and purchase authority remain mandatory before automatic flags; no fabricated7days/100credits.
+
+
+Final boot follow-up: signed app-start events rose3→5 and one new ping arrived12:04:48UTC,
+but the regular30second series did not continue. ADB/debug discovery did not return. Do
+not accept unattended startup from the initial event or service setting. Pending question
+now asks Ian to open Exotic Payment Capture/START SERVICE; this is the already-approved
+rare-reboot recovery step, not new setup permission. Verify fresh ongoing server check-ins
+before declaring the phone back healthy. Android ordinary credential-encrypted storage
+requires first unlock, but no physical unlock action is claimed without Ian confirmation.
