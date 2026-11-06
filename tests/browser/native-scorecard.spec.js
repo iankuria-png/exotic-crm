@@ -67,6 +67,9 @@ for (const width of [320, 390, 1440]) {
         await page.keyboard.press('Enter');
         await expect(native).toHaveAttribute('aria-pressed', 'true');
         await expect(page.getByText('GHS revenue', { exact: true })).toBeVisible();
+        await expect(page.getByText('-50%', { exact: true }).first()).toHaveClass(/text-rose-700/);
+        await page.getByLabel('Revenue currency', { exact: true }).selectOption('USD');
+        await expect(page.getByText('USD 35.25', { exact: true }).first()).toBeVisible();
         await expect(page.getByText('Historical payments read', { exact: false })).toBeVisible();
         await page.getByLabel('Revenue currency', { exact: true }).selectOption('KES');
         await expect(page.getByText('KES revenue', { exact: true })).toBeVisible();
@@ -105,4 +108,18 @@ test('empty payments and unavailable archive are explicit', async ({ page }) => 
     await open(page, { native_reporting: { status: 'unavailable' } });
     await expect(page.getByRole('button', { name: 'Native currencies', exact: true })).toBeDisabled();
     await expect(page.getByText('Native amounts are unavailable for this archived report.', { exact: false })).toBeVisible();
+});
+
+
+test('large native amounts and unresolved currency labels fit a small phone', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 1000 });
+    const large = compare('TZS', 15241000, 13296010);
+    const unresolved = { ...compare('unresolved:1:CFA', 19924999.99, 0), currency: 'CFA (Unassigned market with a long name)', unresolved: true };
+    await open(page, { native_reporting: { status: 'ready', source: 'snapshot', currencies: [large, unresolved], markets: [], members: [] } });
+    await page.getByRole('button', { name: 'Native currencies', exact: true }).click();
+    await expect(page.getByText('TZS 15,241,000', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByLabel('Revenue currency', { exact: true }).selectOption(unresolved.key);
+    await expect(page.getByText(`${unresolved.currency} 19,924,999.99`, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

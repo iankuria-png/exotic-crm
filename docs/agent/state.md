@@ -1,4 +1,4 @@
-- Weekly scorecard native currencies (6 Nov): [task](tasks/native-scorecard-currencies.md) — LOCAL TESTED28backend/148assertions+4browser journeys; isolatedbuild, plan auditREADY2rounds. Original archive retained; native revenue picker/market/staff/source-labelled recovery + exports. Ian authorizes ship/deploy; no migrations or SMS. Live acceptance next.
+- Weekly scorecard native currencies (6 Nov): [task](tasks/native-scorecard-currencies.md) — LIVE/VERIFIED61d27225; native21currencygroups/34markets/14staff, independent2,759paymentrows + authorizedcontroller/archive/full16hash/FPM/assets/logpass. StrictMariaDB fix candidate-proven; originalfailure retained. Backend28baseline+7fix/2integration,5browser journeys; no migration/regeneration/tasksend.
 
 - Daily reconciliation / trial controls (5 Nov): [task](tasks/daily-reconciliation-and-trial-controls.md) — PUSHED `7e63eea9`, exact remote/source/assets verified. MySQL27/253+5browser+31PHP+build pass; broader76pass/1known base failure reproduced. cPanel pull/migration/live acceptance pending; admin configures actual review/export grants and PIN exceptions. No WP upload or live business change.
 
