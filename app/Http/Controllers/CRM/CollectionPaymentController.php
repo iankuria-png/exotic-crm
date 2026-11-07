@@ -21,10 +21,12 @@ use App\Services\Collections\CollectionPayerEvidenceService;
 use App\Services\Collections\CollectionPolicyService;
 use App\Services\Collections\CollectionPrivacy;
 use App\Services\Collections\CollectionPurchaseService;
+use App\Services\Collections\CollectionReceiptStatusService;
 use App\Services\Collections\CollectionReviewContextService;
 use App\Services\Collections\CollectionReviewService;
 use App\Services\Collections\CollectionSettlementService;
 use App\Services\MarketAuthorizationService;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -49,10 +51,14 @@ class CollectionPaymentController extends Controller
     {
         $this->enabled();
         $v = $request->validate(['state' => 'nullable|string|max:32', 'account_id' => 'nullable|uuid', 'client_id' => 'nullable|integer|min:1',
-            'platform_id' => 'nullable|integer|min:1', 'search' => 'nullable|string|max:128', 'page' => 'nullable|integer|min:1', 'export' => 'nullable|boolean']);
-        $q = CollectionReceipt::with(['account', 'allocation.effects'])->whereIn('account_id', $this->access->accountIds($request->user()));
+            'platform_id' => 'nullable|integer|min:1', 'search' => 'nullable|string|max:128', 'page' => 'nullable|integer|min:1', 'export' => 'nullable|boolean',
+            'sort' => 'nullable|in:newest,oldest,amount_high,amount_low', 'date_from' => 'nullable|date_format:Y-m-d',
+            'date_to' => 'nullable|date_format:Y-m-d'.($request->filled('date_from') ? '|after_or_equal:date_from' : '')]);
+        $q = CollectionReceipt::select('collection_receipts.*')->with(['account', 'allocation.effects', 'sale.items'])->whereIn('account_id', $this->access->accountIds($request->user()));
         if (! empty($v['state'])) {
-            if ($v['state'] === 'purchase_saved') {
+            if (in_array($v['state'], ['needs_action', 'already_recorded'], true)) {
+                app(CollectionReceiptStatusService::class)->filter($q, $v['state']);
+            } elseif ($v['state'] === 'purchase_saved') {
                 $q->whereDoesntHave('allocation')->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
                     ->where(fn ($q) => $q->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
                     ->whereExists(fn ($intent) => $intent->selectRaw('1')->from('collection_purchase_intents')
@@ -86,26 +92,46 @@ class CollectionPaymentController extends Controller
             });
         }
         if (! empty($v['search'])) {
-            $q->where('reference_norm', 'like', '%'.strtoupper($v['search']).'%');
+            $phone = app(CollectionPrivacy::class)->tzPhone($v['search']);
+            $q->where(fn ($search) => $search->where('reference_norm', 'like', '%'.strtoupper($v['search']).'%')
+                ->when($phone, fn ($search) => $search->orWhere('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))));
         }
+        $effective = 'COALESCE(provider_at, first_received_at, collection_receipts.created_at)';
+        if (! empty($v['date_from'])) {
+            $q->whereRaw($effective.' >= ?', [CarbonImmutable::parse($v['date_from'], 'Africa/Dar_es_Salaam')->startOfDay()->utc()]);
+        }
+        if (! empty($v['date_to'])) {
+            $q->whereRaw($effective.' < ?', [CarbonImmutable::parse($v['date_to'], 'Africa/Dar_es_Salaam')->startOfDay()->addDay()->utc()]);
+        }
+        $sort = $v['sort'] ?? 'newest';
+        if (str_starts_with($sort, 'amount_')) {
+            // Currencies are grouped explicitly before amount comparisons.
+            $q->orderBy('currency')->orderBy('principal_minor', $sort === 'amount_high' ? 'desc' : 'asc');
+        }
+        $direction = $sort === 'oldest' ? 'asc' : 'desc';
+        $q->orderByRaw($effective.' '.$direction)->orderBy('collection_receipts.id', $direction);
         if ($v['export'] ?? false) {
             return response()->streamDownload(function () use ($q) {
                 $f = fopen('php://output', 'w');
-                fputcsv($f, ['Reference', 'Account', 'Currency', 'Principal minor', 'Received UTC', 'Funds', 'Subscription/review', 'Historical only']);
-                foreach ($q->orderBy('id')->cursor() as $r) {
-                    // Provider references are opaque; prevent formula injection in spreadsheet clients.
-                    fputcsv($f, ["'".$r->reference_norm, "'".$r->account->label, $r->currency, $r->principal_minor, $r->provider_at, $r->funds_state, $r->decision_state, $r->historical_only ? 'Yes' : 'No']);
-                }
+                fputcsv($f, ['Reference', 'Account', 'Currency', 'Principal minor', 'Paid UTC', 'Phone arrival UTC', 'Funds', 'Subscription/review', 'Payment code status', 'Historical only']);
+                $q->chunk(100, function ($receipts) use ($f) {
+                    $usage = app(CollectionReceiptStatusService::class)->forReceipts($receipts);
+                    foreach ($receipts as $r) {
+                        // Provider references are opaque; prevent formula injection in spreadsheet clients.
+                        fputcsv($f, ["'".$r->reference_norm, "'".$r->account->label, $r->currency, $r->principal_minor, $r->provider_at, $r->first_received_at, $r->funds_state, $r->decision_state, $usage[$r->id]['state'], $r->historical_only ? 'Yes' : 'No']);
+                    }
+                });
                 fclose($f);
             }, 'collection-receipts.csv', ['Content-Type' => 'text/csv']);
         }
-        $rows = $q->orderByDesc('id')->paginate(25);
+        $rows = $q->paginate(25);
+        $usage = app(CollectionReceiptStatusService::class)->forReceipts($rows->getCollection());
         $evidence = app(CollectionPayerEvidenceService::class)->forReceipts($rows->getCollection());
         $counts = DB::table('collection_receipts')->whereIn('account_id', $rows->pluck('account_id')->unique())
             ->whereIn('payer_fingerprint', $rows->pluck('payer_fingerprint')->filter()->unique())
             ->selectRaw('account_id, payer_fingerprint, COUNT(*) AS total')->groupBy('account_id', 'payer_fingerprint')->get()
             ->keyBy(fn ($c) => $c->account_id.':'.$c->payer_fingerprint);
-        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null));
+        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id]));
 
         return response()->json($rows);
     }
@@ -114,8 +140,8 @@ class CollectionPaymentController extends Controller
     {
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
-        $r->load('account', 'allocation.effects');
-        $payload = $this->present($r);
+        $r->load('account', 'allocation.effects', 'sale.items');
+        $payload = $this->present($r, null, null, app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id]);
         $candidates = app(CollectionDecisionService::class)->candidates($r);
         $payload['candidates'] = $candidates;
         $payload['payer_links'] = CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', $r->payer_fingerprint)->get()->toArray();
@@ -127,7 +153,7 @@ class CollectionPaymentController extends Controller
         return response()->json($payload);
     }
 
-    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null): array
+    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null, ?array $usage = null): array
     {
         $allocation = $r->allocation;
         $p = $allocation?->purchase_snapshot;
@@ -135,7 +161,7 @@ class CollectionPaymentController extends Controller
             ->where('provider_reference', $r->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->latest('created_at')->first() : null;
         $p ??= $savedChoice?->purchase_snapshot;
         $clientIds = array_filter([$p['client_id'] ?? null, data_get($p, 'subsidiary.client_id')]);
-        $sale = Schema::hasTable('collection_sales_sessions') ? $r->sale()->with('items')->first() : null;
+        $sale = $r->relationLoaded('sale') ? $r->sale : (Schema::hasTable('collection_sales_sessions') ? $r->sale()->with('items')->first() : null);
         if ($sale) {
             $clientIds = array_unique(array_merge($clientIds, $sale->items->pluck('client_id')->all()));
         }
@@ -144,8 +170,8 @@ class CollectionPaymentController extends Controller
         return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
-            'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
-            'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'historical_only' => $r->historical_only,
+            'usage' => $usage, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
+            'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'created_at' => $r->created_at, 'historical_only' => $r->historical_only,
             'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
             'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
@@ -161,7 +187,7 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         $input = $request->validate(['cursor' => 'nullable|string|max:4096', 'selected_client_id' => 'nullable|integer|min:1',
-            'product_price_id' => 'nullable|integer|min:1', 'deal_id' => 'nullable|integer|min:1', 'subsidiary_client_id' => 'nullable|integer|min:1', 'intent_id' => 'nullable|uuid']);
+            'product_price_id' => 'nullable|integer|min:1', 'deal_id' => 'nullable|integer|min:1', 'subsidiary_client_id' => 'nullable|integer|min:1', 'intent_id' => 'nullable|uuid', 'workflow' => 'nullable|in:manual']);
 
         return response()->json($context->context($r, $request->user(), $input))->header('Cache-Control', 'private, no-store');
     }
@@ -179,12 +205,12 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         $v = $request->validate(['search' => 'required_without:selected_client_id|string|min:2|max:128',
-            'selected_client_id' => 'nullable|integer|min:1', 'subsidiary_for_client_id' => 'nullable|integer|min:1']);
+            'selected_client_id' => 'nullable|integer|min:1', 'subsidiary_for_client_id' => 'nullable|integer|min:1', 'workflow' => 'nullable|in:manual']);
         $context = app(CollectionReviewContextService::class);
         if (! empty($v['selected_client_id'])) {
             $client = $context->selectable()->findOrFail($v['selected_client_id']);
 
-            return response()->json(['clients' => [$context->clientData($client)]] + $context->options($r, $request->user(), $client))->header('Cache-Control', 'private, no-store');
+            return response()->json(['clients' => [$context->clientData($client)]] + $context->options($r, $request->user(), $client, ($v['workflow'] ?? null) !== 'manual'))->header('Cache-Control', 'private, no-store');
         }
         if (! empty($v['subsidiary_for_client_id'])) {
             $primary = $context->selectable()->findOrFail($v['subsidiary_for_client_id']);
@@ -196,7 +222,7 @@ class CollectionPaymentController extends Controller
             $clients = $context->selectable()->where('platform_id', $secondary)->where(fn ($q) => $q->where('name', 'like', '%'.$v['search'].'%')
                 ->orWhere('wp_post_id', $v['search'])->orWhere('phone_normalized', $phone ?? $v['search']))->orderBy('name')->limit(20)->get();
 
-            return response()->json(['clients' => $clients->map(fn ($c) => $context->clientData($c))])->header('Cache-Control', 'private, no-store');
+            return response()->json(['clients' => $context->clientRows($clients)])->header('Cache-Control', 'private, no-store');
         }
         $term = $v['search'];
         $platforms = DB::table('collection_account_platforms')->where('account_id', $r->account_id)->whereNull('valid_until')->pluck('platform_id');
@@ -204,9 +230,9 @@ class CollectionPaymentController extends Controller
         $payerClients = $phone ? CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))->whereNull('revoked_at')->where('valid_until', '>', now())->pluck('client_id')->all() : [];
         $clients = $context->selectable()->whereIn('platform_id', $platforms)->where(function ($q) use ($term, $payerClients, $phone) {
             $q->where('name', 'like', '%'.$term.'%')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
-        })->orderBy('name')->limit(20)->get(['id', 'name', 'platform_id', 'wp_post_id']);
+        })->orderBy('name')->limit(20)->get();
 
-        return response()->json(['clients' => $clients, 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
+        return response()->json(['clients' => $context->clientRows($clients), 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
             ->whereHas('product', fn ($q) => $q->whereIn('platform_id', $platforms)->where('is_active', true)->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
             'quotes' => Deal::whereIn('client_id', $clients->pluck('id'))->whereIn('status', ['pending', 'active'])->where('currency', $r->currency)->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by']),
             'recent_subscriptions' => Deal::whereIn('client_id', $clients->pluck('id'))->whereNotNull('activated_at')->where('amount', '>', 0)

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
@@ -12,11 +12,13 @@ const titles = {
 };
 const when = value => value ? new Date(value).toLocaleString() : 'No signed contact yet';
 
-export default function CollectionDeviceHealthPanel({ platformId }) {
+export default function CollectionDeviceHealthPanel({ platformId, compact = false }) {
+    const [expanded, setExpanded] = useState(false);
     const { user } = useAuth();
     const query = useQuery({ queryKey: ['collection-device-health', user?.id, platformId || null],
         queryFn: async () => (await api.get('/crm/collections/device-health', { params: { platform_id: platformId || undefined } })).data,
         refetchInterval: () => document.visibilityState === 'visible' ? 10000 : false, refetchOnWindowFocus: true });
+    if (compact && !expanded) return <section aria-label="Receiving phone health" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm"><div><span className="font-medium text-slate-800">Office phone · </span><span className={query.isError || query.data?.devices?.some(d => !d.capture_ready) ? 'text-amber-900' : 'text-slate-600'}>{query.isPending ? 'Checking…' : query.isError ? 'Status unavailable' : query.data?.summary?.label || (query.data?.devices?.some(d => !d.capture_ready) ? 'Needs attention · new SMS may be delayed' : 'Receiving normally')}</span></div><button type="button" className="py-2 font-medium text-teal-800 underline" onClick={() => setExpanded(true)}>View phone details</button></section>;
     return <section aria-label="Receiving phone health" className="mb-5 border-b border-slate-200 pb-5">
         <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Receiving phone</h3>
             <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} className="rounded px-2 py-2 text-sm font-medium text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-50">{query.isFetching ? 'Checking…' : 'Check again'}</button></div>
@@ -30,6 +32,7 @@ export default function CollectionDeviceHealthPanel({ platformId }) {
                 {['revoked', 'account_review', 'sim_review', 'filter_review', 'format_review', 'not_enrolled'].includes(device.state) && <p className="mt-3 text-sm font-medium text-amber-950">An administrator must also resolve the setup or review issue. Restarting the phone alone will not clear it.</p>}
             </>}
         </div>)}
+        {compact && <button type="button" className="mb-3 py-2 text-sm font-medium text-teal-800 underline" onClick={() => setExpanded(false)}>Hide phone details</button>}
         {query.data?.checked_at && <p className="text-xs text-slate-500">Checked {when(query.data.checked_at)} · Updates automatically while this page is open</p>}
     </section>;
 }

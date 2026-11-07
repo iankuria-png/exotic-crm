@@ -15,9 +15,19 @@ use App\Services\MarketAuthorizationService;
 /** Advisory staff context only. Never calls evaluate(), reserve(), or an external provider. */
 class CollectionReviewContextService
 {
+    private array $status = [];
+
+    public function clientRows(\Illuminate\Support\Collection $clients): array
+    {
+        $this->status += app(CollectionReceiptStatusService::class)->clients($clients);
+
+        return $clients->map(fn ($client) => $this->clientData($client))->all();
+    }
+
     public function context(CollectionReceipt $receipt, User $actor, array $input = []): array
     {
         app(CollectionAccessService::class)->receipt($actor, $receipt->id);
+        $manual = ($input['workflow'] ?? null) === 'manual';
         $payer = app(CollectionPayerEvidenceService::class)->forReceipt($receipt);
         $history = app(CollectionPaymentHistoryService::class)->forReceipt($receipt, $actor, $input['cursor'] ?? null);
         $platforms = $history['scope']['platform_ids'];
@@ -40,6 +50,7 @@ class CollectionReviewContextService
         $counts = $history['client_counts'];
         $ids = array_unique(array_merge(array_keys($counts), $links->pluck('client_id')->all(), $phoneClients->pluck('id')->all(), array_map(fn ($i) => $i->client_id, $valid)));
         $clients = $this->selectable()->whereIn('platform_id', $platforms)->whereIn('id', $ids)->get()->keyBy('id');
+        $this->status += app(CollectionReceiptStatusService::class)->clients($clients);
         $evidenceIds = [];
         $suggestions = [];
         $unresolved = count(array_diff($ids, $clients->keys()->all())) > 0;
@@ -81,9 +92,9 @@ class CollectionReviewContextService
         usort($suggestions, fn ($a, $b) => $b['score'] <=> $a['score']);
         $recommended = ! $conflict && count($suggestions) === 1 && $suggestions[0]['score'] >= 80 ? $suggestions[0]['id'] : null;
         $selected = ! empty($input['selected_client_id']) ? $this->selectable()->findOrFail($input['selected_client_id']) : ($recommended ? $clients[$recommended] : null);
-        $options = $selected ? $this->options($receipt, $actor, $selected) : ['prices' => [], 'quotes' => [], 'subsidiary_clients' => [], 'subsidiary_platform_id' => null];
+        $options = $selected ? $this->options($receipt, $actor, $selected, ! $manual) : ['prices' => [], 'quotes' => [], 'subsidiary_clients' => [], 'subsidiary_platform_id' => null];
         $intent = null;
-        if (! empty($input['intent_id'])) {
+        if (! $manual && ! empty($input['intent_id'])) {
             $intent = CollectionPurchaseIntent::where('account_id', $receipt->account_id)->findOrFail($input['intent_id']);
             if ($intent->provider_reference !== $receipt->reference_norm) {
                 throw new CollectionException('purchase_for_another_receipt', 422);
@@ -91,10 +102,10 @@ class CollectionReviewContextService
             if ($selected && (int) $intent->client_id !== $selected->id) {
                 throw new CollectionException('purchase_profile_binding_changed');
             }
-        } elseif ($selected && ! empty($input['product_price_id'])) {
+        } elseif (! $manual && $selected && ! empty($input['product_price_id'])) {
             $intent = app(CollectionPurchaseService::class)->prepare($receipt->account, $selected, $actor, $input + [
                 'authority' => 'reviewed_quote', 'valid_until' => now()->addDays(30), 'provider_reference' => $receipt->reference_norm]);
-        } elseif ($selected && count($valid) === 1 && (int) $valid[0]->client_id === $selected->id) {
+        } elseif (! $manual && $selected && count($valid) === 1 && (int) $valid[0]->client_id === $selected->id) {
             $intent = $valid[0];
         }
         $blocked = ['select_client_and_service'];
@@ -124,7 +135,9 @@ class CollectionReviewContextService
             'selected_client' => $selected ? $this->clientData($selected) : null, 'saved_choice' => $savedData,
             'recommended_intent' => count($valid) === 1 && $recommended === (int) $valid[0]->client_id ? ['id' => $valid[0]->id, 'deal_id' => $valid[0]->deal_id, 'purchase' => $valid[0]->purchase_snapshot] : null,
             'can_activate' => $intent !== null && ! $blocked && ! $receipt->allocation()->exists(), 'blocked_reasons' => $blocked,
-            'capture_only' => $receipt->account->mode === 'shadow'] + $options;
+            'workflow' => $manual ? 'manual' : 'legacy', 'manual_available' => in_array($receipt->account_id, config('collection_sales.verified_accounts', []), true),
+            'usage' => app(CollectionReceiptStatusService::class)->forReceipts(collect([$receipt->loadMissing('allocation', 'sale')]), true)[$receipt->id],
+            'capture_only' => ! $manual && $receipt->account->mode === 'shadow'] + $options;
     }
 
     public function selectable()
@@ -134,13 +147,13 @@ class CollectionReviewContextService
 
     public function clientData(Client $client): array
     {
-        return ['id' => $client->id, 'name' => $client->name, 'platform_id' => (int) $client->platform_id, 'wp_post_id' => (int) $client->wp_post_id];
+        return ['id' => $client->id, 'name' => $client->name, 'platform_id' => (int) $client->platform_id, 'wp_post_id' => (int) $client->wp_post_id, 'status' => $this->status[$client->id] ??= app(CollectionReceiptStatusService::class)->clients(collect([$client]))[$client->id]];
     }
 
-    public function options(CollectionReceipt $receipt, User $actor, Client $client): array
+    public function options(CollectionReceipt $receipt, User $actor, Client $client, bool $includeSubsidiary = true): array
     {
         app(CollectionPurchaseService::class)->assertScope($receipt->account, $client, $actor);
-        $secondary = config('collection.subsidiary_platforms.'.$client->platform_id);
+        $secondary = $includeSubsidiary ? config('collection.subsidiary_platforms.'.$client->platform_id) : null;
         $subsidiaries = collect();
         if ($secondary) {
             app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $secondary);
@@ -155,6 +168,6 @@ class CollectionReviewContextService
                 ->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
             'quotes' => Deal::where('client_id', $client->id)->whereIn('status', ['pending', 'active'])->where('currency', $receipt->currency)
                 ->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by', 'status']),
-            'subsidiary_clients' => $subsidiaries->map(fn ($c) => $this->clientData($c)), 'subsidiary_platform_id' => $secondary ? (int) $secondary : null];
+            'subsidiary_clients' => $this->clientRows($subsidiaries), 'subsidiary_platform_id' => $secondary ? (int) $secondary : null];
     }
 }

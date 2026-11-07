@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 
 export default function SubsidiaryClientSearchPopover({ open, platformId, onClose, onSelect }) {
+    const inputId = useId();
     const [search, setSearch] = useState('');
     const [activeIndex, setActiveIndex] = useState(0);
     const inputRef = useRef(null);
@@ -30,7 +31,7 @@ export default function SubsidiaryClientSearchPopover({ open, platformId, onClos
 
     const handleKeyDown = (event) => {
         if (event.key === 'Escape') {
-            onClose?.();
+            event.preventDefault(); event.stopPropagation(); onClose?.();
             return;
         }
         if (event.key === 'ArrowDown') {
@@ -50,8 +51,10 @@ export default function SubsidiaryClientSearchPopover({ open, platformId, onClos
     };
 
     return (
-        <div className="absolute z-20 mt-2 w-full rounded-md border border-slate-200 bg-white p-2 shadow-lg">
+        <div className="mt-2 w-full rounded-md border border-slate-200 bg-white p-3" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose?.(); } }}>
+            <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-slate-700">Find linked profile</label>
             <input
+                id={inputId}
                 ref={inputRef}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}

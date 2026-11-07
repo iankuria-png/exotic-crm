@@ -6,21 +6,22 @@ import SubsidiaryClientSearchPopover from './SubsidiaryClientSearchPopover';
 
 const explanations = { inactive_market: 'This market is inactive.', free_trial_disabled: 'Free trials are disabled in this market.', missing_matching_product: 'A matching package is not available.', missing_wp_api_credentials: 'This market’s connection needs attention.', missing_wp_db_credentials: 'Profile creation is unavailable for this market.' };
 
-export default function SubsidiaryTrialSection({ dealId, value, onChange, onReadyChange, disabled = false, endpointBase = null, requestContext = {} }) {
+export default function SubsidiaryTrialSection({ dealId, value, onChange, onReadyChange, disabled = false, endpointBase = null, requestContext = {}, optionalReceipt = false }) {
     const identity = endpointBase ? JSON.stringify([endpointBase, requestContext.source_client_id, requestContext.product_price_id]) : dealId;
     const base = endpointBase || `/crm/deals/${dealId}`;
     const [details, setDetails] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
+    const searchTrigger = useRef(null);
     const initialized = useRef(null);
-    const targets = useQuery({ queryKey: ['subsidiary-trial-targets', identity], queryFn: () => api.get(`${base}/subsidiary-trial-targets`, { params: requestContext }).then(r => r.data), enabled: Boolean(endpointBase || dealId), staleTime: 0 });
+    const targets = useQuery({ queryKey: ['subsidiary-trial-targets', identity], queryFn: () => api.get(`${base}/subsidiary-trial-targets`, { params: requestContext }).then(r => r.data), enabled: Boolean(endpointBase || dealId) && (!optionalReceipt || Boolean(value.enabled)), staleTime: 0 });
     const markets = targets.data?.targets || [];
     const target = markets.find(m => Number(m.id) === Number(value.platform_id));
     useEffect(() => {
         if (!targets.data || initialized.current === identity) return;
         initialized.current = identity;
-        if (endpointBase && typeof value.enabled === 'boolean') return;
+        if (endpointBase && typeof value.enabled === 'boolean') { if (!value.platform_id && targets.data.recommended_platform_id) onChange({ platform_id: String(targets.data.recommended_platform_id), request_key: value.request_key || crypto.randomUUID() }); return; }
         const id = targets.data.recommended_platform_id;
-        onChange({ enabled: Boolean(id), platform_id: id ? String(id) : '', client_id: null, manual_client_id: null, duration_days: '', preview_token: '', request_key: crypto.randomUUID(), create_confirmed: false });
+        onChange({ enabled: optionalReceipt ? false : Boolean(id), platform_id: id ? String(id) : '', client_id: null, manual_client_id: null, duration_days: '', preview_token: '', request_key: crypto.randomUUID(), create_confirmed: false });
     }, [targets.data, identity]);
     const preview = useQuery({
         queryKey: ['subsidiary-trial-preview', identity, requestContext.receipt_version || null, value.platform_id, value.manual_client_id || null, value.duration_days || null],
@@ -37,7 +38,7 @@ export default function SubsidiaryTrialSection({ dealId, value, onChange, onRead
         if (!value.duration_days) patch.duration_days = String(result.default_duration_days);
         if (value.preview_token !== patch.preview_token || value.client_id !== patch.client_id || !value.duration_days) onChange(patch);
     }, [result, preview.isFetching, kind, value.preview_token, value.client_id, value.duration_days]);
-    useEffect(() => { onReadyChange?.(!targets.isLoading && (!value.enabled || ready)); }, [ready, value.enabled, targets.isLoading, onReadyChange]);
+    useEffect(() => { onReadyChange?.(!value.enabled || (!targets.isLoading && ready)); }, [ready, value.enabled, targets.isLoading, onReadyChange]);
     const reset = patch => onChange({ client_id: null, manual_client_id: null, preview_token: '', create_confirmed: false, request_key: crypto.randomUUID(), pin: '', ...patch });
     const primaryOnly = () => reset({ enabled: false });
     return <section className="rounded-lg border border-teal-200 bg-teal-50/40 p-4" aria-label="Paired market trial">
@@ -60,7 +61,7 @@ export default function SubsidiaryTrialSection({ dealId, value, onChange, onRead
                 {kind === 'unavailable' && <p role="alert" className="text-amber-900">This profile needs review before a trial. Choose an existing profile or activate the primary subscription only.</p>}
             </div>}
             {errors.length > 0 && <p role="alert" className="text-xs text-amber-900">{errors.map(e => explanations[e] || 'This market needs review.').join(' ')}</p>}
-            {details && <div className="relative space-y-3"><button type="button" className="text-xs font-semibold text-teal-800 underline" onClick={() => setSearchOpen(true)}>Choose a different profile</button><SubsidiaryClientSearchPopover open={searchOpen} platformId={value.platform_id} onClose={() => setSearchOpen(false)} onSelect={c => { reset({ manual_client_id: c.id }); setSearchOpen(false); }} /><label className="block text-xs font-medium text-slate-700">Trial duration (days)<input aria-label="Trial duration (days)" type="number" min="1" max="90" className="crm-input mt-1" value={value.duration_days || ''} onChange={e => reset({ duration_days: e.target.value, manual_client_id: value.manual_client_id })} /></label></div>}
+            {details && <div className="relative space-y-3"><button ref={searchTrigger} type="button" className="py-2 text-xs font-semibold text-teal-800 underline" aria-expanded={searchOpen} onClick={() => setSearchOpen(true)}>Choose a different profile</button><SubsidiaryClientSearchPopover open={searchOpen} platformId={value.platform_id} onClose={() => { setSearchOpen(false); searchTrigger.current?.focus(); }} onSelect={c => { reset({ manual_client_id: c.id }); setSearchOpen(false); searchTrigger.current?.focus(); }} /><label className="block text-xs font-medium text-slate-700">Trial duration (days)<input aria-label="Trial duration (days)" type="number" min="1" max="90" className="crm-input mt-1" value={value.duration_days || ''} onChange={e => reset({ duration_days: e.target.value, manual_client_id: value.manual_client_id })} /></label></div>}
             {value.platform_id && kind !== 'already_active' && <TrialAuthorizationControl compact marketId={value.platform_id} value={value.pin || ''} disabled={disabled} onChange={pin => onChange({ pin })} />}
             {(!ready || errors.length > 0) && <button type="button" className="rounded py-2 text-xs font-semibold text-teal-800 underline" onClick={primaryOnly}>Continue with primary subscription only</button>}
             <p className="text-xs text-slate-500">You’ll get the confirmed profile links here after activation.</p>
