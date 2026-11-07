@@ -88,7 +88,7 @@ class CollectionExactContractTest extends CollectionWorkflowTestCase
         $item = \App\Models\Collections\CollectionSalesItem::firstOrFail();
         $fulfillment->resume($item->id);
         ContentMonetizationSystemSetting::updateOrCreate(['id' => 1], ['enabled' => true]);
-        ContentMonetizationSetting::create(['platform_id' => 101, 'enabled' => true, 'rollout_mode' => 'production', 'currency' => 'TZS', 'grant_secret' => str_repeat('g',32), 'device_pepper' => str_repeat('d',32), 'free_pass_policy_json' => ['new_subscriptions_enabled' => false]]);
+        ContentMonetizationSetting::create(['platform_id' => 101, 'enabled' => true, 'rollout_mode' => 'production', 'currency' => 'TZS', 'grant_secret' => str_repeat('g', 32), 'device_pepper' => str_repeat('d', 32), 'free_pass_policy_json' => ['new_subscriptions_enabled' => false]]);
         $sync = \Mockery::mock(SyncService::class);
         $sync->shouldReceive('configuredSubscriptionProfile')->twice()->andReturn(['status' => 'failed'], ['status' => 'synced']);
         $this->app->instance(SyncService::class, $sync);
