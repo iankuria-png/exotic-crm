@@ -75,7 +75,18 @@ class CollectionOutboxWorker
             throw new CollectionException('sale_benefits_not_ready');
         }
         app(CollectionGate::class)->assertFunds($item->session->receipt);
-        app(CollectionWriterGuard::class)->ownedSale($item, fn () => app(\App\Jobs\GrantNewSubscriptionPass::class, ['dealId' => $item->deal_id])->handle(app(\App\Services\Monetization\ComplimentaryPassService::class)));
+        app(CollectionWriterGuard::class)->ownedSale($item, function () use ($item) {
+            $system = \App\Models\ContentMonetizationSystemSetting::find(1);
+            $settings = \App\Models\ContentMonetizationSetting::where('platform_id', $item->session->platform_id)->first();
+            if (! $system || ! $settings || ! $system->enabled || ! $settings->enabled || $settings->rollout_mode === 'off') {
+                return;
+            }
+            app(\App\Jobs\GrantNewSubscriptionPass::class, ['dealId' => $item->deal_id])->handle(app(\App\Services\Monetization\ComplimentaryPassService::class));
+            $result = app(\App\Services\Monetization\SyncService::class)->configuredSubscriptionProfile(\App\Models\Client::findOrFail($item->client_id));
+            if (($result['status'] ?? '') !== 'synced') {
+                throw new CollectionException('sale_monetization_sync_pending');
+            }
+        });
     }
 
     private function salesTrial(string $id): void

@@ -75,6 +75,7 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
     protected function snapshot(int $post, int $user, int $expiry = 0, string $tier = 'basic', int $deal = 0): array
     {
         $state = ['post_id' => $post, 'wp_user_id' => $user, 'post_status' => $expiry > 0 ? 'publish' : 'private', 'post_type' => 'escort',
+            'canonical_type' => 'escort', 'expiry_meta_key' => 'escort_expire',
             'meta' => ['escort_expire' => (string) $expiry, 'agency_expire' => '', 'premium' => in_array($tier, ['premium', 'vip', 'vvip']) ? '1' : '0', 'featured' => in_array($tier, ['vip', 'vvip']) ? '1' : '0', 'vvip' => $tier === 'vvip' ? '1' : '0', 'crm_deal_id' => (string) $deal]];
         $state['meta'] += ['premium_expire' => in_array($tier, ['premium', 'vip', 'vvip']) ? (string) $expiry : '',
             'featured_expire' => in_array($tier, ['vip', 'vvip']) ? (string) $expiry : '', 'vvip_expire' => $tier === 'vvip' ? (string) $expiry : '',

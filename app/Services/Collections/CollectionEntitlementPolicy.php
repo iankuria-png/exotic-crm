@@ -13,7 +13,14 @@ class CollectionEntitlementPolicy
 
     public function expiry(array $snapshot): int
     {
-        return max((int) data_get($snapshot, 'meta.escort_expire', 0), (int) data_get($snapshot, 'meta.agency_expire', 0));
+        $canonical = $snapshot['canonical_type'] ?? null;
+        $key = $snapshot['expiry_meta_key'] ?? null;
+        if (! in_array($canonical, ['escort', 'agency'], true)
+            || $key !== ($canonical === 'agency' ? 'agency_expire' : 'escort_expire')) {
+            throw new CollectionException('canonical_subscription_snapshot_required');
+        }
+
+        return (int) data_get($snapshot, 'meta.'.$key, 0);
     }
 
     public function assertSnapshot(array $snapshot, array $identity): void
@@ -30,6 +37,20 @@ class CollectionEntitlementPolicy
     {
         $this->assertSnapshot($before, $purchase);
         $expiry = $this->expiry($before);
+        $meta = $before['meta'];
+        if (($meta['needs_ag_payment'] ?? '') === '1' || ($meta['exotic_tour_visitor'] ?? '') === '1'
+            || ($before['canonical_type'] ?? '') !== 'escort') {
+            throw new CollectionException('subscription_ownership_requires_review');
+        }
+        $active = $before['post_status'] === 'publish' && ($meta['needs_payment'] ?? '') !== '1' && ($meta['notactive'] ?? '') !== '1';
+        if ($active && ($expiry <= 0
+            || (($meta['premium'] ?? '') === '1' && (int) ($meta['premium_expire'] ?? 0) <= 0)
+            || (($meta['featured'] ?? '') === '1' && (int) ($meta['featured_expire'] ?? 0) <= 0))) {
+            throw new CollectionException('indefinite_active_coverage_requires_review');
+        }
+        if ((int) ($meta['_escortwp_package_campaign_id'] ?? 0) > 0) {
+            throw new CollectionException('placement_or_tier_requires_review');
+        }
         $tier = $purchase['tier'];
         if ($tier === 'vvip' || ! in_array($tier, ['basic', 'premium', 'vip'], true)) {
             throw new CollectionException('placement_or_tier_requires_review');

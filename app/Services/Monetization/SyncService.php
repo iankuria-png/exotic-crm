@@ -13,6 +13,18 @@ use Illuminate\Support\Str;
 
 class SyncService
 {
+    /** Receipt activation must not create or enable previously unconfigured monetization. */
+    public function configuredSubscriptionProfile(Client $client): array
+    {
+        $system = \App\Models\ContentMonetizationSystemSetting::find(1);
+        $settings = ContentMonetizationSetting::where('platform_id', $client->platform_id)->first();
+        if (! $system || ! $settings || ! $system->enabled || ! $settings->enabled || $settings->rollout_mode === 'off') {
+            return ['status' => 'skipped', 'reason' => 'monetization_not_enabled'];
+        }
+
+        return $this->profile($client);
+    }
+
     public function profile(Client $client): array
     {
         $s = app(MonetizationSettingsService::class)->forPlatform($client->platform);

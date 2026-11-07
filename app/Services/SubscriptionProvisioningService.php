@@ -67,7 +67,7 @@ class SubscriptionProvisioningService
         $meta = $snapshot['meta'];
         Client::whereKey($clientId)->update([
             'profile_status' => $snapshot['post_status'],
-            'escort_expire' => max((int) ($meta['escort_expire'] ?? 0), (int) ($meta['agency_expire'] ?? 0)),
+            'escort_expire' => app(\App\Services\Collections\CollectionEntitlementPolicy::class)->expiry($snapshot),
             'premium' => ($meta['premium'] ?? '') === '1',
             'premium_expire' => (int) ($meta['premium_expire'] ?? 0),
             'featured' => ($meta['featured'] ?? '') === '1',
