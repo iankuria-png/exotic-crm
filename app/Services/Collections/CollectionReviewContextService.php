@@ -154,7 +154,7 @@ class CollectionReviewContextService
             ->whereHas('product', fn ($q) => $q->where('platform_id', $client->platform_id)->where('is_active', true)
                 ->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
             'quotes' => Deal::where('client_id', $client->id)->whereIn('status', ['pending', 'active'])->where('currency', $receipt->currency)
-                ->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by']),
+                ->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by', 'status']),
             'subsidiary_clients' => $subsidiaries->map(fn ($c) => $this->clientData($c)), 'subsidiary_platform_id' => $secondary ? (int) $secondary : null];
     }
 }

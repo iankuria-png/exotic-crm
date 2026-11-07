@@ -44,6 +44,9 @@ class SubscriptionProvisioningService
 
     public function activateDeal(Deal $deal, array $options = []): Deal
     {
+        if (($options['payment'] ?? null) instanceof Payment) {
+            app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($options['payment']);
+        }
         if (($options['payment_method'] ?? '') === 'free_trial' || ($options['is_free_trial'] ?? false)) {
             throw \Illuminate\Validation\ValidationException::withMessages(['free_trial' => 'Discretionary free trials must use the market approval workflow.']);
         }
@@ -105,6 +108,43 @@ class SubscriptionProvisioningService
                 'deal_id' => $deal->id, 'payment_id' => $payment->id, 'expires_at' => $end->toIso8601String(), 'review_needed' => ! $free], 'created_at' => now()]);
         app(\App\Services\Collections\CollectionPurchaseService::class)->audit($allocation->receipt, null, 'collection_effect_verified',
             ['effect_id' => $effect->id, 'deal_id' => $deal->id, 'kind' => $effect->effect_kind], 'effect:'.$effect->id);
+    }
+
+    /** Local bookkeeping only. The receipt worker has already verified the persisted WP operation. */
+    public function recordVerifiedManualSaleItem(\App\Models\Collections\CollectionSalesItem $item): void
+    {
+        $p = $item->purchase;
+        $result = $item->operation_result;
+        $snapshot = $result['snapshot'] ?? [];
+        if ($item->state !== 'wp_verified' || ($result['state'] ?? '') !== 'succeeded' || ($result['operation_id'] ?? '') !== $item->operation_key
+            || (int) ($snapshot['post_id'] ?? 0) !== (int) $p['wp_post_id'] || (int) ($snapshot['wp_user_id'] ?? 0) !== (int) $p['wp_user_id']
+            || (int) data_get($snapshot, 'meta.crm_deal_id') !== (int) $item->deal_id
+            || app(\App\Services\Collections\CollectionEntitlementPolicy::class)->tier($snapshot) !== $p['tier']
+            || app(\App\Services\Collections\CollectionEntitlementPolicy::class)->expiry($snapshot) !== $item->expected_site['target']['target_expiry']) {
+            throw new \LogicException('An exact verified receipt sale operation is required.');
+        }
+        $deal = Deal::lockForUpdate()->findOrFail($item->deal_id);
+        $payment = Payment::lockForUpdate()->findOrFail($item->payment_id);
+        if ((int) $deal->client_id !== (int) $item->client_id || (int) $payment->deal_id !== (int) $deal->id || (int) $payment->client_id !== (int) $item->client_id) {
+            throw new \LogicException('Receipt sale financial ownership changed.');
+        }
+        $start = Carbon::createFromTimestamp($item->expected_site['target']['contribution']['start'], 'UTC');
+        $end = Carbon::createFromTimestamp($item->expected_site['target']['target_expiry'], 'UTC');
+        $actor = $item->session->actor_id;
+        $deal->update(['status' => 'active', 'activated_at' => now(), 'expires_at' => $end, 'is_free_trial' => false]);
+        $payment->update(['status' => 'completed', 'start_date' => $start, 'end_date' => $end,
+            'completed_at' => $payment->completed_at ?? now(), 'confirmed_by' => $actor, 'confirmed_at' => now(),
+            'match_confidence' => 'manual', 'reconciliation_state' => 'resolved']);
+        $this->cacheVerifiedCollectionSnapshot($item->client_id, $snapshot);
+        app(SubscriptionActivationAuditService::class)->record($deal, $payment, $actor, 'manual', 'crm_receipt_manual_sale');
+        $item->update(['state' => 'confirmed', 'verified_at' => now()]);
+        app(CommissionService::class)->recordActivationCommission($deal);
+        app(CommissionService::class)->recordRenewalCommission($deal);
+        TimelineEvent::create(['platform_id' => $p['platform_id'], 'entity_type' => 'client', 'entity_id' => $item->client_id,
+            'event_type' => 'profile_activated', 'actor_id' => $actor, 'content' => ['source' => 'receipt_manual_sale',
+                'sales_item_id' => $item->id, 'deal_id' => $deal->id, 'payment_id' => $payment->id, 'expires_at' => $end->toIso8601String()], 'created_at' => now()]);
+        app(\App\Services\Collections\CollectionPurchaseService::class)->audit($item->session->receipt, $actor, 'receipt_sale_item_verified',
+            ['item_id' => $item->id, 'deal_id' => $deal->id, 'payment_id' => $payment->id], 'sale-verified:'.$item->id);
     }
 
     private function activateDealUnlocked(Deal $deal, array $options = []): Deal

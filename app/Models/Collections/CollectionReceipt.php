@@ -25,4 +25,9 @@ class CollectionReceipt extends Model
     {
         return $this->hasOne(CollectionAllocation::class, 'receipt_id');
     }
+
+    public function sale()
+    {
+        return $this->hasOne(CollectionSalesSession::class, 'receipt_id');
+    }
 }

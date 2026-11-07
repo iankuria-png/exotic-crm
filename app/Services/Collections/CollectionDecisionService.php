@@ -19,6 +19,10 @@ class CollectionDecisionService
         return DB::transaction(function () use ($receipt) {
             CollectionAccount::whereKey($receipt->account_id)->lockForUpdate()->firstOrFail();
             $r = CollectionReceipt::lockForUpdate()->findOrFail($receipt->id);
+            if (\Illuminate\Support\Facades\Schema::hasTable('collection_sales_sessions')
+                && DB::table('collection_sales_sessions')->where('receipt_id', $r->id)->where('state', '!=', 'draft')->exists()) {
+                return $r; // This receipt's manual-sale owner governs dispatch and recovery.
+            }
             if (CollectionAllocation::where('receipt_id', $r->id)->lockForUpdate()->first() !== null) {
                 return $r; // Enrichment never silently moves or re-grants an existing allocation.
             }

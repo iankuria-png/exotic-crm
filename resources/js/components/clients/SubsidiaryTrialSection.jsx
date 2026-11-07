@@ -6,23 +6,26 @@ import SubsidiaryClientSearchPopover from './SubsidiaryClientSearchPopover';
 
 const explanations = { inactive_market: 'This market is inactive.', free_trial_disabled: 'Free trials are disabled in this market.', missing_matching_product: 'A matching package is not available.', missing_wp_api_credentials: 'This market’s connection needs attention.', missing_wp_db_credentials: 'Profile creation is unavailable for this market.' };
 
-export default function SubsidiaryTrialSection({ dealId, value, onChange, onReadyChange, disabled = false }) {
+export default function SubsidiaryTrialSection({ dealId, value, onChange, onReadyChange, disabled = false, endpointBase = null, requestContext = {} }) {
+    const identity = endpointBase ? JSON.stringify([endpointBase, requestContext.source_client_id, requestContext.product_price_id]) : dealId;
+    const base = endpointBase || `/crm/deals/${dealId}`;
     const [details, setDetails] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const initialized = useRef(null);
-    const targets = useQuery({ queryKey: ['subsidiary-trial-targets', dealId], queryFn: () => api.get(`/crm/deals/${dealId}/subsidiary-trial-targets`).then(r => r.data), enabled: Boolean(dealId), staleTime: 0 });
+    const targets = useQuery({ queryKey: ['subsidiary-trial-targets', identity], queryFn: () => api.get(`${base}/subsidiary-trial-targets`, { params: requestContext }).then(r => r.data), enabled: Boolean(endpointBase || dealId), staleTime: 0 });
     const markets = targets.data?.targets || [];
     const target = markets.find(m => Number(m.id) === Number(value.platform_id));
     useEffect(() => {
-        if (!targets.data || initialized.current === dealId) return;
-        initialized.current = dealId;
+        if (!targets.data || initialized.current === identity) return;
+        initialized.current = identity;
+        if (endpointBase && typeof value.enabled === 'boolean') return;
         const id = targets.data.recommended_platform_id;
         onChange({ enabled: Boolean(id), platform_id: id ? String(id) : '', client_id: null, manual_client_id: null, duration_days: '', preview_token: '', request_key: crypto.randomUUID(), create_confirmed: false });
-    }, [targets.data, dealId]);
+    }, [targets.data, identity]);
     const preview = useQuery({
-        queryKey: ['subsidiary-trial-preview', dealId, value.platform_id, value.manual_client_id || null, value.duration_days || null],
-        queryFn: () => api.get(`/crm/deals/${dealId}/subsidiary-trial-preview`, { params: { platform_id: Number(value.platform_id), ...(value.manual_client_id ? { client_id: Number(value.manual_client_id) } : {}), ...(value.duration_days ? { duration_days: Number(value.duration_days) } : {}) } }).then(r => r.data),
-        enabled: Boolean(value.enabled && dealId && value.platform_id), staleTime: 0, refetchInterval: value.enabled ? 10 * 60 * 1000 : false,
+        queryKey: ['subsidiary-trial-preview', identity, requestContext.receipt_version || null, value.platform_id, value.manual_client_id || null, value.duration_days || null],
+        queryFn: () => api.get(`${base}/subsidiary-trial-preview`, { params: { ...requestContext, platform_id: Number(value.platform_id), ...(value.manual_client_id ? { client_id: Number(value.manual_client_id) } : {}), ...(value.duration_days ? { duration_days: Number(value.duration_days) } : {}) } }).then(r => r.data),
+        enabled: Boolean(value.enabled && (endpointBase || dealId) && value.platform_id), staleTime: 0, refetchInterval: value.enabled ? 10 * 60 * 1000 : false,
     });
     const result = preview.data;
     const kind = result?.resolution?.kind;

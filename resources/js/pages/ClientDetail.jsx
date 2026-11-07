@@ -3,6 +3,7 @@ import TrialAuthorizationControl from '../components/trials/TrialAuthorizationCo
 import Monetization from './Monetization';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CollectionWorkspace from '../components/collections/CollectionWorkspace';
+import CollectionClientSales, { CollectionSaleLink } from '../components/collections/CollectionClientSales';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -4927,6 +4928,7 @@ export default function ClientDetail() {
 
             {activeTab === 'deals' ? (
                 <div className="space-y-3">
+                    <CollectionClientSales clientId={client.id} />
                     {client.deals?.length > 0 ? client.deals.map((deal) => (
                         <section key={deal.id} className="crm-surface p-5">
                             <button type="button" className="mb-3 rounded px-1 py-2 text-xs font-semibold text-teal-800 underline" onClick={() => setActivationResultDealId(deal.id)}>Activation summary &amp; profile links</button>
@@ -4956,7 +4958,7 @@ export default function ClientDetail() {
 
                                 {!isReadOnly ? (
                                     <div className="flex items-center gap-2">
-                                        {resolveDealStatus(deal) === 'pending' ? (
+                                        {deal.origin === 'receipt_manual_sale' && resolveDealStatus(deal) === 'pending' ? <CollectionSaleLink clientId={client.id} dealId={deal.id} /> : resolveDealStatus(deal) === 'pending' ? (
                                             <button
                                                 onClick={() => openActivationDialog(deal)}
                                                 disabled={activateDealMutation.isPending}

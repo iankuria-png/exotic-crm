@@ -1,14 +1,25 @@
 <?php
 
 use App\Http\Controllers\CRM\CollectionPaymentController;
+use App\Http\Controllers\CRM\CollectionSalesController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin,sales'])
     ->prefix('crm/collections')->group(function () {
         Route::get('capabilities', [CollectionPaymentController::class, 'capabilities']);
+        Route::get('clients/{client}/sales', [CollectionSalesController::class, 'clientSales'])->whereNumber('client');
         Route::get('receipts', [CollectionPaymentController::class, 'index']);
         Route::get('receipts/{receipt}', [CollectionPaymentController::class, 'show'])->whereNumber('receipt');
         Route::get('receipts/{receipt}/review-context', [CollectionPaymentController::class, 'reviewContext'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/messages', [CollectionPaymentController::class, 'messages'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/sales', [CollectionSalesController::class, 'show'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/sales/subsidiary-trial-targets', [CollectionSalesController::class, 'subsidiaryTargets'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/sales/subsidiary-trial-preview', [CollectionSalesController::class, 'subsidiaryPreview'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/sales/preview', [CollectionSalesController::class, 'preview'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/sales/save', [CollectionSalesController::class, 'save'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/sales/activate', [CollectionSalesController::class, 'activate'])->whereNumber('receipt');
+        Route::post('sales/{session}/items/{item}/reconcile', [CollectionSalesController::class, 'reconcile'])->whereUuid('session')->whereUuid('item');
+        Route::post('sales/{session}/items/{item}/retry', [CollectionSalesController::class, 'retry'])->whereUuid('session')->whereUuid('item');
         Route::get('receipts/{receipt}/candidates', [CollectionPaymentController::class, 'candidates'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/intents', [CollectionPaymentController::class, 'createIntent'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/payer-links', [CollectionPaymentController::class, 'reviewPayer'])->whereNumber('receipt');

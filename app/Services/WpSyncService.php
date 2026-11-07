@@ -678,9 +678,9 @@ class WpSyncService
         return $this->get("/clients/{$postId}/subscription-operation", $operationId ? ['operation_id'=>$operationId] : []);
     }
 
-    public function applySubscriptionOperation(int $postId, array $payload): array
+    public function applySubscriptionOperation(int $postId, array $payload, ?float $timeout = null): array
     {
-        return $this->post("/clients/{$postId}/subscription-operation", $payload);
+        return $this->post("/clients/{$postId}/subscription-operation", $payload, $timeout);
     }
 
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array
@@ -1232,15 +1232,17 @@ class WpSyncService
         }
     }
 
-    private function post(string $path, array $body = []): array
+    private function post(string $path, array $body = [], ?float $timeout = null): array
     {
         $this->guardCollectionMutation($path, $body);
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 
-        $response = Http::withHeaders($this->headers())
-            ->timeout($this->defaultTimeout)
-            ->post($this->baseUrl.$path, $body);
+        $pending = Http::withHeaders($this->headers())->timeout($timeout ?? $this->defaultTimeout);
+        if ($timeout !== null) {
+            $pending->connectTimeout(min(3, $timeout));
+        }
+        $response = $pending->post($this->baseUrl.$path, $body);
 
         return $this->decodeResponse($response, 'POST', $path);
     }

@@ -68,13 +68,13 @@ test('review opens with full payer, prior payments and an explained suggested cl
     await dialog.getByRole('combobox', { name: 'Purchased service', exact: true }).selectOption('price:8');
     await expect(dialog.getByRole('button', { name: 'Save purchase choice', exact: true })).toBeEnabled();
     await dialog.getByRole('button', { name: 'Save purchase choice', exact: true }).click();
-    await expect(dialog.getByRole('status')).toContainText('Purchase choice saved. Service remains unchanged');
+    await expect(dialog.getByRole('region', { name: 'Saved purchase', exact: true })).toContainText('Purchase choice saved');
     expect(state.saves[0]).toMatchObject({ client_id: 42, product_price_id: 8, remember_payer: false, expected_version: 2 });
     expect(state.saves[0].request_key).toBeTruthy();
     expect(state.approvals).toEqual([]);
     await dialog.getByRole('button', { name: 'Close', exact: true }).click();
     await page.getByRole('button', { name: 'Review receipt', exact: true }).click();
-    await expect(page.getByText('Saved choice: Example Profile A', { exact: false })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Saved purchase', exact: true })).toContainText('Example Profile A');
 });
 
 test('changing client clears the score and package before an explicit new selection', async ({ page }) => {
@@ -112,7 +112,7 @@ test('failed save preserves inputs and the retry request key', async ({ page }) 
     await expect(page.getByRole('combobox', { name: 'Purchased service', exact: true })).toHaveValue('price:8');
     state.fail = false;
     await save.click();
-    await expect(page.getByRole('dialog').getByRole('status')).toContainText('Purchase choice saved.');
+    await expect(page.getByRole('region', { name: 'Saved purchase', exact: true })).toContainText('Purchase choice saved');
     expect(state.saves[0].request_key).toBe(state.saves[1].request_key);
 });
 

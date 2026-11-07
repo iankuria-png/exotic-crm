@@ -1,7 +1,7 @@
 import TrialAuthorizationControl from '../components/trials/TrialAuthorizationControl';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
@@ -2172,6 +2172,7 @@ export default function Deals() {
                         </header>
 
                         <div className="space-y-4 p-4">
+                            <p className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">Payment captured on the receiving phone? <Link className="font-semibold underline" to="/payments?workspace=collections">Open its incoming receipt</Link> to reuse the payer, reference and amount.</p>
                             {sharedBundleDialog.step === 1 ? (
                                 <div className="grid gap-4 md:grid-cols-2">
                                     <div className="space-y-3">

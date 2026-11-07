@@ -16,6 +16,9 @@ class SubscriptionDeactivationService
     public function deactivateDeal(Deal $deal, DeactivationRequest $request, ?int $actorId = null): Deal
     {
         $deal->loadMissing(['client.platform', 'product', 'platform', 'payment']);
+        if ($deal->payment) {
+            app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($deal->payment);
+        }
 
         $client = $deal->client;
         if (!$client) {

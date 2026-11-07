@@ -23,6 +23,13 @@ use Illuminate\Validation\ValidationException;
 
 class ManualPaymentBundleService
 {
+    private function assertLegacyBundle(ManualPaymentBundle $bundle): void
+    {
+        if (Schema::hasTable('collection_sales_sessions') && DB::table('collection_sales_sessions')->where('bundle_id', $bundle->id)->exists()) {
+            throw new \App\Services\Collections\CollectionException('use_receipt_sale_review');
+        }
+    }
+
     public function __construct(
         private readonly DealPaymentService $dealPaymentService,
         private readonly WalletSettingsService $walletSettingsService,
@@ -433,6 +440,7 @@ class ManualPaymentBundleService
      */
     public function approveBundle(ManualPaymentBundle $bundle, int $actorId): array
     {
+        $this->assertLegacyBundle($bundle);
         $bundle->loadMissing(['payments.client', 'payments.deal', 'createdBy', 'platform']);
 
         if ($bundle->status !== ManualPaymentBundle::STATUS_COMMITTED) {
@@ -472,6 +480,7 @@ class ManualPaymentBundleService
 
     public function voidBundle(ManualPaymentBundle $bundle, array $params, int $actorId): array
     {
+        $this->assertLegacyBundle($bundle);
         $bundle->loadMissing(['payments.deal.client.platform', 'payments.client']);
 
         $allowedStatuses = [

@@ -18,6 +18,49 @@ use Illuminate\Support\Facades\DB;
  */
 class ClientLifecycleMutationLock
 {
+    /** The real shared leases, with one bounded budget for multi-profile preparation. */
+    public function runBounded(array $clientIds, Closure $callback): mixed
+    {
+        $clientIds = array_values(array_unique(array_map('intval', $clientIds)));
+        sort($clientIds, SORT_NUMERIC);
+        $held = [];
+        $deadline = hrtime(true) / 1e9 + 90;
+        $ttl = max(30, (int) config('client_lifecycle.lock_ttl_seconds', 600));
+        $remaining = function (bool $commit = false) use (&$held, &$deadline): float {
+            $seconds = $deadline - hrtime(true) / 1e9 - ($commit ? 0 : 10);
+            foreach ($held as $lock) {
+                if (! method_exists($lock, 'isOwnedByCurrentProcess') || ! $lock->isOwnedByCurrentProcess()) {
+                    throw ClientLifecycleMutationException::busy();
+                }
+            }
+            if ($seconds <= 0) {
+                throw ClientLifecycleMutationException::busy();
+            }
+
+            return $seconds;
+        };
+        try {
+            foreach ($clientIds as $clientId) {
+                $lock = $this->lock($this->key($clientId));
+                $wait = min(5, (int) floor($remaining()));
+                $started = hrtime(true) / 1e9;
+                if (! $lock->block(max(0, $wait))) {
+                    throw ClientLifecycleMutationException::busy();
+                }
+                $held[] = $lock;
+                $deadline = min($deadline, $started + $ttl - 10);
+                app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient($clientId);
+            }
+            $remaining();
+
+            return $callback($remaining);
+        } finally {
+            foreach (array_reverse($held) as $lock) {
+                $lock->release(); // Cache drivers release only their own token.
+            }
+        }
+    }
+
     public function run(Client|int $client, Closure $callback): mixed
     {
         $clientId = $client instanceof Client ? (int) $client->id : (int) $client;

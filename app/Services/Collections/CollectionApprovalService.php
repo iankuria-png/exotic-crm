@@ -86,6 +86,7 @@ class CollectionApprovalService
         return DB::transaction(function () use ($receipt, $intentId, $expectedVersion, $actor, $automatic, $id, $lockedIds) {
             $account = CollectionAccount::whereKey($receipt->account_id)->lockForUpdate()->firstOrFail();
             $r = CollectionReceipt::lockForUpdate()->findOrFail($receipt->id);
+            app(CollectionWriterGuard::class)->assertReceipt($r->id);
             $intent = CollectionPurchaseIntent::whereKey($intentId)->lockForUpdate()->firstOrFail();
             if (! $automatic) {
                 if (! $actor) {

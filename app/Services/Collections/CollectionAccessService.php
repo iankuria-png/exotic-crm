@@ -31,6 +31,12 @@ class CollectionAccessService
                         && ! in_array((int) data_get($intent->purchase_snapshot, 'subsidiary.platform_id'), $allowed, true)))
                 ->pluck('account_id')->unique()->all();
             $ids = array_values(array_diff($ids, $blocked));
+            if (\Illuminate\Support\Facades\Schema::hasTable('collection_sales_items')) {
+                $sales = \App\Models\Collections\CollectionSalesItem::with('session')->whereHas('session', fn ($q) => $q->whereIn('account_id', $ids))->whereNotNull('subsidiary')->get();
+                $blocked = $sales->filter(fn ($item) => ! in_array((int) data_get($item->subsidiary, 'platform_id'), $allowed, true))
+                    ->map(fn ($item) => $item->session->account_id)->unique()->all();
+                $ids = array_values(array_diff($ids, $blocked));
+            }
         }
 
         return $ids;

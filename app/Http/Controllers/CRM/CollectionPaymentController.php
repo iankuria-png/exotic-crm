@@ -36,6 +36,7 @@ class CollectionPaymentController extends Controller
     public function capabilities(Request $request)
     {
         return response()->json(['enabled' => (bool) config('collection.workspace_enabled') && Schema::hasTable('collection_accounts'),
+            'sales_storage_ready' => (bool) config('collection.workspace_enabled') && Schema::hasTable('collection_sales_sessions'),
             'entitlement_writes_enabled' => count(config('collection.entitlement_platforms')) > 0]);
     }
 
@@ -51,7 +52,21 @@ class CollectionPaymentController extends Controller
             'platform_id' => 'nullable|integer|min:1', 'search' => 'nullable|string|max:128', 'page' => 'nullable|integer|min:1', 'export' => 'nullable|boolean']);
         $q = CollectionReceipt::with(['account', 'allocation.effects'])->whereIn('account_id', $this->access->accountIds($request->user()));
         if (! empty($v['state'])) {
-            $q->where('decision_state', $v['state']);
+            if ($v['state'] === 'purchase_saved') {
+                $q->whereDoesntHave('allocation')->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
+                    ->where(fn ($q) => $q->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
+                    ->whereExists(fn ($intent) => $intent->selectRaw('1')->from('collection_purchase_intents')
+                        ->whereColumn('collection_purchase_intents.account_id', 'collection_receipts.account_id')
+                        ->whereColumn('collection_purchase_intents.provider_reference', 'collection_receipts.reference_norm')
+                        ->where('authority', 'reviewed_quote')->whereNull('revoked_at'));
+                if (Schema::hasTable('collection_sales_sessions')) {
+                    $q->whereDoesntHave('sale');
+                }
+            } elseif (str_starts_with($v['state'], 'sales_') && Schema::hasTable('collection_sales_sessions')) {
+                $q->whereHas('sale', fn ($sale) => $sale->where('state', substr($v['state'], 6)));
+            } else {
+                $q->where('decision_state', $v['state']);
+            }
         }
         if (! empty($v['account_id'])) {
             $q->where('account_id', $v['account_id']);
@@ -65,6 +80,9 @@ class CollectionPaymentController extends Controller
             $q->where(function ($q) use ($client) {
                 $q->whereHas('allocation', fn ($a) => $a->where('purchase_snapshot->client_id', $client->id)->orWhere('purchase_snapshot->subsidiary->client_id', $client->id))
                     ->orWhereIn('payer_fingerprint', CollectionPayerLink::where('client_id', $client->id)->whereNull('revoked_at')->select('payer_fingerprint'));
+                if (Schema::hasTable('collection_sales_sessions')) {
+                    $q->orWhereHas('sale.items', fn ($item) => $item->where('client_id', $client->id));
+                }
             });
         }
         if (! empty($v['search'])) {
@@ -113,7 +131,14 @@ class CollectionPaymentController extends Controller
     {
         $allocation = $r->allocation;
         $p = $allocation?->purchase_snapshot;
+        $savedChoice = ! $allocation ? \App\Models\Collections\CollectionPurchaseIntent::where('account_id', $r->account_id)
+            ->where('provider_reference', $r->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->latest('created_at')->first() : null;
+        $p ??= $savedChoice?->purchase_snapshot;
         $clientIds = array_filter([$p['client_id'] ?? null, data_get($p, 'subsidiary.client_id')]);
+        $sale = Schema::hasTable('collection_sales_sessions') ? $r->sale()->with('items')->first() : null;
+        if ($sale) {
+            $clientIds = array_unique(array_merge($clientIds, $sale->items->pluck('client_id')->all()));
+        }
         $clients = Client::whereIn('id', $clientIds)->get(['id', 'name', 'platform_id']);
 
         return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
@@ -121,7 +146,8 @@ class CollectionPaymentController extends Controller
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
             'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
             'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'historical_only' => $r->historical_only,
-            'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $r->decision_state,
+            'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
+            'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
             'allocation' => $allocation ? ['id' => $allocation->id, 'state' => $allocation->state, 'version' => $allocation->version, 'payment_id' => $allocation->payment_id,
                 'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id,
@@ -138,6 +164,14 @@ class CollectionPaymentController extends Controller
             'product_price_id' => 'nullable|integer|min:1', 'deal_id' => 'nullable|integer|min:1', 'subsidiary_client_id' => 'nullable|integer|min:1', 'intent_id' => 'nullable|uuid']);
 
         return response()->json($context->context($r, $request->user(), $input))->header('Cache-Control', 'private, no-store');
+    }
+
+    public function messages(Request $request, int $receipt, \App\Services\Collections\CollectionMessageService $messages)
+    {
+        $this->enabled();
+        $r = $this->access->receipt($request->user(), $receipt);
+
+        return response()->json($messages->forReceipt($r))->header('Cache-Control', 'private, no-store');
     }
 
     public function candidates(Request $request, int $receipt)

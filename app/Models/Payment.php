@@ -17,6 +17,11 @@ class Payment extends Model
 {
     use HasFactory;
 
+    public function save(array $options = [])
+    {
+        return app(\App\Services\Collections\CollectionWriterGuard::class)->paymentWrite($this, fn () => parent::save($options));
+    }
+
     public const PURPOSE_TOUR_PASS = 'tour_pass';
 
     public const PURPOSE_SEND_LOVE = 'send_love';
@@ -467,6 +472,15 @@ class Payment extends Model
     {
         if (!self::supportsBundleVisibilityGuard()) {
             return $query;
+        }
+
+        if (Schema::hasTable('collection_sales_items')) {
+            $query->where(function (Builder $receipt) {
+                $receipt->whereNotExists(fn ($sale) => $sale->selectRaw('1')->from('collection_sales_sessions')
+                    ->whereColumn('collection_sales_sessions.bundle_id', 'payments.manual_payment_bundle_id'))
+                    ->orWhereExists(fn ($sale) => $sale->selectRaw('1')->from('collection_sales_items')
+                        ->whereColumn('collection_sales_items.payment_id', 'payments.id')->where('collection_sales_items.state', 'confirmed')->whereNotNull('collection_sales_items.verified_at'));
+            });
         }
 
         return $query->where(function (Builder $builder) {

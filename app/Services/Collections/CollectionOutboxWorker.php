@@ -33,6 +33,9 @@ class CollectionOutboxWorker
                     'decide' => app(CollectionDecisionService::class)->evaluate((int) $row->subject_id),
                     'fulfill' => $this->fulfill($row->subject_id),
                     'benefits' => $this->benefits($row->subject_id),
+                    'sales_dispatch', 'sales_check' => $this->sale($row->subject_id, $row->kind === 'sales_check'),
+                    'sales_benefits' => $this->salesBenefits($row->subject_id),
+                    'sales_trial' => $this->salesTrial($row->subject_id),
                     default => throw new CollectionException('unknown_outbox_kind'),
                 };
                 DB::table('collection_outbox')->where('id', $id)->update(['completed_at' => now(), 'last_error_code' => null]);
@@ -55,6 +58,34 @@ class CollectionOutboxWorker
             // Keep recovery durable; lookup retries do not blindly re-dispatch an uncertain write.
             throw new CollectionException('fulfillment_recovery_pending');
         }
+    }
+
+    private function sale(string $id, bool $readOnly): void
+    {
+        $item = app(CollectionSalesFulfillmentService::class)->resume($id, $readOnly);
+        if ($item->state !== 'confirmed') {
+            throw new CollectionException('sale_confirmation_pending');
+        }
+    }
+
+    private function salesBenefits(string $id): void
+    {
+        $item = \App\Models\Collections\CollectionSalesItem::findOrFail($id);
+        if ($item->state !== 'confirmed' || ! $item->verified_at) {
+            throw new CollectionException('sale_benefits_not_ready');
+        }
+        app(CollectionGate::class)->assertFunds($item->session->receipt);
+        app(CollectionWriterGuard::class)->ownedSale($item, fn () => app(\App\Jobs\GrantNewSubscriptionPass::class, ['dealId' => $item->deal_id])->handle(app(\App\Services\Monetization\ComplimentaryPassService::class)));
+    }
+
+    private function salesTrial(string $id): void
+    {
+        $item = \App\Models\Collections\CollectionSalesItem::findOrFail($id);
+        if ($item->state !== 'confirmed' || ! $item->verified_at) {
+            throw new CollectionException('primary_sale_not_confirmed');
+        }
+        app(CollectionGate::class)->assertFunds($item->session->receipt);
+        app(\App\Services\SubsidiaryTrialService::class)->activateIfPending(\App\Models\Deal::findOrFail($item->deal_id));
     }
 
     private function benefits(string $id): void

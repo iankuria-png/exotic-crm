@@ -14,6 +14,7 @@ class PaymentFulfillmentRecoveryService
 {
     public function resume(Payment $payment): ?PaymentFulfillmentOperation
     {
+        app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
         if (! in_array((int) $payment->platform_id, config('payment_recovery.automatic_platforms', []), true)
             || ! in_array((int) $payment->platform_id, config('payment_recovery.verified_operation_platforms', []), true)) {
             return null;

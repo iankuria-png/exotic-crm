@@ -44,6 +44,11 @@ class CollectionPaymentHistoryService
         $q = Payment::query()->reportableSuccessful()->whereIn('platform_id', $platforms)->where('amount', '>', 0)
             ->where(fn ($q) => $q->whereNull('purpose')->orWhere('purpose', 'subscription'))
             ->whereRaw('COALESCE(completed_at, created_at) < ?', [$receipt->provider_at]);
+        if (Schema::hasTable('collection_sales_sessions')) {
+            // Receipt-owned cash has one principal even when only some children are confirmed.
+            $q->whereNotExists(fn ($sale) => $sale->selectRaw('1')->from('collection_sales_sessions')
+                ->whereColumn('collection_sales_sessions.bundle_id', 'payments.manual_payment_bundle_id'));
+        }
         $anchor ??= (int) ((clone $q)->max('id') ?? 0);
         $q->where('id', '<=', $anchor);
         $out['total_rows'] = (clone $q)->count();
@@ -163,6 +168,8 @@ class CollectionPaymentHistoryService
         }
         $aliases = DB::table('collection_receipt_aliases')->where('account_id', $receipt->account_id)->whereIn('receipt_id', $captured->pluck('id'))
             ->get(['receipt_id', 'reference'])->groupBy('receipt_id');
+        $sales = Schema::hasTable('collection_sales_sessions') ? \App\Models\Collections\CollectionSalesSession::with('items')
+            ->where('account_id', $receipt->account_id)->whereIn('receipt_id', $captured->pluck('id'))->get()->keyBy('receipt_id') : collect();
         foreach ($captured->take(10000) as $r) {
             if ($r->conflicts) {
                 $out['identity_conflict'] = true;
@@ -177,9 +184,19 @@ class CollectionPaymentHistoryService
                 continue;
             }
             $seenRefs = array_merge($seenRefs, $refs);
-            $items[] = ['key' => 'receipt:'.$r->id, 'source' => 'observed', 'client_ids' => [], 'amount_minor' => $r->principal_minor,
+            $sale = $sales->get($r->id);
+            $confirmed = $sale?->items->where('state', 'confirmed')->whereNotNull('verified_at') ?? collect();
+            $ids = $confirmed->pluck('client_id')->unique()->all();
+            if ($sale && $sale->state !== 'draft') {
+                $out['identity_conflict'] = $out['identity_conflict'] || $sale->items->count() > 1 || $sale->state === 'needs_review';
+                foreach ($ids as $id) {
+                    $clientCounts[$id] = ($clientCounts[$id] ?? 0) + 1;
+                }
+            }
+            $items[] = ['key' => 'receipt:'.$r->id, 'source' => $confirmed->isNotEmpty() ? 'crm' : 'observed', 'client_ids' => $ids, 'amount_minor' => $r->principal_minor,
                 'currency' => $r->currency, 'at' => $r->provider_at->toIso8601String(), 'reference' => $r->reference_norm];
         }
+        $crmCount = count(array_filter($items, fn ($item) => $item['source'] === 'crm'));
         usort($items, fn ($a, $b) => strtotime($b['at']) <=> strtotime($a['at']));
         $out['complete'] = $complete;
         $out['prior_count'] = count($items);

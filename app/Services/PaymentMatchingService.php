@@ -30,6 +30,7 @@ class PaymentMatchingService
      */
     public function matchPayment(Payment $payment, ?string $prefix = null): array
     {
+        app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
         $result = $this->dryRunMatchPayment($payment, $prefix);
         if (($result['confidence'] ?? '') === 'excluded' || ($result['confidence'] ?? '') === 'already_matched') return $result;
         if (! $result['matched']) {
@@ -49,6 +50,7 @@ class PaymentMatchingService
      */
     public function confirmMatch(Payment $payment, int $clientId, int $confirmedBy): Payment
     {
+        app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
         abort_if($payment->isVisitorPayment(), 422, 'Visitor payments cannot match advertisers.');
         abort_if(\Illuminate\Support\Facades\Schema::hasTable('payment_attributions') && in_array($payment->attribution?->attribution_state,['archived','disputed'],true),422,'Historical or disputed attribution requires a reviewed correction before matching.');
         abort_if(\Illuminate\Support\Facades\Schema::hasTable('payment_attributions') && $payment->attribution?->original_client_id && (int)$payment->attribution->original_client_id !== $clientId,422,'Changing the original customer requires an audited attribution correction.');

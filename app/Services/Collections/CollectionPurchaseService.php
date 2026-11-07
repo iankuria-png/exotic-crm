@@ -39,7 +39,7 @@ class CollectionPurchaseService
     }
 
     /** Build and validate terms without writing authority, audits or customer records. */
-    public function prepare(CollectionAccount $account, Client $client, User $actor, array $input): CollectionPurchaseIntent
+    public function prepare(CollectionAccount $account, Client $client, User $actor, array $input, bool $legacySubsidiary = true): CollectionPurchaseIntent
     {
         $this->assertScope($account, $client, $actor);
         $standing = ($input['authority'] ?? '') === 'standing_agreement';
@@ -70,7 +70,7 @@ class CollectionPurchaseService
             throw new CollectionException('reviewed_current_payer_required', 422);
         }
         $subsidiary = null;
-        $subsidiaryPlatform = config('collection.subsidiary_platforms.'.$client->platform_id);
+        $subsidiaryPlatform = $legacySubsidiary ? config('collection.subsidiary_platforms.'.$client->platform_id) : null;
         if ($subsidiaryPlatform) {
             $subsidiary = Client::where('platform_id', $subsidiaryPlatform)->findOrFail($input['subsidiary_client_id'] ?? 0);
             app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, $subsidiaryPlatform);
@@ -120,6 +120,7 @@ class CollectionPurchaseService
         return DB::transaction(function () use ($receipt, $actor, $input, $key, $digest) {
             $account = CollectionAccount::whereKey($receipt->account_id)->lockForUpdate()->firstOrFail();
             $r = CollectionReceipt::lockForUpdate()->findOrFail($receipt->id);
+            app(CollectionWriterGuard::class)->assertReceipt($r->id);
             $prior = DB::table('collection_audit')->where('dedupe_key', $key)->first();
             if ($prior) {
                 $context = json_decode($prior->context, true, 512, JSON_THROW_ON_ERROR);

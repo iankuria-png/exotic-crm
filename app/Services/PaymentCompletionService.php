@@ -205,6 +205,7 @@ class PaymentCompletionService
 
     public function completeSubscriptionPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
+        app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
         return DB::transaction(function () use ($payment, $providerPayload, $options) {
             $client = $options['client'] ?? $this->resolveClientForPayment($payment);
             $deal = null;

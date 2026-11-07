@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
+import CollectionSalesFlow from './CollectionSalesFlow';
 
 const button = 'rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-40';
 const money = value => `${value.currency} ${Number((value.amount_minor ?? value.principal_minor ?? 0) / 100).toLocaleString()}`;
@@ -50,6 +51,8 @@ export default function CollectionPurchaseReview({ row, onSaved }) {
     const [historyPages, setHistoryPages] = useState([]);
     const [nextCursor, setNextCursor] = useState(null);
     const [loadingHistory, setLoadingHistory] = useState(false);
+    const [salesMode, setSalesMode] = useState(row.sale ? 'one' : null);
+    const [editingSaved, setEditingSaved] = useState(false);
     const initialized = useRef(false);
     const request = useRef({ key: crypto.randomUUID(), body: null });
     const term = useSearch(search);
@@ -148,7 +151,7 @@ export default function CollectionPurchaseReview({ row, onSaved }) {
                     {nextCursor && <button type="button" className="mt-2 text-sm font-medium text-teal-700 underline" disabled={loadingHistory} onClick={async () => { setLoadingHistory(true); try { const next = (await api.get(`/crm/collections/receipts/${row.id}/review-context`, { params: { cursor: nextCursor } })).data.history; setHistoryPages(pages => [...pages, ...next.items]); setNextCursor(next.next_cursor); } catch { setError('Could not load more history. Try again.'); } finally { setLoadingHistory(false); } }}>{loadingHistory ? 'Loading…' : 'Show more payments'}</button>}
                 </details>}</>}
         </section>
-        <form onSubmit={submit} className="space-y-4" aria-label="Confirm purchased service">
+        {salesMode ? <CollectionSalesFlow row={row} shared={salesMode === 'shared'} onBack={() => setSalesMode(null)} onSaved={onSaved} /> : data?.saved_choice && !editingSaved ? <section aria-label="Saved purchase" className="space-y-4 rounded-xl border border-teal-200 bg-teal-50/50 p-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-teal-800">Purchase choice saved</p><h3 className="mt-2 font-semibold">{data.saved_choice.client.name}</h3><p className="mt-1 text-sm">{data.saved_choice.purchase.tier.toUpperCase()} · {data.saved_choice.purchase.duration_days} days · {money(data.saved_choice.purchase)}</p><p className="mt-2 text-xs text-slate-500">{data.saved_choice.valid ? 'Not activated yet. Review the subscription before activating.' : 'This saved choice needs review before activation.'}</p></div><div className="flex flex-wrap gap-3"><button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} onClick={() => setSalesMode('one')}>Review activation</button><button type="button" className={button} onClick={() => setSalesMode('shared')}>Split across profiles</button><button type="button" className="text-sm font-medium text-teal-700 underline" onClick={() => setEditingSaved(true)}>Change purchase choice</button></div></section> : <form onSubmit={submit} className="space-y-4" aria-label="Confirm purchased service">
             <div><h3 className="text-base font-semibold">Confirm the purchase</h3><p className="mt-1 text-sm text-slate-500">Check the advertiser profile and the exact service purchased.</p></div>
             {data?.needs_choice && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Choose the intended profile. The evidence is shared, conflicting or incomplete, so no client has been preselected.</p>}
             {client && <div className={`rounded-xl border p-4 ${suggestion ? 'border-teal-200 bg-teal-50/60' : 'border-slate-200 bg-slate-50/60'}`}>
@@ -185,6 +188,7 @@ export default function CollectionPurchaseReview({ row, onSaved }) {
             {status && <p role="status" className="rounded-lg bg-teal-50 p-3 text-sm text-teal-800">{status}</p>}
             <button type="submit" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={!ready || busy || stale || context.isError || preview.isFetching || preview.isError || !preview.data || (!!data?.saved_choice && !intent && !replace)}>{busy ? 'Confirming…' : preview.data?.can_activate ? 'Confirm client and service' : 'Save purchase choice'}</button>
             <p className="text-xs text-slate-500">This review does not authorize automatic future renewals.</p>
-        </form>
+            <button type="button" className="text-sm font-medium text-teal-700 underline" onClick={() => setSalesMode('shared')}>This payment is shared across profiles</button>
+        </form>}
     </section>;
 }
