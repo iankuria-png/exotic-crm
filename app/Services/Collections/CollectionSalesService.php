@@ -80,15 +80,41 @@ class CollectionSalesService
             $terms = ['authority' => 'reviewed_quote', 'valid_until' => now()->addMinutes(5), 'provider_reference' => $receipt->reference_norm,
                 'product_price_id' => (int) $value['product_price_id'], 'deal_id' => $value['deal_id'] ?? $saved?->deal_id,
                 'subsidiary_client_id' => $value['subsidiary_client_id'] ?? data_get($saved?->purchase_snapshot, 'subsidiary.client_id')];
+            $discount = $value['discount'] ?? [];
+            $newDiscount = ! empty($discount['enabled']);
+            $replacePrice = ! empty($value['replace_saved_price']);
+            $quoteToAmend = null;
+            if ($replacePrice) {
+                if (! $saved || ! $newDiscount) {
+                    throw new CollectionException('saved_price_amendment_requires_discount_approval', 422);
+                }
+                $oldEvidence = clone $receipt;
+                $oldEvidence->principal_minor = (int) $saved->purchase_snapshot['amount_minor'];
+                app(CollectionPurchaseService::class)->validate($saved, $oldEvidence, false);
+                $quoteToAmend = $saved->deal_id;
+                $terms['deal_id'] = null; // Rebuild catalogue terms; never compound a saved discount.
+            }
             $amendBenefit = ! empty($value['replace_saved_benefit']) && (bool) data_get($saved?->purchase_snapshot, 'subsidiary');
             $legacyBenefit = (bool) data_get($saved?->purchase_snapshot, 'subsidiary') && ! $amendBenefit;
             $prepared = app(CollectionPurchaseService::class)->prepare($receipt->account, $client, $actor, $terms, $legacyBenefit);
+            if ($quoteToAmend) {
+                $prepared->deal_id = $quoteToAmend;
+            }
+            if ($newDiscount) {
+                $prepared->purchase_snapshot = app(CollectionSalesDiscountService::class)->apply($prepared->purchase_snapshot, $actor, $discount, $position);
+            }
             // Validate the allocated row against the existing authority without changing the received total.
             $rowEvidence = clone $receipt;
             $rowEvidence->principal_minor = $prepared->purchase_snapshot['amount_minor'];
-            app(CollectionPurchaseService::class)->validate($prepared, $rowEvidence, false);
+            // Original quote terms were checked during prepare (or saved-authority validation).
+            // The approved new amount is checked without asserting it equals the pre-amendment DB amount.
+            $amountAuthority = clone $prepared;
+            if ($newDiscount) {
+                $amountAuthority->deal_id = null;
+            }
+            app(CollectionPurchaseService::class)->validate($amountAuthority, $rowEvidence, false);
             $purchase = $prepared->purchase_snapshot;
-            if ($saved && ((int) $saved->purchase_snapshot['amount_minor'] !== (int) $purchase['amount_minor']
+            if ($saved && ((! $newDiscount && (int) $saved->purchase_snapshot['amount_minor'] !== (int) $purchase['amount_minor'])
                 || (int) $saved->purchase_snapshot['duration_days'] !== (int) $purchase['duration_days']
                 || $saved->purchase_snapshot['tier'] !== $purchase['tier'] || (! $amendBenefit && $saved->purchase_snapshot['subsidiary'] !== $purchase['subsidiary']))) {
                 throw new CollectionException('saved_purchase_terms_changed');
@@ -102,7 +128,7 @@ class CollectionSalesService
             $lifecycle = app(\App\Services\SubscriptionLifecycleService::class)->resolveForClient($client, $platform, $value['subscription_lifecycle'] ?? null, $value['subscription_lifecycle_reason'] ?? null, ['exclude_deal_id' => $prepared->deal_id]);
             $trial = ! $legacyBenefit ? app(CollectionSalesSubsidiaryAdapter::class)->validate($receipt, $actor, $purchase, $value['subsidiary_trial'] ?? []) : null;
             $items[] = ['lifecycle' => $lifecycle, 'subsidiary_trial' => $trial ? array_diff_key($trial, ['identity' => true]) : null,
-                'subsidiary_fingerprint' => $trial ? $this->digest($trial) : null, 'replaces_saved_benefit' => $amendBenefit, 'client_id' => $client->id, 'client' => app(CollectionReviewContextService::class)->clientData($client),
+                'price_amended' => $newDiscount, 'subsidiary_fingerprint' => $trial ? $this->digest($trial) : null, 'replaces_saved_benefit' => $amendBenefit, 'client_id' => $client->id, 'client' => app(CollectionReviewContextService::class)->clientData($client),
                 'position' => $position + 1, 'deal_id' => $prepared->deal_id, 'purchase' => $purchase,
                 'amount_minor' => $purchase['amount_minor'], 'saved_intent_id' => $saved?->id];
         }
@@ -172,7 +198,9 @@ class CollectionSalesService
             foreach ($preview['items'] as $row) {
                 CollectionSalesItem::create(['id' => (string) Str::uuid(), 'session_id' => $session->id, 'client_id' => $row['client_id'],
                     'position' => $row['position'], 'operation_key' => (string) Str::uuid(), 'amount_minor' => $row['amount_minor'],
-                    'purchase' => $row['purchase'] + ['source_deal_id' => $row['deal_id'], 'saved_intent_id' => $row['saved_intent_id'], 'benefit_amendment' => $row['replaces_saved_benefit'], 'lifecycle' => $row['lifecycle']],
+                    'purchase' => $row['purchase'] + ['source_deal_id' => $row['deal_id'], 'saved_intent_id' => $row['saved_intent_id'], 'benefit_amendment' => $row['replaces_saved_benefit'],
+                        'receipt_discount_requested' => $row['price_amended'],
+                        'replace_saved_price' => (bool) ($input['items'][$row['position'] - 1]['replace_saved_price'] ?? false), 'lifecycle' => $row['lifecycle']],
                     'subsidiary' => $row['subsidiary_trial'] ? app(CollectionSalesSubsidiaryAdapter::class)->validate($receipt, $actor, $row['purchase'], $input['items'][$row['position'] - 1]['subsidiary_trial']) : null]);
             }
             $response = ['session' => $this->present($session, $actor), 'receipt_version' => $receipt->version];
@@ -211,6 +239,7 @@ class CollectionSalesService
     {
         unset($input['request_key'], $input['preview_token']);
         foreach ($input['items'] ?? [] as $i => $item) {
+            unset($input['items'][$i]['discount']['pin']);
             unset($input['items'][$i]['subsidiary_trial']['pin'], $input['items'][$i]['subsidiary_trial']['preview_token'], $input['items'][$i]['subsidiary_trial']['request_key']);
         }
 

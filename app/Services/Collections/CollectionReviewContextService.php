@@ -163,9 +163,10 @@ class CollectionReviewContextService
             }
         }
 
-        return ['prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $receipt->currency)
-            ->whereHas('product', fn ($q) => $q->where('platform_id', $client->platform_id)->where('is_active', true)
-                ->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
+        return ['discount_policy' => app(CollectionSalesDiscountService::class)->availability((int) $client->platform_id),
+            'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $receipt->currency)
+                ->whereHas('product', fn ($q) => $q->where('platform_id', $client->platform_id)->where('is_active', true)
+                    ->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
             'quotes' => Deal::where('client_id', $client->id)->whereIn('status', ['pending', 'active'])->where('currency', $receipt->currency)
                 ->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by', 'status']),
             'subsidiary_clients' => $this->clientRows($subsidiaries), 'subsidiary_platform_id' => $secondary ? (int) $secondary : null];

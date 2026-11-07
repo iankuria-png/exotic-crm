@@ -220,6 +220,12 @@ class CollectionSalesFulfillmentService
                             'client_id' => $client->id, 'deal_id' => $deal->id, 'operation_key' => (string) Str::uuid(), 'state' => 'prepared',
                             'amount_minor' => $p['amount_minor'], 'purchase' => $p, 'expected_site' => $snapshots[$client->id],
                             'subsidiary' => $row['subsidiary_trial'] ? app(CollectionSalesSubsidiaryAdapter::class)->validate($r, $actor, $p, $input['items'][$row['position'] - 1]['subsidiary_trial']) : null]);
+                        if (! empty($row['price_amended'])) {
+                            app(CollectionPurchaseService::class)->audit($r, $actor->id, 'receipt_discount_approved',
+                                ['item_id' => $item->id, 'deal_id' => $deal->id, 'saved_intent_id' => $row['saved_intent_id'],
+                                    'catalogue_minor' => $p['catalogue_minor'], 'payable_minor' => $p['amount_minor'],
+                                    'discount_percentage' => $p['discount_percentage'], 'approved_by' => $actor->id], 'sale-discount:'.$item->id);
+                        }
                         if ($item->subsidiary) {
                             app(CollectionSalesSubsidiaryAdapter::class)->attach($deal, $actor, $item->subsidiary, $input['items'][$row['position'] - 1]['subsidiary_trial']);
                         }
