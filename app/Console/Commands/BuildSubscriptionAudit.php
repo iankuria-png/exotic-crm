@@ -3,8 +3,10 @@
 namespace App\Console\Commands;
 
 use App\Services\SubscriptionAudit\SubscriptionAuditBuilder;
+use App\Services\SubscriptionAudit\SubscriptionAuditException;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Database\QueryException;
 
 class BuildSubscriptionAudit extends Command
 {
@@ -41,7 +43,18 @@ class BuildSubscriptionAudit extends Command
 
             return self::SUCCESS;
         } catch (\Throwable $exception) {
-            $this->error('Subscription audit snapshot build failed ('.class_basename($exception).'). Previous completed reports remain available.');
+            $failure = class_basename($exception);
+            if ($exception instanceof QueryException) {
+                // SQL and bindings may contain private client/payment evidence.
+                $state = (string) ($exception->errorInfo[0] ?? '');
+                $driver = (string) ($exception->errorInfo[1] ?? '');
+                if (preg_match('/^[A-Z0-9]{5}$/D', $state) && ctype_digit($driver)) {
+                    $failure .= '; SQLSTATE '.$state.'; driver '.$driver;
+                }
+            } elseif ($exception instanceof SubscriptionAuditException) {
+                $failure .= '; '.$exception->reason;
+            }
+            $this->error('Subscription audit snapshot build failed ('.$failure.'). Previous completed reports remain available.');
 
             return self::FAILURE;
         }

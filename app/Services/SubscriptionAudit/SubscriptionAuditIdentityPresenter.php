@@ -20,7 +20,9 @@ class SubscriptionAuditIdentityPresenter
         if (! property_exists($mapping, 'wp_post_id')) {
             $frozen = \Illuminate\Support\Facades\Schema::hasTable('subscription_audit_profiles') ? DB::table('subscription_audit_profiles')->where('run_id', $mapping->run_id)->where('client_id', $mapping->client_id)->where('platform_id', $mapping->platform_id)->first(['wp_post_id', 'wp_user_id']) : null;
         }
-        $binding = $client && $frozen && (int) $frozen->wp_post_id === (int) $client->wp_post_id && (int) $frozen->wp_user_id === (int) $client->wp_user_id;
+        $binding = $client && $frozen && (int) $frozen->wp_post_id > 0
+            && ($client->wp_user_id === null || (int) $client->wp_user_id > 0)
+            && (int) $frozen->wp_post_id === (int) $client->wp_post_id && (int) $frozen->wp_user_id === (int) $client->wp_user_id;
         $identity = ['identity_as_of' => now('UTC')->toIso8601String(), 'state' => $binding ? 'current_identity' : 'identity_unavailable',
             'client_display_name' => $binding ? $this->display($client->name) : null,
             'profile_url' => $binding ? $this->profileUrl($client) : null, 'profile_url_kind' => 'wordpress_public_locator'];

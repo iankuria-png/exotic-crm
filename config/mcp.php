@@ -98,7 +98,7 @@ return [
         'max_ttl_days' => 365,
         'allow_tool_allowlist' => true,
     ],
-    'subscription_profiles' => ['max_profiles' => 300000, 'build_seconds' => 120],
+    'subscription_profiles' => ['max_profiles' => 300000, 'build_seconds' => 600],
     'sanitisation' => [
         'truncate_chars' => 500,
         'strip_urls' => true,

@@ -96,7 +96,7 @@ class SubscriptionAuditBuilder
             $run->update(['coverage' => $coverage, 'status' => 'completed']);
 
             $completed = $run->fresh();
-            if (($coverage['profiles']['state'] ?? null) === 'partial' && microtime(true) - $started > (float) config('mcp.subscription_profiles.build_seconds', 120)) {
+            if (($coverage['profiles']['state'] ?? null) === 'partial' && microtime(true) - $started > (float) config('mcp.subscription_profiles.build_seconds', 600)) {
                 throw new SubscriptionAuditException('Snapshot completion exceeded its time budget.', 'audit_source_limit', 503, -32020);
             }
 

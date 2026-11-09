@@ -244,6 +244,27 @@ class SubscriptionAuditReadModelTest extends TestCase
         $this->assertSame('active', $deal->fresh()->status);
     }
 
+    public function test_cli_failure_reports_safe_database_codes_without_query_or_payment_details(): void
+    {
+        $previous = $this->build();
+        $cause = new \PDOException('Private payment reference and client name');
+        $cause->errorInfo = ['22003', 1264, 'Private SQL value'];
+        $error = new \Illuminate\Database\QueryException('mysql', 'insert private_payment_payload values (?)', ['Private client name'], $cause);
+        $builder = \Mockery::mock(SubscriptionAuditBuilder::class);
+        $builder->shouldReceive('build')->once()->andThrow($error);
+        $this->app->instance(SubscriptionAuditBuilder::class, $builder);
+        $this->artisan('crm:subscription-audit-build')->expectsOutput('Subscription audit snapshot build failed (QueryException; SQLSTATE 22003; driver 1264). Previous completed reports remain available.')->assertFailed();
+        $this->assertSame($previous->run_ref, $this->report('summary')['run_ref']);
+    }
+
+    public function test_cli_budget_failure_identifies_the_safe_reporting_limit(): void
+    {
+        $builder = \Mockery::mock(SubscriptionAuditBuilder::class);
+        $builder->shouldReceive('build')->once()->andThrow(new SubscriptionAuditException('Private implementation detail', 'audit_source_limit'));
+        $this->app->instance(SubscriptionAuditBuilder::class, $builder);
+        $this->artisan('crm:subscription-audit-build')->expectsOutput('Subscription audit snapshot build failed (SubscriptionAuditException; audit_source_limit). Previous completed reports remain available.')->assertFailed();
+    }
+
     private function auth(?array $platforms = null): McpAuthorizationContext
     {
         return new McpAuthorizationContext($this->admin, ['mcp:read', 'mcp:subscription-audit'], $platforms);

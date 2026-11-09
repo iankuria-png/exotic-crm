@@ -58,6 +58,41 @@ class McpSubscriptionProfileAuditTest extends TestCase
         $this->assertSame(3, $this->report(['run_ref' => $run->run_ref, 'profile_scope' => 'published'])['total_matching']);
     }
 
+    public function test_invalid_wordpress_ids_do_not_abort_the_snapshot_or_attach_named_identity(): void
+    {
+        [$badPost] = $this->action(now()->subDay());
+        DB::table('clients')->where('id', $badPost->id)->update(['wp_post_id' => -48]);
+        $badPost->refresh();
+        $zeroPost = $this->client(['wp_post_id' => 0]);
+        $badUser = $this->client(['wp_user_id' => -19]);
+        $zeroUser = $this->client(['wp_user_id' => 0]);
+        $valid = $this->client(['wp_user_id' => null]);
+        $run = app(SubscriptionAuditBuilder::class)->build();
+        $rows = collect($this->report(['identified' => true])['rows'])->keyBy('client_handle');
+        $this->assertSame(5, $rows->count());
+        foreach ([$badPost, $zeroPost, $badUser, $zeroUser] as $client) {
+            $row = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $client->id)];
+            $this->assertContains('wordpress_identity_invalid', $row['review_flags']);
+            $this->assertSame('identity_unavailable', $row['audit_identity']['state']);
+            $this->assertNull($row['audit_identity']['client_display_name']);
+            $this->assertNull($row['audit_identity']['profile_url']);
+            $this->assertSame($client->wp_post_id, $client->fresh()->wp_post_id);
+            $this->assertSame($client->wp_user_id, $client->fresh()->wp_user_id);
+            $frozen = DB::table('subscription_audit_profiles')->where('run_id', $run->id)->where('client_id', $client->id)->first();
+            $this->assertSame((int) $client->wp_post_id > 0 ? (int) $client->wp_post_id : null, $frozen->wp_post_id);
+            $this->assertSame((int) $client->wp_user_id > 0 ? (int) $client->wp_user_id : null, $frozen->wp_user_id);
+        }
+        $eventRef = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $badPost->id)]['latest_action']['event_ref'];
+        $trace = app(SubscriptionAuditService::class)->report('trace', ['purpose' => 'Invalid identity regression',
+            'run_ref' => $run->run_ref, 'event_ref' => $eventRef, 'identified' => true], $this->auth());
+        $this->assertSame('identity_unavailable', $trace['event']['audit_identity']['state']);
+        $this->assertNull($trace['event']['audit_identity']['client_display_name']);
+        $this->assertNull($trace['event']['audit_identity']['profile_url']);
+        $validRow = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $valid->id)];
+        $this->assertSame('current_identity', $validRow['audit_identity']['state']);
+        $this->assertNotNull($validRow['audit_identity']['profile_url']);
+    }
+
     public function test_cash_history_separates_wallet_purchases_topups_tests_and_failed_payments(): void
     {
         $cash = $this->client();

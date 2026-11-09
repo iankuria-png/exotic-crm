@@ -46,6 +46,11 @@ class SubscriptionProfileAuditBuilder
                     $latest = $recorded[0] ?? null;
                     $activation = collect($recorded)->first(fn ($row) => in_array($row['event_type'], ['activation', 'renewal'], true));
                     $flags = $h['has_unverified_candidates'] ? ['payment_history_candidates_unverified'] : [];
+                    $postId = (int) $client->wp_post_id > 0 ? (int) $client->wp_post_id : null;
+                    $userId = (int) $client->wp_user_id > 0 ? (int) $client->wp_user_id : null;
+                    if ($postId === null || ($client->wp_user_id !== null && $userId === null)) {
+                        $flags[] = 'wordpress_identity_invalid';
+                    }
                     if (! $client->last_synced_at || $client->last_synced_at->lt($asOf->subHours(2))) {
                         $flags[] = 'wordpress_cache_stale_or_unknown';
                     }
@@ -70,7 +75,7 @@ class SubscriptionProfileAuditBuilder
                         'authorisation_state' => $latest['authorisation_state'] ?? 'not_recorded', 'review_flags' => $flags,
                     ];
                     $rows[] = ['run_id' => $run->id, 'profile_ref' => $payload['profile_ref'], 'platform_id' => $client->platform_id, 'client_id' => $client->id,
-                        'wp_post_id' => $client->wp_post_id, 'wp_user_id' => $client->wp_user_id, 'country' => $payload['country'],
+                        'wp_post_id' => $postId, 'wp_user_id' => $userId, 'country' => $payload['country'],
                         'business_active' => $active, 'published' => $published, 'profile_as_of' => $asOf->toDateTimeString(),
                         'source_last_synced_at' => $client->last_synced_at?->toDateTimeString(), 'payment_history_state' => $state,
                         'action_payment_state' => $payload['action_payment_state'], 'authorisation_state' => $payload['authorisation_state'],
@@ -258,7 +263,7 @@ class SubscriptionProfileAuditBuilder
 
     private function budget(float $started): void
     {
-        if (microtime(true) - $started > (float) config('mcp.subscription_profiles.build_seconds', 120)) {
+        if (microtime(true) - $started > (float) config('mcp.subscription_profiles.build_seconds', 600)) {
             throw new SubscriptionAuditException('Profile snapshot exceeded its time budget.', 'audit_source_limit', 503, -32020);
         }
     }
