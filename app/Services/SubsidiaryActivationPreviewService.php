@@ -80,7 +80,8 @@ class SubsidiaryActivationPreviewService
         if ($client && ! $selected && $email && $this->email($client->email) && $email !== $this->email($client->email)) {
             $ambiguous = true;
         }
-        $removed = $client && ($client->profile_removal_requested_at || $client->profile_reverted_at || ! $client->wp_post_id || ! $client->wp_user_id);
+        $removed = $client && ($client->profile_removal_requested_at || $client->profile_reverted_at || ! $client->wp_post_id || ! $client->wp_user_id
+            || app(SubsidiaryProfileCopyService::class)->incompleteTarget($client)); // An unfinished copied profile is never a ready existing match.
         $coverage = $client ? $this->coverage($client) : null;
         $kind = $removed ? 'unavailable' : ($ambiguous ? 'ambiguous' : ($client ? ($coverage ? 'already_active' : 'existing') : ($phone ? 'create_if_needed' : 'unavailable')));
         $candidateData = $candidates->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'phone_normalized' => $c->phone_normalized, 'city' => $c->city, 'profile_status' => $c->profile_status])->all();
@@ -96,10 +97,29 @@ class SubsidiaryActivationPreviewService
         if (! in_array($preview['resolution']['kind'], ['existing', 'create_if_needed', 'already_active']) || $preview['config_errors']) {
             return null;
         }
+        if ($preview['resolution']['kind'] !== 'already_active' && (! empty($preview['duration']['error']) || ! in_array($this->copyStatus($preview), ['off', 'ready'], true))) {
+            return null; // The period or the profile copy needs a choice before this can be included.
+        }
 
         return Crypt::encryptString(json_encode(['actor' => $actor->id, 'deal' => $main->id, 'platform' => $preview['target_platform']['id'],
             'selected' => $selected, 'days' => $days, 'product' => $preview['target_platform']['trial_product_id'],
-            'identity' => $preview['resolution']['identity'], 'expires' => now()->addMinutes(config('subsidiary_trials.preview_minutes', 15))->timestamp], JSON_THROW_ON_ERROR));
+            'identity' => $preview['resolution']['identity'], 'terms' => $this->frozen($preview), 'expires' => now()->addMinutes(config('subsidiary_trials.preview_minutes', 15))->timestamp], JSON_THROW_ON_ERROR));
+    }
+
+    /** Period and copy facts the token binds: mode, policy, purchased package, snapshot and chosen location. */
+    public function frozen(array $preview): array
+    {
+        $d = $preview['duration'] ?? [];
+        $c = $preview['copy_preview'] ?? [];
+
+        return ['mode' => $d['mode'] ?? null, 'policy' => $d['policy_version'] ?? null, 'purchased' => $d['purchased_days'] ?? null,
+            'copy' => $this->copyStatus($preview), 'digest' => $c['snapshot_digest'] ?? null,
+            'location' => isset($c['location']) ? [$c['location']['region_id'] ?? null, $c['location']['city_id'] ?? null] : null, 'currency' => $c['currency']['id'] ?? null];
+    }
+
+    private function copyStatus(array $preview): string
+    {
+        return (string) ($preview['copy_preview']['status'] ?? 'off');
     }
 
     public function validate(User $actor, Deal $main, array $input, array $preview): void
@@ -114,7 +134,8 @@ class SubsidiaryActivationPreviewService
         }
         abort_unless($token['actor'] === $actor->id && $token['deal'] === $main->id && $token['platform'] === (int) $input['platform_id']
             && $token['days'] === (int) $input['duration_days'] && $token['product'] === $preview['target_platform']['trial_product_id']
-            && $token['identity'] === $preview['resolution']['identity'] && $token['expires'] > now()->timestamp, 409, 'Trial details changed. Refresh the preview before activating.');
+            && $token['identity'] === $preview['resolution']['identity'] && ($token['terms'] ?? null) === $this->frozen($preview)
+            && $token['expires'] > now()->timestamp, 409, 'Trial details changed. Refresh the preview before activating.');
     }
 
     public function currentIdentity(array $terms): array

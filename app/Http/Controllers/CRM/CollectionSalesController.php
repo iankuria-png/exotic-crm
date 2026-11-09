@@ -57,7 +57,10 @@ class CollectionSalesController extends Controller
             'items.*.subsidiary_trial.enabled' => 'nullable|boolean',
             'items.*.subsidiary_trial.platform_id' => 'required_if:items.*.subsidiary_trial.enabled,true|nullable|integer|min:1',
             'items.*.subsidiary_trial.client_id' => 'nullable|integer|min:1', 'items.*.subsidiary_trial.manual_client_id' => 'nullable|integer|min:1',
-            'items.*.subsidiary_trial.duration_days' => 'required_if:items.*.subsidiary_trial.enabled,true|nullable|integer|min:1|max:90',
+            'items.*.subsidiary_trial.duration_days' => 'required_if:items.*.subsidiary_trial.enabled,true|nullable|integer|min:1|max:365',
+            'items.*.subsidiary_trial.duration_mode' => 'nullable|in:match_primary,custom',
+            'items.*.subsidiary_trial.copy_region_id' => 'nullable|integer|min:1', 'items.*.subsidiary_trial.copy_city_id' => 'nullable|integer|min:1',
+            'items.*.subsidiary_trial.copy_currency_id' => 'nullable|integer|min:1',
             'items.*.subsidiary_trial.create_confirmed' => 'nullable|boolean', 'items.*.subsidiary_trial.pin' => 'nullable|string|max:6',
             'items.*.subsidiary_trial.preview_token' => 'required_if:items.*.subsidiary_trial.enabled,true|nullable|string|max:60000',
             'items.*.subsidiary_trial.request_key' => 'required_if:items.*.subsidiary_trial.enabled,true|nullable|uuid',
@@ -75,7 +78,8 @@ class CollectionSalesController extends Controller
     private function subsidiaryInput(Request $request): array
     {
         return $request->validate(['source_client_id' => 'required|integer|min:1', 'product_price_id' => 'required|integer|min:1',
-            'platform_id' => 'nullable|integer|min:1', 'client_id' => 'nullable|integer|min:1', 'duration_days' => 'nullable|integer|min:1|max:90']);
+            'platform_id' => 'nullable|integer|min:1', 'client_id' => 'nullable|integer|min:1', 'duration_days' => 'nullable|integer|min:1|max:365',
+            'duration_mode' => 'nullable|in:match_primary,custom', 'copy_region_id' => 'nullable|integer|min:1', 'copy_city_id' => 'nullable|integer|min:1', 'copy_currency_id' => 'nullable|integer|min:1']);
     }
 
     public function subsidiaryTargets(Request $request, int $receipt, \App\Services\Collections\CollectionSalesSubsidiaryAdapter $adapter)

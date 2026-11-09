@@ -51,7 +51,7 @@ class SubsidiaryActivationSummaryTest extends TestCase
         $target->update(['product_id' => $targetProduct->id]);
         BillingSubscriptionRule::create(['market_id' => $target->id, 'free_trial_json' => ['enabled' => true, 'duration_days' => 9]]);
         $client = Client::factory()->create(['platform_id' => $source->id, 'phone_normalized' => '255712345678', 'email' => 'aryan@customer.test', 'profile_reverted_at' => null, 'profile_removal_requested_at' => null]);
-        $main = Deal::factory()->create(['platform_id' => $source->id, 'client_id' => $client->id, 'product_id' => $product->id, 'status' => 'active', 'expires_at' => now()->addDays(7), 'activated_at' => now(), 'payment_id' => null]);
+        $main = Deal::factory()->create(['platform_id' => $source->id, 'client_id' => $client->id, 'product_id' => $product->id, 'status' => 'active', 'expires_at' => now()->addDays(7), 'activated_at' => now(), 'payment_id' => null, 'duration_days' => 9]);
         $other = $withTarget ? Client::factory()->create(['platform_id' => $target->id, 'phone_normalized' => $client->phone_normalized, 'email' => $client->email, 'profile_reverted_at' => null, 'profile_removal_requested_at' => null, 'profile_status' => 'private']) : null;
         $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
         config(['subsidiary_trials.pairs' => [$source->id => $target->id]]);
@@ -355,8 +355,9 @@ class SubsidiaryActivationSummaryTest extends TestCase
             },
         ]);
         $preview = $this->getJson('/api/crm/deals/'.$main->id.'/subsidiary-trial-preview?platform_id='.$target->id)->assertOk()->json();
-        $this->postJson('/api/crm/deals/'.$main->id.'/activate', ['payment_method' => 'manual', 'payment_reference' => 'SALES-QA-123', 'subsidiary_trial' => ['enabled' => true, 'platform_id' => $target->id, 'client_id' => $client->id, 'duration_days' => 9, 'preview_token' => $preview['preview_token'], 'request_key' => (string) Str::uuid()]])->assertOk()->assertJsonPath('status', 'active');
+        $this->postJson('/api/crm/deals/'.$main->id.'/activate', ['payment_method' => 'manual', 'payment_reference' => 'SALES-QA-123', 'subsidiary_trial' => ['enabled' => true, 'platform_id' => $target->id, 'client_id' => $client->id, 'duration_days' => $preview['duration']['days'], 'preview_token' => $preview['preview_token'], 'request_key' => (string) Str::uuid()]])->assertOk()->assertJsonPath('status', 'active');
         $this->assertSame('active', FreeTrialRequest::firstOrFail()->status);
+        $this->assertSame(7, FreeTrialRequest::firstOrFail()->terms_json['duration_days']); // Matches the purchased primary package.
         $this->assertNotNull($main->fresh()->linked_deal_id);
         $this->assertDatabaseCount('payments', 2);
         $this->assertSame(1, \App\Models\Payment::where('amount', 0)->count());

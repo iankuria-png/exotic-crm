@@ -3468,6 +3468,10 @@ export default function ClientDetail() {
                     pin: activationSubsidiaryTrial.pin,
                     preview_token: activationSubsidiaryTrial.preview_token,
                     request_key: activationSubsidiaryTrial.request_key,
+                    ...(activationSubsidiaryTrial.duration_mode ? { duration_mode: activationSubsidiaryTrial.duration_mode } : {}),
+                    ...(activationSubsidiaryTrial.copy_region_id ? { copy_region_id: Number(activationSubsidiaryTrial.copy_region_id) } : {}),
+                    ...(activationSubsidiaryTrial.copy_city_id ? { copy_city_id: Number(activationSubsidiaryTrial.copy_city_id) } : {}),
+                    ...(activationSubsidiaryTrial.copy_currency_id ? { copy_currency_id: Number(activationSubsidiaryTrial.copy_currency_id) } : {}),
                 }
                 : undefined,
         });
@@ -6887,7 +6891,7 @@ export default function ClientDetail() {
                                         : activationPaymentMethod === 'link'
                                             ? 'Send payment link'
                                             : supportsSubsidiaryTrial && activationSubsidiaryTrial.enabled && activationSubsidiaryTrial.resolution_kind !== 'already_active'
-                                                ? currentUser?.role === 'admin' || activationSubsidiaryTrial.pin ? 'Activate subscription + trial' : 'Activate subscription + request trial'
+                                                ? currentUser?.role === 'admin' || activationSubsidiaryTrial.pin ? 'Activate subscription' : 'Activate subscription + request approval'
                                                 : 'Activate subscription'}
                             </button>
                         </footer>

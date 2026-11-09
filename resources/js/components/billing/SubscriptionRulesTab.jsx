@@ -4,6 +4,7 @@ import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import BillingStateNotice from './BillingStateNotice';
 import { isForbiddenQueryError } from './queryState';
+import PairedMarketPromotionPanel from './PairedMarketPromotionPanel';
 
 const ACTIVATION_OPTIONS = [
     { key: 'manual', label: 'Manual activation', hint: 'Operators can provision subscriptions directly from the CRM.' },
@@ -597,6 +598,8 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                     />
                 </div>
             </PolicyPanel>
+
+            <PairedMarketPromotionPanel marketId={marketId} />
         </div>
     );
 }

@@ -36,6 +36,15 @@ class TrialActivationService
             if ($r->status === 'uncertain' || ! $r->client_id || $primary->status !== 'active' || ($primary->expires_at && $primary->expires_at->isPast())) return $r;
             $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal(Deal::findOrFail($r->terms_json['source_deal_id']), Platform::findOrFail($r->platform_id), $r->client_id);
             abort_if((bool) $preview['config_errors'], 409, 'Subsidiary trial configuration changed.');
+            $copies = app(\App\Services\SubsidiaryProfileCopyService::class);
+            if ($copies->tagged($r)) {
+                // Versioned copy guard: a new profile receives its period only after its verified copy.
+                DB::transaction(fn () => $this->approvals->assertDispatch(FreeTrialRequest::lockForUpdate()->findOrFail($r->id)));
+                if ($copies->gate($r->fresh()) === 'pending') {
+                    return $r->fresh();
+                }
+                $r = $r->fresh();
+            }
         }
         if ($r->action === 'seo_boost') {
             $terms = $r->terms_json;

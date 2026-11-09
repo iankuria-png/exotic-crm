@@ -32,7 +32,7 @@ for (const mode of ['ambiguous', 'missing']) {
 test('direct activation has no required save and leaves optional exposure off', async ({ page }) => {
     const state = await setup(page);
     await expect(page.getByRole('button', { name: 'Save purchase choice', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('checkbox', { name: /Include.*trial/ })).not.toBeChecked();
+    await expect(page.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ })).not.toBeChecked();
     await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
     await expect(page.getByText('1 of 1 subscriptions confirmed')).toBeVisible();
     expect(state.mutations.filter(m => /\/sales\/(save|activate)$/.test(m.path)).map(m => m.path.split('/').pop())).toEqual(['activate']);
@@ -85,7 +85,7 @@ test('queue shows provider time and sends date/sort filters before export', asyn
 
 test('optional linked search stays inline; Escape closes it and preserves receipt', async ({ page }) => {
     const state = await setup(page, { trial: true });
-    await page.getByRole('checkbox', { name: /Include.*trial/ }).check();
+    await page.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ }).check();
     await expect(page.getByText('Existing profile: Example linked profile', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Change details', exact: true }).click();
     await page.getByRole('button', { name: 'Choose a different profile', exact: true }).click();

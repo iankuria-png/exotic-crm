@@ -41,14 +41,20 @@ class CollectionSalesSubsidiaryAdapter
         app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, $target->id);
         abort_if((int) $main->platform_id === (int) $target->id, 422, 'Choose a different subsidiary market.');
 
-        return app(SubsidiaryTrialService::class)->previewForDeal($main, $target, ! empty($input['client_id']) ? (int) $input['client_id'] : null);
+        return app(SubsidiaryTrialService::class)->previewForDeal($main, $target, ! empty($input['client_id']) ? (int) $input['client_id'] : null, $this->options($input));
+    }
+
+    private function options(array $input): array
+    {
+        return ['duration_mode' => $input['duration_mode'] ?? null, 'duration_days' => $input['duration_days'] ?? null, 'copy' => empty($input['client_id']),
+            'copy_region_id' => $input['copy_region_id'] ?? null, 'copy_city_id' => $input['copy_city_id'] ?? null, 'copy_currency_id' => $input['copy_currency_id'] ?? null];
     }
 
     public function preview(CollectionReceipt $receipt, User $actor, array $input): array
     {
         $main = $this->main($receipt, $actor, $input['source_client_id'], $input['product_price_id']);
         $preview = $this->projection($receipt, $actor, $main, $input);
-        $days = (int) ($input['duration_days'] ?? $preview['default_duration_days']);
+        $days = (int) ($preview['duration']['days'] ?? $input['duration_days'] ?? $preview['default_duration_days']);
         $inner = app(SubsidiaryActivationPreviewService::class)->issue($actor, $main, $preview, $input['client_id'] ?? null, $days);
         $preview['preview_token'] = $inner ? Crypt::encryptString(json_encode(['receipt' => $receipt->id, 'receipt_version' => $receipt->version,
             'source_client' => $main->client_id, 'price' => $main->product_price_id, 'actor' => $actor->id, 'expires' => now()->addMinutes(5)->timestamp, 'token' => $inner], JSON_THROW_ON_ERROR)) : null;
@@ -84,15 +90,23 @@ class CollectionSalesSubsidiaryAdapter
 
         return ['enabled' => true, 'market_name' => $preview['target_platform']['name'], 'platform_id' => (int) $input['platform_id'], 'client_id' => $preview['resolution']['client_id'],
             'manual_client_id' => ! empty($input['manual_client_id']) ? (int) $input['manual_client_id'] : null,
-            'duration_days' => (int) $input['duration_days'], 'resolution_kind' => $preview['resolution']['kind'],
+            'duration_days' => (int) ($preview['duration']['days'] ?? $input['duration_days']), 'resolution_kind' => $preview['resolution']['kind'],
             'create_confirmed' => (bool) ($input['create_confirmed'] ?? false), 'identity' => $preview['resolution']['identity'],
-            'coverage_id' => $preview['resolution']['coverage_id'], 'product_id' => $preview['target_platform']['trial_product_id']];
+            'coverage_id' => $preview['resolution']['coverage_id'], 'product_id' => $preview['target_platform']['trial_product_id'],
+            'duration_mode' => $preview['duration']['mode'] ?? null, 'copy_digest' => $preview['copy_preview']['snapshot_digest'] ?? null,
+            'copy_region_id' => $input['copy_region_id'] ?? null, 'copy_city_id' => $input['copy_city_id'] ?? null, 'copy_currency_id' => $input['copy_currency_id'] ?? null];
     }
 
     /** Called only inside the prepared sale transaction, against the actual new/reused Deal. */
     public function attach(Deal $deal, User $actor, array $canonical, array $input): void
     {
-        $preview = app(SubsidiaryTrialService::class)->previewForDeal($deal->loadMissing('client.platform', 'product'), Platform::findOrFail($canonical['platform_id']), $canonical['client_id']);
+        $preview = app(SubsidiaryTrialService::class)->previewForDeal($deal->loadMissing('client.platform', 'product'), Platform::findOrFail($canonical['platform_id']), $canonical['client_id'],
+            $this->options(['duration_mode' => $canonical['duration_mode'] ?? null, 'duration_days' => $canonical['duration_days'], 'client_id' => $canonical['client_id'],
+                'copy_region_id' => $canonical['copy_region_id'] ?? null, 'copy_city_id' => $canonical['copy_city_id'] ?? null, 'copy_currency_id' => $canonical['copy_currency_id'] ?? null]));
+        // Attachment revalidates against the actual recorded deal and price, never the transient preview deal.
+        if (($preview['duration']['days'] ?? null) !== $canonical['duration_days'] || ($preview['copy_preview']['snapshot_digest'] ?? null) !== ($canonical['copy_digest'] ?? null)) {
+            throw new CollectionException('subsidiary_identity_changed_before_attachment');
+        }
         if (! app(SubsidiaryActivationPreviewService::class)->same($canonical['identity'], $preview['resolution']['identity'])
             || $canonical['resolution_kind'] !== $preview['resolution']['kind'] || $canonical['product_id'] !== $preview['target_platform']['trial_product_id'] || $preview['config_errors']) {
             throw new CollectionException('subsidiary_identity_changed_before_attachment');
@@ -106,7 +120,8 @@ class CollectionSalesSubsidiaryAdapter
         $request = Request::create('/receipt-sale-subsidiary', 'POST');
         $request->setUserResolver(fn () => $actor);
         $trialInput = ['platform_id' => $canonical['platform_id'], 'client_id' => $canonical['client_id'], 'duration_days' => $canonical['duration_days'],
-            'create_confirmed' => $canonical['create_confirmed'], 'request_key' => $input['request_key'], 'pin' => $input['pin'] ?? null];
+            'create_confirmed' => $canonical['create_confirmed'], 'request_key' => $input['request_key'], 'pin' => $input['pin'] ?? null,
+            'duration_mode' => $canonical['duration_mode'] ?? null, 'copy_region_id' => $canonical['copy_region_id'] ?? null, 'copy_city_id' => $canonical['copy_city_id'] ?? null, 'copy_currency_id' => $canonical['copy_currency_id'] ?? null];
         $trial = app(\App\Http\Controllers\CRM\FreeTrialApprovalController::class)->createForSubsidiary($request, $deal, $trialInput);
         $deal->update(['pending_subsidiary_trial' => ['status' => 'pending', 'platform_id' => $canonical['platform_id'],
             'duration_days' => $canonical['duration_days'], 'subsidiary_client_id' => $canonical['client_id'], 'trial_request_id' => $trial->id,

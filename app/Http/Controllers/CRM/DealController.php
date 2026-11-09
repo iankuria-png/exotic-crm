@@ -180,7 +180,11 @@ class DealController extends Controller
         $validated = $request->validate([
             'platform_id' => 'required|integer|exists:platforms,id',
             'client_id' => 'nullable|integer',
-            'duration_days' => 'nullable|integer|min:1|max:90',
+            'duration_days' => 'nullable|integer|min:1|max:365',
+            'duration_mode' => 'nullable|in:match_primary,custom',
+            'copy_region_id' => 'nullable|integer|min:1',
+            'copy_city_id' => 'nullable|integer|min:1',
+            'copy_currency_id' => 'nullable|integer|min:1',
         ]);
 
         $targetId = (int) $validated['platform_id'];
@@ -197,8 +201,8 @@ class DealController extends Controller
         );
 
         $selected = ! empty($validated['client_id']) ? (int) $validated['client_id'] : null;
-        $preview = $this->subsidiaryTrialService->previewForDeal($deal, Platform::findOrFail($targetId), $selected);
-        $days = (int) ($validated['duration_days'] ?? $preview['default_duration_days']);
+        $preview = $this->subsidiaryTrialService->previewForDeal($deal, Platform::findOrFail($targetId), $selected, $this->subsidiaryOptions($validated, $selected));
+        $days = (int) ($preview['duration']['days'] ?? $validated['duration_days'] ?? $preview['default_duration_days']);
         $preview['preview_token'] = app(\App\Services\SubsidiaryActivationPreviewService::class)->issue($request->user(), $deal, $preview, $selected, $days);
         unset($preview['resolution']['identity']);
         return response()->json($preview);
@@ -419,7 +423,11 @@ class DealController extends Controller
             'subsidiary_trial.platform_id' => 'nullable|integer|exists:platforms,id',
             'subsidiary_trial.client_id' => 'nullable|integer|exists:clients,id',
             'subsidiary_trial.create_confirmed' => 'nullable',
-            'subsidiary_trial.duration_days' => 'nullable|integer|min:1|max:90',
+            'subsidiary_trial.duration_days' => 'nullable|integer|min:1|max:365',
+            'subsidiary_trial.duration_mode' => 'nullable|in:match_primary,custom',
+            'subsidiary_trial.copy_region_id' => 'nullable|integer|min:1',
+            'subsidiary_trial.copy_city_id' => 'nullable|integer|min:1',
+            'subsidiary_trial.copy_currency_id' => 'nullable|integer|min:1',
             'subsidiary_trial.preview_token' => 'nullable|string|max:15000',
             'subsidiary_trial.request_key' => 'nullable|uuid',
             'subsidiary_trial.pin' => ['nullable', 'regex:/^\d{4,6}$/'],
@@ -1617,6 +1625,13 @@ class DealController extends Controller
         ], 422);
     }
 
+    /** Period and copy choices shared by the paired-market preview and activation. */
+    private function subsidiaryOptions(array $input, ?int $selected): array
+    {
+        return ['duration_mode' => $input['duration_mode'] ?? null, 'duration_days' => $input['duration_days'] ?? null, 'copy' => ! $selected,
+            'copy_region_id' => $input['copy_region_id'] ?? null, 'copy_city_id' => $input['copy_city_id'] ?? null, 'copy_currency_id' => $input['copy_currency_id'] ?? null];
+    }
+
     private function buildSubsidiaryTrialIntent(Request $request, Deal $deal, Client $client, array $validated): ?array
     {
         $input = $validated['subsidiary_trial'] ?? null;
@@ -1660,14 +1675,12 @@ class DealController extends Controller
             ]);
         }
 
-        $durationDays = (int) ($input['duration_days'] ?? 0);
-        if ($durationDays < 1 || $durationDays > 90) {
-            throw ValidationException::withMessages([
-                'subsidiary_trial.duration_days' => 'Enter a trial duration between 1 and 90 days.',
-            ]);
+        $preview = $this->subsidiaryTrialService->previewForDeal($deal, $target, $clientId ?: null, $this->subsidiaryOptions($input, $clientId ?: null));
+        if (! empty($preview['duration']['error'])) {
+            throw ValidationException::withMessages(['subsidiary_trial.duration_days' => $preview['duration']['message']]);
         }
-
-        $preview = $this->subsidiaryTrialService->previewForDeal($deal, $target, $clientId ?: null);
+        $durationDays = (int) $preview['duration']['days'];
+        $input['duration_days'] ??= $durationDays;
         app(\App\Services\SubsidiaryActivationPreviewService::class)->validate($request->user(), $deal, $input, $preview);
         abort_unless(empty($preview['config_errors']) && in_array($preview['resolution']['kind'], ['existing', 'create_if_needed', 'already_active']), 409, 'Resolve the target profile before including this trial.');
         if ($preview['resolution']['kind'] === 'already_active') return ['status' => 'already_active', 'platform_id' => $targetId, 'subsidiary_client_id' => $preview['resolution']['client_id'], 'coverage_id' => $preview['resolution']['coverage_id']];

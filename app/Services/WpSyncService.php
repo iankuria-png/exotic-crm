@@ -1175,6 +1175,89 @@ class WpSyncService
         return $this->patch("/clients/{$postId}/media/{$attachmentId}/set-main");
     }
 
+    /** Read-only profile-copy contract of this site. */
+    public function profileCopyCapabilities(): array
+    {
+        return $this->get('/profile-copy/capabilities', [], $this->catalogueTimeout);
+    }
+
+    /** Allowlisted public-profile snapshot of a source profile; no writes. */
+    public function profileCopyExport(int $postId): array
+    {
+        return $this->get("/clients/{$postId}/copy-export");
+    }
+
+    /** Streams one listed source attachment into $destination, bounded by $maxBytes. */
+    public function downloadProfileCopyMedia(int $postId, int $attachmentId, string $destination, int $maxBytes): void
+    {
+        $this->assertMarketAvailable();
+        $response = Http::withHeaders($this->headers())->timeout($this->mediaUploadTimeout)->withOptions([
+            'sink' => $destination,
+            'allow_redirects' => false,
+            'progress' => static function ($total, $downloaded) use ($maxBytes) {
+                if ($total > $maxBytes || $downloaded > $maxBytes) {
+                    throw new RuntimeException('Source media exceeds the copy size limit.');
+                }
+            },
+        ])->get($this->baseUrl."/clients/{$postId}/copy-export/media/{$attachmentId}");
+        if ($response->failed()) {
+            @unlink($destination);
+            throw new RuntimeException('Source media could not be downloaded (HTTP '.$response->status().').');
+        }
+        if (! is_file($destination) || filesize($destination) === 0) {
+            $body = $response->body(); // Handlers that ignore the sink still return the bytes.
+            if (strlen($body) > $maxBytes) {
+                throw new RuntimeException('Source media exceeds the copy size limit.');
+            }
+            file_put_contents($destination, $body);
+        }
+    }
+
+    public function bindProfileCopy(int $postId, string $runKey, array $body): array
+    {
+        return $this->post("/clients/{$postId}/profile-copy/{$runKey}/bind", $body);
+    }
+
+    /** Inspect-only target run projection for recovery and verification. */
+    public function profileCopyStatus(int $postId, string $runKey): array
+    {
+        return $this->get("/clients/{$postId}/profile-copy/{$runKey}");
+    }
+
+    public function profileCopyItemStatus(int $postId, string $runKey, string $itemKey): array
+    {
+        return $this->get("/clients/{$postId}/profile-copy/{$runKey}/{$itemKey}");
+    }
+
+    /** Sends the original idempotent item command; a file only accompanies an unstaged media item. */
+    public function profileCopyItem(int $postId, string $runKey, string $itemKey, array $command, string $commandHash, int $fence, ?string $file = null, ?string $mime = null): array
+    {
+        $path = "/clients/{$postId}/profile-copy/{$runKey}/{$itemKey}";
+        if ($file === null) {
+            return $this->post($path, ['command' => $command, 'command_hash' => $commandHash, 'fence' => $fence], (float) $this->mediaUploadTimeout);
+        }
+        $this->assertRemoteWriteAllowed($path);
+        $this->assertMarketAvailable();
+        $handle = @fopen($file, 'rb');
+        if ($handle === false) {
+            throw new RuntimeException('Unable to read staged media for copy.');
+        }
+        try {
+            $response = Http::withHeaders($this->headers())->timeout($this->mediaUploadTimeout)
+                ->attach('file', $handle, $itemKey, ['Content-Type' => $mime ?: 'application/octet-stream'])
+                ->post($this->baseUrl.$path, ['command' => json_encode($command, JSON_THROW_ON_ERROR), 'command_hash' => $commandHash, 'fence' => (string) $fence]);
+        } finally {
+            fclose($handle);
+        }
+
+        return $this->decodeResponse($response, 'POST', $path);
+    }
+
+    public function setProfileCopyState(int $postId, string $runKey, string $state): array
+    {
+        return $this->post("/clients/{$postId}/profile-copy/{$runKey}/state", ['state' => $state]);
+    }
+
     private function get(string $path, array $params = [], ?int $timeout = null): array
     {
         $response = $this->getResponse($path, $params, $timeout);
@@ -1245,6 +1328,10 @@ class WpSyncService
     private function post(string $path, array $body = [], ?float $timeout = null): array
     {
         $this->guardCollectionMutation($path, $body);
+        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|lifecycle)$#', $path, $match)) {
+            // A profile still receiving its one-time copy is not a ready target for any entitlement path.
+            SubsidiaryProfileCopyService::assertTargetReady($this->platformId, (int) $match[1]);
+        }
         $this->assertRemoteWriteAllowed($path);
         $this->assertMarketAvailable();
 

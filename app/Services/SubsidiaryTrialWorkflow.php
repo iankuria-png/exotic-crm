@@ -50,6 +50,7 @@ class SubsidiaryTrialWorkflow
         abort_if(in_array($r->activation_result_json['profile_resolution'] ?? '', ['resolving', 'unknown'])
             || TrialActivationOperation::where('request_id', $r->id)->whereNotNull('dispatched_at')->exists(), 409,
             'This trial is being checked. Recover its existing outcome before changing it.');
+        app(SubsidiaryProfileCopyService::class)->assertCancelable($r);
     }
 
     public function supersede(Deal $main, User $actor, ?string $key): void
@@ -66,7 +67,9 @@ class SubsidiaryTrialWorkflow
             return;
         }
         $this->assertCancelable($old);
-        if (in_array($old->status, ['pending', 'approved'])) {
+        $copyHeld = $old->status === 'activating' && app(SubsidiaryProfileCopyService::class)->tagged($old) && ! TrialActivationOperation::where('request_id', $old->id)->exists();
+        if (in_array($old->status, ['pending', 'approved']) || $copyHeld) {
+            app(SubsidiaryProfileCopyService::class)->cancelled($old);
             $old->update(['status' => 'canceled', 'active_identity' => null, 'version' => $old->version + 1]);
             app(TrialApprovalService::class)->event($old, $actor, 'canceled', [], 'Superseded by the current sale selection.');
         }
@@ -147,9 +150,9 @@ class SubsidiaryTrialWorkflow
             return $r;
         }
         try {
-            $resolved = app(SubsidiaryClientResolver::class)->resolveFrozen($claim['target'], $claim['seed'], $claim['id']);
+            $outcome = app(SubsidiaryClientResolver::class)->resolveFrozenOutcome($claim['target'], $claim['seed'], $claim['id']);
 
-            return $this->bind($r, $resolved);
+            return $this->bind($r, $outcome['client'], $outcome['origin']);
         } catch (\Throwable $e) {
             $r->refresh();
             $r->update(['status' => 'uncertain', 'activation_result_json' => array_merge($r->activation_result_json ?? [], ['profile_resolution' => 'unknown']), 'version' => $r->version + 1]);
@@ -158,9 +161,9 @@ class SubsidiaryTrialWorkflow
         }
     }
 
-    public function bind(FreeTrialRequest $request, Client $resolved): FreeTrialRequest
+    public function bind(FreeTrialRequest $request, Client $resolved, ?string $origin = null): FreeTrialRequest
     {
-        return DB::transaction(function () use ($request, $resolved) {
+        return DB::transaction(function () use ($request, $resolved, $origin) {
             $main = Deal::with('client.platform')->lockForUpdate()->findOrFail($request->terms_json['source_deal_id']);
             $r = FreeTrialRequest::lockForUpdate()->findOrFail($request->id);
             $this->assertAttached($r);
@@ -177,8 +180,8 @@ class SubsidiaryTrialWorkflow
             $terms['client_ids'] = [$resolved->id];
             $terms['subsidiary_identity'] = $resolution['identity'];
             $r->update(['client_id' => $resolved->id, 'terms_json' => $terms, 'source_version' => app(TrialApprovalService::class)->source($terms),
-                'activation_result_json' => array_merge($r->activation_result_json ?? [], ['profile_resolution' => 'resolved']), 'version' => $r->version + 1]);
-            app(TrialApprovalService::class)->event($r, User::find($r->authorized_actor_id), 'subsidiary_identity_resolved', ['client_id' => $resolved->id]);
+                'activation_result_json' => array_merge($r->activation_result_json ?? [], array_filter(['profile_resolution' => 'resolved', 'profile_origin' => $origin])), 'version' => $r->version + 1]);
+            app(TrialApprovalService::class)->event($r, User::find($r->authorized_actor_id), 'subsidiary_identity_resolved', ['client_id' => $resolved->id, 'origin' => $origin]);
 
             return $r->fresh();
         });
@@ -217,7 +220,7 @@ class SubsidiaryTrialWorkflow
                 $this->assertAttached($r);
             });
             $resolved = (new ClientSyncService($target))->syncOne((int) $record['wp_post_id']);
-            $r = $this->bind($r, $resolved);
+            $r = $this->bind($r, $resolved, 'created'); // The completed ledger row proves this request created it.
 
             return DB::transaction(function () use ($r) {
                 $this->assertAttached($r);

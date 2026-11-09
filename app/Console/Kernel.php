@@ -581,6 +581,16 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_retry_deferred_activations.log'));
 
+        // Paired-market profile copies whose worker stopped mid-slice. Item
+        // ledgers make a re-queue finish the same items, never repeat them.
+        $schedule->command('crm:resume-stalled-profile-copies')
+            ->name('crm_resume_stalled_profile_copies')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_resume_stalled_profile_copies.log'));
+
         $schedule->command('crm:refresh-missed-chats')
             ->name('crm_refresh_missed_chats')
             ->cron(sprintf('*/%d * * * *', max(1, min(30, (int) config('crm.missed_chats.refresh_minutes', 10)))))

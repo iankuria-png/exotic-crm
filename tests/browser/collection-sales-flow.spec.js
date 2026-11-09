@@ -39,7 +39,7 @@ test('office summary excludes advertiser links', async ({ page }) => {
 
 test('subsidiary opt-in binds the approved target to the paid child', async ({ page }) => {
     const state = await setup(page, { trial: true });
-    await page.getByRole('checkbox', { name: /Include.*trial/ }).check();
+    await page.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ }).check();
     await expect(page.getByText('Existing profile: Example linked profile')).toBeVisible();
     await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
     const preview = state.mutations.find(m => m.path.endsWith('/sales/preview')).body;
@@ -48,9 +48,9 @@ test('subsidiary opt-in binds the approved target to the paid child', async ({ p
 
 test('removing optional exposure clears its activation request', async ({ page }) => {
     const state = await setup(page, { trial: true });
-    await page.getByRole('checkbox', { name: /Include.*trial/ }).check();
+    await page.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ }).check();
     await expect(page.getByText('Existing profile: Example linked profile')).toBeVisible();
-    await page.getByRole('checkbox', { name: /Include.*trial/ }).uncheck();
+    await page.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ }).uncheck();
     await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
     await expect(page.getByText('1 of 1 subscriptions confirmed')).toBeVisible();
     expect(state.mutations.find(m => m.path.endsWith('/sales/activate')).body.items[0].subsidiary_trial.enabled).toBe(false);

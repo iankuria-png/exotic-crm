@@ -48,7 +48,11 @@ class SubsidiaryTrialService
             'paired_platform_id' => $pair ?: null, 'pair_unavailable' => $pair > 0 && ! $recommended];
     }
 
-    public function previewForDeal(Deal $main, Platform $target, ?int $selected = null): array
+    /**
+     * Options (all optional): duration_mode, duration_days, copy (bool, loads the
+     * read-only profile copy preview), copy_region_id, copy_city_id, copy_currency_id.
+     */
+    public function previewForDeal(Deal $main, Platform $target, ?int $selected = null, array $options = []): array
     {
         $main->loadMissing(['client.platform', 'product']);
         abort_unless($main->client, 422, 'Deal has no associated client.');
@@ -58,10 +62,19 @@ class SubsidiaryTrialService
         $errors = $this->configErrors($target, $main);
         if ($client && $client->wp_post_id) $errors = array_values(array_diff($errors, ['missing_wp_db_credentials']));
         if ($resolution['kind'] === 'already_active') $errors = array_values(array_intersect($errors, ['inactive_market']));
+        $policies = app(SubsidiaryPromotionPolicyService::class);
+        $duration = $policies->resolve($main, $target, $options['duration_mode'] ?? null, ! empty($options['duration_days']) ? (int) $options['duration_days'] : null, $this->freeTrialDurationDays($target));
+        $duration['message'] = $policies->message($duration['error']);
+        $copy = ['status' => 'off'];
+        if (! empty($options['copy']) && $resolution['kind'] === 'create_if_needed' && ! $errors) {
+            $copy = app(SubsidiaryProfileCopyService::class)->preview($main, $target, $options);
+        }
         return ['target_platform' => $this->targetPayload($target, $main), 'config_errors' => $errors,
             'match' => $client ? $this->matchPayload($client) : null, 'resolution' => $resolution,
             'will_create' => $client ? null : $helper->seed($main, $target),
-            'default_duration_days' => $this->freeTrialDurationDays($target)];
+            'default_duration_days' => $duration['days'] ?? $this->freeTrialDurationDays($target),
+            'duration' => $duration, 'copy_preview' => $copy,
+            'source_market' => $main->client?->platform?->name];
     }
 
     public function activateIfPending(Deal $main): ?Deal

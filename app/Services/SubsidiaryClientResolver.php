@@ -46,11 +46,25 @@ class SubsidiaryClientResolver
 
     public function resolveFrozen(Platform $target, array $seed, string $requestId): Client
     {
+        return $this->resolveFrozenOutcome($target, $seed, $requestId)['client'];
+    }
+
+    /**
+     * Same lookup/provision path, also reporting whether an authoritative existing
+     * profile matched or this request's provisioning ledger created the profile.
+     *
+     * @return array{client: Client, origin: string}
+     */
+    public function resolveFrozenOutcome(Platform $target, array $seed, string $requestId): array
+    {
         $lookup = app(SubsidiaryWpIdentityLookup::class);
         $match = $lookup->find($target, $seed); // Exceptions hold the durable claim; never fall through.
-        if ($match) return (new ClientSyncService($target))->syncOne($match['wp_post_id']);
+        if ($match) {
+            return ['client' => (new ClientSyncService($target))->syncOne($match['wp_post_id']), 'origin' => 'existing'];
+        }
         $result = (new WpDirectProvisioningService($target))->provisionEscort($this->frozenPayload($seed, $requestId));
-        return (new ClientSyncService($target))->syncOne((int) $result['wp_post_id']);
+
+        return ['client' => (new ClientSyncService($target))->syncOne((int) $result['wp_post_id']), 'origin' => 'created'];
     }
 
     public function targetPhone(Client $mainClient, Platform $target, array $seed = []): ?string

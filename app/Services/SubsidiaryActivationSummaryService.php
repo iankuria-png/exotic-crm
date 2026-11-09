@@ -100,6 +100,10 @@ class SubsidiaryActivationSummaryService
             } elseif (in_array($trial->status, ['approved', 'activating']) && ($main->status !== 'active' || ($main->expires_at && $main->expires_at->isPast()))) {
                 $status = 'waiting_primary';
             }
+            $copy = app(SubsidiaryProfileCopyService::class)->projection(app(SubsidiaryProfileCopyService::class)->run($trial), $actor);
+            if ($copy && in_array($trial->status, ['approved', 'activating'], true) && $status !== 'waiting_primary') {
+                $status = match ($copy['state']) { 'needs_review' => 'setup_paused', 'ready' => 'activating', 'cancelled' => 'cancelled', default => 'setting_up' };
+            }
         } elseif ($linked && (int) $linked->platform_id === $targetId) {
             $client = $linked->client;
             $coverage = $linked;
@@ -109,7 +113,9 @@ class SubsidiaryActivationSummaryService
             'market' => $client?->platform?->name ?? \App\Models\Platform::find($targetId)?->name,
             'request_id' => $trial?->id, 'request_version' => $trial?->version,
             'can_review' => $actor->role === 'admin' && $trial?->status === 'pending',
-            'can_recover' => $actor->role === 'admin' && $trial && in_array($trial->status, ['activating', 'uncertain']),
+            'can_recover' => $actor->role === 'admin' && $trial && in_array($trial->status, ['activating', 'uncertain']) && ! in_array($status, ['setting_up', 'setup_paused'], true),
+            'copy' => $copy ?? null,
+            'copied_from' => ($copy ?? null) ? $main->client?->platform?->name : null,
         ]);
 
         return $out;

@@ -49,6 +49,10 @@ class TrialApprovalService
 
         $payload = ['clients' => $clients, 'deal' => $deal?->only($fields), 'product' => $product?->only(['id', 'platform_id', 'tier', 'is_active', 'is_archived'])];
         if (! empty($terms['subsidiary_identity'])) $payload['subsidiary_identity'] = app(\App\Services\SubsidiaryActivationPreviewService::class)->currentIdentity($terms);
+        if ($facts = app(\App\Services\SubsidiaryPromotionPolicyService::class)->sourceFacts($terms)) {
+            // Versioned paired terms: the purchased package and frozen copy snapshot are part of the approval.
+            $payload['promotion'] = $facts + ['copy_snapshot_digest' => $terms['copy_snapshot_digest'] ?? null];
+        }
         return hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
     }
 
@@ -67,7 +71,8 @@ class TrialApprovalService
             abort_unless(Client::whereKey($id)->where('platform_id', $market)->exists(), 422, 'The advertiser does not belong to this market.');
         }
         $days = (int) ($terms['duration_days'] ?? 0);
-        abort_if($days < 1 || $days > 365 || (in_array($terms['action'], ['subsidiary', 'seo_boost']) && $days > 90), 422, 'Trial duration is outside the allowed range.');
+        $limit = $terms['action'] === 'subsidiary' ? app(\App\Services\SubsidiaryPromotionPolicyService::class)->maxDays($terms) : ($terms['action'] === 'seo_boost' ? 90 : 365);
+        abort_if($days < 1 || $days > $limit, 422, 'Trial duration is outside the allowed range.');
         $key = $requestKey ?: (string) Str::uuid();
         if (! empty($terms['subsidiary_identity'])) abort_unless(app(\App\Services\SubsidiaryActivationPreviewService::class)->same($terms['subsidiary_identity'], app(\App\Services\SubsidiaryActivationPreviewService::class)->currentIdentity($terms)), 409, 'Customer identity changed. Refresh the preview.');
         $source = $this->source($terms);
@@ -82,6 +87,9 @@ class TrialApprovalService
                     abort_unless($policy->approval_mode === 'admin_or_pin', 403, 'This market requires admin approval.');
                 }
                 foreach (FreeTrialRequest::where('platform_id', $market)->where('status', 'approved')->where('expires_at', '<', now())->get() as $expired) {
+                    if ($expired->action === 'subsidiary' && app(\App\Services\SubsidiaryProfileCopyService::class)->holdsReservation($expired)) {
+                        continue; // A bound copy keeps its identity reservation and waits for reauthorization.
+                    }
                     if (! in_array($expired->activation_result_json['profile_resolution'] ?? '', ['resolving', 'unknown']) && ! \App\Models\TrialActivationOperation::where('request_id', $expired->id)->whereNotNull('dispatched_at')->exists()) {
                         $expired->update(['status' => 'expired', 'active_identity' => null]);
                     }
@@ -101,6 +109,9 @@ class TrialApprovalService
                     'status' => $approved ? 'approved' : 'pending', 'approved_via' => $approved ? ($actor->role === 'admin' ? 'admin' : 'pin') : null, 'approver_id' => $actor->role === 'admin' ? $actor->id : null,
                     'authorized_actor_id' => $approved ? $actor->id : null, 'pin_generation' => $generation, 'reason' => $reason, 'authorized_at' => $approved ? now() : null, 'expires_at' => $approved ? now()->addHours(24) : null]);
                 $this->event($r, $actor, $approved ? 'authorized' : 'requested', ['method' => $r->approved_via], $reason);
+                if (! empty($terms['copy_contract_version'])) {
+                    app(\App\Services\SubsidiaryProfileCopyService::class)->register($r);
+                }
 
                 return $r;
             });
@@ -170,6 +181,71 @@ class TrialApprovalService
             app(WalletSettingsService::class)->assertFreeTrialPinGeneration((int) $r->pin_generation);
         }
         abort_unless(hash_equals($r->source_version, $this->source($r->terms_json)), 409, 'Client or subscription changed after approval.');
+        abort_unless(app(\App\Services\SubsidiaryPromotionPolicyService::class)->stillAllowed($r->terms_json), 409, 'Paired-market settings no longer allow these terms. Request authorization again.');
+    }
+
+    /**
+     * Renews an expired authorization for a held profile copy on the same immutable
+     * terms. Preserves the run, completed items, provision identity and reservation.
+     */
+    public function reauthorizeCopy(User $actor, FreeTrialRequest $r, int $requestVersion, int $runVersion, string $reason, ?string $pin = null): FreeTrialRequest
+    {
+        $copies = app(\App\Services\SubsidiaryProfileCopyService::class);
+        abort_unless($r->action === 'subsidiary' && $copies->tagged($r), 422, 'Only paired profile setups can be reauthorized here.');
+        $this->access($actor, (int) $r->platform_id);
+        abort_if(request()->attributes->get('crm_impersonator'), 403, 'Exit impersonation before authorizing trials.');
+        abort_unless($actor->role === 'admin' || (int) $r->requester_id === (int) $actor->id, 403);
+        $reason = trim($reason);
+        abort_if($reason === '', 422, 'Explain why setup should continue.');
+        $renew = function (?int $generation = null) use ($actor, $r, $requestVersion, $runVersion, $reason, $copies) {
+            return DB::transaction(function () use ($actor, $r, $requestVersion, $runVersion, $reason, $copies, $generation) {
+                $r = FreeTrialRequest::lockForUpdate()->findOrFail($r->id);
+                $run = \App\Models\SubsidiaryProfileCopyRun::lockForUpdate()->where('request_id', $r->id)->firstOrFail();
+                abort_unless($r->version === $requestVersion && $run->version === $runVersion, 409, 'Profile setup changed. Reload it before continuing.');
+                abort_unless(in_array($r->status, ['approved', 'activating'], true) && $run->state === 'needs_review' && $run->error_code === 'approval_expired', 409, 'This setup does not need reauthorization.');
+                abort_if($run->items()->whereIn('state', ['dispatching', 'uncertain'])->exists(), 409, 'Check the unconfirmed setup step before reauthorizing.');
+                abort_unless($run->snapshot_digest === ($r->terms_json['copy_snapshot_digest'] ?? null) && $copies->digest($run->snapshot_json) === $run->snapshot_digest, 409, 'The approved profile snapshot changed. Cancel and review a new setup.');
+                $main = app(\App\Services\SubsidiaryTrialWorkflow::class)->assertAttached($r);
+                $this->access($actor, (int) $main->platform_id);
+                abort_unless($main->status === 'active' && (! $main->expires_at || $main->expires_at->isFuture()), 422, 'The primary subscription must be active before setup can continue.');
+                abort_unless(hash_equals($r->source_version, $this->source($r->terms_json)), 409, 'Client or subscription changed. Cancel and review a new setup.');
+                abort_unless(app(\App\Services\SubsidiaryPromotionPolicyService::class)->stillAllowed($r->terms_json), 422, 'Paired-market settings no longer allow these terms.');
+                abort_unless((int) $r->terms_json['duration_days'] <= app(\App\Services\SubsidiaryPromotionPolicyService::class)->maxDays($r->terms_json), 422, 'The approved number of days is no longer allowed.');
+                $policy = MarketTrialApprovalPolicy::firstOrCreate(['platform_id' => $r->platform_id]);
+                $policy = MarketTrialApprovalPolicy::whereKey($r->platform_id)->lockForUpdate()->firstOrFail();
+                if ($generation !== null) {
+                    abort_unless($policy->approval_mode === 'admin_or_pin', 403, 'This market requires admin approval.');
+                } else {
+                    abort_unless($actor->role === 'admin', 403, 'Enter the approval PIN or ask an admin to continue setup.');
+                }
+                $r->update(['authorized_actor_id' => $actor->id, 'approved_via' => $actor->role === 'admin' ? 'admin' : 'pin', 'approver_id' => $actor->role === 'admin' ? $actor->id : null,
+                    'pin_generation' => $generation, 'policy_version' => $policy->version, 'authorized_at' => now(), 'expires_at' => now()->addHours(24), 'version' => $r->version + 1]);
+                $run->update(['state' => 'copying', 'error_code' => null, 'version' => $run->version + 1]);
+                $this->event($r, $actor, 'profile_copy_reauthorized', ['run_id' => $run->id, 'method' => $r->approved_via], $reason);
+
+                return $r->fresh();
+            });
+        };
+        if ($actor->role !== 'admin') {
+            abort_unless($pin !== null && $pin !== '' && $this->policy((int) $r->platform_id)['approval_mode'] === 'admin_or_pin', 403, 'This market requires admin approval.');
+            $keys = ['trial-pin:staff:'.$actor->id.':'.$r->platform_id, 'trial-pin:ip:'.hash('sha256', (string) request()->ip())];
+            foreach ($keys as $k) {
+                abort_if(RateLimiter::tooManyAttempts($k, 5), 429, 'Too many PIN attempts. Try again in 15 minutes.');
+            }
+            foreach ($keys as $k) {
+                RateLimiter::hit($k, 900);
+            }
+            $renewed = app(WalletSettingsService::class)->authorizeFreeTrialPin($pin, fn ($generation) => $renew($generation));
+            foreach ($keys as $k) {
+                RateLimiter::clear($k);
+            }
+        } else {
+            $renewed = $renew();
+        }
+        $run = \App\Models\SubsidiaryProfileCopyRun::where('request_id', $renewed->id)->first();
+        \App\Jobs\ProcessSubsidiaryProfileCopy::dispatch($run->id);
+
+        return $renewed->fresh();
     }
 
     public function event(FreeTrialRequest $r, ?User $actor, string $action, array $detail = [], ?string $reason = null): void

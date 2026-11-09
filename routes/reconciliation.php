@@ -31,3 +31,12 @@ Route::get('/markets/{platform}/trial-approval-policy', [Trial::class, 'policy']
 Route::put('/markets/{platform}/trial-approval-policy', [Trial::class, 'savePolicy']);
 
 Route::post('/free-trials/requests/{trial}/resume', [Trial::class, 'resume']);
+
+// Paired-market promotion: period/copy settings, explicit setup recovery and same-terms reauthorization.
+use App\Http\Controllers\CRM\SubsidiaryPromotionController as Promotion;
+
+Route::get('/settings/subsidiary-promotions', [Promotion::class, 'index']);
+Route::get('/settings/subsidiary-promotions/{source}/{target}', [Promotion::class, 'show'])->whereNumber('source')->whereNumber('target');
+Route::put('/settings/subsidiary-promotions/{source}/{target}', [Promotion::class, 'update'])->whereNumber('source')->whereNumber('target');
+Route::post('/subsidiary-profile-copies/{run}/resume', [Promotion::class, 'resume'])->whereUuid('run');
+Route::post('/free-trials/requests/{trial}/reauthorize-copy', [Trial::class, 'reauthorizeCopy']);
