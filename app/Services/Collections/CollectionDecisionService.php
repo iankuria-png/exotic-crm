@@ -36,9 +36,11 @@ class CollectionDecisionService
 
                     return $r;
                 }
+                // Retain identity evidence even when purchase or rollout checks hold activation.
+                $match = app(CollectionMatchService::class)->automatic($r);
+                $snapshot['matching'] = $match;
                 if (! $candidates && data_get($r->account->policy, 'purchase_matching') === 'exact_catalogue_or_reviewed') {
-                    $matching = app(CollectionMatchService::class)->automatic($r);
-                    $snapshot['matching'] = $matching;
+                    $matching = $match;
                     if (! $matching['selected_client_id']) {
                         throw new CollectionException('client_match_below_threshold_or_conflicting');
                     }
@@ -56,8 +58,6 @@ class CollectionDecisionService
                 if (count($eligible) !== 1 || count($candidates) > 1) {
                     throw new CollectionException(count($candidates) > 1 ? 'multiple_purchase_candidates' : 'reviewed_purchase_authority_required');
                 }
-                $match = app(CollectionMatchService::class)->automatic($r);
-                $snapshot['matching'] = $match;
                 if ($match['selected_client_id'] !== (int) $eligible[0]['client_id']) {
                     throw new CollectionException('client_match_below_threshold_or_conflicting');
                 }

@@ -47,6 +47,6 @@ test('keyboard focus wraps through visible controls with evidence collapsed', as
     await setup(page);
     const dialog = page.getByRole('dialog'); await dialog.getByRole('button', { name: 'Close', exact: true }).focus();
     await page.keyboard.press('Shift+Tab');
-    await expect(dialog.locator('summary').filter({ hasText: 'Receipt reference and correction history' })).toBeFocused();
+    await expect(dialog.getByRole('button', { name: 'Activate subscription', exact: true })).toBeFocused();
     await page.keyboard.press('Tab'); await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeFocused();
 });

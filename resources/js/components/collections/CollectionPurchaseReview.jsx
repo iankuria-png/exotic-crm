@@ -5,6 +5,7 @@ import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import CollectionSalesFlow from './CollectionSalesFlow';
 import { receiptTime } from './CollectionReceiptEvidence';
+import CollectionPaymentJourney from './CollectionPaymentJourney';
 
 function useReviewContext(row) {
     const { user } = useAuth();
@@ -16,7 +17,8 @@ function useReviewContext(row) {
 export function CollectionMatchEvidence({ row }) {
     const context = useReviewContext(row);
     const suggestions = context.data?.suggestions || [];
-    return <section aria-label="Profile matching" className="space-y-3 rounded-lg border border-slate-200 p-4">
+    return <><CollectionPaymentJourney row={row} assessment={context.data?.automatic_assessment} loading={context.isPending} failed={context.isError} onRetry={() => context.refetch()} />
+    <section aria-label="Profile matching" className="space-y-3 rounded-lg border border-slate-200 p-4">
         <h3 className="text-sm font-semibold text-slate-900">Profile matching</h3>
         {row.match_decision && <div className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950"><p className="font-semibold">Automatic decision · saved match score {row.match_decision.suggestions?.find(client => client.id === row.match_decision.selected_client_id)?.score ?? 'unavailable'} / 100</p><p className="mt-1">The activation used the evidence saved at that decision. The suggestions below reflect the current evidence.</p></div>}
         {context.isPending && <p role="status" className="text-sm text-slate-500">Checking match confidence and evidence…</p>}
@@ -31,7 +33,7 @@ export function CollectionMatchEvidence({ row }) {
             </div>)}
             <p className="text-xs text-slate-500">Rule score, not a measured probability. A profile match does not select or approve the purchased service.</p>
         </>}
-    </section>;
+    </section></>;
 }
 
 export function CollectionPayerSummary({ payer }) {
@@ -47,7 +49,7 @@ export function CollectionPayerSummary({ payer }) {
     </section>;
 }
 
-export default function CollectionPurchaseReview({ row, onSaved }) {
+export default function CollectionPurchaseReview({ row, onSaved, footerTarget = null }) {
     const [more, setMore] = useState([]);
     const [cursor, setCursor] = useState(null);
     const [error, setError] = useState('');
@@ -56,13 +58,17 @@ export default function CollectionPurchaseReview({ row, onSaved }) {
     const data = context.data;
     const history = data?.history;
     const blocked = row.usage && ['already_recorded', 'conflict'].includes(row.usage.state);
+    const matchedPackage = data?.automatic_assessment?.package;
+    const suggestedPurchase = matchedPackage?.state === 'matched' && matchedPackage.source === 'catalogue'
+        && data.automatic_assessment.profile?.id === data.selected_client?.id ? matchedPackage.purchase : null;
     const seed = data?.saved_choice ? { client: data.saved_choice.client, client_id: data.saved_choice.client.id,
         saved_intent_id: data.saved_choice.id, purchase: data.saved_choice.purchase, product_price_id: data.saved_choice.purchase.product_price_id,
-        deal_id: data.recommended_intent?.deal_id } : data?.selected_client ? { client: data.selected_client, client_id: data.selected_client.id } : null;
+        deal_id: data.recommended_intent?.deal_id } : data?.selected_client ? { client: data.selected_client, client_id: data.selected_client.id,
+        ...(suggestedPurchase ? { product_price_id: suggestedPurchase.product_price_id, purchase: suggestedPurchase } : {}) } : null;
     return <section aria-label="Review purchase" className="space-y-4">
         {context.isPending && !row.sale && <p role="status" className="text-sm text-slate-500">Checking this payment and profile matches…</p>}
         {context.isError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">Could not load payment details. <button type="button" className="underline" onClick={() => context.refetch()}>Try again</button></p>}
-        {(data || row.sale) && !blocked && <CollectionSalesFlow key={row.id} row={row} initialSeed={seed} suggestions={data?.suggestions || []} needsChoice={data?.needs_choice} direct onSaved={onSaved} />}
+        {(data || row.sale) && !blocked && <CollectionSalesFlow key={row.id} row={row} initialSeed={seed} suggestions={data?.suggestions || []} needsChoice={data?.needs_choice} direct footerTarget={footerTarget} onSaved={onSaved} />}
         {history && <details className="border-t border-slate-200 pt-4"><summary className="cursor-pointer py-2 text-sm font-medium text-teal-800">Earlier payments {history.prior_count === null ? '' : `(${history.prior_count}${history.complete ? '' : '+'})`}</summary><div className="mt-2 space-y-3 text-sm">
             <p className="text-xs text-slate-500">{history.scope?.label}. {history.complete ? 'Current payment excluded.' : 'Available history is incomplete; counts are lower bounds.'}</p>
             {[...(history.items || []), ...more].filter((item, i, all) => all.findIndex(x => x.key === item.key) === i).map(item => <div key={item.key} className="flex justify-between gap-3 border-b border-slate-100 py-2"><span>{item.currency} {Number(item.amount_minor / 100).toLocaleString()}<span className="block text-xs text-slate-500">{item.source === 'crm' ? 'Recorded in CRM' : 'Captured receipt'}</span></span><span className="text-right text-xs text-slate-600">{receiptTime(item.at)}<span className="block select-all">{item.reference || 'Reference unavailable'}</span></span></div>)}

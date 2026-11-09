@@ -14,12 +14,32 @@ function minor(value) {
     return result;
 }
 
-export default function CollectionPolicyPanel() {
+export function useCollectionPolicies() {
+    const { user } = useAuth();
+    return useQuery({ queryKey: ['collection-policies', user?.id], queryFn: async () => (await api.get('/crm/collections/account-policies')).data,
+        refetchInterval: () => document.visibilityState === 'visible' ? 10000 : false, refetchOnWindowFocus: true });
+}
+
+export function CollectionAutomationSummary({ onConfigure }) {
+    const query = useCollectionPolicies();
+    const accounts = query.data?.accounts || [];
+    const pending = accounts.flatMap(account => account.automation?.readiness || []).filter(check => !check.ready);
+    const finance = pending.some(check => ['independent_reconciliation_accepted_at', 'settlement_policy_accepted_at'].includes(check.key));
+    const enabled = accounts.some(account => account.automation?.enabled);
+    const title = query.isPending ? 'Checking automatic activation…' : query.isError ? 'Automatic activation status unavailable' : !accounts.length ? 'No receiving account in this view' : enabled ? pending.length ? 'Automatic activation · Checks pending' : 'Automatic activation · Enabled' : 'Automatic activation · Paused';
+    return <section aria-label="Automatic activation status" className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4 text-sm">
+        <div className="min-w-0 flex-1"><p className="font-semibold text-slate-900">{title}</p>
+            {accounts.length > 0 && <p className="mt-1 text-slate-600">{finance ? 'Awaiting Finance acceptance and remaining activation checks.' : pending.length ? 'Remaining activation checks must pass before new payments can activate automatically.' : enabled ? 'Eligible new payments activate automatically. Exceptions stay for staff review.' : 'Matching continues. Staff can review and activate payments while automation is paused.'}</p>}
+            {query.isError && <p className="mt-1 text-slate-600">Refresh the status before relying on automatic activation. <button type="button" className="text-teal-800 underline" onClick={() => query.refetch()}>Retry status</button></p>}
+        </div><button type="button" onClick={onConfigure} className="shrink-0 py-2 font-medium text-teal-800 underline">Automation settings</button>
+    </section>;
+}
+
+export default function CollectionPolicyPanel({ open, onToggle }) {
     const { user } = useAuth();
     const manager = ['admin', 'sub_admin'].includes(user?.role);
-    const query = useQuery({ queryKey: ['collection-policies', user?.id], queryFn: async () => (await api.get('/crm/collections/account-policies')).data,
-        refetchOnWindowFocus: true });
-    return <details className="mb-5 border-b border-slate-200 pb-5"><summary className="cursor-pointer py-2 text-sm font-semibold text-slate-800">Automatic activation limits</summary>
+    const query = useCollectionPolicies();
+    return <details id="collection-automation-settings" open={open} onToggle={onToggle} className="mt-6 border-t border-slate-200 pt-4"><summary className="cursor-pointer py-2 text-sm font-semibold text-slate-800">Automatic activation limits</summary>
         <p className="mt-2 text-sm text-slate-600">Limits control exposure from automatic activation. Unlimited keeps the payment and review totals recorded. Saving limits does not enable automatic activation.</p>
         {query.isPending && <p className="mt-3 text-sm text-slate-500">Loading limits…</p>}
         {query.isError && <p role="alert" className="mt-3 text-sm text-rose-800">Limits could not be loaded. <button type="button" className="underline" onClick={() => query.refetch()}>Retry</button></p>}

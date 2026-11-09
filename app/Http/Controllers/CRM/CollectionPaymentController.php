@@ -167,7 +167,12 @@ class CollectionPaymentController extends Controller
         if ($sale) {
             $clientIds = array_unique(array_merge($clientIds, $sale->items->pluck('client_id')->all()));
         }
-        $clients = Client::whereIn('id', $clientIds)->get(['id', 'name', 'platform_id']);
+        $matching = data_get($r->candidate_snapshot, 'matching', []);
+        $suggestions = $matching['suggestions'] ?? [];
+        $profiles = Client::whereIn('id', array_unique(array_merge($clientIds, array_column($suggestions, 'id'))))->get(['id', 'name', 'platform_id'])->keyBy('id');
+        $clients = $profiles->only($clientIds)->values();
+        $suggestions = array_values(array_filter(array_map(fn ($candidate) => isset($profiles[$candidate['id']])
+            ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
         return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
@@ -177,6 +182,7 @@ class CollectionPaymentController extends Controller
             'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
             'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,
             'match_decision' => $allocation && $allocation->decision_source === 'automatic' ? data_get($r->candidate_snapshot, 'matching') : null,
+            'match_suggestions' => $suggestions, 'match_needs_choice' => (bool) ($matching['needs_choice'] ?? false),
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
             'allocation' => $allocation ? ['id' => $allocation->id, 'state' => $allocation->state, 'version' => $allocation->version, 'payment_id' => $allocation->payment_id,
                 'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id,

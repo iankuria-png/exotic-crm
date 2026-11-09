@@ -13,6 +13,7 @@ use App\Services\Collections\CollectionPayerEvidenceService;
 use App\Services\Collections\CollectionReceiptService;
 use App\Services\Collections\TzMpesaParser;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 
@@ -58,6 +59,19 @@ class CollectionReviewContextTest extends CollectionWorkflowTestCase
         $this->assertSame($before, $this->counts());
         $this->assertArrayNotHasKey('payer_phone', $r->toArray());
         $this->assertArrayNotHasKey('normalized', DB::table('collection_events')->exists() ? \App\Models\Collections\CollectionEvent::first()->toArray() : []);
+    }
+
+    public function test_queue_exposes_saved_match_evidence_without_treating_it_as_an_activation(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        app(\App\Services\Collections\CollectionDecisionService::class)->evaluate($r->id);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()
+            ->assertJsonPath('data.0.match_suggestions.0.id', $client->id)
+            ->assertJsonPath('data.0.match_suggestions.0.score', 95)
+            ->assertJsonPath('data.0.clients', [])
+            ->assertJsonPath('data.0.allocation', null);
+        $this->assertDatabaseCount('collection_allocations', 0);
+        Http::assertNothingSent();
     }
 
     public function test_name_only_bank_detail_and_conflicting_names_have_honest_display(): void

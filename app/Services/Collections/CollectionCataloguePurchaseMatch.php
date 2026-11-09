@@ -43,20 +43,36 @@ class CollectionCataloguePurchaseMatch
         return $prices;
     }
 
-    /** Call under the receiving-account lock after identity, age and rollout checks pass. */
-    public function select(CollectionReceipt $receipt, int $clientId): CollectionPurchaseIntent
+    /** Pure package assessment. No intent, audit, reservation or site request is created. */
+    public function preview(CollectionReceipt $receipt, Client $client): array
     {
+        if (! $receipt->provider_at) {
+            throw new CollectionException('receipt_requires_finance_review');
+        }
         $policy = $receipt->account->policy ?? [];
         if (($policy['purchase_matching'] ?? '') !== 'exact_catalogue_or_reviewed' || empty($policy['purchase_matching_approved_by'])
             || empty($policy['purchase_matching_approved_at']) || Carbon::parse($policy['purchase_matching_approved_at'])->gt($receipt->provider_at)) {
             throw new CollectionException('automatic_catalogue_matching_policy_required');
         }
-        $client = app(CollectionPurchaseService::class)->selectableClients()->findOrFail($clientId);
         $prices = $this->eligiblePrices($receipt, $client);
         if ($prices->count() !== 1) {
             throw new CollectionException($prices->count() ? 'multiple_exact_package_matches' : 'no_exact_catalogue_package_match');
         }
         $price = $prices->first();
+
+        return ['product_price_id' => $price->id, 'product_id' => $price->product_id, 'name' => $price->product->name,
+            'tier' => $price->product->tier, 'duration_days' => $price->duration_days, 'duration_key' => $price->duration_key,
+            'duration_label' => $price->duration_label, 'amount_minor' => $receipt->principal_minor, 'catalogue_minor' => $receipt->principal_minor, 'currency' => $receipt->currency,
+            'approved_default' => isset($policy['catalogue_price_defaults'][$client->platform_id.':'.$receipt->currency.':'.$receipt->principal_minor])];
+    }
+
+    /** Call under the receiving-account lock after identity, age and rollout checks pass. */
+    public function select(CollectionReceipt $receipt, int $clientId): CollectionPurchaseIntent
+    {
+        $policy = $receipt->account->policy ?? [];
+        $client = app(CollectionPurchaseService::class)->selectableClients()->findOrFail($clientId);
+        $preview = $this->preview($receipt, $client);
+        $price = ProductPrice::with('product')->findOrFail($preview['product_price_id']);
         $secondary = null;
         if ($secondaryId = config('collection.subsidiary_platforms.'.$client->platform_id)) {
             if (! $client->phone_normalized) {
