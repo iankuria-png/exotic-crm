@@ -14,6 +14,7 @@ use App\Services\SubscriptionAudit\SubscriptionAuditException;
 use App\Services\SubscriptionAudit\SubscriptionAuditService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
@@ -263,6 +264,51 @@ class SubscriptionAuditReadModelTest extends TestCase
         $builder->shouldReceive('build')->once()->andThrow(new SubscriptionAuditException('Private implementation detail', 'audit_source_limit'));
         $this->app->instance(SubscriptionAuditBuilder::class, $builder);
         $this->artisan('crm:subscription-audit-build')->expectsOutput('Subscription audit snapshot build failed (SubscriptionAuditException; audit_source_limit). Previous completed reports remain available.')->assertFailed();
+    }
+
+    public function test_cleanup_timeout_does_not_report_a_completed_snapshot_as_a_build_failure(): void
+    {
+        $run = $this->build();
+        $cause = new \PDOException('Private retention query');
+        $cause->errorInfo = ['HY000', 1205, 'Private SQL data'];
+        $error = new \Illuminate\Database\QueryException('mysql', 'delete private_rows where value = ?', ['Private client name'], $cause);
+        $builder = \Mockery::mock(SubscriptionAuditBuilder::class);
+        $builder->shouldReceive('build')->once()->andReturn($run);
+        $builder->shouldReceive('prune')->once()->andThrow($error);
+        $this->app->instance(SubscriptionAuditBuilder::class, $builder);
+        $this->artisan('crm:subscription-audit-build')
+            ->expectsOutput('Completed audit run '.$run->run_ref.'; UTC '.$run->from_at->toIso8601String().' to '.$run->to_at->toIso8601String().'.')
+            ->expectsOutput('The completed snapshot is available; old-snapshot cleanup failed (QueryException; SQLSTATE HY000; driver 1205). Cleanup will retry on the next build.')
+            ->assertSuccessful();
+        $this->assertSame($run->run_ref, $this->report('summary')['run_ref']);
+    }
+
+    public function test_mysql_command_skips_another_connection_build_and_releases_its_lock_after_failure(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires independent MySQL advisory-lock connections.');
+        }
+        $database = DB::connection()->getDatabaseName();
+        $name = 'exotic:audit:'.substr(hash('sha256', $database), 0, 48);
+        Config::set('database.connections.audit_lock_probe', DB::connection()->getConfig());
+        $other = DB::connection('audit_lock_probe');
+        $this->assertSame(1, (int) $other->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$name])->acquired);
+        $builder = \Mockery::mock(SubscriptionAuditBuilder::class);
+        $builder->shouldReceive('build')->once()->andThrow(new SubscriptionAuditException('Synthetic failure', 'audit_source_limit'));
+        $builder->shouldNotReceive('prune');
+        $this->app->instance(SubscriptionAuditBuilder::class, $builder);
+        try {
+            $this->artisan('crm:subscription-audit-build')
+                ->expectsOutput('Another subscription audit build or cleanup is running. This invocation was skipped; completed reports remain available.')
+                ->assertSuccessful();
+            $this->assertSame(0, DB::table('subscription_audit_runs')->count());
+            $other->selectOne('SELECT RELEASE_LOCK(?) AS released', [$name]);
+            $this->artisan('crm:subscription-audit-build')->assertFailed();
+            $this->assertSame(1, (int) $other->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$name])->acquired);
+        } finally {
+            $other->selectOne('SELECT RELEASE_LOCK(?) AS released', [$name]);
+            DB::purge('audit_lock_probe');
+        }
     }
 
     private function auth(?array $platforms = null): McpAuthorizationContext

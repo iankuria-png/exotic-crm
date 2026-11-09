@@ -43,6 +43,8 @@ php artisan crm:subscription-audit-build --days=90
 
 The migration adds reporting-only runs and events. The initial build reads existing CRM sources and writes only these reporting tables; it does not activate subscriptions, modify payments, send messages or call payment/FX providers. A completed run covers up to 90 days. The CLI build reserves a per-process 384 MB ceiling, bounds each source and the canonical event set to 30,000 rows, and refuses oversized runs while preserving the previous completed report. The scheduler refreshes at minute 13 hourly in the background, with overlap protection and the existing heavy-work load gate. A report exposes its snapshot time and labels stale/partial coverage; a skipped or failed refresh must not look current.
 
+The CLI holds a database-specific advisory lock across both building and pruning on MySQL/MariaDB. A competing manual or scheduled invocation reports that it was skipped. Snapshot completion is printed before cleanup; cleanup failure warns separately and leaves the new completed report available. A lock timeout reported by older command versions does not establish whether the build itself or subsequent cleanup failed.
+
 The build retains six hours of reporting snapshots plus the newest completed run. It prunes reporting rows only. Source deals, payments, audit logs and timeline records remain intact. Cursors expire after 15 minutes; an expired or pruned run requires starting a new report. Do not manually delete source evidence to resolve an exception.
 
 No WordPress upload or frontend build is required for this backend release. Existing source/build work in the Local checkout is excluded from the release.
