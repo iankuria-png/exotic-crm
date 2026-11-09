@@ -65,3 +65,12 @@ test('unavailable original snapshot explains the correction hold before a write'
     await expect(page.getByRole('button', { name: 'Confirm correction', exact: true })).toBeDisabled();
     expect(state.mutations.filter(m => m.path.includes('/sales/corrections/') && m.path.endsWith('/execute'))).toHaveLength(0);
 });
+
+
+test('saved automatic score stays distinct from current suggestions', async ({ page }) => {
+    await setup(page, { savedMatch: true });
+    const matching = page.getByRole('region', { name: 'Profile matching', exact: true });
+    await expect(matching).toContainText('Automatic decision · saved match score 95 / 100');
+    await expect(matching).toContainText('Match confidence 90 / 100');
+    await expect(matching).toContainText('suggestions below reflect the current evidence');
+});

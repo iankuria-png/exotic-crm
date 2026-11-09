@@ -18,6 +18,7 @@ export function CollectionMatchEvidence({ row }) {
     const suggestions = context.data?.suggestions || [];
     return <section aria-label="Profile matching" className="space-y-3 rounded-lg border border-slate-200 p-4">
         <h3 className="text-sm font-semibold text-slate-900">Profile matching</h3>
+        {row.match_decision && <div className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950"><p className="font-semibold">Automatic decision · saved match score {row.match_decision.suggestions?.find(client => client.id === row.match_decision.selected_client_id)?.score ?? 'unavailable'} / 100</p><p className="mt-1">The activation used the evidence saved at that decision. The suggestions below reflect the current evidence.</p></div>}
         {context.isPending && <p role="status" className="text-sm text-slate-500">Checking match confidence and evidence…</p>}
         {context.isError && <p role="alert" className="text-sm text-rose-800">Match confidence could not be loaded. <button type="button" className="font-medium underline" onClick={() => context.refetch()}>Retry matching</button></p>}
         {context.isSuccess && <>
