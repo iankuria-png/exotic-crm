@@ -118,9 +118,13 @@ class SubscriptionProfileAuditBuilder
             $receiptSql = DB::connection()->getDriverName() === 'mysql'
                 ? "CASE WHEN manual_payment_bundle_id IS NULL THEN CONCAT('p', id) ELSE CONCAT('b', manual_payment_bundle_id) END"
                 : "CASE WHEN manual_payment_bundle_id IS NULL THEN 'p' || id ELSE 'b' || manual_payment_bundle_id END";
-            $duplicates = $roots ? Payment::query()->reportableSuccessful()->whereIn('platform_id', $clients->pluck('platform_id')->unique())
-                ->whereIn(DB::raw($rootSql), $roots)->selectRaw('platform_id, '.$rootSql.' as receipt_key')->groupBy('platform_id', DB::raw($rootSql))
-                ->havingRaw('COUNT(DISTINCT '.$receiptSql.') > 1')->get()->mapWithKeys(fn ($r) => [$r->platform_id.':'.$r->receipt_key => true])->all() : [];
+            // Group projected column names: MariaDB's ONLY_FULL_GROUP_BY rejects
+            // selecting this normalisation expression while grouping by it.
+            $receipts = Payment::query()->reportableSuccessful()->whereIn('platform_id', $clients->pluck('platform_id')->unique())
+                ->whereIn(DB::raw($rootSql), $roots)->selectRaw('platform_id, '.$rootSql.' as receipt_key, '.$receiptSql.' as receipt_identity');
+            $duplicates = $roots ? DB::query()->fromSub($receipts, 'retained_receipts')->select('platform_id', 'receipt_key')
+                ->groupBy('platform_id', 'receipt_key')->havingRaw('COUNT(DISTINCT receipt_identity) > 1')
+                ->get()->mapWithKeys(fn ($r) => [$r->platform_id.':'.$r->receipt_key => true])->all() : [];
             $multipleObservations = Schema::hasTable('payment_receipt_observations') ? DB::table('payment_receipt_observations')->whereIn('payment_id', $payments->pluck('id'))->select('payment_id')->groupBy('payment_id')->havingRaw('COUNT(*) > 1')->pluck('payment_id')->flip() : collect();
             foreach ($payments as $p) {
                 $deal = $deals[$p->deal_id] ?? null;

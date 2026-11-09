@@ -283,6 +283,41 @@ class McpSubscriptionProfileAuditTest extends TestCase
         $this->assertContains('payment_history_candidates_unverified', $row['review_flags']);
     }
 
+    public function test_receipt_grouping_normalises_fallback_roots_and_keeps_bundle_and_market_boundaries(): void
+    {
+        $duplicate = $this->client();
+        $bundleClient = $this->client();
+        $clean = $this->client();
+        $bundle = DB::table('manual_payment_bundles')->insertGetId(['platform_id' => $this->site->id,
+            'reference_root' => 'BUNDLE-ROOT', 'total_amount' => '20.00', 'allocated_amount' => '20.00',
+            'currency' => 'KES', 'status' => 'committed', 'audit_state' => 'clean', 'idempotency_key' => 'synthetic-audit-bundle']);
+        foreach ([
+            [$duplicate, ['reference_root' => ' duplicate-root ']],
+            [$duplicate, ['reference_root' => '', 'transaction_reference' => 'DUPLICATE-ROOT']],
+            [$bundleClient, ['reference_root' => 'BUNDLE-ROOT', 'manual_payment_bundle_id' => $bundle, 'reference_sequence' => 1]],
+            [$bundleClient, ['reference_root' => 'BUNDLE-ROOT', 'manual_payment_bundle_id' => $bundle, 'reference_sequence' => 2]],
+            [$clean, ['reference_root' => 'MARKET-ROOT']],
+        ] as [$client, $extra]) {
+            Payment::factory()->create($extra + ['platform_id' => $this->site->id, 'product_id' => $this->productId,
+                'client_id' => $client->id, 'provider_environment' => 'live', 'amount' => '10.00']);
+        }
+        $other = Platform::factory()->create(['currency_code' => 'KES']);
+        Payment::factory()->create(['platform_id' => $other->id, 'client_id' => Client::factory()->create(['platform_id' => $other->id])->id,
+            'provider_environment' => 'live', 'reference_root' => 'MARKET-ROOT', 'amount' => '10.00']);
+        app(SubscriptionAuditBuilder::class)->build();
+        $rows = collect($this->report()['rows'])->keyBy('client_handle');
+        $duplicateRow = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $duplicate->id)];
+        $this->assertSame('payment_history_unverified', $duplicateRow['payment_history_state']);
+        $this->assertSame(0, $duplicateRow['payment_history']['cash_record_count']);
+        $bundleRow = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $bundleClient->id)];
+        $this->assertSame(2, $bundleRow['payment_history']['cash_record_count']);
+        $this->assertSame('20.00', $bundleRow['payment_history']['by_currency'][0]['cash_amount']);
+        $this->assertFalse($bundleRow['payment_history']['has_unverified_candidates']);
+        $cleanRow = $rows[\App\Services\SubscriptionAudit\AuditValue::handle('cli', $clean->id)];
+        $this->assertSame(1, $cleanRow['payment_history']['cash_record_count']);
+        $this->assertFalse($cleanRow['payment_history']['has_unverified_candidates']);
+    }
+
     public function test_missing_optional_trial_source_is_visible_in_coverage(): void
     {
         $this->client();
