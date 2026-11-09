@@ -36,7 +36,11 @@ class SubsidiaryWpIdentityLookup
 
         return $db->transaction(function () use ($db, $target, $deadline, $limit, $phone, $email, $helper) {
             $siteurl = (string) $db->table('options')->where('option_name', 'siteurl')->value('option_value');
-            abort_unless(strtolower((string) parse_url($siteurl, PHP_URL_HOST)) === strtolower((string) parse_url($target->wp_api_url, PHP_URL_HOST)), 409, 'The target database belongs to a different site.');
+            // CRM API settings may use the bare host while WordPress stores its www alias.
+            // Keep the market boundary: no other subdomain or hostname is interchangeable.
+            $siteHost = preg_replace('/^www\./', '', strtolower((string) parse_url($siteurl, PHP_URL_HOST)));
+            $apiHost = preg_replace('/^www\./', '', strtolower((string) parse_url($target->wp_api_url, PHP_URL_HOST)));
+            abort_unless($siteHost !== '' && $apiHost !== '' && $siteHost === $apiHost, 409, 'The target database belongs to a different site.');
             $type = trim((string) $db->table('options')->where('option_name', 'taxonomy_profile_url')->value('option_value')) ?: 'escort';
             abort_unless(preg_match('/^[a-zA-Z0-9_-]+$/D', $type), 409, 'Profile type is unavailable.');
             $last = 0;

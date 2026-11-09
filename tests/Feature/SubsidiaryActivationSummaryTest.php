@@ -525,6 +525,38 @@ class SubsidiaryActivationSummaryTest extends TestCase
         $this->assertSame(520, $db->table('posts')->count());
     }
 
+    public static function siteHostCases(): array
+    {
+        return [
+            'Tanzania www site with bare API host' => ['https://www.target.example.test', 'https://target.example.test/wp-json/exotic-crm-sync/v1', true],
+            'bare site with www API host' => ['https://target.example.test', 'https://www.target.example.test/wp-json/exotic-crm-sync/v1', true],
+            'case insensitive host' => ['https://WWW.Target.Example.Test', 'https://target.example.test/wp-json/exotic-crm-sync/v1', true],
+            'different market' => ['https://another.example.test', 'https://target.example.test/wp-json/exotic-crm-sync/v1', false],
+            'lookalike domain' => ['https://target.example.test.attacker.test', 'https://target.example.test/wp-json/exotic-crm-sync/v1', false],
+            'different subdomain' => ['https://admin.target.example.test', 'https://target.example.test/wp-json/exotic-crm-sync/v1', false],
+            'missing host' => ['', '', false],
+        ];
+    }
+
+    /** @dataProvider siteHostCases */
+    public function test_authoritative_lookup_accepts_only_the_same_market_host_and_its_www_alias(string $siteurl, string $apiUrl, bool $accepted): void
+    {
+        [$source, $target, $main] = $this->fixture(false);
+        $db = $this->siteDatabase($target);
+        $db->table('options')->where('option_name', 'siteurl')->update(['option_value' => $siteurl]);
+        $target->update(['wp_api_url' => $apiUrl]);
+        $lookup = \Mockery::mock(SubsidiaryWpIdentityLookup::class)->makePartial();
+        $lookup->shouldReceive('connection')->once()->andReturn($db);
+        if (! $accepted) {
+            $this->expectException(\Symfony\Component\HttpKernel\Exception\HttpException::class);
+            $this->expectExceptionMessage('The target database belongs to a different site.');
+        }
+        $match = $lookup->find($target, app(SubsidiaryActivationPreviewService::class)->seed($main, $target));
+        $this->assertSame(['wp_post_id' => 510, 'wp_user_id' => 55], $match);
+        $this->assertSame(520, $db->table('posts')->count());
+        Http::assertNothingSent();
+    }
+
     public function test_incomplete_authoritative_scan_cannot_establish_absence(): void
     {
         [$source, $target, $main] = $this->fixture(false);
