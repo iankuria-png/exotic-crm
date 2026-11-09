@@ -18,7 +18,7 @@ export function CollectionMatchEvidence({ row }) {
     const context = useReviewContext(row);
     const suggestions = context.data?.suggestions || [];
     return <><CollectionPaymentJourney row={row} assessment={context.data?.automatic_assessment} loading={context.isPending} failed={context.isError} onRetry={() => context.refetch()} />
-    <section aria-label="Profile matching" className="space-y-3 rounded-lg border border-slate-200 p-4">
+    <section aria-label="Profile matching" className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
         <h3 className="text-sm font-semibold text-slate-900">Profile matching</h3>
         {row.match_decision && <div className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950"><p className="font-semibold">Automatic decision · saved match score {row.match_decision.suggestions?.find(client => client.id === row.match_decision.selected_client_id)?.score ?? 'unavailable'} / 100</p><p className="mt-1">The activation used the evidence saved at that decision. The suggestions below reflect the current evidence.</p></div>}
         {context.isPending && <p role="status" className="text-sm text-slate-500">Checking match confidence and evidence…</p>}
@@ -29,11 +29,20 @@ export function CollectionMatchEvidence({ row }) {
             {suggestions.map(client => <div key={client.id} className="space-y-2">
                 <div className="flex flex-wrap items-baseline justify-between gap-2"><p className="text-sm"><span className="text-slate-500">Suggested profile · </span><Link to={`/clients/${client.id}`} target="_blank" rel="noopener noreferrer" title="Open CRM profile in a new tab" className="font-semibold text-teal-800 underline">{client.name}</Link></p>
                     <span className="text-sm font-semibold tabular-nums text-slate-800">{Number.isFinite(client.score) ? `Match confidence ${client.score} / 100` : 'Match confidence unavailable'}</span></div>
-                {!!client.reasons?.length && <ul className="space-y-1 text-sm text-slate-600">{client.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}
+                {Number.isFinite(client.score) && <ConfidenceMeter score={client.score} threshold={context.data?.automatic_assessment?.threshold ?? 80} />}
+                {!!client.reasons?.length && <ul className="space-y-1 text-sm text-slate-600">{client.reasons.map(reason => <li key={reason} className="flex gap-2"><span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />{reason}</li>)}</ul>}
             </div>)}
             <p className="text-xs text-slate-500">Rule score, not a measured probability. A profile match does not select or approve the purchased service.</p>
         </>}
     </section></>;
+}
+
+function ConfidenceMeter({ score, threshold }) {
+    const clear = score > threshold;
+    return <div aria-hidden="true" className="relative h-1.5 rounded-full bg-slate-100">
+        <div className={`h-full rounded-full ${clear ? 'bg-teal-600' : 'bg-amber-500'}`} style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
+        <span className="absolute -top-1 h-3.5 w-0.5 rounded bg-slate-500" style={{ left: `${threshold}%` }} title={`Automatic threshold ${threshold}`} />
+    </div>;
 }
 
 export function CollectionPayerSummary({ payer }) {

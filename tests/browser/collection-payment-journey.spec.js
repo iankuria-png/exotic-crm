@@ -7,12 +7,15 @@ test('payment queue stays ahead of settings and the summary explains the Finance
     const summary = page.getByRole('region', { name: 'Automatic activation status', exact: true });
     await expect(summary).toContainText('Automatic activation · Paused');
     await expect(summary).toContainText('Awaiting Finance acceptance');
-    const settings = page.locator('#collection-automation-settings');
-    await expect(settings).not.toHaveAttribute('open');
-    expect(await page.getByRole('table').evaluate(table => !!(table.compareDocumentPosition(document.getElementById('collection-automation-settings')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await expect(page.getByRole('dialog', { name: 'Automatic activation' })).toHaveCount(0);
+    await expect(page.getByRole('table')).toBeVisible();
     await summary.getByRole('button', { name: 'Automation settings' }).click();
-    await expect(settings).toHaveAttribute('open', '');
-    await expect(settings.locator(':scope > summary')).toBeFocused();
+    const settings = page.getByRole('dialog', { name: 'Automatic activation' });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Close', exact: true })).toBeFocused();
+    await expect(settings.getByRole('button', { name: 'Switch on automatic activation' })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
     expect(state.mutations.filter(m => m.path.includes('/collections/'))).toHaveLength(0);
 });
 
@@ -90,5 +93,8 @@ test('mobile progress wraps inside the receipt and settings remain secondary', a
     expect(await progress.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: 'output/collection-auto-2026-11-09/journey-mobile.png', fullPage: true });
     await page.getByRole('button', { name: 'Close', exact: true }).click();
-    await expect(page.locator('#collection-automation-settings')).not.toHaveAttribute('open');
+    await expect(page.getByRole('dialog', { name: 'Automatic activation' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Match & activate', exact: true })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: 'output/collection-golive-2026-11-09/queue-mobile.png', fullPage: true });
 });

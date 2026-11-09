@@ -1,44 +1,63 @@
 import { test, expect } from '@playwright/test';
 import { setup } from './support/collection-matching-fixture';
 
-test('manager can save strict matching and one-hour package policy while Finance holds enablement', async ({ page }) => {
-    const state = await setup(page, { automation: true });
+async function openSettings(page) {
     await page.getByRole('button', { name: 'Close', exact: true }).click();
-    await page.getByText('Automatic activation limits', { exact: true }).click();
-    const controls = page.getByRole('region', { name: 'Automatic activation for TZ office wallet' });
-    await expect(controls).toContainText('Maximum payment age: 60 minutes');
-    await controls.getByRole('button', { name: 'Configure automatic activation' }).click();
+    await page.getByRole('button', { name: 'Automation settings' }).click();
+    return page.getByRole('region', { name: 'Automatic activation for TZ office wallet' });
+}
+
+test('manager can save strict matching rules while Finance holds switch-on', async ({ page }) => {
+    const state = await setup(page, { automation: true });
+    const controls = await openSettings(page);
+    await expect(controls).toContainText('1 of 2 go-live checks complete');
+    await expect(controls.getByRole('region', { name: 'Automatic activation rules' })).toContainText('1 hour');
+    await expect(controls.getByRole('button', { name: 'Switch on automatic activation' })).toBeDisabled();
+    await controls.getByRole('button', { name: 'Edit rules' }).click();
     await controls.getByLabel('Match score must be above').fill('85');
     await controls.getByLabel('Reason for this change').fill('Approved TZ pilot matching policy');
-    await expect(controls.getByRole('button', { name: 'Enable for new payments' })).toBeDisabled();
-    await controls.getByRole('button', { name: 'Save policy', exact: true }).click();
-    await expect(controls.getByRole('status')).toHaveText('Automatic activation policy saved.');
+    await controls.getByRole('button', { name: 'Save rules', exact: true }).click();
+    await expect(controls.getByRole('status')).toHaveText('Rules saved.');
     const mutation = state.mutations.find(m => m.path.endsWith('/accounts/fixture/policy'));
-    expect(mutation.body).toMatchObject({ automation_enabled: false, match_threshold: 85, max_auto_age_seconds: 3600, purchase_matching: 'exact_catalogue_or_reviewed' });
+    expect(mutation.body).toEqual({ expected_version: 1, match_threshold: 85, max_auto_age_seconds: 3600, purchase_matching: 'exact_catalogue_or_reviewed', reason: 'Approved TZ pilot matching policy' });
 });
 
-test('observation exception cannot bypass a pending Finance requirement', async ({ page }) => {
-    await setup(page, { automation: true });
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
-    await page.getByText('Automatic activation limits', { exact: true }).click();
-    const controls = page.getByRole('region', { name: 'Automatic activation for TZ office wallet' });
-    await controls.getByRole('button', { name: 'Configure automatic activation' }).click();
-    await controls.getByRole('checkbox', { name: /24-hour TZ exception/ }).check();
-    await controls.getByLabel('Reason for this change').fill('Observation-only exception approved');
-    await expect(controls.getByRole('button', { name: 'Enable for new payments' })).toBeDisabled();
-    await controls.getByText('Readiness · 1 checks pending').click();
-    await expect(controls).toContainText('Pending · Independent payment statement comparison accepted');
+test('recording the Finance sign-off unlocks an attributed switch-on with the 24-hour pilot', async ({ page }) => {
+    const state = await setup(page, { automation: true });
+    const controls = await openSettings(page);
+    await controls.getByRole('button', { name: 'Record sign-off: Statement comparison' }).click();
+    const form = controls.getByRole('form', { name: 'Record sign-off: Statement comparison' });
+    await form.getByRole('button', { name: 'Record sign-off', exact: true }).click();
+    await expect(form.getByRole('alert')).toContainText('Name who accepted this');
+    await form.getByLabel('Who accepted it').fill('Finance — Grace M.');
+    await form.getByLabel('Evidence or note').fill('Statement 1–8 Nov matched');
+    await form.getByRole('button', { name: 'Record sign-off', exact: true }).click();
+    await expect(controls).toContainText('Accepted by Finance — Grace M.');
+    expect(state.mutations.find(m => m.path.endsWith('/signoffs')).body).toEqual({ key: 'independent_reconciliation_accepted_at', expected_version: 1, note: 'Statement 1–8 Nov matched', accepted_by: 'Finance — Grace M.' });
+    await expect(controls).toContainText('Ready to switch on');
+    await controls.getByRole('button', { name: 'Switch on automatic activation' }).click();
+    const confirm = controls.getByRole('form', { name: 'Confirm switch on' });
+    await expect(confirm).toContainText('Only payments received after you switch on');
+    await expect(confirm).toContainText('24-hour pilot');
+    await confirm.getByLabel('Reason for switching on').fill('Finance accepted TZ go-live');
+    await confirm.getByRole('button', { name: 'Switch on now' }).click();
+    await expect(controls).toContainText('Automatic activation is live');
+    await expect(controls).toContainText('24-hour pilot · ends');
+    await expect(page.getByRole('region', { name: 'Automatic activation status', exact: true })).toContainText('Automatic activation · Live');
+    const enable = state.mutations.filter(m => m.path.endsWith('/accounts/fixture/policy')).pop();
+    expect(enable.body).toMatchObject({ expected_version: 2, automation_enabled: true, observation_pilot_hours: 24, match_threshold: 80, max_auto_age_seconds: 3600, reason: 'Finance accepted TZ go-live' });
+    await controls.getByRole('button', { name: 'Pause automatic activation' }).click();
+    await controls.getByRole('button', { name: 'Pause now' }).click();
+    await expect(controls.getByRole('alert')).toContainText('Say why it is being paused');
 });
 
 test('stale automatic policy preserves manager entries for review', async ({ page }) => {
     const state = await setup(page, { automation: true }); state.failPolicy = true;
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
-    await page.getByText('Automatic activation limits', { exact: true }).click();
-    const controls = page.getByRole('region', { name: 'Automatic activation for TZ office wallet' });
-    await controls.getByRole('button', { name: 'Configure automatic activation' }).click();
+    const controls = await openSettings(page);
+    await controls.getByRole('button', { name: 'Edit rules' }).click();
     await controls.getByLabel('Reason for this change').fill('Keep this reviewed reason');
-    await controls.getByRole('button', { name: 'Save policy', exact: true }).click();
-    await expect(controls.getByRole('alert')).toContainText('saved policy or a readiness check changed');
+    await controls.getByRole('button', { name: 'Save rules', exact: true }).click();
+    await expect(controls.getByRole('alert')).toContainText('Someone else changed this policy');
     await expect(controls.getByLabel('Reason for this change')).toHaveValue('Keep this reviewed reason');
 });
 

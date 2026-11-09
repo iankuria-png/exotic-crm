@@ -20,7 +20,15 @@ class CollectionPolicyService
             'version' => $policy['version'] ?? 0, 'configured' => $this->configured($policy),
             'limits' => array_intersect_key($policy, array_flip(self::CAPS)),
             'approved_at' => $policy['limits_approved_at'] ?? null,
-            'mode' => $account->mode, 'automation' => app(CollectionAutomationPolicy::class)->present($account)];
+            'mode' => $account->mode, 'automation' => $this->automation($account)];
+    }
+
+    private function automation(CollectionAccount $account): array
+    {
+        $policy = app(CollectionAutomationPolicy::class);
+        $presented = $policy->present($account);
+
+        return $presented + ['status' => $policy->status($account, $presented)];
     }
 
     public function configured(array $policy): bool

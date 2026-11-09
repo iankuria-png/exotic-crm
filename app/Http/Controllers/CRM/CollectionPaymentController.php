@@ -133,7 +133,16 @@ class CollectionPaymentController extends Controller
             ->keyBy(fn ($c) => $c->account_id.':'.$c->payer_fingerprint);
         $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id]));
 
-        return response()->json($rows);
+        $needsAction = null;
+        if (empty($v['client_id'])) {
+            $pending = CollectionReceipt::whereIn('account_id', $this->access->accountIds($request->user()))
+                ->when(! empty($v['account_id']), fn ($q) => $q->where('account_id', $v['account_id']))
+                ->when(! empty($v['platform_id']), fn ($q) => $q->whereIn('account_id', DB::table('collection_account_platforms')->where('platform_id', $v['platform_id'])->select('account_id')));
+            app(CollectionReceiptStatusService::class)->filter($pending, 'needs_action');
+            $needsAction = $pending->count();
+        }
+
+        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction]]);
     }
 
     public function show(Request $request, int $receipt)
@@ -349,6 +358,13 @@ class CollectionPaymentController extends Controller
         $this->enabled();
 
         return response()->json($policies->update($request->user(), $account, $request->all()));
+    }
+
+    public function recordSignoff(Request $request, string $account, \App\Services\Collections\CollectionAutomationPolicy $automation)
+    {
+        $this->enabled();
+
+        return response()->json($automation->recordSignoff($request->user(), $account, $request->all()));
     }
 
     public function readArrivals(Request $request)

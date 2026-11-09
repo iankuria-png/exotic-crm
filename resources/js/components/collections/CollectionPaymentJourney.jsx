@@ -41,19 +41,29 @@ export default function CollectionPaymentJourney({ row, assessment, loading, fai
         { label: selected ? 'Package selected' : packageMatched ? 'Package matched' : 'Package needs review', detail: purchase ? `${purchase.tier?.toUpperCase()} · ${purchase.duration_days} days` : 'Confirm the purchased service', done: packageMatched },
         { label: finalLabel, detail: confirmed ? 'Subscription verified on the site' : recorded ? 'No new activation' : checking ? 'Do not activate again' : processing ? 'Waiting for the site' : 'No new activation confirmed', done: confirmed || recorded },
     ];
-    return <section aria-label="Payment progress" className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    const firstOpen = stages.findIndex(stage => !stage.done);
+    const blocked = !processing && !checking;
+    return <section aria-label="Payment progress" className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
         <h3 className="text-sm font-semibold text-slate-900">Payment progress</h3>
-        <ol className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">{stages.map((stage, index) => <li key={index} className="min-w-0">
-            <div className="flex items-center gap-2"><span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${stage.done ? 'bg-teal-700 text-white' : 'border border-slate-300 bg-white text-slate-600'}`}>{stage.done ? '✓' : index + 1}</span><span className="text-xs font-semibold text-slate-900">{stage.label}</span></div>
-            <p className="mt-2 break-words text-xs text-slate-600">{stage.detail}</p>
-        </li>)}</ol>
+        <ol className="mt-4 grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-4">{stages.map((stage, index) => {
+            const state = stage.done ? 'done' : index === firstOpen ? (blocked ? 'blocked' : 'busy') : 'pending';
+            return <li key={index} className="relative min-w-0">
+                {index < stages.length - 1 && <span aria-hidden="true" className={`absolute left-8 right-0 top-3 hidden h-0.5 rounded sm:block ${stage.done ? 'bg-teal-600' : 'bg-slate-200'}`} />}
+                <span aria-hidden="true" className={`relative flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${state === 'done' ? 'bg-teal-700 text-white' : state === 'blocked' ? 'bg-amber-100 text-amber-900 ring-2 ring-amber-400' : state === 'busy' ? 'bg-sky-100 text-sky-900 ring-2 ring-sky-400' : 'bg-white text-slate-500 ring-1 ring-slate-300'}`}>{state === 'done' ? '✓' : state === 'blocked' ? '!' : index + 1}</span>
+                <p className={`mt-2 text-xs font-semibold ${state === 'blocked' ? 'text-amber-950' : 'text-slate-900'}`}>{stage.label}</p>
+                <p className="mt-1 break-words text-xs text-slate-600">{stage.detail}</p>
+            </li>;
+        })}</ol>
         {loading && <p role="status" className="mt-4 text-sm text-slate-600">Assessing client and package matches…</p>}
         {failed && <p role="alert" className="mt-4 text-sm text-rose-800">The automatic assessment is unavailable. <button type="button" className="underline" onClick={onRetry}>Retry assessment</button></p>}
-        {!recorded && !confirmed && !processing && !checking && assessment && <div className="mt-4 border-t border-slate-200 pt-3 text-sm text-slate-700">
-            <p>{assessment.activation?.reason ? explain(assessment.activation.reason) : 'Matching is advisory here. The worker still checks identity, service and payment eligibility before activating.'}</p>
+        {!recorded && !confirmed && !processing && !checking && assessment && <div className="mt-4 flex gap-3 rounded-lg bg-amber-50/70 p-3 text-sm text-slate-800 ring-1 ring-inset ring-amber-200">
+            <span aria-hidden="true" className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-200 text-xs font-bold text-amber-900">!</span>
+            <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-amber-900">Next step</p>
+            <p className="mt-1">{assessment.activation?.reason ? explain(assessment.activation.reason) : 'Matching is advisory here. The worker still checks identity, service and payment eligibility before activating.'}</p>
             {assessment.package?.state === 'needs_review' && <p className="mt-2">{explain(assessment.package.reason)}</p>}
             {purchase?.approved_default && <p className="mt-2 text-xs text-slate-600">Uses the approved automatic package for this amount.</p>}
-            {profile && <Link to={`/clients/${profile.id}`} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-teal-800 underline">Open {profile.name}’s profile</Link>}
+            {profile && <Link to={`/clients/${profile.id}`} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-teal-800 underline">Open {profile.name}’s profile</Link>}</div>
         </div>}
+        {(processing || checking) && <p className="mt-4 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">{checking ? 'CRM is confirming the result with the site. Do not activate this payment again.' : 'Activation is running. This view updates on its own.'}</p>}
     </section>;
 }

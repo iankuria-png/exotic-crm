@@ -34,6 +34,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('device-health', [CollectionPaymentController::class, 'deviceHealth']);
         Route::get('account-policies', [CollectionPaymentController::class, 'policies']);
         Route::put('accounts/{account}/policy', [CollectionPaymentController::class, 'updatePolicy']);
+        Route::post('accounts/{account}/signoffs', [CollectionPaymentController::class, 'recordSignoff']);
         Route::post('arrivals/read', [CollectionPaymentController::class, 'readArrivals']);
         Route::get('accounts/{account}/settlement', [CollectionPaymentController::class, 'settlement']);
         Route::post('accounts/{account}/statement', [CollectionPaymentController::class, 'statement']);

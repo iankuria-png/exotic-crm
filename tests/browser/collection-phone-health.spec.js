@@ -33,6 +33,7 @@ async function setup(page, role = 'admin') {
 test('phone outage gives recovery instructions and clears only after a fresh API check-in', async ({ page }) => {
     const state = await setup(page);
     const panel = page.getByRole('region', { name: 'Receiving phone health' });
+    await panel.getByRole('button', { name: 'View phone details' }).click();
     await expect(panel.getByText('No recent check-in', { exact: true })).toBeVisible();
     await expect(panel.getByText('Charge and unlock the office phone.')).toBeVisible();
     await expect(page.getByText('Phone needs attention', { exact: true })).toBeVisible();
@@ -48,7 +49,7 @@ test('phone outage gives recovery instructions and clears only after a fresh API
 
 test('limits support explicit Unlimited and preserve edits after a stale version response', async ({ page }) => {
     const state = await setup(page);
-    await page.getByText('Automatic activation limits', { exact: true }).click();
+    await page.getByRole('button', { name: 'Automation settings' }).click();
     await page.getByRole('button', { name: 'Configure limits' }).click();
     const day = page.getByRole('group', { name: 'Per day', exact: true });
     await day.getByLabel('Unlimited').uncheck();
@@ -67,7 +68,9 @@ test('limits support explicit Unlimited and preserve edits after a stale version
 test('sales can read recovery guidance and limits on mobile without a policy editing action', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await setup(page, 'sales');
-    await page.getByText('Automatic activation limits', { exact: true }).click();
+    await page.getByRole('button', { name: 'View phone details' }).click();
+    await expect(page.getByText('New payment SMS may be delayed.', { exact: false })).toBeVisible();
+    await page.getByRole('button', { name: 'Automation settings' }).click();
     await expect(page.getByRole('button', { name: 'Configure limits' })).toHaveCount(0);
     await expect(page.getByText('New payment SMS may be delayed.', { exact: false })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
