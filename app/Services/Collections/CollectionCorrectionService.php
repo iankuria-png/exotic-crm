@@ -77,6 +77,16 @@ class CollectionCorrectionService
                 }
                 app(CollectionEntitlementPolicy::class)->target($read['snapshot'] ?? [], $targetIdentity);
                 $preview['target_fingerprint'] = $read['snapshot']['fingerprint'];
+                $preview['target_profiles'] = [['client_id' => $targetIdentity['client_id'], 'platform_id' => $targetIdentity['platform_id'],
+                    'wp_post_id' => $targetIdentity['wp_post_id'], 'expected_fingerprint' => $read['snapshot']['fingerprint']]];
+                if ($secondary = ($targetIdentity['subsidiary'] ?? null)) {
+                    $secondaryRead = WpSyncService::forPlatform($secondary['platform_id'])->subscriptionOperation($secondary['wp_post_id']);
+                    if (data_get($secondaryRead, 'capabilities.compensate') !== 2 || data_get($secondaryRead, 'capabilities.durable_correction_owner') !== 1) {
+                        throw new CollectionException('wordpress_correction_owner_required');
+                    }
+                    $preview['target_profiles'][] = ['client_id' => $secondary['client_id'], 'platform_id' => $secondary['platform_id'],
+                        'wp_post_id' => $secondary['wp_post_id'], 'expected_fingerprint' => $secondaryRead['snapshot']['fingerprint']];
+                }
                 // Same-profile package changes are recomputed after source compensation.
             }
             app(CollectionGate::class)->assertWrites($r->account, array_unique($platformIds ?: [$allocation->purchase_snapshot['platform_id']]), false, ! $preActivation);
@@ -112,6 +122,9 @@ class CollectionCorrectionService
             if ($c->version !== $version || $c->allocation_version !== $a->version || $c->expires_at->isPast() || ! $c->preview['can_execute']) {
                 throw new CollectionException('correction_preview_stale_or_held');
             }
+            app(CollectionMatchExclusionService::class)->record($a->receipt, (int) $a->purchase_snapshot['client_id'],
+                isset($c->preview['target_purchase']['client_id']) ? (int) $c->preview['target_purchase']['client_id'] : null,
+                'allocation-correction:'.$c->id, $actor->id, $c->reason);
             if (data_get($c->preview, 'pre_activation')) {
                 return $this->reassignBeforeDispatch($a, $c, $actor, $requestKey);
             }
@@ -149,9 +162,6 @@ class CollectionCorrectionService
 
             return $c;
         }, 3);
-        if ($correction->state === 'verified') {
-            return $correction;
-        }
 
         return $this->resume($correction, $actor);
     }
@@ -160,7 +170,10 @@ class CollectionCorrectionService
     {
         $a = CollectionAllocation::findOrFail($correction->allocation_id);
         $this->authorize($a, $actor);
-        if ($correction->state === 'verified') {
+        if (in_array($correction->state, ['verified', 'verified_release_pending'], true)) {
+            $this->releaseOwners($correction);
+            $correction->update(['state' => 'verified']);
+
             return $correction;
         }
         if (! $correction->request_key) {
@@ -172,6 +185,14 @@ class CollectionCorrectionService
 
             return app(CollectionFulfillmentService::class)->withLocks($ids, function () use ($a, $correction, $actor) {
                 try {
+                    $profiles = array_map(fn ($step) => ['client_id' => $step['client_id'], 'platform_id' => $step['platform_id'], 'wp_post_id' => $step['wp_post_id'],
+                        'source_operation_id' => $step['source_effect_id'], 'expected_fingerprint' => $step['before_state']['fingerprint']], $correction->preview['source_steps']);
+                    foreach (($correction->preview['target_profiles'] ?? []) as $targetProfile) {
+                        if (! collect($profiles)->contains('client_id', $targetProfile['client_id'])) {
+                            $profiles[] = $targetProfile;
+                        }
+                    }
+                    app(CollectionCorrectionOwnership::class)->acquireAll($correction->id, $profiles);
                     $correction->update(['state' => 'source_correcting']);
                     foreach (CollectionBenefitEffect::where('correction_id', $correction->id)->where('effect_kind', 'source_compensation')->orderBy('client_id')->get() as $effect) {
                         app(CollectionFulfillmentService::class)->dispatchEffect($a, $effect);
@@ -181,7 +202,14 @@ class CollectionCorrectionService
                         $this->applyTarget($a, $correction, $actor);
                     }
                     $this->finalize($a, $correction, $actor);
+                    $this->releaseOwners($correction);
                 } catch (\Throwable $e) {
+                    if ($correction->fresh()->state === 'verified') {
+                        $correction->update(['state' => 'verified_release_pending']);
+                        app(CollectionPurchaseService::class)->audit($a->receipt, $actor->id, 'correction_owner_release_pending', ['correction_id' => $correction->id]);
+
+                        return $correction->fresh();
+                    }
                     $correction->update(['state' => 'uncertain']);
                     $a->update(['state' => 'correcting']);
                     $a->receipt->update(['decision_state' => 'uncertain']);
@@ -191,6 +219,12 @@ class CollectionCorrectionService
                 return $correction->fresh();
             });
         });
+    }
+
+    private function releaseOwners(CollectionCorrection $correction): void
+    {
+        $operations = CollectionBenefitEffect::where('correction_id', $correction->id)->where('state', 'succeeded')->get(['id', 'platform_id', 'wp_post_id'])->toArray();
+        app(CollectionCorrectionOwnership::class)->releaseAll($correction->id, $operations);
     }
 
     private function reassignBeforeDispatch(CollectionAllocation $a, CollectionCorrection $c, User $actor, string $key): CollectionCorrection
@@ -243,9 +277,13 @@ class CollectionCorrectionService
 
     private function sourceStep(CollectionBenefitEffect $effect): array
     {
-        $read = WpSyncService::forPlatform($effect->platform_id)->subscriptionOperation($effect->wp_post_id);
+        $read = WpSyncService::forPlatform($effect->platform_id)->subscriptionOperation($effect->wp_post_id, $effect->id);
         if (data_get($read, 'capabilities.compensate') !== 2) {
             throw new CollectionException('wordpress_compensation_v2_required');
+        }
+        if (data_get($read, 'operation.contract_version') !== 2 || ! is_array(data_get($read, 'operation.before_state.meta_present'))
+            || app(CollectionSalesService::class)->digest(data_get($read, 'operation.before_state', [])) !== app(CollectionSalesService::class)->digest($effect->before_state)) {
+            throw new CollectionException('original_compensation_preimage_required');
         }
         $current = $read['snapshot'] ?? [];
         $policy = app(CollectionEntitlementPolicy::class);
@@ -356,7 +394,6 @@ class CollectionCorrectionService
                 $a->update(['state' => 'unassigned']);
             }
             // Corrections are negative training evidence. Automatic reuse must be reviewed again.
-            CollectionPayerLink::where('account_id', $a->receipt->account_id)->where('payer_fingerprint', $a->receipt->payer_fingerprint)->update(['auto_allowed' => false]);
             CollectionPurchaseIntent::whereKey($allocation->intent_id)->update(['revoked_at' => now()]);
             $a->receipt->update(['decision_state' => $a->state, 'reviewed_at' => null, 'reviewed_by' => null, 'version' => $a->receipt->version + 1]);
             $a->increment('version');

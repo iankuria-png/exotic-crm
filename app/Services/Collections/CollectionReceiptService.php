@@ -19,6 +19,12 @@ class CollectionReceiptService
                 return $event->receipt_id ? CollectionReceipt::find($event->receipt_id) : null;
             }
             $account = CollectionAccount::whereKey($event->account_id)->lockForUpdate()->firstOrFail();
+            // Intake order fixes first provenance even if outbox jobs are retried out of order.
+            $first = CollectionEvent::where('account_id', $account->id)->where('state', 'unparsed')
+                ->orderBy('ingested_at')->orderBy('id')->value('id');
+            if ((int) $first !== (int) $event->id) {
+                throw new CollectionException('earlier_intake_parse_pending');
+            }
             $parser = $account->provider_key === 'vodacom_mpesa_tz' && $account->country === 'TZ' ? app(TzMpesaParser::class) : null;
             $observation = $parser?->parse($event->normalized['sender'], $event->normalized['message']) ?? ['kind' => 'unsupported', 'reason' => 'parser_not_available'];
             $event->parse_version = $parser ? TzMpesaParser::VERSION : null;
@@ -40,6 +46,8 @@ class CollectionReceiptService
             if (! $receipt) {
                 $receipt = CollectionReceipt::create(['account_id' => $account->id, 'reference_raw' => $observation['reference_raw'] ?? $observation['reference'],
                     'reference_norm' => $observation['reference'], 'historical_only' => $historical,
+                    'first_ingested_at' => $event->ingested_at, 'automation_epoch' => $event->automation_epoch,
+                    'automation_eligible_at_ingest' => $event->automation_eligible_at_ingest,
                     'first_received_at' => $event->sms_received_at, 'last_received_at' => $event->sms_received_at,
                     'enrichment_deadline' => now()->addSeconds(config('collection.enrichment_seconds')),
                     'field_provenance' => [], 'conflicts' => []]);

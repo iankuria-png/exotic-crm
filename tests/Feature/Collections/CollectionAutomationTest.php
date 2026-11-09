@@ -158,7 +158,7 @@ class CollectionAutomationTest extends CollectionWorkflowTestCase
         $p = $intent->purchase_snapshot;
         $p['subsidiary'] = ['client_id' => $subsidiary->id, 'platform_id' => 2, 'wp_post_id' => 88, 'wp_user_id' => 66];
         $intent->update(['purchase_snapshot' => $p]);
-        config(['collection.entitlement_platforms' => [6, 2], 'collection.verified_writer_platforms' => [6, 2]]);
+        config(['collection.entitlement_platforms' => [6, 2], 'collection.verified_writer_platforms' => [6, 2], 'collection.verified_correction_platforms' => [6, 2]]);
         $this->remote[88] = $this->snapshot(88, 66);
         $this->fakeWordPress();
         $r = $this->received($device);
@@ -185,7 +185,7 @@ class CollectionAutomationTest extends CollectionWorkflowTestCase
         $p = $intent->purchase_snapshot;
         $p['subsidiary'] = ['client_id' => $subsidiary->id, 'platform_id' => 2, 'wp_post_id' => 88, 'wp_user_id' => 66];
         $intent->update(['purchase_snapshot' => $p]);
-        config(['collection.entitlement_platforms' => [6, 2], 'collection.verified_writer_platforms' => [6, 2]]);
+        config(['collection.entitlement_platforms' => [6, 2], 'collection.verified_writer_platforms' => [6, 2], 'collection.verified_correction_platforms' => [6, 2]]);
         $longer = now()->addDays(20)->timestamp;
         $this->remote[88] = $this->snapshot(88, 66, $longer, 'vip', 999);
         $this->unavailablePost = 88;

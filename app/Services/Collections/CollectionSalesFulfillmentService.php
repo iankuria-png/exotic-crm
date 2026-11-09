@@ -151,7 +151,7 @@ class CollectionSalesFulfillmentService
                     $client = Client::findOrFail($p['client_id']);
                     $this->assertWallet($client);
                     $read = WpSyncService::forPlatform($p['platform_id'])->withReadBudget(fn () => min(8, $remaining()))->subscriptionOperation($p['wp_post_id']);
-                    if (($read['version'] ?? 0) !== 1) {
+                    if (! in_array($read['version'] ?? 0, [1, 2], true)) {
                         throw new CollectionException('exact_target_contract_required');
                     }
                     $before = $read['snapshot'] ?? [];
@@ -302,7 +302,7 @@ class CollectionSalesFulfillmentService
             $p = $item->purchase;
             $this->assertItemTerms($item, $actor);
             $read = WpSyncService::forPlatform($p['platform_id'])->withReadBudget(fn () => min(6, $remaining()))->subscriptionOperation($p['wp_post_id'], $item->operation_key);
-            if (($read['version'] ?? 0) !== 1 || ! empty($read['operation']) || ($read['snapshot']['fingerprint'] ?? '') !== $item->expected_site['target']['expected_fingerprint']
+            if (! in_array($read['version'] ?? 0, [1, 2], true) || ! empty($read['operation']) || ($read['snapshot']['fingerprint'] ?? '') !== $item->expected_site['target']['expected_fingerprint']
                 || $item->expected_site['target']['target_expiry'] <= now()->timestamp) {
                 throw new CollectionException('prepared_site_state_requires_review');
             }
@@ -341,7 +341,7 @@ class CollectionSalesFulfillmentService
     public function resume(string $itemId, bool $readOnly = false): CollectionSalesItem
     {
         $item = CollectionSalesItem::findOrFail($itemId);
-        if ($item->state === 'confirmed') {
+        if (in_array($item->state, ['confirmed', 'correcting', 'unassigned', 'correction_unknown'], true)) {
             return $item;
         }
 
@@ -351,7 +351,7 @@ class CollectionSalesFulfillmentService
                 $this->lockReceipt($item);
                 $session = CollectionSalesSession::lockForUpdate()->findOrFail($item->session_id);
                 $row = CollectionSalesItem::lockForUpdate()->findOrFail($item->id);
-                if ($row->state === 'confirmed') {
+                if (in_array($row->state, ['confirmed', 'correcting', 'unassigned', 'correction_unknown'], true)) {
                     return false;
                 }
                 $first = $session->items()->where('state', '!=', 'confirmed')->first();
@@ -382,14 +382,14 @@ class CollectionSalesFulfillmentService
                 return true;
             });
             $item->refresh();
-            if ($item->state === 'confirmed') {
+            if (in_array($item->state, ['confirmed', 'correcting', 'unassigned', 'correction_unknown'], true)) {
                 return $item;
             }
             $p = $item->purchase;
             $sync = WpSyncService::forPlatform($p['platform_id'])->withReadBudget(fn () => min(6, $remaining()));
             try {
                 $read = $sync->subscriptionOperation($p['wp_post_id'], $item->operation_key);
-                if (($read['version'] ?? 0) !== 1) {
+                if (! in_array($read['version'] ?? 0, [1, 2], true)) {
                     throw new CollectionException('exact_target_contract_required');
                 }
                 if (empty($read['operation']) && $dispatch) {

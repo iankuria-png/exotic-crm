@@ -169,8 +169,8 @@ class CollectionPurchaseService
         $p = $intent->purchase_snapshot;
         $client = Client::findOrFail($intent->client_id);
         $price = ProductPrice::with('product')->find($p['product_price_id']);
-        if (! in_array($intent->authority, ['standing_agreement', 'reviewed_quote'], true)
-            || ! in_array($p['identity_authority'] ?? '', ['reviewed_payer', 'staff_reviewed_quote'], true)
+        if (! in_array($intent->authority, ['standing_agreement', 'reviewed_quote', 'matched_catalogue'], true)
+            || ! in_array($p['identity_authority'] ?? '', ['reviewed_payer', 'staff_reviewed_quote', 'rule_supported_payer'], true)
             || ($p['stacking'] ?? '') !== 'same_tier') {
             throw new CollectionException('reviewed_purchase_authority_required');
         }
@@ -210,16 +210,25 @@ class CollectionPurchaseService
             && (! data_get($receipt->account->policy, 'recurring_negotiated_enabled') || empty($p['discount_approved_by']) || empty($p['discount_source']))) {
             throw new CollectionException('recurring_negotiated_policy_disabled');
         }
+        if ($intent->authority === 'matched_catalogue') {
+            app(CollectionCataloguePurchaseMatch::class)->assertCurrent($intent, $receipt, $client);
+        } elseif (($p['identity_authority'] ?? '') === 'rule_supported_payer') {
+            throw new CollectionException('reviewed_purchase_authority_required');
+        }
         if ($automatic) {
+            app(CollectionAutomationEpoch::class)->assertReceipt($receipt);
+            if (in_array((int) $client->id, app(CollectionMatchExclusionService::class)->clientIds($receipt), true)) {
+                throw new CollectionException('corrected_payer_match_requires_fresh_review');
+            }
             $ageLimit = data_get($receipt->account->policy, 'max_auto_age_seconds');
             if (! is_int($ageLimit) || $ageLimit <= 0 || ! $receipt->provider_at || $receipt->provider_at->lt(now()->subSeconds($ageLimit))) {
                 throw new CollectionException('automatic_receipt_time_window_requires_review');
             }
             $links = CollectionPayerLink::where('account_id', $receipt->account_id)->where('payer_fingerprint', $receipt->payer_fingerprint)
                 ->whereNull('revoked_at')->where('valid_until', '>', now())->get();
-            if (! $receipt->payer_fingerprint || $links->pluck('client_id')->unique()->count() !== 1
+            if ($intent->authority !== 'matched_catalogue' && (! $receipt->payer_fingerprint || $links->pluck('client_id')->unique()->count() !== 1
                 || ! $links->contains(fn ($link) => $link->id === $intent->payer_link_id && $link->auto_allowed
-                    && (int) $link->client_id === (int) $client->id && (int) $link->wp_post_id === (int) $client->wp_post_id && (int) $link->wp_user_id === (int) $client->wp_user_id)) {
+                    && (int) $link->client_id === (int) $client->id && (int) $link->wp_post_id === (int) $client->wp_post_id && (int) $link->wp_user_id === (int) $client->wp_user_id))) {
                 throw new CollectionException('reviewed_unique_payer_required');
             }
         }

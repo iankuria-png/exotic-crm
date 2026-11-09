@@ -18,9 +18,21 @@ class CollectionPaymentHistoryService
     public function forReceipt(CollectionReceipt $receipt, User $actor, ?string $cursor = null): array
     {
         app(CollectionAccessService::class)->receipt($actor, $receipt->id);
+
+        return $this->read($receipt, (string) $actor->id, $cursor);
+    }
+
+    /** Internal worker read: scope comes exclusively from this persisted receiving account. */
+    public function forAccountReceipt(CollectionReceipt $receipt): array
+    {
+        return $this->read($receipt, 'account:'.$receipt->account_id, null);
+    }
+
+    private function read(CollectionReceipt $receipt, string $reader, ?string $cursor): array
+    {
         $platforms = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)
             ->where('valid_from', '<=', $receipt->provider_at ?? now())->whereNull('valid_until')->pluck('platform_id')->map(fn ($id) => (int) $id)->sort()->values()->all();
-        $scope = hash('sha256', json_encode([$actor->id, $receipt->id, $receipt->account_id, $receipt->payer_fingerprint, $platforms]));
+        $scope = hash('sha256', json_encode([$reader, $receipt->id, $receipt->account_id, $receipt->payer_fingerprint, $platforms]));
         $offset = 0;
         $anchor = null;
         if ($cursor) {

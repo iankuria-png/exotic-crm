@@ -27,7 +27,7 @@ class CollectionDecisionService
                 return $r; // Enrichment never silently moves or re-grants an existing allocation.
             }
             $candidates = $this->candidates($r);
-            $snapshot = ['rule_version' => config('collection.rule_version'), 'intents' => $candidates, 'reasons' => []];
+            $snapshot = ['rule_version' => config('collection.rule_version'), 'intents' => $candidates, 'reasons' => [], 'policy_version' => data_get($r->account->policy, 'version')];
             try {
                 app(CollectionGate::class)->assertFunds($r);
                 if (! $r->payer_fingerprint && $r->enrichment_deadline->isFuture()) {
@@ -36,9 +36,30 @@ class CollectionDecisionService
 
                     return $r;
                 }
+                if (! $candidates && data_get($r->account->policy, 'purchase_matching') === 'exact_catalogue_or_reviewed') {
+                    $matching = app(CollectionMatchService::class)->automatic($r);
+                    $snapshot['matching'] = $matching;
+                    if (! $matching['selected_client_id']) {
+                        throw new CollectionException('client_match_below_threshold_or_conflicting');
+                    }
+                    app(CollectionAutomationEpoch::class)->assertReceipt($r);
+                    $platforms = [(int) \App\Models\Client::findOrFail($matching['selected_client_id'])->platform_id];
+                    if ($secondary = config('collection.subsidiary_platforms.'.$platforms[0])) {
+                        $platforms[] = (int) $secondary;
+                    }
+                    app(CollectionGate::class)->assertWrites($r->account, $platforms, true);
+                    app(CollectionCataloguePurchaseMatch::class)->select($r, $matching['selected_client_id']);
+                    $candidates = $this->candidates($r);
+                    $snapshot['intents'] = $candidates;
+                }
                 $eligible = array_values(array_filter($candidates, fn ($c) => $c['automatic_eligible']));
                 if (count($eligible) !== 1 || count($candidates) > 1) {
                     throw new CollectionException(count($candidates) > 1 ? 'multiple_purchase_candidates' : 'reviewed_purchase_authority_required');
+                }
+                $match = app(CollectionMatchService::class)->automatic($r);
+                $snapshot['matching'] = $match;
+                if ($match['selected_client_id'] !== (int) $eligible[0]['client_id']) {
+                    throw new CollectionException('client_match_below_threshold_or_conflicting');
                 }
                 $snapshot['reasons'][] = 'reviewed_payer_and_purchase_authority';
                 $r->update(['candidate_snapshot' => $snapshot, 'decision_state' => 'ready_auto']);

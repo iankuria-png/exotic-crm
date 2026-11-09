@@ -33,9 +33,7 @@ class CollectionOutboxWorker
                     'decide' => app(CollectionDecisionService::class)->evaluate((int) $row->subject_id),
                     'fulfill' => $this->fulfill($row->subject_id),
                     'benefits' => $this->benefits($row->subject_id),
-                    'sales_dispatch', 'sales_check' => $this->sale($row->subject_id, $row->kind === 'sales_check'),
-                    'sales_benefits' => $this->salesBenefits($row->subject_id),
-                    'sales_trial' => $this->salesTrial($row->subject_id),
+                    'sales_dispatch', 'sales_check', 'sales_benefits', 'sales_trial' => $this->saleJob($row),
                     default => throw new CollectionException('unknown_outbox_kind'),
                 };
                 DB::table('collection_outbox')->where('id', $id)->update(['completed_at' => now(), 'last_error_code' => null]);
@@ -58,6 +56,31 @@ class CollectionOutboxWorker
             // Keep recovery durable; lookup retries do not blindly re-dispatch an uncertain write.
             throw new CollectionException('fulfillment_recovery_pending');
         }
+    }
+
+    private function saleJob(object $job): void
+    {
+        $item = \App\Models\Collections\CollectionSalesItem::findOrFail($job->subject_id);
+        if (in_array($job->kind, ['sales_dispatch', 'sales_check'], true)) {
+            if ($item->generation === (int) ($job->source_generation ?? 1)) {
+                $this->sale($item->id, $job->kind === 'sales_check');
+            }
+
+            return;
+        }
+        app(CollectionWriterGuard::class)->ownedSale($item, fn () => app(\App\Services\ClientLifecycleMutationLock::class)->runBounded([$item->client_id], function () use ($job, $item) {
+            $item->refresh();
+            if ($item->generation !== (int) ($job->source_generation ?? 1)
+                || (($job->source_deal_id ?? null) !== null && (int) $job->source_deal_id !== (int) $item->deal_id)
+                || in_array($item->state, ['correcting', 'unassigned', 'correction_unknown'], true)) {
+                return; // Terminal superseded; retain the old outbox audit without another grant.
+            }
+            match ($job->kind) {
+                'sales_dispatch', 'sales_check' => $this->sale($item->id, $job->kind === 'sales_check'),
+                'sales_benefits' => $this->salesBenefits($item->id),
+                'sales_trial' => $this->salesTrial($item->id),
+            };
+        }));
     }
 
     private function sale(string $id, bool $readOnly): void

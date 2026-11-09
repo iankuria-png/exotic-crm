@@ -71,7 +71,7 @@ class CollectionIngestService
                     $this->suspendDeviceAccounts($device, $reason);
                 } else {
                     $binding = $bindings->first();
-                    $account = CollectionAccount::findOrFail($binding->account_id);
+                    $account = CollectionAccount::whereKey($binding->account_id)->lockForUpdate()->firstOrFail();
                     try {
                         // An offset is mandatory; never interpret a local clock as UTC.
                         if (! preg_match('/(?:Z|[+-]\d{2}:\d{2})$/D', $data['payload']['receivedAt'])) {
@@ -118,7 +118,8 @@ class CollectionIngestService
                 'event_kind' => $data['event'], 'source_kind' => $historical ? 'historical' : 'live',
                 'account_id' => $account?->id, 'raw_body' => $rawBody, 'raw_sha256' => $hash,
                 'normalized' => $data['payload'], 'sms_received_at' => $received, 'ingested_at' => now(),
-                'state' => $reason ? 'quarantined' : ($data['event'] === 'sms:received' ? 'unparsed' : 'heartbeat'), 'quarantine_reason' => $reason]);
+                'state' => $reason ? 'quarantined' : ($data['event'] === 'sms:received' ? 'unparsed' : 'heartbeat'), 'quarantine_reason' => $reason]
+                + ($account ? app(CollectionAutomationEpoch::class)->intake($account, ! $historical && ! $reason) : []));
             if (! $reason && $data['event'] === 'sms:received') {
                 $this->outbox('parse', (string) $event->id, 'parse:'.$event->id);
             }
@@ -130,7 +131,12 @@ class CollectionIngestService
 
     public function outbox(string $kind, string $subject, string $key, $at = null): void
     {
-        DB::table('collection_outbox')->insertOrIgnore(['kind' => $kind, 'subject_id' => $subject, 'dedupe_key' => $key, 'available_at' => $at ?? now()]);
+        $source = [];
+        if (str_starts_with($kind, 'sales_')) {
+            $item = \App\Models\Collections\CollectionSalesItem::findOrFail($subject);
+            $source = ['source_generation' => $item->generation, 'source_deal_id' => $item->deal_id];
+        }
+        DB::table('collection_outbox')->insertOrIgnore(['kind' => $kind, 'subject_id' => $subject, 'dedupe_key' => $key, 'available_at' => $at ?? now()] + $source);
     }
 
     private function suspendDeviceAccounts(CollectionDevice $device, string $reason): void

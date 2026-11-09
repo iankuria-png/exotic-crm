@@ -23,6 +23,8 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
 
     protected array $operations = [];
 
+    protected array $siteOwners = [];
+
     protected int $posts = 0;
 
     protected bool $loseResponse = false;
@@ -50,13 +52,13 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
         $intent = CollectionPurchaseIntent::create(['id' => (string) Str::uuid(), 'account_id' => $account->id, 'payer_link_id' => $link->id,
             'client_id' => $client->id, 'platform_id' => $market->id, 'authority' => 'standing_agreement', 'purchase_snapshot' => $snapshot,
             'approved_by' => $user->id, 'approved_at' => now()->subDays(2), 'valid_from' => now()->subDays(2), 'valid_until' => now()->addMonth(), 'max_renewals' => 10]);
-        $account->update(['mode' => 'auto', 'policy' => ['version' => 1, 'max_auto_age_seconds' => 86400, 'single_cap_minor' => 4000000, 'daily_cap_minor' => 7000000, 'unreviewed_cap_minor' => 7000000, 'unverified_cap_minor' => 7000000,
+        $account->update(['mode' => 'auto', 'policy' => ['automation_enabled' => true, 'automation_epoch' => (string) Str::uuid(), 'enabled_from' => now()->subHour()->toIso8601String(), 'match_threshold' => 80, 'version' => 1, 'max_auto_age_seconds' => 86400, 'single_cap_minor' => 4000000, 'daily_cap_minor' => 7000000, 'unreviewed_cap_minor' => 7000000, 'unverified_cap_minor' => 7000000,
             'clean_observation_days' => 7, 'positive_receiving_credits' => 100, 'independent_reconciliation_accepted_at' => now()->toIso8601String(),
             'held_out_parser_accepted_at' => now()->toIso8601String(), 'correction_acceptance_at' => now()->toIso8601String(), 'device_capture_accepted_at' => now()->toIso8601String(),
             'settlement_policy_accepted_at' => now()->toIso8601String(), 'historical_reference_map_accepted_at' => now()->toIso8601String(),
             'accepted_parser_versions' => ['tz-mpesa-v1'], 'subsidiary_grant_approved_by' => $user->id, 'subsidiary_grant_valid_until' => now()->addMonth()->toIso8601String()]]);
         if ($enable) {
-            config(['collection.entitlement_platforms' => [$market->id], 'collection.verified_writer_platforms' => [$market->id], 'collection.automatic_accounts' => [$account->id]]);
+            config(['collection.entitlement_platforms' => [$market->id], 'collection.verified_writer_platforms' => [$market->id], 'collection.verified_correction_platforms' => [$market->id], 'collection.automatic_accounts' => [$account->id]]);
         }
         $this->remote[77] = $this->snapshot(77, 55);
         $this->captureCheckIn($device);
@@ -80,6 +82,7 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
         $state['meta'] += ['premium_expire' => in_array($tier, ['premium', 'vip', 'vvip']) ? (string) $expiry : '',
             'featured_expire' => in_array($tier, ['vip', 'vvip']) ? (string) $expiry : '', 'vvip_expire' => $tier === 'vvip' ? (string) $expiry : '',
             'needs_payment' => '', 'notactive' => '', 'crm_lifecycle_state' => ''];
+        $state['meta_present'] = array_keys($state['meta']);
         $state['fingerprint'] = hash('sha256', json_encode($state));
 
         return $state;
@@ -88,6 +91,23 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
     protected function fakeWordPress(): void
     {
         Http::fake(function ($request) {
+            if (preg_match('#/clients/(\d+)/subscription-correction-owner#', $request->url(), $ownerMatch)) {
+                $post = (int) $ownerMatch[1];
+                if ($request->method() === 'GET') {
+                    return Http::response(['version' => 1, 'owner' => $this->siteOwners[$post] ?? null]);
+                }
+                $owner = $this->siteOwners[$post] ?? null;
+                if ($request['action'] === 'acquire') {
+                    $owner = ['correction_id' => $request['correction_id'], 'generation' => $request['owner_generation'], 'state' => 'owned', 'initial_fingerprint' => $request['expected_fingerprint']];
+                } elseif (! $owner || $owner['correction_id'] !== $request['correction_id'] || (int) $owner['generation'] !== (int) $request['owner_generation']) {
+                    return Http::response(['reason' => 'owner_conflict'], 409);
+                } elseif ($request['action'] === 'release') {
+                    $owner['state'] = 'released';
+                }
+                $this->siteOwners[$post] = $owner;
+
+                return Http::response(['version' => 1, 'owner' => $owner]);
+            }
             preg_match('#/clients/(\d+)/subscription-operation#', $request->url(), $match);
             $post = (int) ($match[1] ?? 0);
             $this->assertArrayHasKey($post, $this->remote);
@@ -97,9 +117,10 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
             if ($request->method() === 'GET') {
                 parse_str(parse_url($request->url(), PHP_URL_QUERY) ?: '', $query);
 
-                return Http::response(['version' => 1, 'capabilities' => ['compensate' => $this->compensationV2 ? 2 : 0], 'operation' => $this->operations[$query['operation_id'] ?? ''] ?? null, 'snapshot' => $this->remote[$post]]);
+                return Http::response(['version' => 1, 'capabilities' => ['compensate' => $this->compensationV2 ? 2 : 0, 'durable_correction_owner' => $this->compensationV2 ? 1 : 0], 'operation' => $this->operations[$query['operation_id'] ?? ''] ?? null, 'snapshot' => $this->remote[$post]]);
             }
             $this->assertSame($this->remote[$post]['fingerprint'], $request['expected_fingerprint']);
+            $beforeState = $this->remote[$post];
             $this->posts++;
             $this->remote[$post] = $this->snapshot($post, (int) $request['wp_user_id'], (int) $request['target_expiry'], $request['product_type'], (int) $request['crm_deal_id']);
             if (isset($request['restore_snapshot'])) {
@@ -108,7 +129,7 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
                 $restored['fingerprint'] = hash('sha256', json_encode($restored));
                 $this->remote[$post] = $restored;
             }
-            $result = ['state' => 'succeeded', 'operation_id' => $request['operation_id'], 'post_id' => $post, 'escort_expire' => $request['target_expiry'],
+            $result = ['contract_version' => 2, 'before_state' => $beforeState, 'correction_id' => $request->data()['correction_id'] ?? null, 'owner_generation' => $request->data()['owner_generation'] ?? null, 'state' => 'succeeded', 'operation_id' => $request['operation_id'], 'post_id' => $post, 'escort_expire' => $request['target_expiry'],
                 'product_type' => $request['product_type'], 'applied_at' => now()->toIso8601String(), 'snapshot' => $this->remote[$post]];
             $this->operations[$request['operation_id']] = $result;
             if ($this->loseResponse) {

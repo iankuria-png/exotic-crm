@@ -1,3 +1,5 @@
+import CollectionStandingAgreement from './CollectionStandingAgreement';
+import CollectionReceiptTimeline from './CollectionReceiptTimeline';
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -11,6 +13,13 @@ import CollectionReceiptEvidence, { receiptTime } from './CollectionReceiptEvide
 
 const states = { purchase_saved: 'Choice saved · Review activation', sales_draft: 'Allocations saved · Review activation', sales_prepared: 'Waiting to activate', sales_activating: 'Activating subscriptions', sales_partial: 'Partly active', sales_confirmed: 'Active · Confirmed', sales_needs_review: 'Sale needs checking', collecting: 'Waiting for payment details', historical: 'Historical · no activation', ready_auto: 'Ready for automatic activation', dispatching: 'Activation processing', active_review_pending: 'Active · Review needed', reviewed: 'Reviewed', needs_review: 'Needs a sales decision', uncertain: 'Checking site confirmation', correcting: 'Correction in progress', unassigned: 'Money received · Unassigned', dependent_pending: 'Active · Tanzania exposure pending' };
 const reasons = {
+    multiple_exact_package_matches: 'More than one configured package matches this amount. Choose the purchased package.',
+    no_exact_catalogue_package_match: 'No current configured package exactly matches this payment. Review the agreed price and service.',
+    approved_default_package_unavailable: 'The approved automatic package is no longer available at this price. Staff must review the payment.',
+    client_match_below_threshold_or_conflicting: 'The profile match is below the automatic threshold or has conflicting evidence. Choose the intended profile.',
+    receipt_outside_automatic_age: 'This payment is older than the approved automatic window. It remains available for staff review.',
+    receipt_outside_automation_epoch: 'This payment arrived before the current automatic policy took effect. Review it manually.',
+    corrected_payer_match_requires_fresh_review: 'A staff correction rejected this payer-to-profile match. A fresh explicit review is required.',
     later_paid_coverage_requires_recovery: 'A later paid purchase needs a reviewed recovery. Existing service stays unchanged.',
     primary_paid: 'Paid subscription', verification_only: 'Existing paid subscription', target_paid: 'Corrected subscription',
     prepared: 'Waiting to sync', dispatching: 'Syncing with the site', effect_unknown: 'Waiting for site confirmation', wp_verified: 'Site confirmed · Updating records',
@@ -143,6 +152,8 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
             {(detail.isError || error) && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error || 'Receipt could not be refreshed.'} <button className="underline" type="button" onClick={() => detail.refetch()}>Refresh receipt</button></p>}
             {row && <><div className="border-b border-slate-100 pb-4"><p className="font-medium text-teal-800">{row.usage?.state === 'already_recorded' ? 'Existing payment found' : states[row.decision_state] || explain(row.decision_state)}</p><p className="mt-1 text-sm text-slate-500">{row.account_label}</p><p className="mt-1 text-sm text-slate-500">{row.evidence_level === 'statement' ? 'Funds verified on a statement' : 'Funds observed on the receiving phone; statement verification is separate.'}</p>{row.historical_only && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Historical archive receipt. Activation is disabled for this evidence.</p>}</div>
                 <CollectionMatchEvidence key={`match-${row.id}`} row={row} />
+                <CollectionReceiptTimeline key={`timeline-${row.id}`} receiptId={row.id} timeline={row.timeline} />
+                <CollectionStandingAgreement key={`agreement-${row.id}`} receipt={row} />
                 <CollectionReceiptEvidence usage={row.usage} />
                 {!row.allocation && !row.historical_only && <CollectionPurchaseReview key={row.id} row={row} onSaved={refresh} />}
                 <details className="border-t border-slate-200 pt-3"><summary className="cursor-pointer py-2 text-sm font-medium text-teal-800">Payer, receiving message &amp; payment details</summary><div className="mt-3 space-y-4"><CollectionPayerSummary payer={row.payer} /><CollectionMessageCopy key={`messages-${row.id}`} receiptId={row.id} /><dl className="space-y-2 text-sm text-slate-600"><div><dt>Payment code</dt><dd className="select-all font-medium">{row.reference}</dd></div><div><dt>Paid at</dt><dd>{receiptTime(row.provider_at)}</dd></div><div><dt>First received on phone</dt><dd>{receiptTime(row.received_at)}</dd></div></dl></div></details>

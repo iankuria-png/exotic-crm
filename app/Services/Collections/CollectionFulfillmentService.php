@@ -116,7 +116,7 @@ class CollectionFulfillmentService
         app(CollectionPurchaseService::class)->validate($intent, $r, $allocation->decision_source === 'automatic', true);
         app(CollectionGate::class)->assertWrites($r->account, array_filter([$p['platform_id'], data_get($p, 'subsidiary.platform_id')]), $allocation->decision_source === 'automatic', false, $allocation->id);
         $remote = WpSyncService::forPlatform($p['platform_id'])->subscriptionOperation($p['wp_post_id']);
-        if (($remote['version'] ?? 0) !== 1) {
+        if (! in_array($remote['version'] ?? 0, [1, 2], true)) {
             throw new CollectionException('exact_target_contract_required');
         }
         $before = $remote['snapshot'] ?? [];
@@ -203,7 +203,16 @@ class CollectionFulfillmentService
                     $r = $allocation->receipt->fresh();
                     app(CollectionGate::class)->assertFunds($r);
                     app(CollectionGate::class)->assertWrites($r->account, [$effect->platform_id], $effect->correction_id === null && $allocation->decision_source === 'automatic', $effect->correction_id !== null, $allocation->id);
-                    DB::transaction(function () use ($effect) {
+                    DB::transaction(function () use ($effect, $allocation) {
+                        $account = CollectionAccount::whereKey($allocation->receipt->account_id)->lockForUpdate()->firstOrFail();
+                        $receipt = CollectionReceipt::lockForUpdate()->findOrFail($allocation->receipt_id);
+                        $receipt->setRelation('account', $account);
+                        $automatic = $effect->correction_id === null && $allocation->decision_source === 'automatic';
+                        app(CollectionGate::class)->assertFunds($receipt);
+                        app(CollectionGate::class)->assertWrites($account, [$effect->platform_id], $automatic, $effect->correction_id !== null, $allocation->id);
+                        if ($automatic && $effect->effect_kind !== 'subsidiary_free') {
+                            app(CollectionAutomationEpoch::class)->assertReceipt($receipt);
+                        }
                         $locked = CollectionBenefitEffect::lockForUpdate()->findOrFail($effect->id);
                         if ($locked->state !== 'prepared') {
                             throw new CollectionException('effect_dispatch_already_claimed');
@@ -211,7 +220,8 @@ class CollectionFulfillmentService
                         $locked->update(['state' => 'dispatching', 'attempts' => $locked->attempts + 1, 'dispatch_started_at' => now()]);
                         PaymentFulfillmentOperation::whereKey($effect->id)->update(['state' => 'dispatching', 'dispatch_started_at' => now()]);
                     });
-                    $sync->applySubscriptionOperation($effect->wp_post_id, $effect->target_state + ['operation_id' => $effect->id, 'wp_user_id' => $effect->wp_user_id]);
+                    $proof = $effect->correction_id ? app(CollectionCorrectionOwnership::class)->proof($effect->correction_id, $effect->platform_id, $effect->wp_post_id) : [];
+                    $sync->applySubscriptionOperation($effect->wp_post_id, $effect->target_state + ['operation_id' => $effect->id, 'wp_user_id' => $effect->wp_user_id] + $proof);
                     $read = $sync->subscriptionOperation($effect->wp_post_id, $effect->id);
                     $result = $read['operation'] ?? null;
                 }
@@ -300,7 +310,7 @@ class CollectionFulfillmentService
             throw new CollectionException('subsidiary_profile_changed');
         }
         $remote = WpSyncService::forPlatform($identity['platform_id'])->subscriptionOperation($identity['wp_post_id']);
-        if (($remote['version'] ?? 0) !== 1) {
+        if (! in_array($remote['version'] ?? 0, [1, 2], true)) {
             throw new CollectionException('subsidiary_exact_target_contract_required');
         }
         $target = app(CollectionEntitlementPolicy::class)->target($remote['snapshot'] ?? [], $identity + ['tier' => $p['tier'], 'duration_days' => $p['duration_days']], $primary->contribution);

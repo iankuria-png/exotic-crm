@@ -20,7 +20,7 @@ class CollectionPolicyService
             'version' => $policy['version'] ?? 0, 'configured' => $this->configured($policy),
             'limits' => array_intersect_key($policy, array_flip(self::CAPS)),
             'approved_at' => $policy['limits_approved_at'] ?? null,
-            'mode' => $account->mode];
+            'mode' => $account->mode, 'automation' => app(CollectionAutomationPolicy::class)->present($account)];
     }
 
     public function configured(array $policy): bool
@@ -42,6 +42,9 @@ class CollectionPolicyService
 
     public function update(User $actor, string $accountId, array $input): array
     {
+        if (array_intersect(array_keys($input), CollectionAutomationPolicy::FIELDS)) {
+            return app(CollectionAutomationPolicy::class)->update($actor, $accountId, $input);
+        }
         app(MarketAuthorizationService::class)->ensureManager($actor);
         app(CollectionAccessService::class)->account($actor, $accountId);
         if (array_diff(array_keys($input), [...self::CAPS, 'expected_version'])) {

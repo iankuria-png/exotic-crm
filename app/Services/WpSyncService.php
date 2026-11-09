@@ -683,6 +683,16 @@ class WpSyncService
         return $this->post("/clients/{$postId}/subscription-operation", $payload, $timeout);
     }
 
+    public function subscriptionCorrectionOwner(int $postId): array
+    {
+        return $this->get("/clients/{$postId}/subscription-correction-owner");
+    }
+
+    public function updateSubscriptionCorrectionOwner(int $postId, array $payload): array
+    {
+        return $this->post("/clients/{$postId}/subscription-correction-owner", $payload);
+    }
+
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array
     {
         $body = [

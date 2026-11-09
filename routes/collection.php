@@ -20,6 +20,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('receipts/{receipt}/sales/activate', [CollectionSalesController::class, 'activate'])->whereNumber('receipt');
         Route::post('sales/{session}/items/{item}/reconcile', [CollectionSalesController::class, 'reconcile'])->whereUuid('session')->whereUuid('item');
         Route::post('sales/{session}/items/{item}/retry', [CollectionSalesController::class, 'retry'])->whereUuid('session')->whereUuid('item');
+        Route::post('sales/items/{item}/correction-preview', [\App\Http\Controllers\CRM\CollectionSalesCorrectionController::class, 'preview'])->whereUuid('item');
+        Route::post('sales/corrections/{correction}/execute', [\App\Http\Controllers\CRM\CollectionSalesCorrectionController::class, 'execute'])->whereUuid('correction');
+        Route::post('receipts/{receipt}/standing-agreements', [\App\Http\Controllers\CRM\CollectionSalesCorrectionController::class, 'standingAgreement'])->whereNumber('receipt');
         Route::get('receipts/{receipt}/candidates', [CollectionPaymentController::class, 'candidates'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/intents', [CollectionPaymentController::class, 'createIntent'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/payer-links', [CollectionPaymentController::class, 'reviewPayer'])->whereNumber('receipt');

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
+import CollectionAutomationControls from './CollectionAutomationControls';
 
 const caps = { single_cap_minor: 'Per payment', daily_cap_minor: 'Per day', unreviewed_cap_minor: 'Awaiting sales review', unverified_cap_minor: 'Awaiting statement verification' };
 const showAmount = value => value === null ? '' : (value / 100).toFixed(2);
@@ -56,5 +57,6 @@ function AccountLimits({ account, manager }) {
             <div className="mt-4 flex flex-wrap gap-3"><button type="submit" disabled={update.isPending} className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{update.isPending ? 'Saving…' : 'Save limits'}</button><button type="button" disabled={update.isPending} onClick={() => { setEditing(null); setError(''); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Cancel</button>{error && <button type="button" onClick={() => client.invalidateQueries({ queryKey: ['collection-policies'] })} className="rounded px-2 py-2 text-sm text-teal-700">Reload latest limits</button>}</div>
             {editing.version !== account.version && <p role="status" className="mt-3 text-sm text-amber-900">Latest saved version loaded. Your edits are preserved. <button type="button" className="underline" onClick={() => setEditing(current => ({ ...current, version: account.version }))}>Use this version for my next save</button></p>}
         </form> : account.configured && <dl className="mt-3 grid gap-3 sm:grid-cols-2">{Object.entries(caps).map(([cap, label]) => <div key={cap}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 text-sm text-slate-900">{account.limits[cap] === null ? 'Unlimited' : `${account.currency} ${showAmount(account.limits[cap])}`}</dd></div>)}</dl>}
+        <CollectionAutomationControls account={account} manager={manager} />
     </div>;
 }

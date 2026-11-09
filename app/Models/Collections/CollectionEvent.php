@@ -10,7 +10,7 @@ class CollectionEvent extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['raw_body' => 'encrypted', 'normalized' => 'encrypted:array', 'sms_received_at' => 'datetime', 'ingested_at' => 'datetime'];
+    protected $casts = ['automation_eligible_at_ingest' => 'boolean', 'raw_body' => 'encrypted', 'normalized' => 'encrypted:array', 'sms_received_at' => 'datetime', 'ingested_at' => 'datetime'];
 
     protected $hidden = ['raw_body', 'normalized'];
 

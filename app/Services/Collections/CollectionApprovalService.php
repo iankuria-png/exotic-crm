@@ -48,6 +48,12 @@ class CollectionApprovalService
         }
         app(CollectionGate::class)->assertFunds($r);
         $client = app(CollectionPurchaseService::class)->validate($intent, $r, $automatic);
+        if ($automatic) {
+            $matching = app(CollectionMatchService::class)->automatic($r);
+            if ($matching['selected_client_id'] !== (int) $client->id) {
+                throw new CollectionException('client_match_below_threshold_or_conflicting');
+            }
+        }
         $p = $intent->purchase_snapshot;
         $platforms = [(int) $client->platform_id];
         if (! empty($p['subsidiary'])) {
@@ -106,6 +112,12 @@ class CollectionApprovalService
                 throw new CollectionException('receipt_version_changed');
             }
             $eligibility = $this->eligibility($r, $intent, $actor, $automatic);
+            if ($automatic) {
+                $match = app(CollectionMatchService::class)->automatic($r);
+                app(CollectionPurchaseService::class)->audit($r, null, 'automatic_match_reserved', [
+                    'client_id' => $match['selected_client_id'], 'match_score' => $match['suggestions'][0]['score'],
+                    'policy_version' => $account->policy['version'], 'matching' => $match, 'purchase' => $intent->purchase_snapshot]);
+            }
             $client = $eligibility['client'];
             $payment = $eligibility['payment'];
             $p = $intent->purchase_snapshot;

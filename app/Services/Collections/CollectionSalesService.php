@@ -224,7 +224,18 @@ class CollectionSalesService
                 app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, $trialPlatform);
             }
 
-            return ['subsidiary_trial' => $item->subsidiary ? array_diff_key($item->subsidiary, ['identity' => true]) : null, 'id' => $item->id, 'version' => $item->version, 'state' => $item->state, 'client' => app(CollectionReviewContextService::class)->clientData($item->client),
+            $corrections = \App\Models\Collections\CollectionSalesCorrection::where('item_id', $item->id)->orderByDesc('created_at')->limit(10)->get();
+            foreach ($corrections as $correction) {
+                foreach (array_filter([data_get($correction->preview, 'source.client_id'), data_get($correction->preview, 'target.client_id')]) as $clientId) {
+                    app(CollectionPurchaseService::class)->assertScope($session->receipt->account, Client::findOrFail($clientId), $actor);
+                }
+            }
+            $correctionReady = in_array($item->state, ['confirmed', 'prepared', 'unassigned'], true)
+                && ! data_get($item->subsidiary, 'enabled') && ! data_get($item->purchase, 'subsidiary');
+            $correctionPlatforms = config('collection.verified_correction_platforms', []);
+            $correctionReady = $correctionReady && in_array((int) $item->purchase['platform_id'], $correctionPlatforms, true);
+
+            return ['correction_available' => $correctionReady, 'generation' => $item->generation, 'corrections' => $corrections->map(fn ($c) => ['id' => $c->id, 'state' => $c->state, 'action' => $c->action, 'reason' => $c->reason, 'version' => $c->version, 'request_key' => $c->request_key])->all(), 'subsidiary_trial' => $item->subsidiary ? array_diff_key($item->subsidiary, ['identity' => true]) : null, 'id' => $item->id, 'version' => $item->version, 'state' => $item->state, 'client' => app(CollectionReviewContextService::class)->clientData($item->client),
                 'client_id' => $item->client_id, 'purchase' => $item->purchase, 'amount_minor' => $item->amount_minor,
                 'deal_id' => $item->deal_id, 'payment_id' => $item->payment_id, 'last_error_code' => $item->last_error_code,
                 'verified_at' => $item->verified_at?->toIso8601String()];

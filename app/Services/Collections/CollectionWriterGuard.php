@@ -17,6 +17,19 @@ class CollectionWriterGuard
 
     private ?string $saleItem = null;
 
+    private ?string $saleCorrection = null;
+
+    public function ownedSaleCorrection(\App\Models\Collections\CollectionSalesItem $item, string $correctionId, Closure $callback): mixed
+    {
+        $previous = $this->saleCorrection;
+        $this->saleCorrection = $correctionId;
+        try {
+            return $this->ownedSale($item, $callback);
+        } finally {
+            $this->saleCorrection = $previous;
+        }
+    }
+
     public function ownedSale(\App\Models\Collections\CollectionSalesItem $item, Closure $callback): mixed
     {
         $previous = $this->saleItem;
@@ -111,7 +124,7 @@ class CollectionWriterGuard
                     })->get(['r.id']);
                 foreach ($receipts as $receipt) {
                     $owner = DB::table('collection_sales_sessions')->where('receipt_id', $receipt->id)->where('state', '!=', 'draft')->first();
-                    if ($owner && (! $this->saleItem || ! DB::table('collection_sales_items')->where('session_id', $owner->id)->where('id', $this->saleItem)
+                    if ($owner && ! $this->correctionOwnsPayment($payment) && (! $this->saleItem || ! DB::table('collection_sales_items')->where('session_id', $owner->id)->where('id', $this->saleItem)
                         ->where('client_id', $payment->client_id)->where('deal_id', $payment->deal_id)->exists())) {
                         throw new CollectionException('receipt_principal_owned_by_manual_sale');
                     }
@@ -148,5 +161,22 @@ class CollectionWriterGuard
                 }
             }
         }
+    }
+
+    private function correctionOwnsPayment(Payment $payment): bool
+    {
+        if (! $this->saleCorrection || ! $this->saleItem || ! $payment->exists
+            || $payment->isDirty(['platform_id', 'amount', 'currency', 'transaction_reference', 'reference_number', 'reference_root', 'manual_payment_bundle_id'])) {
+            return false;
+        }
+        $journal = \App\Models\Collections\CollectionSalesCorrection::whereKey($this->saleCorrection)->where('item_id', $this->saleItem)
+            ->whereNotNull('request_key')->whereIn('state', ['reserved', 'source_compensating', 'target_applying', 'unknown'])->first();
+        if (! $journal || (int) data_get($journal->preview, 'source.payment_id') !== (int) $payment->id) {
+            return false;
+        }
+        $target = $journal->preview['target'];
+
+        return $target ? (int) $payment->client_id === (int) $target['client_id'] && (int) $payment->deal_id === (int) $journal->target_deal_id
+            : $payment->client_id === null && $payment->deal_id === null;
     }
 }

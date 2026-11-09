@@ -145,6 +145,8 @@ class CollectionPaymentController extends Controller
         $candidates = app(CollectionDecisionService::class)->candidates($r);
         $payload['candidates'] = $candidates;
         $payload['payer_links'] = CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', $r->payer_fingerprint)->get()->toArray();
+        $timelineInput = $request->validate(['timeline_before' => 'sometimes|integer|min:1']);
+        $payload['timeline'] = app(\App\Services\Collections\CollectionAuditTimeline::class)->forReceipt($r, isset($timelineInput['timeline_before']) ? (int) $timelineInput['timeline_before'] : null);
         $payload['history'] = DB::table('collection_audit')->where('receipt_id', $r->id)->orderByDesc('id')->limit(50)->get();
         $payload['corrections'] = $r->allocation ? CollectionCorrection::where('allocation_id', $r->allocation->id)->orderByDesc('created_at')->get() : [];
         $payload['field_provenance'] = $r->field_provenance;
@@ -174,6 +176,7 @@ class CollectionPaymentController extends Controller
             'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'created_at' => $r->created_at, 'historical_only' => $r->historical_only,
             'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
             'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,
+            'match_decision' => $allocation && $allocation->decision_source === 'automatic' ? data_get($r->candidate_snapshot, 'matching') : null,
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
             'allocation' => $allocation ? ['id' => $allocation->id, 'state' => $allocation->state, 'version' => $allocation->version, 'payment_id' => $allocation->payment_id,
                 'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id,
