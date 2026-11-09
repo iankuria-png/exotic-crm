@@ -5,7 +5,7 @@ import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import CollectionDeviceHealthPanel from './CollectionDeviceHealthPanel';
 import CollectionPolicyPanel from './CollectionPolicyPanel';
-import CollectionPurchaseReview, { CollectionPayerSummary } from './CollectionPurchaseReview';
+import CollectionPurchaseReview, { CollectionPayerSummary, CollectionMatchEvidence } from './CollectionPurchaseReview';
 import CollectionMessageCopy from './CollectionMessageCopy';
 import CollectionReceiptEvidence, { receiptTime } from './CollectionReceiptEvidence';
 
@@ -142,6 +142,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
             {detail.isPending && <p role="status" className="text-sm text-slate-500">Loading receipt evidence…</p>}
             {(detail.isError || error) && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error || 'Receipt could not be refreshed.'} <button className="underline" type="button" onClick={() => detail.refetch()}>Refresh receipt</button></p>}
             {row && <><div className="border-b border-slate-100 pb-4"><p className="font-medium text-teal-800">{row.usage?.state === 'already_recorded' ? 'Existing payment found' : states[row.decision_state] || explain(row.decision_state)}</p><p className="mt-1 text-sm text-slate-500">{row.account_label}</p><p className="mt-1 text-sm text-slate-500">{row.evidence_level === 'statement' ? 'Funds verified on a statement' : 'Funds observed on the receiving phone; statement verification is separate.'}</p>{row.historical_only && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Historical archive receipt. Activation is disabled for this evidence.</p>}</div>
+                <CollectionMatchEvidence key={`match-${row.id}`} row={row} />
                 <CollectionReceiptEvidence usage={row.usage} />
                 {!row.allocation && !row.historical_only && <CollectionPurchaseReview key={row.id} row={row} onSaved={refresh} />}
                 <details className="border-t border-slate-200 pt-3"><summary className="cursor-pointer py-2 text-sm font-medium text-teal-800">Payer, receiving message &amp; payment details</summary><div className="mt-3 space-y-4"><CollectionPayerSummary payer={row.payer} /><CollectionMessageCopy key={`messages-${row.id}`} receiptId={row.id} /><dl className="space-y-2 text-sm text-slate-600"><div><dt>Payment code</dt><dd className="select-all font-medium">{row.reference}</dd></div><div><dt>Paid at</dt><dd>{receiptTime(row.provider_at)}</dd></div><div><dt>First received on phone</dt><dd>{receiptTime(row.received_at)}</dd></div></dl></div></details>

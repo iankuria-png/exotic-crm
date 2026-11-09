@@ -1,6 +1,34 @@
 import { test, expect } from '@playwright/test';
 import { setup, addSecond } from './support/collection-matching-fixture';
 
+test('match confidence and reasons stay visible before and after activation, with profile links', async ({ page }) => {
+    await setup(page);
+    const matching = page.getByRole('region', { name: 'Profile matching', exact: true });
+    await expect(matching.getByText('Match confidence 90 / 100', { exact: true })).toBeVisible();
+    await expect(matching.getByText('The full SMS payer phone matches this profile.', { exact: true })).toBeVisible();
+    const profile = page.getByRole('group', { name: 'PROFILE 1', exact: true }).getByRole('link', { name: 'Example Profile A', exact: true });
+    await expect(profile).toHaveAttribute('href', '/clients/42');
+    await expect(profile).toHaveAttribute('target', '_blank');
+    await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
+    await expect(page.getByText('1 of 1 subscriptions confirmed')).toBeVisible();
+    await expect(matching.getByText('Match confidence 90 / 100', { exact: true })).toBeVisible();
+});
+
+test('used payment keeps matching evidence without an activation action', async ({ page }) => {
+    await setup(page, { used: true });
+    await expect(page.getByRole('region', { name: 'Profile matching' })).toContainText('Match confidence 90 / 100');
+    await expect(page.getByRole('button', { name: 'Activate subscription', exact: true })).toHaveCount(0);
+});
+
+for (const mode of ['ambiguous', 'missing']) {
+    test(`${mode} matching evidence explains why staff must choose`, async ({ page }) => {
+        await setup(page, { [mode]: true, unsaved: true });
+        const matching = page.getByRole('region', { name: 'Profile matching', exact: true });
+        await expect(matching).toContainText(mode === 'ambiguous' ? 'The evidence needs a staff choice' : 'No supported profile match found');
+        await expect(page.getByRole('button', { name: 'Activate subscription', exact: true })).toBeDisabled();
+    });
+}
+
 test('direct activation has no required save and leaves optional exposure off', async ({ page }) => {
     const state = await setup(page);
     await expect(page.getByRole('button', { name: 'Save purchase choice', exact: true })).toHaveCount(0);

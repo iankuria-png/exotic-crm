@@ -12,6 +12,53 @@ use Laravel\Sanctum\Sanctum;
 
 class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
 {
+    public static function publishedNoExpiryCases(): array
+    {
+        return [
+            'expired and payment required' => ['needs_payment', '1', true],
+            'inactive published profile' => ['notactive', '1', true],
+            'active indefinite coverage' => ['needs_payment', '', false],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('publishedNoExpiryCases')]
+    public function test_published_no_expiry_uses_actual_payment_and_activity_state(string $flag, string $value, bool $allowed): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $receipt] = $this->fixture();
+        $before = $this->snapshot(77, 55);
+        $before['post_status'] = 'publish';
+        $before['meta'][$flag] = $value;
+        $before['meta']['crm_lifecycle_state'] = 'expired';
+        unset($before['fingerprint']);
+        $before['fingerprint'] = hash('sha256', json_encode($before));
+        $this->remote[77] = $before;
+        $this->fakeWordPress();
+        $input = $this->accepted($this->input($receipt, $client, $price), $receipt, $actor);
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        if (! $allowed) {
+            try {
+                $service->prepare($receipt, $actor, $input);
+                $this->fail('Active indefinite coverage must remain protected.');
+            } catch (\App\Services\Collections\CollectionException $e) {
+                $this->assertSame('indefinite_active_coverage_requires_review', $e->reason);
+            }
+            $this->assertSame(0, $this->posts);
+            $this->assertSame(0, DB::table('payments')->count());
+            $this->assertSame(0, DB::table('collection_sales_profile_holds')->count());
+
+            return;
+        }
+        $prepared = $service->prepare($receipt, $actor, $input);
+        $item = \App\Models\Collections\CollectionSalesItem::firstOrFail();
+        $this->assertSame(now()->addDays(8)->timestamp, $item->expected_site['target']['target_expiry']);
+        $this->assertSame(0, $this->posts);
+        $this->assertSame('confirmed', $service->resume($item->id)->state);
+        $service->resume($item->id);
+        $this->assertSame(1, $this->posts);
+        $this->assertSame(1, DB::table('payments')->count());
+        $this->assertSame($prepared['session']['id'], $service->prepare($receipt, $actor, $input)['session']['id']);
+    }
+
     private function fixture(): array
     {
         $fixture = $this->purchase(false);

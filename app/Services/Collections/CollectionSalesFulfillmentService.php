@@ -156,9 +156,6 @@ class CollectionSalesFulfillmentService
                     }
                     $before = $read['snapshot'] ?? [];
                     $policy = app(CollectionEntitlementPolicy::class);
-                    if (($before['post_status'] ?? '') === 'publish' && $policy->expiry($before) <= 0) {
-                        throw new CollectionException('indefinite_coverage_requires_review');
-                    }
                     $target = $policy->target($before, $p);
                     $snapshots[$p['client_id']] = ['before' => $before, 'target' => $target];
                 }
